@@ -283,17 +283,52 @@ mod imp {
             }
         }
         let has_video = settings.video.is_some();
-        let mut encoder = Encoder::new(output, settings).map_err(media_err)?;
+        let encoder = Encoder::new(output, settings).map_err(media_err)?;
         let mut renderer = CpuRenderer::new(MediaAssets::new(root));
         let total = if has_video { comp.frame_count() } else { 0 };
+        // Frames are rendered and converted here while the encoder runs on
+        // its own thread, a few frames behind.
+        let color = if has_video {
+            Some(encoder.video_color().map_err(media_err)?)
+        } else {
+            None
+        };
+        let (tx, rx) = std::sync::mpsc::sync_channel::<geneva_media::convert::Yuv420p>(4);
+        let worker = std::thread::spawn(move || -> Result<Encoder, geneva_media::MediaError> {
+            let mut encoder = encoder;
+            for yuv in rx {
+                encoder.push_yuv420p(&yuv)?;
+            }
+            Ok(encoder)
+        });
+        let mut render_error = None;
+        let mut frame = geneva_render::Frame::new(0, 0, geneva_color::Color::BLACK);
         for n in 0..total {
-            let frame = renderer.render_frame(comp, comp.frame_time(n))?;
-            encoder.push_frame(&frame).map_err(media_err)?;
+            if let Err(e) = renderer.render_into(comp, comp.frame_time(n), &mut frame) {
+                render_error = Some(e);
+                break;
+            }
+            let yuv = geneva_media::convert::frame_to_yuv420p(
+                &frame,
+                color.expect("video output has color tags"),
+            );
+            if tx.send(yuv).is_err() {
+                // The encoder stopped; its error is reported below.
+                break;
+            }
             if progress && (n % 30 == 29 || n + 1 == total) {
                 eprint!("\rframe {}/{total}", n + 1);
             }
         }
-        if progress {
+        drop(tx);
+        let joined = worker
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+        if let Some(e) = render_error {
+            return Err(e);
+        }
+        let mut encoder = joined.map_err(media_err)?;
+        if progress && total > 0 {
             eprintln!();
         }
         if has_audio {

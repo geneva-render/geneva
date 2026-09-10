@@ -14,7 +14,7 @@ use geneva_timeline::Ratio;
 use super::probe::{ratio, ts_to_secs};
 use super::{codec_error, init, open_error, tags};
 use crate::MediaError;
-use crate::convert::{Planes16, rgba8_to_image, ycbcr16_to_image};
+use crate::convert::{Planes16, rgba8_into, ycbcr16_into};
 
 /// Seeking more than this far ahead of the current position restarts from
 /// the nearest keyframe instead of decoding every frame in between.
@@ -255,7 +255,9 @@ impl VideoReader {
                 } else {
                     pts
                 };
-                let image = self.convert(&raw)?;
+                // The previous frame's buffer is reused for the new one.
+                let mut image = self.current.take().map(|(_, img)| img).unwrap_or_default();
+                self.convert(&raw, &mut image)?;
                 self.current = Some((from, image));
                 if pts > t {
                     break;
@@ -280,7 +282,7 @@ impl VideoReader {
         self.frame_duration
     }
 
-    fn convert(&mut self, raw: &frame::Video) -> Result<Image, MediaError> {
+    fn convert(&mut self, raw: &frame::Video, into: &mut Image) -> Result<(), MediaError> {
         self.scaler.run(raw, &mut self.scaled).map_err(|e| {
             codec_error(
                 format!("{}: pixel format conversion", self.inner.path.display()),
@@ -289,35 +291,29 @@ impl VideoReader {
         })?;
         let (w, h) = (self.scaled.width(), self.scaled.height());
         if self.rgb {
-            Ok(rgba8_to_image(
+            rgba8_into(
                 self.scaled.data(0),
                 self.scaled.stride(0),
                 w,
                 h,
                 self.tags.transfer,
-            ))
+                into,
+            );
         } else {
-            let plane = |i: usize| -> Vec<u16> {
-                self.scaled
-                    .data(i)
-                    .chunks_exact(2)
-                    .map(|b| u16::from_le_bytes([b[0], b[1]]))
-                    .collect()
-            };
-            let (y, cb, cr) = (plane(0), plane(1), plane(2));
-            let stride = self.scaled.stride(0) / 2;
-            Ok(ycbcr16_to_image(
+            ycbcr16_into(
                 &Planes16 {
-                    y: &y,
-                    cb: &cb,
-                    cr: &cr,
-                    stride,
+                    y: self.scaled.data(0),
+                    cb: self.scaled.data(1),
+                    cr: self.scaled.data(2),
+                    stride: self.scaled.stride(0),
                 },
                 w,
                 h,
                 self.tags,
-            ))
+                into,
+            );
         }
+        Ok(())
     }
 }
 

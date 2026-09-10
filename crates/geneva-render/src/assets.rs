@@ -8,7 +8,7 @@ use geneva_timeline::{Composition, Ratio};
 use crate::RenderError;
 
 /// A decoded still image in the compositing format.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Image {
     /// Width in pixels.
     pub width: u32,
@@ -63,11 +63,8 @@ impl Image {
     pub fn sample(&self, x: f64, y: f64) -> LinearRgba {
         let fx = x - 0.5;
         let fy = y - 0.5;
-        let x0 = fx.floor();
-        let y0 = fy.floor();
-        let tx = (fx - x0) as f32;
-        let ty = (fy - y0) as f32;
-        let (x0, y0) = (x0 as i64, y0 as i64);
+        let (x0, tx) = split(fx);
+        let (y0, ty) = split(fy);
         let lerp = |a: LinearRgba, b: LinearRgba, t: f32| LinearRgba {
             r: a.r + (b.r - a.r) * t,
             g: a.g + (b.g - a.g) * t,
@@ -78,6 +75,15 @@ impl Image {
         let bottom = lerp(self.texel(x0, y0 + 1), self.texel(x0 + 1, y0 + 1), tx);
         lerp(top, bottom, ty)
     }
+}
+
+/// Splits a coordinate into its floor and fractional part. Truncation
+/// with a correction for negatives avoids a library call per sample.
+#[inline]
+fn split(v: f64) -> (i64, f32) {
+    let t = v as i64;
+    let floor = if (t as f64) > v { t - 1 } else { t };
+    (floor, (v - floor as f64) as f32)
 }
 
 fn srgb_lut() -> &'static [f32; 256] {

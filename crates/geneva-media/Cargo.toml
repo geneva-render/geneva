@@ -19,6 +19,7 @@ geneva-anim = { workspace = true }
 geneva-color = { workspace = true }
 geneva-render = { workspace = true }
 geneva-timeline = { workspace = true }
+rayon = { workspace = true }
 ffmpeg-next = { workspace = true, optional = true }
 serde = { workspace = true }
 thiserror = { workspace = true }

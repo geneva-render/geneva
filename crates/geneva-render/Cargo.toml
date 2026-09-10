@@ -12,6 +12,7 @@ cosmic-text = { workspace = true }
 geneva-color = { workspace = true }
 geneva-timeline = { workspace = true }
 image = { workspace = true }
+rayon = { workspace = true }
 swash = { workspace = true }
 thiserror = { workspace = true }
 

@@ -10,61 +10,92 @@ use std::sync::{Mutex, OnceLock};
 
 use geneva_color::{LinearRgba, Matrix, Range, ResolvedTags, Transfer, matrix};
 use geneva_render::{Frame, Image};
+use rayon::prelude::*;
 
 /// Number of entries in the 16-bit code lookup tables.
 const LUT_SIZE: usize = 1 << 16;
 
-/// Lazily built lookup tables, one per transfer function.
-type LutCache = OnceLock<Mutex<Vec<(Transfer, &'static [f32])>>>;
+/// A lookup table over 16-bit codes.
+type Lut = [f32; LUT_SIZE];
 
-/// Per-transfer lookup from a 16-bit non-linear code to linear light.
-fn to_linear_lut(transfer: Transfer) -> &'static [f32] {
-    static LUTS: LutCache = OnceLock::new();
-    let cache = LUTS.get_or_init(|| Mutex::new(Vec::new()));
+/// Lazily built lookup tables, one per transfer function.
+type LutCache = OnceLock<Mutex<Vec<(Transfer, &'static Lut)>>>;
+
+fn build_lut(cache: &'static LutCache, transfer: Transfer, f: impl Fn(f64) -> f32) -> &'static Lut {
+    let cache = cache.get_or_init(|| Mutex::new(Vec::new()));
     let mut guard = cache.lock().expect("lut cache");
     if let Some((_, lut)) = guard.iter().find(|(t, _)| *t == transfer) {
         return lut;
     }
-    let lut: Vec<f32> = (0..LUT_SIZE)
-        .map(|i| transfer.to_linear(i as f64 / (LUT_SIZE - 1) as f64) as f32)
+    let values: Vec<f32> = (0..LUT_SIZE)
+        .map(|i| f(i as f64 / (LUT_SIZE - 1) as f64))
         .collect();
-    let lut: &'static [f32] = Box::leak(lut.into_boxed_slice());
+    let boxed: Box<Lut> = values.into_boxed_slice().try_into().expect("table size");
+    let lut: &'static Lut = Box::leak(boxed);
     guard.push((transfer, lut));
     lut
+}
+
+/// Per-transfer lookup from a 16-bit non-linear code to linear light.
+fn to_linear_lut(transfer: Transfer) -> &'static Lut {
+    static LUTS: LutCache = OnceLock::new();
+    build_lut(&LUTS, transfer, |x| transfer.to_linear(x) as f32)
 }
 
 /// Per-transfer lookup from linear light (quantized to 16 bits over
-/// `[0, 1]`) to an 8-bit-scaled non-linear value in `[0, 255]`.
-fn from_linear_lut(transfer: Transfer) -> &'static [f32] {
+/// `[0, 1]`) to the non-linear value in `[0, 1]`.
+fn from_linear_lut(transfer: Transfer) -> &'static Lut {
     static LUTS: LutCache = OnceLock::new();
-    let cache = LUTS.get_or_init(|| Mutex::new(Vec::new()));
-    let mut guard = cache.lock().expect("lut cache");
-    if let Some((_, lut)) = guard.iter().find(|(t, _)| *t == transfer) {
-        return lut;
-    }
-    let lut: Vec<f32> = (0..LUT_SIZE)
-        .map(|i| (transfer.from_linear(i as f64 / (LUT_SIZE - 1) as f64) * 255.0) as f32)
-        .collect();
-    let lut: &'static [f32] = Box::leak(lut.into_boxed_slice());
-    guard.push((transfer, lut));
-    lut
+    build_lut(&LUTS, transfer, |x| transfer.from_linear(x) as f32)
 }
 
-/// Three 16-bit planes of equal size, little-endian, row-major with a
-/// stride in samples.
+/// Table index for a value nominally in `[0, 1]`. The float-to-integer
+/// cast saturates and maps NaN to zero, and the index is narrowed to the
+/// table's range, so no bounds check is needed at the lookup.
+#[inline]
+fn lut_index(v: f32) -> usize {
+    let i = (v * (LUT_SIZE - 1) as f32 + 0.5) as i32;
+    i.clamp(0, (LUT_SIZE - 1) as i32) as u16 as usize
+}
+
+/// Three 16-bit little-endian planes of equal size, row-major, given as
+/// bytes with a stride in bytes.
 pub struct Planes16<'a> {
     /// Luma or first component.
-    pub y: &'a [u16],
+    pub y: &'a [u8],
     /// First chroma or second component.
-    pub cb: &'a [u16],
+    pub cb: &'a [u8],
     /// Second chroma or third component.
-    pub cr: &'a [u16],
-    /// Samples per row in each plane.
+    pub cr: &'a [u8],
+    /// Bytes per row in each plane.
     pub stride: usize,
+}
+
+#[inline]
+fn sample16(plane: &[u8], offset: usize) -> f32 {
+    f32::from(u16::from_le_bytes([plane[offset], plane[offset + 1]]))
 }
 
 /// Converts 16-bit 4:4:4 Y'CbCr planes to a premultiplied linear image.
 pub fn ycbcr16_to_image(planes: &Planes16, width: u32, height: u32, tags: ResolvedTags) -> Image {
+    let mut image = Image {
+        width,
+        height,
+        pixels: Vec::new(),
+    };
+    ycbcr16_into(planes, width, height, tags, &mut image);
+    image
+}
+
+/// Like [`ycbcr16_to_image`], writing into `out` and keeping its buffer
+/// when the size has not changed.
+pub fn ycbcr16_into(
+    planes: &Planes16,
+    width: u32,
+    height: u32,
+    tags: ResolvedTags,
+    out: &mut Image,
+) {
     let lut = to_linear_lut(tags.transfer);
     let (kr, kb) = matrix::luma_coefficients(tags.matrix).unwrap_or((0.0, 0.0));
     let kg = 1.0 - kr - kb;
@@ -74,43 +105,45 @@ pub fn ycbcr16_to_image(planes: &Planes16, width: u32, height: u32, tags: Resolv
         Range::Full => (0.0, 1.0 / 65535.0, 1.0 / 65535.0),
         Range::Limited => (16.0 * 256.0, 1.0 / (219.0 * 256.0), 1.0 / (224.0 * 256.0)),
     };
-    let max_index = (LUT_SIZE - 1) as f32;
-    let encode = |v: f32| lut[(v.clamp(0.0, 1.0) * max_index + 0.5) as usize];
-    let mut pixels = Vec::with_capacity(width as usize * height as usize);
-    for row in 0..height as usize {
-        let base = row * planes.stride;
-        for col in 0..width as usize {
-            let y = f32::from(planes.y[base + col]);
-            let cb = f32::from(planes.cb[base + col]);
-            let cr = f32::from(planes.cr[base + col]);
-            let (r, g, b) = if identity {
-                (
-                    (y - y_off) * y_scale,
-                    (cb - y_off) * y_scale,
-                    (cr - y_off) * y_scale,
-                )
-            } else {
-                let yn = (y - y_off) * y_scale;
-                let cbn = (cb - 32768.0) * c_scale;
-                let crn = (cr - 32768.0) * c_scale;
-                let r = yn + 2.0 * (1.0 - kr as f32) * crn;
-                let b = yn + 2.0 * (1.0 - kb as f32) * cbn;
-                let g = (yn - kr as f32 * r - kb as f32 * b) / kg as f32;
-                (r, g, b)
-            };
-            pixels.push(LinearRgba {
-                r: encode(r),
-                g: encode(g),
-                b: encode(b),
-                a: 1.0,
-            });
-        }
-    }
-    Image {
-        width,
-        height,
-        pixels,
-    }
+    let encode = |v: f32| lut[lut_index(v)];
+    let w = width as usize;
+    out.width = width;
+    out.height = height;
+    out.pixels
+        .resize(w * height as usize, LinearRgba::TRANSPARENT);
+    out.pixels
+        .par_chunks_mut(w)
+        .enumerate()
+        .for_each(|(row, out)| {
+            let base = row * planes.stride;
+            for (col, px) in out.iter_mut().enumerate() {
+                let at = base + col * 2;
+                let y = sample16(planes.y, at);
+                let cb = sample16(planes.cb, at);
+                let cr = sample16(planes.cr, at);
+                let (r, g, b) = if identity {
+                    (
+                        (y - y_off) * y_scale,
+                        (cb - y_off) * y_scale,
+                        (cr - y_off) * y_scale,
+                    )
+                } else {
+                    let yn = (y - y_off) * y_scale;
+                    let cbn = (cb - 32768.0) * c_scale;
+                    let crn = (cr - 32768.0) * c_scale;
+                    let r = yn + 2.0 * (1.0 - kr as f32) * crn;
+                    let b = yn + 2.0 * (1.0 - kb as f32) * cbn;
+                    let g = (yn - kr as f32 * r - kb as f32 * b) / kg as f32;
+                    (r, g, b)
+                };
+                *px = LinearRgba {
+                    r: encode(r),
+                    g: encode(g),
+                    b: encode(b),
+                    a: 1.0,
+                };
+            }
+        });
 }
 
 /// Converts 8-bit straight-alpha RGBA rows with `stride` bytes per row to a
@@ -122,26 +155,47 @@ pub fn rgba8_to_image(
     height: u32,
     transfer: Transfer,
 ) -> Image {
-    let lut = to_linear_lut(transfer);
-    let step = (LUT_SIZE - 1) / 255;
-    let mut pixels = Vec::with_capacity(width as usize * height as usize);
-    for row in 0..height as usize {
-        let line = &data[row * stride..row * stride + width as usize * 4];
-        for p in line.chunks_exact(4) {
-            let a = f32::from(p[3]) / 255.0;
-            pixels.push(LinearRgba {
-                r: lut[p[0] as usize * step] * a,
-                g: lut[p[1] as usize * step] * a,
-                b: lut[p[2] as usize * step] * a,
-                a,
-            });
-        }
-    }
-    Image {
+    let mut image = Image {
         width,
         height,
-        pixels,
-    }
+        pixels: Vec::new(),
+    };
+    rgba8_into(data, stride, width, height, transfer, &mut image);
+    image
+}
+
+/// Like [`rgba8_to_image`], writing into `out` and keeping its buffer when
+/// the size has not changed.
+pub fn rgba8_into(
+    data: &[u8],
+    stride: usize,
+    width: u32,
+    height: u32,
+    transfer: Transfer,
+    out: &mut Image,
+) {
+    let lut = to_linear_lut(transfer);
+    let step = (LUT_SIZE - 1) / 255;
+    let w = width as usize;
+    out.width = width;
+    out.height = height;
+    out.pixels
+        .resize(w * height as usize, LinearRgba::TRANSPARENT);
+    out.pixels
+        .par_chunks_mut(w)
+        .enumerate()
+        .for_each(|(row, px)| {
+            let line = &data[row * stride..row * stride + w * 4];
+            for (p, out) in line.chunks_exact(4).zip(px.iter_mut()) {
+                let a = f32::from(p[3]) / 255.0;
+                *out = LinearRgba {
+                    r: lut[p[0] as usize * step] * a,
+                    g: lut[p[1] as usize * step] * a,
+                    b: lut[p[2] as usize * step] * a,
+                    a,
+                };
+            }
+        });
 }
 
 /// 8-bit 4:2:0 planes ready for an encoder.
@@ -180,51 +234,54 @@ pub fn frame_to_yuv420p(frame: &Frame, tags: ResolvedTags) -> Yuv420p {
     let width = frame.width();
     let height = frame.height();
     let lut = from_linear_lut(tags.transfer);
-    let max_index = (LUT_SIZE - 1) as f32;
     let (kr, kb) = matrix::luma_coefficients(tags.matrix).unwrap_or((0.2126, 0.0722));
     let kg = 1.0 - kr - kb;
     let (y_scale, y_off, c_scale) = match tags.range {
         Range::Full => (255.0, 0.0, 255.0),
         Range::Limited => (219.0, 16.0, 224.0),
     };
-    let n = width as usize * height as usize;
-    let mut y_plane = vec![0u8; n];
-    let mut cb_full = vec![0f32; n];
-    let mut cr_full = vec![0f32; n];
-    for (i, p) in frame.pixels().iter().enumerate() {
-        // Premultiplied over opaque black is just the premultiplied value.
-        let enc = |v: f32| lut[(v.clamp(0.0, 1.0) * max_index + 0.5) as usize] / 255.0;
+    let w = width as usize;
+    let h = height as usize;
+    let cw = width.div_ceil(2) as usize;
+    let ch = height.div_ceil(2) as usize;
+    let mut y_plane = vec![0u8; w * h];
+    let mut cb_plane = vec![0u8; cw * ch];
+    let mut cr_plane = vec![0u8; cw * ch];
+    // Premultiplied over opaque black is just the premultiplied value.
+    let enc = |v: f32| lut[lut_index(v)];
+    let to_ycc = |p: &LinearRgba| {
         let (r, g, b) = (enc(p.r), enc(p.g), enc(p.b));
         let y = kr as f32 * r + kg as f32 * g + kb as f32 * b;
         let cb = (b - y) / (2.0 * (1.0 - kb as f32));
         let cr = (r - y) / (2.0 * (1.0 - kr as f32));
-        y_plane[i] = (y * y_scale + y_off + 0.5).clamp(0.0, 255.0) as u8;
-        cb_full[i] = cb;
-        cr_full[i] = cr;
-    }
-    let cw = width.div_ceil(2) as usize;
-    let ch = height.div_ceil(2) as usize;
-    let mut cb_plane = vec![0u8; cw * ch];
-    let mut cr_plane = vec![0u8; cw * ch];
-    for cy in 0..ch {
-        for cx in 0..cw {
-            let (mut sum_b, mut sum_r, mut count) = (0.0f32, 0.0f32, 0.0f32);
-            for dy in 0..2 {
-                for dx in 0..2 {
-                    let x = cx * 2 + dx;
-                    let y = cy * 2 + dy;
-                    if x < width as usize && y < height as usize {
-                        sum_b += cb_full[y * width as usize + x];
-                        sum_r += cr_full[y * width as usize + x];
+        (y, cb, cr)
+    };
+    let code = |v: f32, scale: f32, off: f32| (v * scale + off + 0.5).clamp(0.0, 255.0) as u8;
+    // Each task handles one chroma row: two picture rows, whose chroma is
+    // averaged over 2×2 blocks (or fewer samples at a right or bottom edge).
+    frame
+        .pixels()
+        .par_chunks(w * 2)
+        .zip(y_plane.par_chunks_mut(w * 2))
+        .zip(cb_plane.par_chunks_mut(cw))
+        .zip(cr_plane.par_chunks_mut(cw))
+        .for_each(|(((src, y_rows), cb_row), cr_row)| {
+            let rows = src.len() / w;
+            for cx in 0..cw {
+                let (mut sum_b, mut sum_r, mut count) = (0.0f32, 0.0f32, 0.0f32);
+                for dy in 0..rows {
+                    for x in (cx * 2..cx * 2 + 2).filter(|&x| x < w) {
+                        let (y, cb, cr) = to_ycc(&src[dy * w + x]);
+                        y_rows[dy * w + x] = code(y, y_scale, y_off);
+                        sum_b += cb;
+                        sum_r += cr;
                         count += 1.0;
                     }
                 }
+                cb_row[cx] = code(sum_b / count, c_scale, 128.0);
+                cr_row[cx] = code(sum_r / count, c_scale, 128.0);
             }
-            let i = cy * cw + cx;
-            cb_plane[i] = (sum_b / count * c_scale + 128.0 + 0.5).clamp(0.0, 255.0) as u8;
-            cr_plane[i] = (sum_r / count * c_scale + 128.0 + 0.5).clamp(0.0, 255.0) as u8;
-        }
-    }
+        });
     Yuv420p {
         width,
         height,
@@ -273,16 +330,16 @@ mod tests {
             let frame = Frame::new(2, 2, Color::from_rgba8(r, g, b, 255));
             let yuv = frame_to_yuv420p(&frame, ResolvedTags::SDR_VIDEO);
             // Widen to 16-bit 4:4:4 the way swscale does: a plain shift.
-            let wide = |v: u8| u16::from(v) << 8;
-            let y: Vec<u16> = yuv.y.iter().map(|&v| wide(v)).collect();
-            let cb = vec![wide(yuv.cb[0]); 4];
-            let cr = vec![wide(yuv.cr[0]); 4];
+            let wide = |v: u8| (u16::from(v) << 8).to_le_bytes();
+            let y: Vec<u8> = yuv.y.iter().flat_map(|&v| wide(v)).collect();
+            let cb: Vec<u8> = std::iter::repeat_n(wide(yuv.cb[0]), 4).flatten().collect();
+            let cr: Vec<u8> = std::iter::repeat_n(wide(yuv.cr[0]), 4).flatten().collect();
             let img = ycbcr16_to_image(
                 &Planes16 {
                     y: &y,
                     cb: &cb,
                     cr: &cr,
-                    stride: 2,
+                    stride: 4,
                 },
                 2,
                 2,

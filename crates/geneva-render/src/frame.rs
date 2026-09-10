@@ -20,6 +20,16 @@ impl Frame {
         }
     }
 
+    /// Resizes the frame if needed and clears it to `color`, keeping the
+    /// pixel buffer when the size is unchanged.
+    pub fn reset(&mut self, width: u32, height: u32, color: Color) {
+        self.width = width;
+        self.height = height;
+        self.pixels.clear();
+        self.pixels
+            .resize(width as usize * height as usize, color.to_linear());
+    }
+
     /// Width in pixels.
     pub fn width(&self) -> u32 {
         self.width

@@ -16,6 +16,7 @@ mod cpu;
 mod frame;
 mod text;
 
+use geneva_color::Color;
 use geneva_timeline::{Composition, Ratio};
 use thiserror::Error;
 
@@ -66,6 +67,19 @@ impl RenderError {
 
 /// Renders single frames of a composition.
 pub trait Renderer {
+    /// Renders the frame shown at time `t` into `frame`, which is resized
+    /// and cleared first; passing the same frame back keeps its buffer.
+    fn render_into(
+        &mut self,
+        comp: &Composition,
+        t: Ratio,
+        frame: &mut Frame,
+    ) -> Result<(), RenderError>;
+
     /// Renders the frame shown at time `t`.
-    fn render_frame(&mut self, comp: &Composition, t: Ratio) -> Result<Frame, RenderError>;
+    fn render_frame(&mut self, comp: &Composition, t: Ratio) -> Result<Frame, RenderError> {
+        let mut frame = Frame::new(0, 0, Color::BLACK);
+        self.render_into(comp, t, &mut frame)?;
+        Ok(frame)
+    }
 }

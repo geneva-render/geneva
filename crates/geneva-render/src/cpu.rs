@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use geneva_color::{Color, LinearRgba};
 use geneva_timeline::schema::{BlendMode, Fit, ShapeKind};
 use geneva_timeline::{Composition, Ratio, ResolvedClip, ResolvedLayer, ResolvedSource};
+use rayon::prelude::*;
 
 use crate::assets::{AssetSource, FileAssets, Image};
 use crate::frame::Frame;
@@ -49,20 +50,26 @@ impl<A: AssetSource> CpuRenderer<A> {
 }
 
 impl<A: AssetSource> Renderer for CpuRenderer<A> {
-    fn render_frame(&mut self, comp: &Composition, t: Ratio) -> Result<Frame, RenderError> {
+    fn render_into(
+        &mut self,
+        comp: &Composition,
+        t: Ratio,
+        frame: &mut Frame,
+    ) -> Result<(), RenderError> {
         if t < Ratio::ZERO || t >= comp.duration {
             return Err(RenderError::OutOfRange {
                 time: t,
                 duration: comp.duration,
             });
         }
-        self.render_layers(
+        self.render_layers_into(
             comp,
             &comp.layers,
             comp.width,
             comp.height,
             comp.background,
             t,
+            frame,
         )
     }
 }
@@ -104,7 +111,23 @@ impl<A: AssetSource> CpuRenderer<A> {
         background: Color,
         t: Ratio,
     ) -> Result<Frame, RenderError> {
-        let mut frame = Frame::new(width, height, background);
+        let mut frame = Frame::new(0, 0, Color::BLACK);
+        self.render_layers_into(comp, layers, width, height, background, t, &mut frame)?;
+        Ok(frame)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_layers_into(
+        &mut self,
+        comp: &Composition,
+        layers: &[ResolvedLayer],
+        width: u32,
+        height: u32,
+        background: Color,
+        t: Ratio,
+        frame: &mut Frame,
+    ) -> Result<(), RenderError> {
+        frame.reset(width, height, background);
         let visible = layers
             .iter()
             .flat_map(|layer| layer.clips.iter().filter(|c| c.start <= t && t < c.end));
@@ -170,9 +193,9 @@ impl<A: AssetSource> CpuRenderer<A> {
             let Some(placement) = Placement::new(width, height, clip, local, paint.size()) else {
                 continue;
             };
-            draw(&mut frame, &paint, &placement, opacity as f32, clip.blend);
+            draw(frame, &paint, &placement, opacity as f32, clip.blend);
         }
-        Ok(frame)
+        Ok(())
     }
 }
 
@@ -372,7 +395,48 @@ impl Placement {
 
 fn draw(frame: &mut Frame, paint: &Paint, place: &Placement, opacity: f32, blend: BlendMode) {
     let [x0, y0, x1, y1] = place.bounds;
-    for y in y0..y1 {
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let width = frame.width() as usize;
+    let rows = &mut frame.pixels_mut()[y0 as usize * width..y1 as usize * width];
+    // A pixel-aligned image maps texels one-to-one onto output pixels at
+    // an integer offset, so it is read directly instead of sampled.
+    let aligned = match paint {
+        Paint::Image(img) if place.pixel_aligned => Some((
+            img.as_ref(),
+            (place.position[0] - place.anchor[0]).round() as i64,
+            (place.position[1] - place.anchor[1]).round() as i64,
+        )),
+        _ => None,
+    };
+    // Rows are independent, so they are drawn in parallel.
+    rows.par_chunks_mut(width).enumerate().for_each(|(i, row)| {
+        let y = y0 + i as u32;
+        if let Some((img, ox, oy)) = aligned {
+            let v = i64::from(y) - oy;
+            if v < 0 || v >= i64::from(img.height) {
+                return;
+            }
+            let src_row = &img.pixels[v as usize * img.width as usize..][..img.width as usize];
+            let first = i64::from(x0).max(ox);
+            let last = i64::from(x1).min(ox + i64::from(img.width));
+            let plain = opacity >= 1.0 && blend == BlendMode::Normal;
+            for x in first..last {
+                let src = src_row[(x - ox) as usize];
+                if src.a <= 0.0 {
+                    continue;
+                }
+                if plain && src.a >= 1.0 {
+                    row[x as usize] = src;
+                    continue;
+                }
+                let src = src.scaled(opacity);
+                let dst = row[x as usize];
+                row[x as usize] = composite(src, dst, blend);
+            }
+            return;
+        }
         for x in x0..x1 {
             let src = if place.pixel_aligned {
                 let (u, v) = place.inverse(f64::from(x) + 0.5, f64::from(y) + 0.5);
@@ -393,10 +457,10 @@ fn draw(frame: &mut Frame, paint: &Paint, place: &Placement, opacity: f32, blend
                 continue;
             }
             let src = src.scaled(opacity);
-            let dst = frame.get(x, y);
-            frame.set(x, y, composite(src, dst, blend));
+            let dst = row[x as usize];
+            row[x as usize] = composite(src, dst, blend);
         }
-    }
+    });
 }
 
 /// Blends premultiplied `src` onto premultiplied `dst`.

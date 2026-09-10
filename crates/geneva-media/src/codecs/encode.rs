@@ -13,7 +13,7 @@ use geneva_timeline::schema::{AudioCodec, Container, HardwarePolicy, VideoCodec}
 
 use super::{codec_error, init, open_error, tags};
 use crate::MediaError;
-use crate::convert::frame_to_yuv420p;
+use crate::convert::{Yuv420p, frame_to_yuv420p};
 
 /// What to write and how.
 #[derive(Debug, Clone)]
@@ -434,14 +434,31 @@ impl Encoder {
     /// Encodes one frame. Frames must be pushed in order; each is shown
     /// for exactly one frame period.
     pub fn push_frame(&mut self, frame: &Frame) -> Result<(), MediaError> {
+        let color = self.video_color()?;
+        let yuv = frame_to_yuv420p(frame, color);
+        self.push_yuv420p(&yuv)
+    }
+
+    /// Output color tags of the video track, which frames converted ahead
+    /// of [`push_yuv420p`](Self::push_yuv420p) must use.
+    pub fn video_color(&self) -> Result<ResolvedTags, MediaError> {
+        self.video
+            .as_ref()
+            .map(|t| t.settings.color)
+            .ok_or_else(|| MediaError::Codec {
+                context: "encoding video".to_owned(),
+                reason: "the output has no video track".to_owned(),
+            })
+    }
+
+    /// Encodes one frame already converted to the output's color tags.
+    pub fn push_yuv420p(&mut self, yuv: &Yuv420p) -> Result<(), MediaError> {
         let Some(track) = self.video.as_mut() else {
             return Err(MediaError::Codec {
                 context: "encoding video".to_owned(),
                 reason: "the output has no video track".to_owned(),
             });
         };
-        let color = track.settings.color;
-        let yuv = frame_to_yuv420p(frame, color);
         let mut out = frame::Video::new(Pixel::YUV420P, yuv.width, yuv.height);
         let strides = [out.stride(0), out.stride(1), out.stride(2)];
         copy_plane(
@@ -454,7 +471,7 @@ impl Encoder {
         let (cw, ch) = (yuv.chroma_width() as usize, yuv.chroma_height() as usize);
         copy_plane(out.data_mut(1), strides[1], &yuv.cb, cw, ch);
         copy_plane(out.data_mut(2), strides[2], &yuv.cr, cw, ch);
-        let (space, range, primaries, transfer) = tags::to_codec_tags(color);
+        let (space, range, primaries, transfer) = tags::to_codec_tags(track.settings.color);
         out.set_color_space(space);
         out.set_color_range(range);
         out.set_color_primaries(primaries);
