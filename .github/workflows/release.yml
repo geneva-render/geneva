@@ -3,9 +3,15 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (created at the chosen ref if it does not exist)"
+        required: true
 
 env:
   CARGO_TERM_COLOR: always
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   build:
@@ -47,7 +53,7 @@ jobs:
         run: cargo build --release --locked
       - name: Package
         run: |
-          name=geneva-${GITHUB_REF_NAME}-${{ matrix.target }}
+          name=geneva-${RELEASE_TAG}-${{ matrix.target }}
           mkdir -p "$name/licenses"
           cp target/release/geneva README.md LICENSE THIRD-PARTY-NOTICES.md "$name/"
           cp licenses/* target/media-libs/share/licenses/* "$name/licenses/"
@@ -67,4 +73,6 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
           files: geneva-*.tar.gz
