@@ -32,12 +32,16 @@ export CXXFLAGS="${CXXFLAGS:-} -fPIC -O2"
 
 fetch() { # name url [strip-components, default 1]
   local name=$1 url=$2 strip=${3:-1} dir=$src/$1
-  if [ -d "$dir" ]; then return; fi
+  # A source tree counts only when its marker says the unpack finished;
+  # a directory alone may be the remains of an interrupted or pruned one.
+  if [ -f "$dir/.fetched" ]; then return; fi
   echo "==> fetching $name"
+  rm -rf "$dir"
   curl -sSL --retry 3 -o "$src/$name.tar" "$url"
   mkdir -p "$dir"
   tar xf "$src/$name.tar" --strip-components="$strip" -C "$dir"
   rm -f "$src/$name.tar"
+  touch "$dir/.fetched"
 }
 
 done_marker() { [ -f "$prefix/.built-$1" ]; }
@@ -93,9 +97,11 @@ fi
 
 # --- OpenH264 (BSD-2), H.264 encoding --------------------------------------
 if ! done_marker openh264; then
-  if [ ! -d "$src/openh264" ]; then
+  if [ ! -f "$src/openh264/.fetched" ]; then
     echo "==> fetching openh264"
+    rm -rf "$src/openh264"
     git clone -q --depth 1 --branch "v$OPENH264_VERSION" https://github.com/cisco/openh264 "$src/openh264"
+    touch "$src/openh264/.fetched"
   fi
   echo "==> building openh264"
   (cd "$src/openh264" && make -j"$jobs" PREFIX="$prefix" libraries >/dev/null \
@@ -106,9 +112,11 @@ fi
 
 # --- NVIDIA encoder headers (MIT); the driver is loaded at run time ---------
 if [ "$(uname -s)" = Linux ] && ! done_marker nvheaders; then
-  if [ ! -d "$src/nv-codec-headers" ]; then
+  if [ ! -f "$src/nv-codec-headers/.fetched" ]; then
     echo "==> fetching nv-codec-headers"
+    rm -rf "$src/nv-codec-headers"
     git clone -q --depth 1 --branch "n$NVCODEC_VERSION" https://github.com/FFmpeg/nv-codec-headers "$src/nv-codec-headers"
+    touch "$src/nv-codec-headers/.fetched"
   fi
   (cd "$src/nv-codec-headers" && make PREFIX="$prefix" install >/dev/null)
   mark_done nvheaders
