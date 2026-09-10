@@ -129,13 +129,22 @@ pub struct VideoReader {
     rgb: bool,
     scaler: scaling::Context,
     scaled: frame::Video,
-    /// The frame shown for the current time range: its image and the start
-    /// of the range it covers.
-    current: Option<(Ratio, Image)>,
-    /// The next decoded frame after `current`, not yet converted.
+    /// The frame shown for the current time range.
+    current: Option<Current>,
+    /// The next decoded frame after `current`.
     pending: Option<(Ratio, frame::Video)>,
     /// Source time of the last frame pulled from the decoder.
     position: Option<Ratio>,
+    /// An image buffer kept for the next conversion.
+    spare: Option<Image>,
+}
+
+/// A decoded frame, converted to the compositing format on first use.
+struct Current {
+    /// Start of the time range the frame covers.
+    from: Ratio,
+    raw: frame::Video,
+    image: Option<Image>,
 }
 
 impl VideoReader {
@@ -193,7 +202,14 @@ impl VideoReader {
             current: None,
             pending: None,
             position: None,
+            spare: None,
         })
+    }
+
+    /// Whether decoded frames are already 8-bit 4:2:0 Y'CbCr, the format
+    /// the encoders take.
+    pub fn is_yuv420p(&self) -> bool {
+        self.decoder.format() == Pixel::YUV420P
     }
 
     /// The resolved color tags used to interpret the stream.
@@ -215,22 +231,46 @@ impl VideoReader {
     /// presentation time is at or before `t`. Before the first frame the
     /// first frame is returned; after the last, the last.
     pub fn frame_at(&mut self, t: Ratio) -> Result<&Image, MediaError> {
+        self.advance_to(t)?;
+        let mut current = self.current.take().expect("advance_to leaves a frame");
+        if current.image.is_none() {
+            let mut image = self.spare.take().unwrap_or_default();
+            self.convert(&current.raw, &mut image)?;
+            current.image = Some(image);
+        }
+        let current = self.current.insert(current);
+        Ok(current.image.as_ref().expect("converted above"))
+    }
+
+    /// Like [`frame_at`](Self::frame_at), but returns the decoded frame in
+    /// the stream's own pixel format, without conversion.
+    pub fn raw_frame_at(&mut self, t: Ratio) -> Result<&frame::Video, MediaError> {
+        self.advance_to(t)?;
+        Ok(&self
+            .current
+            .as_ref()
+            .expect("advance_to leaves a frame")
+            .raw)
+    }
+
+    /// Makes `current` the frame displayed at source time `t`.
+    fn advance_to(&mut self, t: Ratio) -> Result<(), MediaError> {
         let t = t.max(Ratio::ZERO);
         let covered = match (&self.current, &self.pending) {
-            (Some((from, _)), Some((next, _))) => *from <= t && t < *next,
-            (Some((from, _)), None) => *from <= t && self.inner.eof,
+            (Some(cur), Some((next, _))) => cur.from <= t && t < *next,
+            (Some(cur), None) => cur.from <= t && self.inner.eof,
             _ => false,
         };
         if covered {
-            return Ok(&self.current.as_ref().expect("checked").1);
+            return Ok(());
         }
-        let backwards = self.current.as_ref().is_some_and(|(from, _)| t < *from);
+        let backwards = self.current.as_ref().is_some_and(|cur| t < cur.from);
         let far_ahead = self
             .position
             .is_some_and(|p| (t - p).to_f64() > FORWARD_DECODE_WINDOW_SECS);
         if self.position.is_none() || backwards || far_ahead {
             self.inner.seek(t, &mut self.decoder)?;
-            self.current = None;
+            self.retire_current();
             self.pending = None;
             self.position = None;
         }
@@ -255,10 +295,12 @@ impl VideoReader {
                 } else {
                     pts
                 };
-                // The previous frame's buffer is reused for the new one.
-                let mut image = self.current.take().map(|(_, img)| img).unwrap_or_default();
-                self.convert(&raw, &mut image)?;
-                self.current = Some((from, image));
+                self.retire_current();
+                self.current = Some(Current {
+                    from,
+                    raw,
+                    image: None,
+                });
                 if pts > t {
                     break;
                 }
@@ -267,14 +309,22 @@ impl VideoReader {
                 break;
             }
         }
-        // Consume a pending frame whose display time has been reached.
-        self.current
-            .as_ref()
-            .map(|(_, img)| img)
-            .ok_or_else(|| MediaError::Codec {
+        if self.current.is_none() {
+            return Err(MediaError::Codec {
                 context: format!("{}: decoding", self.inner.path.display()),
                 reason: "no frames could be decoded".to_owned(),
-            })
+            });
+        }
+        Ok(())
+    }
+
+    /// Drops the current frame, keeping its image buffer for reuse.
+    fn retire_current(&mut self) {
+        if let Some(cur) = self.current.take() {
+            if cur.image.is_some() {
+                self.spare = cur.image;
+            }
+        }
     }
 
     /// Nominal duration of one frame.

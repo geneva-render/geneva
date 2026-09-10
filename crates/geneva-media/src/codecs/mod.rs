@@ -2,6 +2,7 @@
 
 mod copy;
 mod decode;
+mod direct;
 mod encode;
 mod ffi;
 mod probe;
@@ -13,6 +14,7 @@ use crate::MediaError;
 
 pub use copy::{CopyPlan, CopyReport, CopySegment, plan_stream_copy, stream_copy};
 pub use decode::{AudioReader, VideoReader};
+pub use direct::DirectSource;
 pub use encode::{
     AudioSettings, EncodeSettings, Encoder, VideoSettings, container_for, default_codecs,
 };

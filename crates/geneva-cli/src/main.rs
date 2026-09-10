@@ -512,14 +512,14 @@ fn render_to(
             let result = serde_json::json!({
                 "ok": true,
                 "output": output,
-                "mode": if stats.copied { "copy" } else { "render" },
+                "mode": stats.mode.as_str(),
                 "frames": stats.frames,
                 "duration": stats.duration,
                 "seconds": stats.seconds,
             });
             if format == Format::Human {
                 report(&diagnostics, format, None)?;
-                if stats.copied {
+                if stats.mode == media::RenderMode::Copy {
                     println!(
                         "wrote {} ({}s, streams copied without re-encoding, {:.1}s elapsed)",
                         output.display(),

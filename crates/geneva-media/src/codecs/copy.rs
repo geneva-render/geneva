@@ -85,87 +85,42 @@ pub fn plan_stream_copy(
     requested_codec: Option<VideoCodec>,
 ) -> Result<Option<CopyPlan>, MediaError> {
     init();
-    if comp.layers.len() > 1 || comp.audio.len() > 1 {
+    if comp.audio.len() > 1 {
+        return Ok(None);
+    }
+    let Some(untouched) = untouched_video_clips(comp, root)? else {
+        return Ok(None);
+    };
+    if !untouched.is_empty() && container.is_audio_only() {
         return Ok(None);
     }
     let mut video_segments = Vec::new();
     let mut own_audio: Option<bool> = None;
     let mut reference: Option<StreamShape> = None;
-    let mut expected_end = Ratio::ZERO;
-
-    if let Some(layer) = comp.layers.first() {
-        if container.is_audio_only() {
+    for clip in &untouched {
+        own_audio = Some(clip.audio);
+        let shape = StreamShape::read(&clip.path)?;
+        if let Some(code) = requested_codec {
+            if shape.codec != Some(code) {
+                return Ok(None);
+            }
+        }
+        if !container_accepts(container, shape.codec) {
             return Ok(None);
         }
-        for clip in &layer.clips {
-            let ResolvedSource::Video { asset, in_, audio } = &clip.source else {
-                return Ok(None);
-            };
-            if clip.start != expected_end || clip.transition_in.is_some() {
-                return Ok(None);
-            }
-            if !clip.opacity.is_constant() || clip.opacity.sample(0.0) < 1.0 {
-                return Ok(None);
-            }
-            if !clip.scale.is_constant() || clip.scale.sample(0.0) != [1.0, 1.0] {
-                return Ok(None);
-            }
-            if !clip.rotation.is_constant() || clip.rotation.sample(0.0) != 0.0 {
-                return Ok(None);
-            }
-            if clip.blend != geneva_timeline::schema::BlendMode::Normal {
-                return Ok(None);
-            }
-            match own_audio {
-                None => own_audio = Some(*audio),
-                Some(a) if a != *audio => return Ok(None),
-                _ => {}
-            }
-            let Some(asset_info) = comp.assets.get(asset) else {
-                return Ok(None);
-            };
-            let path = root.join(&asset_info.src);
-            let shape = StreamShape::read(&path)?;
-            if shape.width != comp.width || shape.height != comp.height || shape.fps != comp.fps {
-                return Ok(None);
-            }
-            let center = [f64::from(comp.width) / 2.0, f64::from(comp.height) / 2.0];
-            if !clip.position.is_constant() || clip.position.sample(0.0) != center {
-                return Ok(None);
-            }
-            if clip
-                .anchor
-                .to_px(f64::from(comp.width), f64::from(comp.height))
-                != center
-            {
-                return Ok(None);
-            }
-            if let Some(code) = requested_codec {
-                if shape.codec != Some(code) {
-                    return Ok(None);
-                }
-            }
-            if !container_accepts(container, shape.codec) {
-                return Ok(None);
-            }
-            if *audio && !shape.has_audio {
-                return Ok(None);
-            }
-            match &reference {
-                None => reference = Some(shape),
-                Some(r) if !r.compatible(&shape) => return Ok(None),
-                _ => {}
-            }
-            video_segments.push(CopySegment {
-                path,
-                from: *in_,
-                to: Some(*in_ + clip.duration()),
-            });
-            expected_end = clip.end;
-        }
-        if video_segments.is_empty() || expected_end != comp.duration {
+        if clip.audio && !shape.has_audio {
             return Ok(None);
         }
+        match &reference {
+            None => reference = Some(shape),
+            Some(r) if !r.compatible(&shape) => return Ok(None),
+            _ => {}
+        }
+        video_segments.push(CopySegment {
+            path: clip.path.clone(),
+            from: clip.in_,
+            to: Some(clip.in_ + (clip.end - clip.start)),
+        });
     }
 
     // Audio: the clips' own audio, one untouched separate track, or none.
@@ -220,6 +175,93 @@ pub fn plan_stream_copy(
         audio: audio_segments,
         reason,
     }))
+}
+
+/// A video clip shown exactly as decoded: natural size at the frame
+/// center, full opacity, no rotation or transition, normal blending, in a
+/// composition whose output size and rate match the source's.
+pub(super) struct UntouchedClip {
+    pub path: PathBuf,
+    pub asset: String,
+    pub start: Ratio,
+    pub end: Ratio,
+    pub in_: Ratio,
+    pub audio: bool,
+}
+
+/// The composition's single video layer as a contiguous list of untouched
+/// clips covering the whole output, or `None` when anything would change
+/// the picture. An empty list means the composition has no video layer.
+pub(super) fn untouched_video_clips(
+    comp: &Composition,
+    root: &Path,
+) -> Result<Option<Vec<UntouchedClip>>, MediaError> {
+    if comp.layers.len() > 1 {
+        return Ok(None);
+    }
+    let Some(layer) = comp.layers.first() else {
+        return Ok(Some(Vec::new()));
+    };
+    let mut clips = Vec::new();
+    let mut own_audio: Option<bool> = None;
+    let mut expected_end = Ratio::ZERO;
+    let center = [f64::from(comp.width) / 2.0, f64::from(comp.height) / 2.0];
+    for clip in &layer.clips {
+        let ResolvedSource::Video { asset, in_, audio } = &clip.source else {
+            return Ok(None);
+        };
+        if clip.start != expected_end || clip.transition_in.is_some() {
+            return Ok(None);
+        }
+        if !clip.opacity.is_constant() || clip.opacity.sample(0.0) < 1.0 {
+            return Ok(None);
+        }
+        if !clip.scale.is_constant() || clip.scale.sample(0.0) != [1.0, 1.0] {
+            return Ok(None);
+        }
+        if !clip.rotation.is_constant() || clip.rotation.sample(0.0) != 0.0 {
+            return Ok(None);
+        }
+        if clip.blend != geneva_timeline::schema::BlendMode::Normal {
+            return Ok(None);
+        }
+        if !clip.position.is_constant() || clip.position.sample(0.0) != center {
+            return Ok(None);
+        }
+        if clip
+            .anchor
+            .to_px(f64::from(comp.width), f64::from(comp.height))
+            != center
+        {
+            return Ok(None);
+        }
+        match own_audio {
+            None => own_audio = Some(*audio),
+            Some(a) if a != *audio => return Ok(None),
+            _ => {}
+        }
+        let Some(asset_info) = comp.assets.get(asset) else {
+            return Ok(None);
+        };
+        let path = root.join(&asset_info.src);
+        let shape = StreamShape::read(&path)?;
+        if shape.width != comp.width || shape.height != comp.height || shape.fps != comp.fps {
+            return Ok(None);
+        }
+        clips.push(UntouchedClip {
+            path,
+            asset: asset.clone(),
+            start: clip.start,
+            end: clip.end,
+            in_: *in_,
+            audio: *audio,
+        });
+        expected_end = clip.end;
+    }
+    if clips.is_empty() || expected_end != comp.duration {
+        return Ok(None);
+    }
+    Ok(Some(clips))
 }
 
 /// Audio codecs each container can hold without re-encoding.

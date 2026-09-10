@@ -15,13 +15,35 @@ pub struct RenderOverrides {
 }
 
 /// What a render produced.
+/// How `render` produced its output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderMode {
+    /// Source streams were copied without decoding.
+    Copy,
+    /// Decoded frames went straight to the encoder without compositing.
+    Direct,
+    /// Frames were composited by the renderer.
+    Render,
+}
+
+impl RenderMode {
+    /// The name used in reports.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Copy => "copy",
+            Self::Direct => "direct",
+            Self::Render => "render",
+        }
+    }
+}
+
 pub struct RenderStats {
     /// Frames encoded; zero when streams were copied.
     pub frames: u64,
     /// Output duration in seconds.
     pub duration: Ratio,
-    /// Whether the output was produced by copying source streams.
-    pub copied: bool,
+    /// How the output was produced.
+    pub mode: RenderMode,
     /// Remarks for the user, such as cuts moved to keyframes.
     pub notes: Vec<String>,
     pub seconds: f64,
@@ -111,7 +133,7 @@ mod imp {
     use geneva_render::{CpuRenderer, RenderError, Renderer};
     use geneva_timeline::Composition;
 
-    use super::{RenderOverrides, RenderStats};
+    use super::{RenderMode, RenderOverrides, RenderStats};
 
     pub fn probe(path: &Path) -> Result<MediaInfo> {
         geneva_media::probe(path).with_context(|| format!("probing {}", path.display()))
@@ -276,13 +298,24 @@ mod imp {
                 return Ok(RenderStats {
                     frames: 0,
                     duration: report.duration,
-                    copied: true,
+                    mode: RenderMode::Copy,
                     notes,
                     seconds: started.elapsed().as_secs_f64(),
                 });
             }
         }
         let has_video = settings.video.is_some();
+        // When the picture is the source's own, decoded frames skip the
+        // compositing pipeline.
+        let mut direct = if has_video {
+            geneva_media::DirectSource::open(comp, root).map_err(media_err)?
+        } else {
+            None
+        };
+        let mut notes = Vec::new();
+        if let Some(d) = &direct {
+            notes.push(d.reason());
+        }
         let encoder = Encoder::new(output, settings).map_err(media_err)?;
         let mut renderer = CpuRenderer::new(MediaAssets::new(root));
         let total = if has_video { comp.frame_count() } else { 0 };
@@ -304,14 +337,25 @@ mod imp {
         let mut render_error = None;
         let mut frame = geneva_render::Frame::new(0, 0, geneva_color::Color::BLACK);
         for n in 0..total {
-            if let Err(e) = renderer.render_into(comp, comp.frame_time(n), &mut frame) {
-                render_error = Some(e);
-                break;
-            }
-            let yuv = geneva_media::convert::frame_to_yuv420p(
-                &frame,
-                color.expect("video output has color tags"),
-            );
+            let t = comp.frame_time(n);
+            let yuv = if let Some(d) = direct.as_mut() {
+                match d.frame(t) {
+                    Ok(yuv) => yuv,
+                    Err(e) => {
+                        render_error = Some(media_err(e));
+                        break;
+                    }
+                }
+            } else {
+                if let Err(e) = renderer.render_into(comp, t, &mut frame) {
+                    render_error = Some(e);
+                    break;
+                }
+                geneva_media::convert::frame_to_yuv420p(
+                    &frame,
+                    color.expect("video output has color tags"),
+                )
+            };
             if tx.send(yuv).is_err() {
                 // The encoder stopped; its error is reported below.
                 break;
@@ -339,8 +383,12 @@ mod imp {
         Ok(RenderStats {
             frames: total,
             duration: comp.duration,
-            copied: false,
-            notes: Vec::new(),
+            mode: if direct.is_some() {
+                RenderMode::Direct
+            } else {
+                RenderMode::Render
+            },
+            notes,
             seconds: started.elapsed().as_secs_f64(),
         })
     }
@@ -354,7 +402,7 @@ mod imp {
     use geneva_render::{CpuRenderer, FileAssets, RenderError};
     use geneva_timeline::Composition;
 
-    use super::{RenderOverrides, RenderStats};
+    use super::{RenderMode, RenderOverrides, RenderStats};
 
     fn unavailable() -> anyhow::Error {
         anyhow::anyhow!("{}", geneva_media::MediaError::Unavailable)

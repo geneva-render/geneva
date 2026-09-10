@@ -27,8 +27,8 @@ use thiserror::Error;
 pub use assets::MediaAssets;
 #[cfg(feature = "media")]
 pub use codecs::{
-    AudioReader, AudioSettings, CopyPlan, CopyReport, CopySegment, EncodeSettings, Encoder,
-    VideoReader, VideoSettings, container_for, default_codecs, plan_stream_copy, probe,
+    AudioReader, AudioSettings, CopyPlan, CopyReport, CopySegment, DirectSource, EncodeSettings,
+    Encoder, VideoReader, VideoSettings, container_for, default_codecs, plan_stream_copy, probe,
     stream_copy,
 };
 pub use info::{AudioInfo, MediaInfo, VideoInfo};

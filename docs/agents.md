@@ -30,8 +30,10 @@ Every command that touches a timeline returns:
 }
 ```
 
-`render` and the verbs add `output`, `mode` (`"copy"` or `"render"`),
-`frames`, `duration` and `seconds`. `frame` adds `output`, `time`,
+`render` and the verbs add `output`, `mode`, `frames`, `duration` and
+`seconds`. `mode` is `"copy"` (source streams copied, no decoding),
+`"direct"` (decoded frames handed straight to the encoder) or `"render"`
+(frames composited by the renderer). `frame` adds `output`, `time`,
 `frame`, `width`, `height`. `probe` returns the media description directly.
 
 Diagnostics carry a stable `code` ([errors.md](errors.md)), a JSON

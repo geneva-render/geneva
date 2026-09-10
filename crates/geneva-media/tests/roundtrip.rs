@@ -399,3 +399,51 @@ fn audio_only_outputs_round_trip_through_wav() {
     let rms_out = rms(&back[..2000]);
     assert!((rms_in - rms_out).abs() < 0.01, "{rms_in} vs {rms_out}");
 }
+
+#[test]
+fn direct_frames_match_the_reference_renderer() {
+    use geneva_media::{DirectSource, MediaAssets, convert::frame_to_yuv420p};
+    use geneva_render::{CpuRenderer, Renderer};
+
+    let root = clip().parent().unwrap().to_path_buf();
+    let doc = |clip_extra: &str| {
+        format!(
+            r#"{{
+              "geneva": "0.1",
+              "output": {{ "width": 192, "height": 108, "fps": 25 }},
+              "assets": {{ "clip": {{ "src": "clip.mp4" }} }},
+              "layers": [ {{ "clips": [ {{
+                "source": {{ "kind": "video", "asset": "clip", "in": "0.5s", "out": "1.5s" }}{clip_extra}
+              }} ] }} ]
+            }}"#
+        )
+    };
+    let comp = load(&doc("")).composition.unwrap();
+    let mut direct = DirectSource::open(&comp, &root)
+        .unwrap()
+        .expect("a plain cut qualifies");
+    let mut renderer = CpuRenderer::new(MediaAssets::new(root.clone()));
+    for n in [0u64, 7, 24] {
+        let t = comp.frame_time(n);
+        let fast = direct.frame(t).unwrap();
+        let slow = frame_to_yuv420p(&renderer.render_frame(&comp, t).unwrap(), comp.color);
+        assert_eq!(fast.y.len(), slow.y.len());
+        // The reference path resamples chroma up and back down through
+        // linear light, which moves luma at hard edges in both directions;
+        // the two must agree closely on average and show no bias.
+        let n_px = fast.y.len() as f64;
+        let (mut abs, mut signed) = (0.0f64, 0.0f64);
+        for (a, b) in fast.y.iter().zip(&slow.y) {
+            let d = f64::from(*a) - f64::from(*b);
+            abs += d.abs();
+            signed += d;
+        }
+        let (abs, signed) = (abs / n_px, signed / n_px);
+        assert!(abs < 4.0, "frame {n}: mean luma difference {abs}");
+        assert!(signed.abs() < 0.5, "frame {n}: luma bias {signed}");
+    }
+
+    // Anything that changes the picture disqualifies the direct path.
+    let comp = load(&doc(r#", "opacity": 0.5"#)).composition.unwrap();
+    assert!(DirectSource::open(&comp, &root).unwrap().is_none());
+}

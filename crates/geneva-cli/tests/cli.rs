@@ -250,7 +250,7 @@ fn render_copies_plain_cuts_and_reencodes_with_exact() {
         .unwrap();
     assert!(exact.status.success());
     let doc: serde_json::Value = serde_json::from_slice(&exact.stdout).unwrap();
-    assert_eq!(doc["mode"], "render");
+    assert_eq!(doc["mode"], "direct");
     assert_eq!(doc["frames"], 23);
 }
 
@@ -307,7 +307,7 @@ fn trim_prints_its_timeline_and_copies_the_streams() {
         &["trim", "--from", "0.5", "--duration", "1", "--exact", "-o"],
         &[&dir.path().join("exact.mp4"), &clip],
     );
-    assert_eq!(exact["mode"], "render");
+    assert_eq!(exact["mode"], "direct");
     assert_eq!(exact["frames"], 25);
 }
 
@@ -433,4 +433,32 @@ fn audio_extracts_mutes_and_replaces() {
         .assert()
         .code(2)
         .stderr(predicate::str::contains("--extract"));
+}
+
+#[test]
+fn convert_hands_decoded_frames_straight_to_the_encoder() {
+    let dir = tempfile::tempdir().unwrap();
+    let clip = media_dir().join("clip.mp4");
+    let out = dir.path().join("out.webm");
+    let doc = run_json(&["convert", "--preset", "ultrafast", "-o"], &[&out, &clip]);
+    assert_eq!(doc["mode"], "direct");
+    assert_eq!(doc["frames"], 50);
+    let notes: Vec<&str> = doc["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["message"].as_str().unwrap())
+        .collect();
+    assert!(
+        notes.iter().any(|n| n.contains("straight to the encoder")),
+        "{notes:?}"
+    );
+    let info = run_json(&["probe"], &[&out]);
+    assert_eq!(info["video"]["codec"], "vp9");
+
+    let resized = run_json(
+        &["resize", "--width", "96", "--preset", "ultrafast", "-o"],
+        &[&dir.path().join("small.mp4"), &clip],
+    );
+    assert_eq!(resized["mode"], "render");
 }

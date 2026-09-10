@@ -42,7 +42,8 @@ First release.
   AV1; AAC, Opus, FLAC and PCM audio; MP4, MOV, MKV, WebM and audio-only
   M4A, Ogg, FLAC and WAV.
 - Stream copy for trims and joins that leave the picture untouched, with
-  keyframe-snapped cuts reported and `--exact` to re-encode instead.
+  keyframe-snapped cuts reported and `--exact` to re-encode instead; when
+  a re-encode is needed anyway, decoded frames go straight to the encoder.
 - Golden-frame test harness with perceptual comparison.
 
 ### Platforms

@@ -94,6 +94,17 @@ requested time and the command reports the times used; `--exact` forces
 decoding and encoding for frame-accurate cuts. An audio-only output copies
 its one track under the same rule.
 
+## Direct transcode
+
+When the same analysis finds the picture untouched but the streams cannot
+be copied (a different codec was asked for, a quality setting was given,
+or `--exact`), the decoded frames are handed to the encoder as they come
+out of the decoder, provided they are already 8-bit 4:2:0 and carry the
+output's color tags. No pixel would have changed on the way through the
+renderer, so skipping it changes nothing but the time taken. Frame
+selection follows the same rule as the renderer (the last decoded frame
+at or before each output time), and the report names this mode `direct`.
+
 ## Verbs
 
 `trim`, `concat`, `convert`, `resize`, `overlay` and `audio` do not have

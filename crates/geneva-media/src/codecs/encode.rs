@@ -179,6 +179,9 @@ fn open_video_encoder(
     if global_header {
         vctx.set_flags(codec::Flags::GLOBAL_HEADER);
     }
+    // Software encoders spread work over all cores; the count is theirs to
+    // pick from the machine.
+    vctx.set_threading(codec::threading::Config::count(0));
     let mut venc = vctx
         .encoder()
         .video()
