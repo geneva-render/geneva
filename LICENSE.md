@@ -1,6 +1,6 @@
 # Geneva License 1.0
 
-Copyright (c) 2026 Geneva Render
+Copyright (c) 2026 Francesco Benetti
 
 ## Acceptance
 

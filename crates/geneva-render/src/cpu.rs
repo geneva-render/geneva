@@ -322,27 +322,64 @@ fn draw(frame: &mut Frame, paint: &Paint, place: &Placement, opacity: f32, blend
 }
 
 /// Blends premultiplied `src` onto premultiplied `dst`.
+///
+/// Separable modes follow the W3C compositing formula: each channel is
+/// `Cs·αs·(1−αb) + Cb·αb·(1−αs) + αs·αb·B(Cb, Cs)` where `B` is the mode's
+/// blend function on straight (un-premultiplied) colors, and the result
+/// alpha is the ordinary "over" alpha.
 fn composite(src: LinearRgba, dst: LinearRgba, mode: BlendMode) -> LinearRgba {
-    match mode {
-        BlendMode::Normal => src.over(dst),
-        BlendMode::Add => LinearRgba {
-            r: src.r + dst.r,
-            g: src.g + dst.g,
-            b: src.b + dst.b,
-            a: src.a + dst.a - src.a * dst.a,
-        },
-        BlendMode::Multiply => LinearRgba {
-            r: src.r * dst.r + src.r * (1.0 - dst.a) + dst.r * (1.0 - src.a),
-            g: src.g * dst.g + src.g * (1.0 - dst.a) + dst.g * (1.0 - src.a),
-            b: src.b * dst.b + src.b * (1.0 - dst.a) + dst.b * (1.0 - src.a),
-            a: src.a + dst.a * (1.0 - src.a),
-        },
-        BlendMode::Screen => LinearRgba {
-            r: src.r + dst.r - src.r * dst.r,
-            g: src.g + dst.g - src.g * dst.g,
-            b: src.b + dst.b - src.b * dst.b,
-            a: src.a + dst.a * (1.0 - src.a),
-        },
+    let blend: fn(f32, f32) -> f32 = match mode {
+        BlendMode::Normal => return src.over(dst),
+        BlendMode::Add => {
+            return LinearRgba {
+                r: src.r + dst.r,
+                g: src.g + dst.g,
+                b: src.b + dst.b,
+                a: src.a + dst.a - src.a * dst.a,
+            };
+        }
+        BlendMode::Multiply => |cb, cs| cb * cs,
+        BlendMode::Screen => |cb, cs| cb + cs - cb * cs,
+        BlendMode::Overlay => |cb, cs| hard_light(cs, cb),
+        BlendMode::Darken => f32::min,
+        BlendMode::Lighten => f32::max,
+        BlendMode::Difference => |cb, cs| (cb - cs).abs(),
+        BlendMode::SoftLight => soft_light,
+    };
+    let (sa, ba) = (src.a, dst.a);
+    let straight = |c: f32, a: f32| if a > 0.0 { c / a } else { 0.0 };
+    let channel = |s: f32, d: f32| {
+        let (cs, cb) = (straight(s, sa), straight(d, ba));
+        s * (1.0 - ba) + d * (1.0 - sa) + sa * ba * blend(cb, cs)
+    };
+    LinearRgba {
+        r: channel(src.r, dst.r),
+        g: channel(src.g, dst.g),
+        b: channel(src.b, dst.b),
+        a: sa + ba * (1.0 - sa),
+    }
+}
+
+/// Hard light: multiply for dark source values, screen for light ones.
+fn hard_light(cb: f32, cs: f32) -> f32 {
+    if cs <= 0.5 {
+        cb * 2.0 * cs
+    } else {
+        cb + (2.0 * cs - 1.0) - cb * (2.0 * cs - 1.0)
+    }
+}
+
+/// Soft light as defined by the W3C compositing specification.
+fn soft_light(cb: f32, cs: f32) -> f32 {
+    if cs <= 0.5 {
+        cb - (1.0 - 2.0 * cs) * cb * (1.0 - cb)
+    } else {
+        let d = if cb <= 0.25 {
+            ((16.0 * cb - 12.0) * cb + 4.0) * cb
+        } else {
+            cb.sqrt()
+        };
+        cb + (2.0 * cs - 1.0) * (d - cb)
     }
 }
 
@@ -513,6 +550,65 @@ mod tests {
         let a = render(&text, "0.5s");
         let b = render(&text, "0.5s");
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn blend_modes_on_opaque_colors_match_their_definitions() {
+        let a = |r: f32, g: f32, b: f32| LinearRgba { r, g, b, a: 1.0 };
+        let src = a(0.5, 1.0, 0.0);
+        let dst = a(0.5, 0.25, 0.75);
+        let close = |x: LinearRgba, y: LinearRgba| {
+            assert!(
+                (x.r - y.r).abs() < 1e-6 && (x.g - y.g).abs() < 1e-6 && (x.b - y.b).abs() < 1e-6,
+                "{x:?} vs {y:?}"
+            );
+        };
+        close(composite(src, dst, BlendMode::Multiply), a(0.25, 0.25, 0.0));
+        close(composite(src, dst, BlendMode::Screen), a(0.75, 1.0, 0.75));
+        close(composite(src, dst, BlendMode::Darken), a(0.5, 0.25, 0.0));
+        close(composite(src, dst, BlendMode::Lighten), a(0.5, 1.0, 0.75));
+        close(
+            composite(src, dst, BlendMode::Difference),
+            a(0.0, 0.75, 0.75),
+        );
+        // Overlay of 0.5 over anything is the backdrop unchanged.
+        close(composite(a(0.5, 0.5, 0.5), dst, BlendMode::Overlay), dst);
+        close(composite(a(0.5, 0.5, 0.5), dst, BlendMode::SoftLight), dst);
+        close(composite(src, dst, BlendMode::Add), a(1.0, 1.25, 0.75));
+    }
+
+    #[test]
+    fn blend_modes_degrade_to_over_against_transparent_backdrops() {
+        let src = LinearRgba {
+            r: 0.2,
+            g: 0.4,
+            b: 0.6,
+            a: 0.5,
+        };
+        for mode in [
+            BlendMode::Multiply,
+            BlendMode::Overlay,
+            BlendMode::Difference,
+            BlendMode::SoftLight,
+        ] {
+            let out = composite(src, LinearRgba::TRANSPARENT, mode);
+            assert!(
+                (out.r - src.r).abs() < 1e-6 && (out.a - src.a).abs() < 1e-6,
+                "{mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn video_clips_default_to_contain_and_images_to_natural_size() {
+        let text = doc(
+            r##""assets":{"v":{"src":"v.mp4"},"i":{"src":"i.png"}},"layers":[{"clips":[
+            {"source":{"kind":"video","asset":"v","out":"1s"}},
+            {"source":{"kind":"image","asset":"i"},"duration":"1s"}]}]"##,
+        );
+        let comp = load(&text).composition.unwrap();
+        assert_eq!(comp.layers[0].clips[0].fit, Fit::Contain);
+        assert_eq!(comp.layers[0].clips[1].fit, Fit::None);
     }
 
     #[test]

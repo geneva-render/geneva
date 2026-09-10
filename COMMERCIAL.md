@@ -6,6 +6,8 @@ and educational organizations, for evaluation, and for the benefit of
 companies with at most three people in total.
 
 Companies with more than three people need a company license to use Geneva.
-Company licenses are offered by the licensor. Contact details will be
-published with the first tagged release; until then, open an issue titled
-"Commercial license inquiry" in this repository.
+
+Contact: Francesco Benetti, <francesco@benetti.dev>.
+
+(This contact address is provisional and will change once the project has
+its own domain and mailbox.)

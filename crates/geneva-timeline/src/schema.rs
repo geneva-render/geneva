@@ -270,7 +270,8 @@ pub struct Clip {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition: Option<Transition>,
     /// How the source is sized to the output frame before the transform.
-    /// Defaults to "none" (natural size).
+    /// Defaults to "contain" for video and to "none" (natural size) for
+    /// everything else.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fit: Option<Fit>,
     /// Position, scale and rotation.
@@ -317,18 +318,28 @@ pub enum Fit {
     Fill,
 }
 
-/// Blend modes.
+/// Blend modes, computed in linear light.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum BlendMode {
     /// Source over destination.
     #[default]
     Normal,
-    /// Multiply.
+    /// Darkens: the product of the two colors.
     Multiply,
-    /// Screen.
+    /// Lightens: the inverse product of the inverted colors.
     Screen,
-    /// Additive.
+    /// Multiplies dark areas and screens light ones, increasing contrast.
+    Overlay,
+    /// Keeps the darker of the two colors per channel.
+    Darken,
+    /// Keeps the lighter of the two colors per channel.
+    Lighten,
+    /// The absolute difference of the two colors.
+    Difference,
+    /// A gentler version of overlay.
+    SoftLight,
+    /// Adds the two colors; bright areas can clip.
     Add,
 }
 

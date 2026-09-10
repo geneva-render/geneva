@@ -673,7 +673,7 @@
               "type": "null"
             }
           ],
-          "description": "How the source is sized to the output frame before the transform.\nDefaults to \"none\" (natural size)."
+          "description": "How the source is sized to the output frame before the transform.\nDefaults to \"contain\" for video and to \"none\" (natural size) for\neverything else."
         },
         "transform": {
           "anyOf": [
@@ -1700,20 +1700,45 @@
         {
           "type": "string",
           "const": "multiply",
-          "description": "Multiply."
+          "description": "Darkens: the product of the two colors."
         },
         {
           "type": "string",
           "const": "screen",
-          "description": "Screen."
+          "description": "Lightens: the inverse product of the inverted colors."
+        },
+        {
+          "type": "string",
+          "const": "overlay",
+          "description": "Multiplies dark areas and screens light ones, increasing contrast."
+        },
+        {
+          "type": "string",
+          "const": "darken",
+          "description": "Keeps the darker of the two colors per channel."
+        },
+        {
+          "type": "string",
+          "const": "lighten",
+          "description": "Keeps the lighter of the two colors per channel."
+        },
+        {
+          "type": "string",
+          "const": "difference",
+          "description": "The absolute difference of the two colors."
+        },
+        {
+          "type": "string",
+          "const": "soft-light",
+          "description": "A gentler version of overlay."
         },
         {
           "type": "string",
           "const": "add",
-          "description": "Additive."
+          "description": "Adds the two colors; bright areas can clip."
         }
       ],
-      "description": "Blend modes."
+      "description": "Blend modes, computed in linear light."
     },
     "AudioTrack": {
       "type": "object",

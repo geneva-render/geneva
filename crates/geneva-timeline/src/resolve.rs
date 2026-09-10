@@ -700,7 +700,10 @@ impl Resolver<'_> {
                 start,
                 end,
                 source,
-                fit: clip.fit.unwrap_or_default(),
+                fit: clip.fit.unwrap_or(match clip.source {
+                    Source::Video { .. } => Fit::Contain,
+                    _ => Fit::None,
+                }),
                 blend: clip.blend.unwrap_or_default(),
                 anchor,
                 position,

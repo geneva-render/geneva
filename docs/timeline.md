@@ -144,10 +144,10 @@ clips never contain paths.
 | `start` | no | end of the previous clip | Timeline time the clip appears. |
 | `duration` | no | see timing rules | How long it lasts. |
 | `transition` | no | | `{ "kind": "crossfade", "duration": ... }` from the previous clip. |
-| `fit` | no | `none` | `none`, `contain`, `cover`, `fill`: how the source box is sized to the frame before the transform. |
+| `fit` | no | `contain` for video, `none` otherwise | `none`, `contain`, `cover`, `fill`: how the source box is sized to the frame before the transform. |
 | `transform` | no | centered | Position, anchor, scale, rotation. |
 | `opacity` | no | `1` | Animatable, 0 to 1. |
-| `blend` | no | `normal` | `normal`, `multiply`, `screen`, `add`. |
+| `blend` | no | `normal` | `normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `difference`, `soft-light`, `add`. Computed in linear light. |
 
 ### `transform`
 
@@ -236,8 +236,9 @@ Tracks have `id`, `enabled` and `clips` like layers. Audio clips:
 1. A clip without `start` begins where the previous clip in the same layer
    ends; the first clip begins at 0.
 2. Video and audio clips last `duration` if given, otherwise `out - in`.
-   Until media probing is available, a video clip with neither `out` nor
-   `duration` is treated like an open-ended source (rule 3).
+   With neither, they play to the end of the file, as ffmpeg would. Until
+   media probing is available the file length is unknown, so such a clip
+   is treated like an open-ended source (rule 3).
 3. Images, solids, shapes and text are open-ended: without `duration` they
    last until `output.duration`. If that is not set either, validation fails
    with E305.
