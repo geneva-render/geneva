@@ -109,12 +109,12 @@ object with a `keyframes` array:
 | `color` | no | BT.709 SDR, limited range | Color tags for the output; see [color.md](color.md). HDR transfers are rejected (E420). |
 | `audio.sample_rate` | no | 48000 | Output sample rate. |
 | `audio.channels` | no | 2 | 1 or 2. |
-| `encode.container` | no | from the output file extension | `mp4`, `mov`, `mkv`, `webm`. |
+| `encode.container` | no | from the output file extension | `mp4`, `mov`, `mkv`, `webm`; audio only: `m4a`, `ogg`, `flac`, `wav`. An audio-only container writes no video. |
 | `encode.video.codec` | no | `h264` (`vp9` for webm) | `h264`, `h265`, `vp9`, `av1`. H.265 needs a hardware encoder. |
 | `encode.video.crf` | no | per codec | Constant quality; lower is better. |
 | `encode.video.preset` | no | per codec | Encoder speed preset name (`ultrafast` to `veryslow`); ignored by encoders without presets. |
 | `encode.video.hardware` | no | `auto` | `auto`, `never`, `require`. |
-| `encode.audio.codec` | no | `aac` (`opus` for webm) | `aac`, `opus`. |
+| `encode.audio.codec` | no | `aac` (`opus` for webm and ogg, `flac` for flac, `pcm` for wav) | `aac`, `opus`, `flac`, `pcm`. |
 | `encode.audio.bitrate_kbps` | no | 160 | Audio bitrate. |
 
 ### `assets`

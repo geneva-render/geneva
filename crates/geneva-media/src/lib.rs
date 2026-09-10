@@ -28,7 +28,8 @@ pub use assets::MediaAssets;
 #[cfg(feature = "media")]
 pub use codecs::{
     AudioReader, AudioSettings, CopyPlan, CopyReport, CopySegment, EncodeSettings, Encoder,
-    VideoReader, container_for, default_codecs, plan_stream_copy, probe, stream_copy,
+    VideoReader, VideoSettings, container_for, default_codecs, plan_stream_copy, probe,
+    stream_copy,
 };
 pub use info::{AudioInfo, MediaInfo, VideoInfo};
 

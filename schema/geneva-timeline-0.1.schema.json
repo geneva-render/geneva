@@ -396,6 +396,26 @@
           "type": "string",
           "const": "webm",
           "description": "WebM."
+        },
+        {
+          "type": "string",
+          "const": "m4a",
+          "description": "MPEG-4 audio only (AAC)."
+        },
+        {
+          "type": "string",
+          "const": "ogg",
+          "description": "Ogg audio only (Opus)."
+        },
+        {
+          "type": "string",
+          "const": "flac",
+          "description": "FLAC audio only, lossless."
+        },
+        {
+          "type": "string",
+          "const": "wav",
+          "description": "WAV audio only, uncompressed."
         }
       ],
       "description": "Output container format."
@@ -529,6 +549,16 @@
           "type": "string",
           "const": "opus",
           "description": "Opus."
+        },
+        {
+          "type": "string",
+          "const": "flac",
+          "description": "FLAC, lossless."
+        },
+        {
+          "type": "string",
+          "const": "pcm",
+          "description": "16-bit PCM, uncompressed."
         }
       ],
       "description": "Audio codec."

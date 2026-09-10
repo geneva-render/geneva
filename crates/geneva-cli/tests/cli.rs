@@ -253,3 +253,184 @@ fn render_copies_plain_cuts_and_reencodes_with_exact() {
     assert_eq!(doc["mode"], "render");
     assert_eq!(doc["frames"], 23);
 }
+
+fn run_json(args: &[&str], extra: &[&std::path::Path]) -> serde_json::Value {
+    let mut cmd = geneva();
+    cmd.args(["--format", "json"]).args(args);
+    for p in extra {
+        cmd.arg(p);
+    }
+    let result = cmd.output().unwrap();
+    assert!(
+        result.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    serde_json::from_slice(&result.stdout).unwrap()
+}
+
+#[test]
+fn trim_prints_its_timeline_and_copies_the_streams() {
+    let dir = tempfile::tempdir().unwrap();
+    let clip = media_dir().join("clip.mp4");
+    let out = dir.path().join("cut.mp4");
+
+    let shown = run_json(
+        &[
+            "trim",
+            "--from",
+            "0.5",
+            "--duration",
+            "1",
+            "--show-timeline",
+            "-o",
+        ],
+        &[&out, &clip],
+    );
+    assert_eq!(shown["output"]["width"], 192);
+    assert_eq!(shown["layers"][0]["clips"][0]["source"]["in"], "0.5s");
+    assert_eq!(shown["layers"][0]["clips"][0]["source"]["out"], "1.5s");
+    assert!(!out.exists());
+
+    let doc = run_json(
+        &["trim", "--from", "0.5", "--duration", "1", "-o"],
+        &[&out, &clip],
+    );
+    assert_eq!(doc["mode"], "copy");
+    let info = run_json(&["probe"], &[&out]);
+    assert_eq!(info["video"]["width"], 192);
+    let duration = info["duration"].as_f64().unwrap();
+    assert!((1.0..1.2).contains(&duration), "{duration}");
+
+    let exact = run_json(
+        &["trim", "--from", "0.5", "--duration", "1", "--exact", "-o"],
+        &[&dir.path().join("exact.mp4"), &clip],
+    );
+    assert_eq!(exact["mode"], "render");
+    assert_eq!(exact["frames"], 25);
+}
+
+#[test]
+fn resize_keeps_the_aspect_ratio_and_reencodes() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("small.mp4");
+    let doc = run_json(
+        &["resize", "--width", "96", "--preset", "ultrafast", "-o"],
+        &[&out, &media_dir().join("clip.mp4")],
+    );
+    assert_eq!(doc["mode"], "render");
+    let info = run_json(&["probe"], &[&out]);
+    assert_eq!(info["video"]["width"], 96);
+    assert_eq!(info["video"]["height"], 54);
+}
+
+#[test]
+fn concat_copies_matching_sources_and_renders_crossfades() {
+    let dir = tempfile::tempdir().unwrap();
+    let clip = media_dir().join("clip.mp4");
+    let joined = dir.path().join("joined.mp4");
+    let doc = run_json(&["concat", "-o"], &[&joined, &clip, &clip]);
+    assert_eq!(doc["mode"], "copy");
+    let info = run_json(&["probe"], &[&joined]);
+    let duration = info["duration"].as_f64().unwrap();
+    assert!((4.0..4.1).contains(&duration), "{duration}");
+
+    let faded = dir.path().join("faded.mp4");
+    let doc = run_json(
+        &[
+            "concat",
+            "--crossfade",
+            "0.5",
+            "--preset",
+            "ultrafast",
+            "-o",
+        ],
+        &[&faded, &clip, &clip],
+    );
+    assert_eq!(doc["mode"], "render");
+    assert_eq!(doc["duration"], 3.5);
+}
+
+#[test]
+fn overlay_places_an_image_for_the_length_of_the_video() {
+    let dir = tempfile::tempdir().unwrap();
+    let logo = dir.path().join("logo.png");
+    geneva()
+        .args(["frame"])
+        .arg(examples().join("solid.json"))
+        .args(["-o"])
+        .arg(&logo)
+        .assert()
+        .success();
+    let out = dir.path().join("branded.mp4");
+    let shown = run_json(
+        &[
+            "overlay",
+            "--at",
+            "bottom-left",
+            "--scale",
+            "0.1",
+            "--opacity",
+            "0.8",
+            "--show-timeline",
+            "-o",
+        ],
+        &[&out, &media_dir().join("clip.mp4"), &logo],
+    );
+    assert_eq!(shown["output"]["duration"], "2s");
+    assert_eq!(shown["layers"][1]["clips"][0]["opacity"], 0.8);
+    let doc = run_json(
+        &["overlay", "--scale", "0.1", "--preset", "ultrafast", "-o"],
+        &[&out, &media_dir().join("clip.mp4"), &logo],
+    );
+    assert_eq!(doc["mode"], "render");
+    assert_eq!(doc["frames"], 50);
+}
+
+#[test]
+fn audio_extracts_mutes_and_replaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let clip = media_dir().join("clip.mp4");
+    let wav = dir.path().join("sound.wav");
+    let doc = run_json(&["audio", "--extract", "-o"], &[&wav, &clip]);
+    assert_eq!(doc["mode"], "render");
+    assert_eq!(doc["frames"], 0);
+    let info = run_json(&["probe"], &[&wav]);
+    assert!(info["video"].is_null());
+    assert_eq!(info["audio"]["codec"], "pcm_s16le");
+
+    let m4a = dir.path().join("sound.m4a");
+    let doc = run_json(&["audio", "--extract", "-o"], &[&m4a, &clip]);
+    assert_eq!(doc["mode"], "copy");
+    assert_eq!(run_json(&["probe"], &[&m4a])["audio"]["codec"], "aac");
+
+    let muted = dir.path().join("muted.mp4");
+    let doc = run_json(&["audio", "--mute", "-o"], &[&muted, &clip]);
+    assert_eq!(doc["mode"], "copy");
+    assert!(run_json(&["probe"], &[&muted])["audio"].is_null());
+
+    let replaced = dir.path().join("replaced.mp4");
+    let doc = run_json(
+        &[
+            "audio",
+            "--replace",
+            wav.to_str().unwrap(),
+            "--preset",
+            "ultrafast",
+            "-o",
+        ],
+        &[&replaced, &clip],
+    );
+    assert_eq!(doc["frames"], 50);
+    let info = run_json(&["probe"], &[&replaced]);
+    assert_eq!(info["audio"]["channels"], 2);
+
+    geneva()
+        .args(["audio", "-o"])
+        .arg(dir.path().join("none.mp4"))
+        .arg(&clip)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--extract"));
+}

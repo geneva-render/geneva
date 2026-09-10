@@ -78,12 +78,23 @@ Before rendering, `geneva render` checks whether the composition is one
 layer of video clips shown as they are: natural size at the frame center,
 full opacity, no rotation, no transitions, nothing else on top, output
 size and rate equal to the sources', the same codec in every source with
-identical coded parameters, and either no audio or the sources' own
-audio. When that holds and no quality setting asks for a re-encode, the
-coded packets are copied into the output instead. Cuts move back to the
-keyframe at or before the requested time and the command reports the
-times used; `--exact` forces decoding and encoding for frame-accurate
-cuts.
+identical coded parameters, and audio that is either absent, the sources'
+own, or one untouched track spanning the output. When that holds and no
+quality setting asks for a re-encode, the coded packets are copied into
+the output instead. Cuts move back to the keyframe at or before the
+requested time and the command reports the times used; `--exact` forces
+decoding and encoding for frame-accurate cuts. An audio-only output copies
+its one track under the same rule.
+
+## Verbs
+
+`trim`, `concat`, `convert`, `resize`, `overlay` and `audio` do not have
+code paths of their own. Each probes its inputs, builds a timeline
+document (`crates/geneva-cli/src/verbs.rs`), and hands it to the same
+load, validate, plan and render sequence a timeline file goes through, so
+stream copy, diagnostics and the JSON report behave identically.
+`--show-timeline` prints the document; asset paths in it are relative to
+the deepest directory containing every input.
 
 ## Media
 

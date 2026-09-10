@@ -5,7 +5,9 @@
 use std::path::{Path, PathBuf};
 
 use geneva_color::{Color, ColorTags, Matrix, Primaries, Range, ResolvedTags, Transfer};
-use geneva_media::{AudioReader, AudioSettings, EncodeSettings, Encoder, VideoReader, mix, probe};
+use geneva_media::{
+    AudioReader, AudioSettings, EncodeSettings, Encoder, VideoReader, VideoSettings, mix, probe,
+};
 use geneva_render::Frame;
 use geneva_timeline::schema::{AudioCodec, HardwarePolicy, VideoCodec};
 use geneva_timeline::{Ratio, load};
@@ -92,15 +94,17 @@ fn encoded_solid_color_survives_the_round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("solid.mp4");
     let settings = EncodeSettings {
-        width: 320,
-        height: 180,
-        fps: Ratio::from_int(25),
+        video: Some(VideoSettings {
+            width: 320,
+            height: 180,
+            fps: Ratio::from_int(25),
+            codec: VideoCodec::H264,
+            crf: Some(16),
+            preset: Some("veryfast".to_owned()),
+            hardware: HardwarePolicy::Never,
+            color: ResolvedTags::SDR_VIDEO,
+        }),
         container: None,
-        video_codec: VideoCodec::H264,
-        crf: Some(16),
-        preset: Some("veryfast".to_owned()),
-        hardware: HardwarePolicy::Never,
-        color: ResolvedTags::SDR_VIDEO,
         audio: Some(AudioSettings {
             codec: AudioCodec::Aac,
             bitrate_kbps: 96,
@@ -183,15 +187,17 @@ fn audio_lands_at_its_timeline_position_in_the_output_file() {
     }"#;
     let comp = load(text).composition.unwrap();
     let settings = EncodeSettings {
-        width: 64,
-        height: 64,
-        fps: Ratio::from_int(25),
+        video: Some(VideoSettings {
+            width: 64,
+            height: 64,
+            fps: Ratio::from_int(25),
+            codec: VideoCodec::H264,
+            crf: Some(30),
+            preset: Some("ultrafast".to_owned()),
+            hardware: HardwarePolicy::Never,
+            color: ResolvedTags::SDR_VIDEO,
+        }),
         container: None,
-        video_codec: VideoCodec::H264,
-        crf: Some(30),
-        preset: Some("ultrafast".to_owned()),
-        hardware: HardwarePolicy::Never,
-        color: ResolvedTags::SDR_VIDEO,
         audio: Some(AudioSettings {
             codec: AudioCodec::Aac,
             bitrate_kbps: 96,
@@ -239,7 +245,7 @@ fn stream_copy_trims_at_keyframes_and_joins_compatible_sources() {
     let plan = plan_stream_copy(&comp, &root, Container::Mp4, None)
         .unwrap()
         .expect("copyable");
-    assert!(plan.audio);
+    assert_eq!(plan.audio.len(), 1);
     let out = dir.path().join("cut.mp4");
     let report = stream_copy(&plan, &out).unwrap();
     // Keyframes every 12 frames at 25 fps: the cut moves back to 0.48 s.
@@ -360,4 +366,36 @@ impl geneva_timeline::AssetInfo for Durations {
     fn duration(&self, _: &str, _: &str) -> Option<Ratio> {
         Some(Ratio::from_int(2))
     }
+}
+
+#[test]
+fn audio_only_outputs_round_trip_through_wav() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("tone.wav");
+    let settings = EncodeSettings {
+        video: None,
+        container: None,
+        audio: Some(AudioSettings {
+            codec: AudioCodec::Pcm,
+            bitrate_kbps: 0,
+            sample_rate: 48000,
+        }),
+    };
+    let mut enc = Encoder::new(&out, settings).unwrap();
+    let tone: Vec<f32> = (0..48000 * 2)
+        .map(|i| ((i / 2) as f32 * 440.0 * std::f32::consts::TAU / 48000.0).sin() * 0.5)
+        .collect();
+    enc.push_audio(&tone).unwrap();
+    assert!(enc.push_frame(&Frame::new(2, 2, Color::BLACK)).is_err());
+    enc.finish().unwrap();
+
+    let info = probe(&out).unwrap();
+    assert!(info.video.is_none());
+    assert_eq!(info.audio.as_ref().unwrap().channels, 2);
+    let mut reader = AudioReader::open(&out).unwrap();
+    let back = reader.read(Ratio::ZERO, Ratio::from_int(1), 48000).unwrap();
+    assert_eq!(back.len(), 48000 * 2);
+    let rms_in = rms(&tone[..2000]);
+    let rms_out = rms(&back[..2000]);
+    assert!((rms_in - rms_out).abs() < 0.01, "{rms_in} vs {rms_out}");
 }

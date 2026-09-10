@@ -18,16 +18,25 @@ use crate::convert::frame_to_yuv420p;
 /// What to write and how.
 #[derive(Debug, Clone)]
 pub struct EncodeSettings {
+    /// Video track settings; `None` writes no video.
+    pub video: Option<VideoSettings>,
+    /// Container. Chosen from the output path's extension when `None`.
+    pub container: Option<Container>,
+    /// Audio track settings; `None` writes no audio.
+    pub audio: Option<AudioSettings>,
+}
+
+/// Video track settings.
+#[derive(Debug, Clone)]
+pub struct VideoSettings {
     /// Frame width.
     pub width: u32,
     /// Frame height.
     pub height: u32,
     /// Frame rate.
     pub fps: Ratio,
-    /// Container. Chosen from the output path's extension when `None`.
-    pub container: Option<Container>,
-    /// Video codec.
-    pub video_codec: VideoCodec,
+    /// Codec.
+    pub codec: VideoCodec,
     /// Constant-quality level, when the codec supports one.
     pub crf: Option<u8>,
     /// Encoder speed preset name.
@@ -36,8 +45,6 @@ pub struct EncodeSettings {
     pub hardware: HardwarePolicy,
     /// Output color tags; frames are converted to and tagged with these.
     pub color: ResolvedTags,
-    /// Audio track settings; `None` writes no audio.
-    pub audio: Option<AudioSettings>,
 }
 
 /// Audio track settings.
@@ -59,6 +66,10 @@ pub fn container_for(path: &Path, requested: Option<Container>) -> Option<Contai
             "mov" => Some(Container::Mov),
             "mkv" => Some(Container::Mkv),
             "webm" => Some(Container::Webm),
+            "m4a" => Some(Container::M4a),
+            "ogg" | "oga" | "opus" => Some(Container::Ogg),
+            "flac" => Some(Container::Flac),
+            "wav" => Some(Container::Wav),
             _ => None,
         },
     )
@@ -67,8 +78,24 @@ pub fn container_for(path: &Path, requested: Option<Container>) -> Option<Contai
 /// Default codecs per container.
 pub fn default_codecs(container: Container) -> (VideoCodec, AudioCodec) {
     match container {
-        Container::Webm => (VideoCodec::Vp9, AudioCodec::Opus),
-        Container::Mp4 | Container::Mov | Container::Mkv => (VideoCodec::H264, AudioCodec::Aac),
+        Container::Webm | Container::Ogg => (VideoCodec::Vp9, AudioCodec::Opus),
+        Container::Mp4 | Container::Mov | Container::Mkv | Container::M4a => {
+            (VideoCodec::H264, AudioCodec::Aac)
+        }
+        Container::Flac => (VideoCodec::H264, AudioCodec::Flac),
+        Container::Wav => (VideoCodec::H264, AudioCodec::Pcm),
+    }
+}
+
+/// Muxer to select explicitly when the container's extension would map
+/// to a different one; `None` lets the extension decide.
+pub(super) fn muxer_name(container: Container) -> Option<&'static str> {
+    match container {
+        Container::M4a => Some("mp4"),
+        Container::Ogg => Some("ogg"),
+        Container::Mp4 | Container::Mov | Container::Mkv | Container::Webm => None,
+        Container::Flac => Some("flac"),
+        Container::Wav => Some("wav"),
     }
 }
 
@@ -125,6 +152,8 @@ fn audio_encoder_names(codec: AudioCodec) -> &'static [&'static str] {
     match codec {
         AudioCodec::Aac => &["aac"],
         AudioCodec::Opus => &["libopus"],
+        AudioCodec::Flac => &["flac"],
+        AudioCodec::Pcm => &["pcm_s16le"],
     }
 }
 
@@ -140,7 +169,7 @@ fn find_encoder(names: &[&str]) -> Result<ffmpeg_next::Codec, MediaError> {
 /// Configures and opens one video encoder implementation.
 fn open_video_encoder(
     vcodec: ffmpeg_next::Codec,
-    settings: &EncodeSettings,
+    settings: &VideoSettings,
     video_time_base: Rational,
     fps: Rational,
     global_header: bool,
@@ -208,6 +237,74 @@ fn open_video_encoder(
         .map_err(|e| codec_error(format!("opening {name} encoder"), e))
 }
 
+/// Opens the first video encoder candidate that accepts the settings and
+/// adds its stream to the output.
+fn open_video_track(
+    octx: &mut ffmpeg_next::format::context::Output,
+    path: &Path,
+    settings: VideoSettings,
+    global_header: bool,
+) -> Result<VideoTrack, MediaError> {
+    let fps = Rational::new(settings.fps.numer() as i32, settings.fps.denom() as i32);
+    let time_base = Rational::new(fps.denominator(), fps.numerator());
+    let candidates = video_encoder_candidates(settings.codec, settings.hardware);
+    if candidates.is_empty() {
+        return Err(MediaError::MissingEncoder {
+            name: format!(
+                "{:?} ({:?} hardware policy)",
+                settings.codec, settings.hardware
+            ),
+        });
+    }
+    let mut opened = None;
+    let mut last_error = None;
+    for name in &candidates {
+        let Some(vcodec) = ffmpeg_next::encoder::find_by_name(name) else {
+            continue;
+        };
+        // A hardware encoder that is compiled in but has no device logs its
+        // failure before returning an error; with a software fallback still
+        // to try, that log line is noise.
+        let quiet = settings.hardware == HardwarePolicy::Auto && !name.starts_with("lib");
+        if quiet {
+            ffmpeg_next::log::set_level(ffmpeg_next::log::Level::Quiet);
+        }
+        let result = open_video_encoder(vcodec, &settings, time_base, fps, global_header);
+        if quiet {
+            ffmpeg_next::log::set_level(ffmpeg_next::log::Level::Error);
+        }
+        match result {
+            Ok(enc) => {
+                opened = Some(enc);
+                break;
+            }
+            Err(e) => last_error = Some(e),
+        }
+    }
+    let encoder = match (opened, last_error) {
+        (Some(v), _) => v,
+        (None, Some(e)) => return Err(e),
+        (None, None) => {
+            return Err(MediaError::MissingEncoder {
+                name: candidates.join(" or "),
+            });
+        }
+    };
+    let vcodec = encoder.codec().expect("opened encoder has a codec");
+    let mut stream = octx.add_stream(vcodec).map_err(|e| open_error(path, e))?;
+    let stream_index = stream.index();
+    stream.set_time_base(time_base);
+    stream.set_avg_frame_rate(fps);
+    stream.set_rate(fps);
+    stream.set_parameters(&encoder);
+    Ok(VideoTrack {
+        encoder,
+        stream_index,
+        time_base,
+        settings,
+    })
+}
+
 struct AudioTrack {
     encoder: codec::encoder::audio::Encoder,
     stream_index: usize,
@@ -220,14 +317,18 @@ struct AudioTrack {
     next_pts: i64,
 }
 
-/// Writes video (and optionally audio) to a file.
+struct VideoTrack {
+    encoder: codec::encoder::video::Encoder,
+    stream_index: usize,
+    time_base: Rational,
+    settings: VideoSettings,
+}
+
+/// Writes video and/or audio to a file.
 pub struct Encoder {
     path: PathBuf,
     octx: ffmpeg_next::format::context::Output,
-    video: codec::encoder::video::Encoder,
-    video_stream: usize,
-    video_time_base: Rational,
-    settings: EncodeSettings,
+    video: Option<VideoTrack>,
     frame_index: i64,
     audio: Option<AudioTrack>,
     finished: bool,
@@ -237,54 +338,27 @@ impl Encoder {
     /// Creates the output file and writes its header.
     pub fn new(path: &Path, settings: EncodeSettings) -> Result<Self, MediaError> {
         init();
-        let mut octx = ffmpeg_next::format::output(path).map_err(|e| open_error(path, e))?;
+        if settings.video.is_none() && settings.audio.is_none() {
+            return Err(MediaError::Codec {
+                context: "encoder setup".to_owned(),
+                reason: "no video or audio track requested".to_owned(),
+            });
+        }
+        let container = container_for(path, settings.container);
+        let mut octx = match container.and_then(muxer_name) {
+            Some(name) => ffmpeg_next::format::output_as(path, name),
+            None => ffmpeg_next::format::output(path),
+        }
+        .map_err(|e| open_error(path, e))?;
         let global_header = octx
             .format()
             .flags()
             .contains(ffmpeg_next::format::Flags::GLOBAL_HEADER);
-        let fps = Rational::new(settings.fps.numer() as i32, settings.fps.denom() as i32);
-        let video_time_base = Rational::new(fps.denominator(), fps.numerator());
 
-        // Video stream: the first candidate that opens wins.
-        let candidates = video_encoder_candidates(settings.video_codec, settings.hardware);
-        if candidates.is_empty() {
-            return Err(MediaError::MissingEncoder {
-                name: format!(
-                    "{:?} ({:?} hardware policy)",
-                    settings.video_codec, settings.hardware
-                ),
-            });
-        }
-        let mut video = None;
-        let mut last_error = None;
-        for name in &candidates {
-            let Some(vcodec) = ffmpeg_next::encoder::find_by_name(name) else {
-                continue;
-            };
-            match open_video_encoder(vcodec, &settings, video_time_base, fps, global_header) {
-                Ok(enc) => {
-                    video = Some(enc);
-                    break;
-                }
-                Err(e) => last_error = Some(e),
-            }
-        }
-        let video = match (video, last_error) {
-            (Some(v), _) => v,
-            (None, Some(e)) => return Err(e),
-            (None, None) => {
-                return Err(MediaError::MissingEncoder {
-                    name: candidates.join(" or "),
-                });
-            }
+        let video = match settings.video {
+            None => None,
+            Some(v) => Some(open_video_track(&mut octx, path, v, global_header)?),
         };
-        let vcodec = video.codec().expect("opened encoder has a codec");
-        let mut vstream = octx.add_stream(vcodec).map_err(|e| open_error(path, e))?;
-        let video_stream = vstream.index();
-        vstream.set_time_base(video_time_base);
-        vstream.set_avg_frame_rate(fps);
-        vstream.set_rate(fps);
-        vstream.set_parameters(&video);
 
         // Audio stream.
         let audio = match &settings.audio {
@@ -306,12 +380,15 @@ impl Encoder {
                 let format = match a.codec {
                     AudioCodec::Aac => Sample::F32(sample::Type::Planar),
                     AudioCodec::Opus => Sample::F32(sample::Type::Packed),
+                    AudioCodec::Flac | AudioCodec::Pcm => Sample::I16(sample::Type::Packed),
                 };
                 aenc.set_rate(a.sample_rate as i32);
                 aenc.set_format(format);
                 aenc.set_channel_layout(ChannelLayout::STEREO);
                 aenc.set_time_base(time_base);
-                aenc.set_bit_rate(a.bitrate_kbps as usize * 1000);
+                if matches!(a.codec, AudioCodec::Aac | AudioCodec::Opus) {
+                    aenc.set_bit_rate(a.bitrate_kbps as usize * 1000);
+                }
                 let encoder = aenc
                     .open()
                     .map_err(|e| codec_error("opening audio encoder", e))?;
@@ -348,9 +425,6 @@ impl Encoder {
             path: path.to_owned(),
             octx,
             video,
-            video_stream,
-            video_time_base,
-            settings,
             frame_index: 0,
             audio,
             finished: false,
@@ -360,7 +434,14 @@ impl Encoder {
     /// Encodes one frame. Frames must be pushed in order; each is shown
     /// for exactly one frame period.
     pub fn push_frame(&mut self, frame: &Frame) -> Result<(), MediaError> {
-        let yuv = frame_to_yuv420p(frame, self.settings.color);
+        let Some(track) = self.video.as_mut() else {
+            return Err(MediaError::Codec {
+                context: "encoding video".to_owned(),
+                reason: "the output has no video track".to_owned(),
+            });
+        };
+        let color = track.settings.color;
+        let yuv = frame_to_yuv420p(frame, color);
         let mut out = frame::Video::new(Pixel::YUV420P, yuv.width, yuv.height);
         let strides = [out.stride(0), out.stride(1), out.stride(2)];
         copy_plane(
@@ -373,17 +454,24 @@ impl Encoder {
         let (cw, ch) = (yuv.chroma_width() as usize, yuv.chroma_height() as usize);
         copy_plane(out.data_mut(1), strides[1], &yuv.cb, cw, ch);
         copy_plane(out.data_mut(2), strides[2], &yuv.cr, cw, ch);
-        let (space, range, primaries, transfer) = tags::to_codec_tags(self.settings.color);
+        let (space, range, primaries, transfer) = tags::to_codec_tags(color);
         out.set_color_space(space);
         out.set_color_range(range);
         out.set_color_primaries(primaries);
         out.set_color_transfer_characteristic(transfer);
         out.set_pts(Some(self.frame_index));
         self.frame_index += 1;
-        self.video
+        track
+            .encoder
             .send_frame(&out)
             .map_err(|e| codec_error("encoding video", e))?;
-        self.drain_video()
+        Self::drain(
+            &mut self.octx,
+            &mut track.encoder,
+            track.stream_index,
+            track.time_base,
+            1,
+        )
     }
 
     /// Queues interleaved stereo samples at the configured sample rate.
@@ -430,16 +518,6 @@ impl Encoder {
         )
     }
 
-    fn drain_video(&mut self) -> Result<(), MediaError> {
-        Self::drain(
-            &mut self.octx,
-            &mut self.video,
-            self.video_stream,
-            self.video_time_base,
-            1,
-        )
-    }
-
     fn drain(
         octx: &mut ffmpeg_next::format::context::Output,
         encoder: &mut codec::encoder::Encoder,
@@ -473,7 +551,7 @@ impl Encoder {
         }
     }
 
-    /// Flushes both encoders and writes the trailer.
+    /// Flushes the encoders and writes the trailer.
     pub fn finish(mut self) -> Result<(), MediaError> {
         if let Some(mut track) = self.audio.take() {
             if !track.pending.is_empty() {
@@ -493,10 +571,19 @@ impl Encoder {
                 track.frame_size as i64,
             )?;
         }
-        self.video
-            .send_eof()
-            .map_err(|e| codec_error("flushing video", e))?;
-        self.drain_video()?;
+        if let Some(mut track) = self.video.take() {
+            track
+                .encoder
+                .send_eof()
+                .map_err(|e| codec_error("flushing video", e))?;
+            Self::drain(
+                &mut self.octx,
+                &mut track.encoder,
+                track.stream_index,
+                track.time_base,
+                1,
+            )?;
+        }
         self.octx
             .write_trailer()
             .map_err(|e| open_error(&self.path, e))?;

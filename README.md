@@ -6,10 +6,9 @@ animation, color management and audio mixing, and delegates container
 parsing, decoding and encoding to established media libraries.
 
 **Status: pre-release (0.0.x).** The timeline format, validation, the CPU
-reference renderer, text layout, media decoding and encoding work end to
-end. GPU rendering, the everyday task verbs and hardware encoders are not
-there yet. Expect breaking changes to the format until the schema reaches
-1.0.
+reference renderer, text layout, media decoding and encoding, stream copy
+and the everyday verbs work end to end. GPU rendering is not there yet.
+Expect breaking changes to the format until the schema reaches 1.0.
 
 ## What works today
 
@@ -25,9 +24,31 @@ there yet. Expect breaking changes to the format until the schema reaches
 - `geneva probe clip.mp4` — shows streams, size, rate, duration and color
   tags, including which tags had to be assumed.
 - `geneva schema` — prints the JSON Schema for the current timeline version.
+- `geneva trim`, `concat`, `convert`, `resize`, `overlay` and `audio` —
+  everyday tasks as one-line commands. Each builds a timeline and renders
+  it through the same engine; `--show-timeline` prints that timeline so a
+  quick job can grow into a full composition.
 
 Geneva ships as a single binary with its media libraries built in; see
-[Building](#building) if you build from source.
+[Building from source](#building-from-source) if you build it yourself.
+The [command-line reference](docs/cli.md) lists every command and option.
+
+## Everyday tasks
+
+```sh
+geneva trim talk.mp4 -o intro.mp4 --to 30s            # copied, no re-encode
+geneva concat part1.mp4 part2.mp4 -o all.mp4           # copied when the streams match
+geneva concat a.mp4 b.mp4 -o ab.mp4 --crossfade 0.5s   # rendered
+geneva resize talk.mp4 -o talk-720.mp4 --height 720
+geneva overlay talk.mp4 logo.png -o branded.mp4 --at bottom-right --scale 0.5
+geneva audio talk.mp4 -o talk.m4a --extract
+geneva audio talk.mp4 -o scored.mp4 --mix music.mp3 --gain -12
+```
+
+Trims and joins that leave the picture untouched copy the source streams
+and finish in the time it takes to read the files; cuts land on the
+previous keyframe unless `--exact` asks for a re-encode. Anything that
+changes the picture is rendered.
 
 ## Installing
 
@@ -88,7 +109,8 @@ geneva render examples/lower-third.json -o out.mp4
 }
 ```
 
-See [docs/timeline.md](docs/timeline.md) for the format reference and
+See [docs/timeline.md](docs/timeline.md) for the format reference,
+[docs/cli.md](docs/cli.md) for the commands and
 [docs/errors.md](docs/errors.md) for the diagnostic codes.
 
 ## Building from source
@@ -115,7 +137,7 @@ licenses are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 | `crates/geneva-media` | Probing, decoding, encoding and audio mixing over the bundled media libraries |
 | `crates/geneva-cli` | The `geneva` command-line tool |
 | `schema/` | Published JSON Schema files, one per timeline version |
-| `docs/` | Format reference, diagnostics, color pipeline, architecture |
+| `docs/` | Format reference, command-line reference, diagnostics, color pipeline, architecture |
 | `tests/golden/` | Golden scenes, their reference frames, and the fonts they use |
 | `tests/media/` | Small media files used by tests |
 | `scripts/` | The media library build and the benchmark script |

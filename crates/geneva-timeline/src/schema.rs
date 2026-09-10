@@ -127,6 +127,21 @@ pub enum Container {
     Mkv,
     /// WebM.
     Webm,
+    /// MPEG-4 audio only (AAC).
+    M4a,
+    /// Ogg audio only (Opus).
+    Ogg,
+    /// FLAC audio only, lossless.
+    Flac,
+    /// WAV audio only, uncompressed.
+    Wav,
+}
+
+impl Container {
+    /// Whether the container holds audio only.
+    pub fn is_audio_only(self) -> bool {
+        matches!(self, Self::M4a | Self::Ogg | Self::Flac | Self::Wav)
+    }
 }
 
 /// Video encoder settings.
@@ -195,6 +210,10 @@ pub enum AudioCodec {
     Aac,
     /// Opus.
     Opus,
+    /// FLAC, lossless.
+    Flac,
+    /// 16-bit PCM, uncompressed.
+    Pcm,
 }
 
 /// A media file referenced by the composition.

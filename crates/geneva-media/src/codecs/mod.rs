@@ -13,7 +13,9 @@ use crate::MediaError;
 
 pub use copy::{CopyPlan, CopyReport, CopySegment, plan_stream_copy, stream_copy};
 pub use decode::{AudioReader, VideoReader};
-pub use encode::{AudioSettings, EncodeSettings, Encoder, container_for, default_codecs};
+pub use encode::{
+    AudioSettings, EncodeSettings, Encoder, VideoSettings, container_for, default_codecs,
+};
 pub use probe::probe;
 
 /// Initializes the libraries once. Safe to call repeatedly.

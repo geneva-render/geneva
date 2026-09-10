@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod media;
+mod verbs;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -47,6 +48,18 @@ enum Command {
     Probe(ProbeArgs),
     /// Print the JSON Schema of the timeline format.
     Schema,
+    /// Re-encode a video, optionally changing its codec, size or frame rate.
+    Convert(ConvertArgs),
+    /// Change a video's size.
+    Resize(ResizeArgs),
+    /// Cut a range out of a video.
+    Trim(TrimArgs),
+    /// Join videos back to back.
+    Concat(ConcatArgs),
+    /// Place an image or video over a video.
+    Overlay(OverlayArgs),
+    /// Extract, remove, replace or mix a video's audio.
+    Audio(AudioArgs),
 }
 
 #[derive(Args)]
@@ -120,6 +133,151 @@ struct RenderArgs {
 struct ProbeArgs {
     /// Media file to inspect.
     file: PathBuf,
+}
+
+#[derive(Args)]
+struct ConvertArgs {
+    /// Input video.
+    input: PathBuf,
+    /// Output file. The extension selects the container.
+    #[arg(short, long, value_name = "FILE")]
+    output: PathBuf,
+    /// Output width in pixels. The height follows when not given.
+    #[arg(long)]
+    width: Option<u32>,
+    /// Output height in pixels. The width follows when not given.
+    #[arg(long)]
+    height: Option<u32>,
+    /// How to fit the picture when the shape changes.
+    #[arg(long, value_enum, default_value_t = verbs::FitArg::Contain)]
+    fit: verbs::FitArg,
+    /// Output frame rate, for example 30 or 30000/1001.
+    #[arg(long, value_name = "FPS")]
+    fps: Option<String>,
+    #[command(flatten)]
+    encode: verbs::EncodeArgs,
+}
+
+#[derive(Args)]
+struct ResizeArgs {
+    /// Input video.
+    input: PathBuf,
+    /// Output file. The extension selects the container.
+    #[arg(short, long, value_name = "FILE")]
+    output: PathBuf,
+    /// Output width in pixels. The height follows when not given.
+    #[arg(long, required_unless_present = "height")]
+    width: Option<u32>,
+    /// Output height in pixels. The width follows when not given.
+    #[arg(long, required_unless_present = "width")]
+    height: Option<u32>,
+    /// How to fit the picture when the shape changes.
+    #[arg(long, value_enum, default_value_t = verbs::FitArg::Contain)]
+    fit: verbs::FitArg,
+    #[command(flatten)]
+    encode: verbs::EncodeArgs,
+}
+
+#[derive(Args)]
+struct TrimArgs {
+    /// Input video.
+    input: PathBuf,
+    /// Output file. The extension selects the container.
+    #[arg(short, long, value_name = "FILE")]
+    output: PathBuf,
+    /// Where the kept range starts, for example 1.5, "1.5s", "45f" or
+    /// "00:00:01.5". Defaults to the beginning.
+    #[arg(long, value_name = "TIME")]
+    from: Option<String>,
+    /// Where the kept range ends. Defaults to the end.
+    #[arg(long, value_name = "TIME", conflicts_with = "duration")]
+    to: Option<String>,
+    /// Length of the kept range, instead of an end time.
+    #[arg(long, value_name = "TIME")]
+    duration: Option<String>,
+    #[command(flatten)]
+    encode: verbs::EncodeArgs,
+}
+
+#[derive(Args)]
+struct ConcatArgs {
+    /// Input videos, in order.
+    #[arg(required = true, num_args = 2..)]
+    inputs: Vec<PathBuf>,
+    /// Output file. The extension selects the container.
+    #[arg(short, long, value_name = "FILE")]
+    output: PathBuf,
+    /// Cross-fade between inputs over this long instead of cutting.
+    #[arg(long, value_name = "TIME")]
+    crossfade: Option<String>,
+    #[command(flatten)]
+    encode: verbs::EncodeArgs,
+}
+
+#[derive(Args)]
+struct OverlayArgs {
+    /// Input video.
+    input: PathBuf,
+    /// Image or video to place on top.
+    overlay: PathBuf,
+    /// Output file. The extension selects the container.
+    #[arg(short, long, value_name = "FILE")]
+    output: PathBuf,
+    /// Where to put the overlay.
+    #[arg(long, value_enum, default_value_t = verbs::Corner::TopRight)]
+    at: verbs::Corner,
+    /// Distance from the edges in pixels.
+    #[arg(long, default_value_t = 24.0)]
+    margin: f64,
+    /// Scale factor applied to the overlay.
+    #[arg(long, default_value_t = 1.0)]
+    scale: f64,
+    /// Opacity from 0 to 1.
+    #[arg(long, default_value_t = 1.0)]
+    opacity: f64,
+    /// When the overlay appears. Defaults to the beginning.
+    #[arg(long, value_name = "TIME")]
+    start: Option<String>,
+    /// How long the overlay stays. Defaults to the end of the video.
+    #[arg(long, value_name = "TIME")]
+    duration: Option<String>,
+    #[command(flatten)]
+    encode: verbs::EncodeArgs,
+}
+
+#[derive(Args)]
+#[command(group = clap::ArgGroup::new("operation")
+    .required(true)
+    .args(["extract", "mute", "replace", "mix"]))]
+struct AudioArgs {
+    /// Input file.
+    input: PathBuf,
+    /// Output file. For --extract, an audio extension such as .m4a, .ogg,
+    /// .flac or .wav.
+    #[arg(short, long, value_name = "FILE")]
+    output: PathBuf,
+    /// Write only the audio, to an audio file.
+    #[arg(long)]
+    extract: bool,
+    /// Drop the audio track.
+    #[arg(long)]
+    mute: bool,
+    /// Replace the audio with this file's.
+    #[arg(long, value_name = "FILE")]
+    replace: Option<PathBuf>,
+    /// Mix this file's audio in with the original.
+    #[arg(long, value_name = "FILE")]
+    mix: Option<PathBuf>,
+    /// Gain in decibels applied to the mixed-in audio.
+    #[arg(
+        long,
+        default_value_t = 0.0,
+        requires = "mix",
+        allow_negative_numbers = true
+    )]
+    gain: f64,
+    #[command(flatten)]
+    encode: verbs::EncodeArgs,
 }
 
 fn main() -> ExitCode {
@@ -214,69 +372,189 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
         Command::Render(args) => {
             let loaded = load_timeline(&args.timeline, true)?;
-            let Some(comp) = &loaded.composition else {
-                report(&loaded.diagnostics, cli.format, None)?;
-                return Ok(ExitCode::from(EXIT_INVALID));
-            };
-            let mut diagnostics = loaded.diagnostics.clone();
             let overrides = media::RenderOverrides {
                 crf: args.crf,
                 preset: args.preset.clone(),
                 no_audio: args.no_audio,
                 exact: args.exact,
             };
-            match media::render(
-                comp,
+            render_to(
+                &loaded,
                 &args.timeline.root(),
                 &args.output,
                 &overrides,
-                cli.format == Format::Human,
-            ) {
-                Ok(stats) => {
-                    for note in &stats.notes {
-                        diagnostics.push(Diagnostic::note("N600", "", note.clone()));
-                    }
-                    let result = serde_json::json!({
-                        "ok": true,
-                        "output": args.output,
-                        "mode": if stats.copied { "copy" } else { "render" },
-                        "frames": stats.frames,
-                        "duration": stats.duration,
-                        "seconds": stats.seconds,
-                    });
-                    if cli.format == Format::Human {
-                        report(&diagnostics, cli.format, None)?;
-                        if stats.copied {
-                            println!(
-                                "wrote {} ({}s, streams copied without re-encoding, {:.1}s elapsed)",
-                                args.output.display(),
-                                stats.duration,
-                                stats.seconds
-                            );
-                        } else {
-                            println!(
-                                "wrote {} ({} frames, {}s of video, {:.1}s elapsed)",
-                                args.output.display(),
-                                stats.frames,
-                                stats.duration,
-                                stats.seconds
-                            );
-                        }
-                    } else {
-                        report(&diagnostics, cli.format, Some(result))?;
-                    }
-                    Ok(ExitCode::SUCCESS)
-                }
-                Err(err) => {
-                    diagnostics.push(render_diagnostic(&err));
-                    report(
-                        &diagnostics,
-                        cli.format,
-                        Some(serde_json::json!({ "ok": false })),
-                    )?;
-                    Ok(ExitCode::from(EXIT_RENDER))
-                }
+                cli.format,
+            )
+        }
+        Command::Convert(args) => {
+            let fps = args
+                .fps
+                .as_deref()
+                .map(|f| geneva_timeline::Fps::parse(f).map_err(|e| anyhow::anyhow!("--fps: {e}")))
+                .transpose()?;
+            let compiled = verbs::convert(
+                &args.input,
+                args.width,
+                args.height,
+                args.fit,
+                fps,
+                &args.encode,
+            )?;
+            run_verb(&compiled, &args.output, &args.encode, cli.format)
+        }
+        Command::Resize(args) => {
+            let compiled = verbs::convert(
+                &args.input,
+                args.width,
+                args.height,
+                args.fit,
+                None,
+                &args.encode,
+            )?;
+            run_verb(&compiled, &args.output, &args.encode, cli.format)
+        }
+        Command::Trim(args) => {
+            let compiled = verbs::trim(
+                &args.input,
+                parse_time("--from", args.from.as_deref())?,
+                parse_time("--to", args.to.as_deref())?,
+                parse_time("--duration", args.duration.as_deref())?,
+                &args.encode,
+            )?;
+            run_verb(&compiled, &args.output, &args.encode, cli.format)
+        }
+        Command::Concat(args) => {
+            let compiled = verbs::concat(
+                &args.inputs,
+                parse_time("--crossfade", args.crossfade.as_deref())?,
+                &args.encode,
+            )?;
+            run_verb(&compiled, &args.output, &args.encode, cli.format)
+        }
+        Command::Overlay(args) => {
+            let placement = verbs::Placement {
+                corner: args.at,
+                margin: args.margin,
+                scale: args.scale,
+                opacity: args.opacity,
+                start: parse_time("--start", args.start.as_deref())?,
+                duration: parse_time("--duration", args.duration.as_deref())?,
+            };
+            let compiled = verbs::overlay(&args.input, &args.overlay, &placement, &args.encode)?;
+            run_verb(&compiled, &args.output, &args.encode, cli.format)
+        }
+        Command::Audio(args) => {
+            let op = if args.extract {
+                verbs::AudioOp::Extract
+            } else if args.mute {
+                verbs::AudioOp::Mute
+            } else if let Some(p) = &args.replace {
+                verbs::AudioOp::Replace(p.clone())
+            } else if let Some(p) = &args.mix {
+                verbs::AudioOp::Mix(p.clone(), args.gain)
+            } else {
+                anyhow::bail!("choose one of --extract, --mute, --replace or --mix");
+            };
+            let compiled = verbs::audio(&args.input, &op, &args.encode)?;
+            run_verb(&compiled, &args.output, &args.encode, cli.format)
+        }
+    }
+}
+
+fn parse_time(flag: &str, text: Option<&str>) -> Result<Option<Time>> {
+    text.map(|t| Time::parse(t).map_err(|e| anyhow::anyhow!("{flag}: {e}")))
+        .transpose()
+}
+
+/// Renders a compiled verb, or prints its timeline when asked to.
+fn run_verb(
+    compiled: &verbs::Compiled,
+    output: &Path,
+    encode: &verbs::EncodeArgs,
+    format: Format,
+) -> Result<ExitCode> {
+    let text = serde_json::to_string_pretty(&compiled.timeline)?;
+    if encode.show_timeline {
+        println!("{text}");
+        if format == Format::Human {
+            eprintln!("asset paths are relative to {}", compiled.root.display());
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+    let loaded = load_text(&text, &compiled.root, true);
+    let overrides = media::RenderOverrides {
+        crf: encode.crf,
+        preset: encode.preset.clone(),
+        no_audio: encode.no_audio,
+        exact: encode.exact,
+    };
+    render_to(&loaded, &compiled.root, output, &overrides, format)
+}
+
+/// Renders a loaded timeline to `output` and reports the outcome.
+fn render_to(
+    loaded: &Loaded,
+    root: &Path,
+    output: &Path,
+    overrides: &media::RenderOverrides,
+    format: Format,
+) -> Result<ExitCode> {
+    let Some(comp) = &loaded.composition else {
+        report(&loaded.diagnostics, format, None)?;
+        return Ok(ExitCode::from(EXIT_INVALID));
+    };
+    let mut diagnostics = loaded.diagnostics.clone();
+    match media::render(comp, root, output, overrides, format == Format::Human) {
+        Ok(stats) => {
+            for note in &stats.notes {
+                diagnostics.push(Diagnostic::note("N600", "", note.clone()));
             }
+            let result = serde_json::json!({
+                "ok": true,
+                "output": output,
+                "mode": if stats.copied { "copy" } else { "render" },
+                "frames": stats.frames,
+                "duration": stats.duration,
+                "seconds": stats.seconds,
+            });
+            if format == Format::Human {
+                report(&diagnostics, format, None)?;
+                if stats.copied {
+                    println!(
+                        "wrote {} ({}s, streams copied without re-encoding, {:.1}s elapsed)",
+                        output.display(),
+                        stats.duration,
+                        stats.seconds
+                    );
+                } else if stats.frames == 0 {
+                    println!(
+                        "wrote {} ({}s of audio, {:.1}s elapsed)",
+                        output.display(),
+                        stats.duration,
+                        stats.seconds
+                    );
+                } else {
+                    println!(
+                        "wrote {} ({} frames, {}s of video, {:.1}s elapsed)",
+                        output.display(),
+                        stats.frames,
+                        stats.duration,
+                        stats.seconds
+                    );
+                }
+            } else {
+                report(&diagnostics, format, Some(result))?;
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(err) => {
+            diagnostics.push(render_diagnostic(&err));
+            report(
+                &diagnostics,
+                format,
+                Some(serde_json::json!({ "ok": false })),
+            )?;
+            Ok(ExitCode::from(EXIT_RENDER))
         }
     }
 }
@@ -294,16 +572,21 @@ fn write_png(frame: &Frame, path: &Path) -> Result<()> {
     std::fs::write(path, png).with_context(|| format!("writing {}", path.display()))
 }
 
-/// Reads and resolves a timeline, probing media assets for their lengths
-/// when `probe` is set and media support is available.
+/// Reads and resolves a timeline file, probing media assets for their
+/// lengths when `probe` is set and media support is available.
 fn load_timeline(args: &TimelineArgs, probe: bool) -> Result<Loaded> {
     let text = std::fs::read_to_string(&args.timeline)
         .with_context(|| format!("reading {}", args.timeline.display()))?;
+    Ok(load_text(&text, &args.root(), probe))
+}
+
+/// Resolves timeline text whose asset paths are relative to `root`.
+fn load_text(text: &str, root: &Path, probe: bool) -> Loaded {
     if !probe {
-        return Ok(geneva_timeline::load(&text));
+        return geneva_timeline::load(text);
     }
-    let info = media::probe_assets(&text, &args.root());
-    let mut loaded = geneva_timeline::load_with(&text, &info);
+    let info = media::probe_assets(text, root);
+    let mut loaded = geneva_timeline::load_with(text, &info);
     loaded.diagnostics.extend(info.diagnostics());
     loaded.diagnostics.sort_by(|a, b| {
         b.severity
@@ -313,7 +596,7 @@ fn load_timeline(args: &TimelineArgs, probe: bool) -> Result<Loaded> {
     if loaded.diagnostics.iter().any(Diagnostic::is_error) {
         loaded.composition = None;
     }
-    Ok(loaded)
+    loaded
 }
 
 fn timeline_dir(path: &Path) -> PathBuf {

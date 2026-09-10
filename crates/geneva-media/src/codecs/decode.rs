@@ -381,23 +381,30 @@ impl AudioReader {
             return Ok(out);
         }
         let path = self.inner.path.clone();
-        let in_layout = if self.decoder.channel_layout().channels() > 0 {
-            self.decoder.channel_layout()
-        } else {
-            ChannelLayout::default(i32::from(self.decoder.channels()))
+        // The converter is built from the first decoded frame rather than
+        // from the decoder, and frames whose channel order is unspecified
+        // (plain WAV, for one) are given the default order for their
+        // channel count so every frame matches the converter's input.
+        let normalize = |raw: &mut frame::Audio| {
+            if raw.channel_layout().bits() == 0 {
+                raw.set_channel_layout(ChannelLayout::default(i32::from(raw.channels())));
+            }
         };
-        let mut resampler = resampling::Context::get(
-            self.decoder.format(),
-            in_layout,
-            self.decoder.rate(),
-            Sample::F32(sample::Type::Packed),
-            ChannelLayout::STEREO,
-            rate,
-        )
-        .map_err(|e| codec_error(format!("{}: audio resampling", path.display()), e))?;
+        let make_resampler = |raw: &frame::Audio| {
+            resampling::Context::get(
+                raw.format(),
+                raw.channel_layout(),
+                raw.rate(),
+                Sample::F32(sample::Type::Packed),
+                ChannelLayout::STEREO,
+                rate,
+            )
+            .map_err(|e| codec_error(format!("{}: audio resampling", path.display()), e))
+        };
 
         self.inner.seek(from, &mut self.decoder)?;
         let mut write_pos: Option<i64> = None;
+        let mut resampler = None;
         let mut raw = frame::Audio::empty();
         let mut resampled = frame::Audio::empty();
         loop {
@@ -408,7 +415,12 @@ impl AudioReader {
             if write_pos.is_none() {
                 write_pos = Some(((secs - from).to_f64() * f64::from(rate)).round() as i64);
             }
-            resampler
+            normalize(&mut raw);
+            let converter = match resampler.as_mut() {
+                Some(r) => r,
+                None => resampler.insert(make_resampler(&raw)?),
+            };
+            converter
                 .run(&raw, &mut resampled)
                 .map_err(|e| codec_error(format!("{}: audio resampling", path.display()), e))?;
             let pos = write_pos.as_mut().expect("set above");
@@ -418,7 +430,7 @@ impl AudioReader {
             }
         }
         let mut tail = frame::Audio::empty();
-        if let Some(pos) = write_pos.as_mut() {
+        if let (Some(pos), Some(resampler)) = (write_pos.as_mut(), resampler.as_mut()) {
             while resampler.flush(&mut tail).is_ok_and(|d| d.is_some()) || tail.samples() > 0 {
                 copy_samples(&tail, pos, &mut out);
                 if tail.samples() == 0 {

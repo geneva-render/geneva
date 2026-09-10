@@ -105,7 +105,9 @@ mod imp {
     use std::time::Instant;
 
     use anyhow::{Context, Result};
-    use geneva_media::{AudioSettings, EncodeSettings, Encoder, MediaAssets, MediaInfo};
+    use geneva_media::{
+        AudioSettings, EncodeSettings, Encoder, MediaAssets, MediaInfo, VideoSettings,
+    };
     use geneva_render::{CpuRenderer, RenderError, Renderer};
     use geneva_timeline::Composition;
 
@@ -195,7 +197,7 @@ mod imp {
                     RenderError::Asset {
             id: output.display().to_string(),
             reason:
-                "unknown container; use .mp4, .mov, .mkv or .webm or set output.encode.container"
+                "unknown container; use .mp4, .mov, .mkv, .webm, .m4a, .ogg, .flac or .wav or set output.encode.container"
                     .to_owned(),
         }
                 })?;
@@ -207,30 +209,44 @@ mod imp {
             .as_ref()
             .and_then(|a| a.sample_rate)
             .unwrap_or(48000);
+        let audio_settings = if overrides.no_audio {
+            None
+        } else {
+            Some(AudioSettings {
+                codec: audio.and_then(|a| a.codec).unwrap_or(default_audio),
+                bitrate_kbps: audio.and_then(|a| a.bitrate_kbps).unwrap_or(160),
+                sample_rate,
+            })
+        };
+        let video_settings = if container.is_audio_only() {
+            None
+        } else {
+            Some(VideoSettings {
+                width: comp.width,
+                height: comp.height,
+                fps: comp.fps,
+                codec: video.and_then(|v| v.codec).unwrap_or(default_video),
+                crf: overrides.crf.or_else(|| video.and_then(|v| v.crf)),
+                preset: overrides
+                    .preset
+                    .clone()
+                    .or_else(|| video.and_then(|v| v.preset.clone())),
+                hardware: video
+                    .and_then(|v| v.hardware)
+                    .unwrap_or(geneva_timeline::schema::HardwarePolicy::Auto),
+                color: comp.color,
+            })
+        };
+        if video_settings.is_none() && audio_settings.is_none() {
+            return Err(RenderError::Asset {
+                id: output.display().to_string(),
+                reason: "an audio-only output with audio disabled has nothing to write".to_owned(),
+            });
+        }
         let settings = EncodeSettings {
-            width: comp.width,
-            height: comp.height,
-            fps: comp.fps,
+            video: video_settings,
             container: Some(container),
-            video_codec: video.and_then(|v| v.codec).unwrap_or(default_video),
-            crf: overrides.crf.or_else(|| video.and_then(|v| v.crf)),
-            preset: overrides
-                .preset
-                .clone()
-                .or_else(|| video.and_then(|v| v.preset.clone())),
-            hardware: video
-                .and_then(|v| v.hardware)
-                .unwrap_or(geneva_timeline::schema::HardwarePolicy::Auto),
-            color: comp.color,
-            audio: if overrides.no_audio {
-                None
-            } else {
-                Some(AudioSettings {
-                    codec: audio.and_then(|a| a.codec).unwrap_or(default_audio),
-                    bitrate_kbps: audio.and_then(|a| a.bitrate_kbps).unwrap_or(160),
-                    sample_rate,
-                })
-            },
+            audio: audio_settings,
         };
         let has_audio = settings.audio.is_some();
         let media_err = |e: geneva_media::MediaError| RenderError::Asset {
@@ -250,7 +266,7 @@ mod imp {
                 .map_err(media_err)?;
             if let Some(p) = plan.as_mut() {
                 if overrides.no_audio {
-                    p.audio = false;
+                    p.audio.clear();
                 }
             }
             if let Some(plan) = plan {
@@ -266,9 +282,10 @@ mod imp {
                 });
             }
         }
+        let has_video = settings.video.is_some();
         let mut encoder = Encoder::new(output, settings).map_err(media_err)?;
         let mut renderer = CpuRenderer::new(MediaAssets::new(root));
-        let total = comp.frame_count();
+        let total = if has_video { comp.frame_count() } else { 0 };
         for n in 0..total {
             let frame = renderer.render_frame(comp, comp.frame_time(n))?;
             encoder.push_frame(&frame).map_err(media_err)?;

@@ -32,20 +32,24 @@ pub struct CopySegment {
 /// A decision that the composition can be produced by copying packets.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CopyPlan {
-    /// Segments in output order.
+    /// Video segments in output order; empty for audio-only outputs.
     pub segments: Vec<CopySegment>,
-    /// Whether the sources' audio is copied too.
-    pub audio: bool,
+    /// Audio segments in output order; empty when the output has no audio.
+    /// They may come from other files than the video.
+    pub audio: Vec<CopySegment>,
     /// Why copying is possible, for the user.
     pub reason: String,
 }
 
+/// Requested start, actual start (a keyframe) and actual end of one
+/// copied segment, in source seconds.
+pub type SegmentReport = (Ratio, Ratio, Ratio);
+
 /// What a copy actually did.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CopyReport {
-    /// Per segment: requested start, actual start (a keyframe), and the
-    /// actual end, in source seconds.
-    pub segments: Vec<(Ratio, Ratio, Ratio)>,
+    /// One entry per copied segment.
+    pub segments: Vec<SegmentReport>,
     /// Duration of the output in seconds.
     pub duration: Ratio,
     /// Number of video packets written.
@@ -66,11 +70,14 @@ impl CopyReport {
 /// Decides whether `comp` can be written by copying packets from its
 /// sources, and returns the plan when it can.
 ///
-/// Copying applies when the composition is one visual layer of video clips
-/// shown at natural size and full opacity with nothing else on top, the
-/// output matches the sources' size, rate and codec, every source has
-/// compatible coded parameters, and audio is either absent or passed
-/// through untouched.
+/// Copying applies when the visual part is one layer of video clips shown
+/// as they are (natural size at the frame center, full opacity, no
+/// rotation, no transitions, nothing else on top) with output size, rate
+/// and codec matching the sources and compatible coded parameters across
+/// them; and the audio is absent, the video clips' own audio, or a single
+/// untouched audio track that spans the output. Audio-only outputs copy
+/// when the audio track is one untouched clip and the source codec fits
+/// the container.
 pub fn plan_stream_copy(
     comp: &Composition,
     root: &Path,
@@ -78,116 +85,194 @@ pub fn plan_stream_copy(
     requested_codec: Option<VideoCodec>,
 ) -> Result<Option<CopyPlan>, MediaError> {
     init();
-    if comp.layers.len() != 1 {
+    if comp.layers.len() > 1 || comp.audio.len() > 1 {
         return Ok(None);
     }
-    let layer = &comp.layers[0];
-    if layer.clips.is_empty() {
-        return Ok(None);
-    }
-    // Audio: either no audio at all, or exactly the clips' own audio.
-    if !comp.audio.is_empty() {
-        return Ok(None);
-    }
-    let mut segments = Vec::new();
-    let mut wants_audio: Option<bool> = None;
-    let mut expected_end = Ratio::ZERO;
+    let mut video_segments = Vec::new();
+    let mut own_audio: Option<bool> = None;
     let mut reference: Option<StreamShape> = None;
-    for clip in &layer.clips {
-        let ResolvedSource::Video { asset, in_, audio } = &clip.source else {
-            return Ok(None);
-        };
-        if clip.start != expected_end || clip.transition_in.is_some() {
-            return Ok(None);
-        }
-        if !clip.opacity.is_constant() || clip.opacity.sample(0.0) < 1.0 {
+    let mut expected_end = Ratio::ZERO;
+
+    if let Some(layer) = comp.layers.first() {
+        if container.is_audio_only() {
             return Ok(None);
         }
-        if !clip.scale.is_constant() || clip.scale.sample(0.0) != [1.0, 1.0] {
-            return Ok(None);
-        }
-        if !clip.rotation.is_constant() || clip.rotation.sample(0.0) != 0.0 {
-            return Ok(None);
-        }
-        if clip.blend != geneva_timeline::schema::BlendMode::Normal {
-            return Ok(None);
-        }
-        match wants_audio {
-            None => wants_audio = Some(*audio),
-            Some(a) if a != *audio => return Ok(None),
-            _ => {}
-        }
-        let Some(asset_info) = comp.assets.get(asset) else {
-            return Ok(None);
-        };
-        let path = root.join(&asset_info.src);
-        let shape = StreamShape::read(&path)?;
-        // Natural size at the frame center means the clip covers the
-        // output exactly when sizes match; any fit mode gives the same
-        // placement at equal sizes.
-        if shape.width != comp.width || shape.height != comp.height || shape.fps != comp.fps {
-            return Ok(None);
-        }
-        let center = [f64::from(comp.width) / 2.0, f64::from(comp.height) / 2.0];
-        if !clip.position.is_constant() || clip.position.sample(0.0) != center {
-            return Ok(None);
-        }
-        if clip
-            .anchor
-            .to_px(f64::from(comp.width), f64::from(comp.height))
-            != center
-        {
-            return Ok(None);
-        }
-        if let Some(code) = requested_codec {
-            if shape.codec != Some(code) {
+        for clip in &layer.clips {
+            let ResolvedSource::Video { asset, in_, audio } = &clip.source else {
+                return Ok(None);
+            };
+            if clip.start != expected_end || clip.transition_in.is_some() {
                 return Ok(None);
             }
+            if !clip.opacity.is_constant() || clip.opacity.sample(0.0) < 1.0 {
+                return Ok(None);
+            }
+            if !clip.scale.is_constant() || clip.scale.sample(0.0) != [1.0, 1.0] {
+                return Ok(None);
+            }
+            if !clip.rotation.is_constant() || clip.rotation.sample(0.0) != 0.0 {
+                return Ok(None);
+            }
+            if clip.blend != geneva_timeline::schema::BlendMode::Normal {
+                return Ok(None);
+            }
+            match own_audio {
+                None => own_audio = Some(*audio),
+                Some(a) if a != *audio => return Ok(None),
+                _ => {}
+            }
+            let Some(asset_info) = comp.assets.get(asset) else {
+                return Ok(None);
+            };
+            let path = root.join(&asset_info.src);
+            let shape = StreamShape::read(&path)?;
+            if shape.width != comp.width || shape.height != comp.height || shape.fps != comp.fps {
+                return Ok(None);
+            }
+            let center = [f64::from(comp.width) / 2.0, f64::from(comp.height) / 2.0];
+            if !clip.position.is_constant() || clip.position.sample(0.0) != center {
+                return Ok(None);
+            }
+            if clip
+                .anchor
+                .to_px(f64::from(comp.width), f64::from(comp.height))
+                != center
+            {
+                return Ok(None);
+            }
+            if let Some(code) = requested_codec {
+                if shape.codec != Some(code) {
+                    return Ok(None);
+                }
+            }
+            if !container_accepts(container, shape.codec) {
+                return Ok(None);
+            }
+            if *audio && !shape.has_audio {
+                return Ok(None);
+            }
+            match &reference {
+                None => reference = Some(shape),
+                Some(r) if !r.compatible(&shape) => return Ok(None),
+                _ => {}
+            }
+            video_segments.push(CopySegment {
+                path,
+                from: *in_,
+                to: Some(*in_ + clip.duration()),
+            });
+            expected_end = clip.end;
         }
-        if !container_accepts(container, shape.codec) {
+        if video_segments.is_empty() || expected_end != comp.duration {
             return Ok(None);
         }
-        if wants_audio == Some(true) && !shape.has_audio {
-            return Ok(None);
-        }
-        match &reference {
-            None => reference = Some(shape),
-            Some(r) if !r.compatible(&shape) => return Ok(None),
-            _ => {}
-        }
-        segments.push(CopySegment {
-            path,
-            from: *in_,
-            to: Some(*in_ + clip.duration()),
-        });
-        expected_end = clip.end;
     }
-    if expected_end != comp.duration {
+
+    // Audio: the clips' own audio, one untouched separate track, or none.
+    let mut audio_segments = Vec::new();
+    match (own_audio, comp.audio.first()) {
+        (Some(true), None) => {
+            audio_segments.clone_from(&video_segments);
+        }
+        (Some(true), Some(_)) => return Ok(None),
+        (own, Some(track)) => {
+            if own == Some(true) || track.clips.len() != 1 {
+                return Ok(None);
+            }
+            let clip = &track.clips[0];
+            let untouched = clip.gain_db.is_constant()
+                && clip.gain_db.sample(0.0) == 0.0
+                && clip.fade_in.is_zero()
+                && clip.fade_out.is_zero()
+                && clip.start.is_zero()
+                && clip.end == comp.duration;
+            if !untouched {
+                return Ok(None);
+            }
+            let Some(asset_info) = comp.assets.get(&clip.asset) else {
+                return Ok(None);
+            };
+            let path = root.join(&asset_info.src);
+            let audio_shape = AudioShape::read(&path)?;
+            if !container_accepts_audio(container, audio_shape.codec_id) {
+                return Ok(None);
+            }
+            audio_segments.push(CopySegment {
+                path,
+                from: clip.in_,
+                to: Some(clip.in_ + (clip.end - clip.start)),
+            });
+        }
+        (Some(false) | None, None) => {}
+    }
+    if video_segments.is_empty() && audio_segments.is_empty() {
         return Ok(None);
     }
-    let codec = reference
-        .and_then(|r| r.codec)
-        .map_or("video".to_owned(), |c| format!("{c:?}").to_lowercase());
-    let reason = if segments.len() == 1 {
-        format!("the {codec} stream is used as is, so it is copied without re-encoding")
-    } else {
-        format!(
-            "all {} sources share the same {codec} stream parameters, so they are joined without re-encoding",
-            segments.len()
-        )
+    let reason = match (video_segments.len(), audio_segments.is_empty()) {
+        (0, _) => "the audio stream is used as is, so it is copied without re-encoding".to_owned(),
+        (1, _) => "the video stream is used as is, so it is copied without re-encoding".to_owned(),
+        (n, _) => format!(
+            "all {n} sources share the same stream parameters, so they are joined without re-encoding"
+        ),
     };
     Ok(Some(CopyPlan {
-        segments,
-        audio: wants_audio.unwrap_or(false),
+        segments: video_segments,
+        audio: audio_segments,
         reason,
     }))
+}
+
+/// Audio codecs each container can hold without re-encoding.
+fn container_accepts_audio(container: Container, codec: codec::Id) -> bool {
+    match container {
+        Container::Mp4 | Container::Mov | Container::M4a => {
+            matches!(
+                codec,
+                codec::Id::AAC
+                    | codec::Id::MP3
+                    | codec::Id::ALAC
+                    | codec::Id::AC3
+                    | codec::Id::EAC3
+            )
+        }
+        Container::Mkv => true,
+        Container::Webm | Container::Ogg => matches!(codec, codec::Id::OPUS | codec::Id::VORBIS),
+        Container::Flac => codec == codec::Id::FLAC,
+        Container::Wav => matches!(
+            codec,
+            codec::Id::PCM_S16LE | codec::Id::PCM_S24LE | codec::Id::PCM_F32LE
+        ),
+    }
+}
+
+/// Coded parameters of an audio stream, for copy decisions.
+struct AudioShape {
+    codec_id: codec::Id,
+}
+
+impl AudioShape {
+    fn read(path: &Path) -> Result<Self, MediaError> {
+        let ictx = ffmpeg_next::format::input(path).map_err(|e| open_error(path, e))?;
+        let audio = ictx
+            .streams()
+            .best(Type::Audio)
+            .ok_or_else(|| MediaError::NoStream {
+                path: path.to_owned(),
+                kind: "audio",
+            })?;
+        Ok(Self {
+            codec_id: audio.parameters().id(),
+        })
+    }
 }
 
 fn container_accepts(container: Container, codec: Option<VideoCodec>) -> bool {
     match codec {
         None => false,
-        Some(VideoCodec::Vp9 | VideoCodec::Av1) => true,
-        Some(VideoCodec::H264 | VideoCodec::H265) => container != Container::Webm,
+        Some(VideoCodec::Vp9 | VideoCodec::Av1) => !container.is_audio_only(),
+        Some(VideoCodec::H264 | VideoCodec::H265) => {
+            !container.is_audio_only() && container != Container::Webm
+        }
     }
 }
 
@@ -264,59 +349,107 @@ impl StreamShape {
 /// Writes `output` by copying the planned segments' packets.
 pub fn stream_copy(plan: &CopyPlan, output: &Path) -> Result<CopyReport, MediaError> {
     init();
-    let first = plan.segments.first().ok_or_else(|| MediaError::Codec {
-        context: "stream copy".to_owned(),
-        reason: "no segments to copy".to_owned(),
-    })?;
-    let mut octx = ffmpeg_next::format::output(output).map_err(|e| open_error(output, e))?;
-
-    // Output streams take their parameters from the first source.
-    let template =
-        ffmpeg_next::format::input(&first.path).map_err(|e| open_error(&first.path, e))?;
-    let video_in = template
-        .streams()
-        .best(Type::Video)
-        .ok_or_else(|| MediaError::NoStream {
-            path: first.path.clone(),
-            kind: "video",
-        })?;
-    let out_video = add_copied_stream(&mut octx, &video_in, output)?;
-    let out_audio = if plan.audio {
-        let audio_in =
-            template
-                .streams()
-                .best(Type::Audio)
-                .ok_or_else(|| MediaError::NoStream {
-                    path: first.path.clone(),
-                    kind: "audio",
-                })?;
-        Some(add_copied_stream(&mut octx, &audio_in, output)?)
-    } else {
-        None
+    let container = super::encode::container_for(output, None);
+    let mut octx = match container.and_then(super::encode::muxer_name) {
+        Some(name) => {
+            ffmpeg_next::format::output_as(output, name).map_err(|e| open_error(output, e))?
+        }
+        None => ffmpeg_next::format::output(output).map_err(|e| open_error(output, e))?,
     };
-    drop(template);
+
+    // Output streams take their parameters from the first source of each kind.
+    let out_video = match plan.segments.first() {
+        Some(first) => {
+            let template =
+                ffmpeg_next::format::input(&first.path).map_err(|e| open_error(&first.path, e))?;
+            let video_in =
+                template
+                    .streams()
+                    .best(Type::Video)
+                    .ok_or_else(|| MediaError::NoStream {
+                        path: first.path.clone(),
+                        kind: "video",
+                    })?;
+            Some(add_copied_stream(&mut octx, &video_in, output)?)
+        }
+        None => None,
+    };
+    let out_audio = match plan.audio.first() {
+        Some(first) => {
+            let template =
+                ffmpeg_next::format::input(&first.path).map_err(|e| open_error(&first.path, e))?;
+            let audio_in =
+                template
+                    .streams()
+                    .best(Type::Audio)
+                    .ok_or_else(|| MediaError::NoStream {
+                        path: first.path.clone(),
+                        kind: "audio",
+                    })?;
+            Some(add_copied_stream(&mut octx, &audio_in, output)?)
+        }
+        None => None,
+    };
+    if out_video.is_none() && out_audio.is_none() {
+        return Err(MediaError::Codec {
+            context: "stream copy".to_owned(),
+            reason: "nothing to copy".to_owned(),
+        });
+    }
     octx.write_header().map_err(|e| open_error(output, e))?;
 
     let mut report_segments = Vec::new();
     let mut video_packets = 0u64;
-    // Running offset of the output timeline, in seconds.
+    let mut duration = Ratio::ZERO;
+    if let Some(out_idx) = out_video {
+        let (segs, total) = copy_track(
+            &mut octx,
+            &plan.segments,
+            Type::Video,
+            out_idx,
+            &mut video_packets,
+        )?;
+        report_segments = segs;
+        duration = total;
+    }
+    if let Some(out_idx) = out_audio {
+        let mut ignored = 0u64;
+        let (segs, total) = copy_track(&mut octx, &plan.audio, Type::Audio, out_idx, &mut ignored)?;
+        if out_video.is_none() {
+            report_segments = segs;
+            duration = total;
+        }
+    }
+    octx.write_trailer().map_err(|e| open_error(output, e))?;
+    Ok(CopyReport {
+        segments: report_segments,
+        duration,
+        video_packets,
+    })
+}
+
+/// Copies one kind of stream from a list of segments into output stream
+/// `out_idx`, returning the per-segment report and the total duration.
+fn copy_track(
+    octx: &mut ffmpeg_next::format::context::Output,
+    segments: &[CopySegment],
+    kind: Type,
+    out_idx: usize,
+    packets: &mut u64,
+) -> Result<(Vec<SegmentReport>, Ratio), MediaError> {
+    let mut report = Vec::new();
     let mut offset = Ratio::ZERO;
-    for segment in &plan.segments {
+    let out_tb = octx.stream(out_idx).expect("added").time_base();
+    let out_scale = Ratio::new(
+        i64::from(out_tb.denominator()),
+        i64::from(out_tb.numerator()),
+    );
+    for segment in segments {
         let mut ictx =
             ffmpeg_next::format::input(&segment.path).map_err(|e| open_error(&segment.path, e))?;
-        let (vid_idx, vid_tb, vid_start) = {
-            let s = ictx
-                .streams()
-                .best(Type::Video)
-                .expect("checked by the plan");
+        let (in_idx, tb, start) = {
+            let s = ictx.streams().best(kind).expect("checked by the plan");
             (s.index(), s.time_base(), s.start_time().max(0))
-        };
-        let aud = if plan.audio {
-            ictx.streams()
-                .best(Type::Audio)
-                .map(|s| (s.index(), s.time_base(), s.start_time().max(0)))
-        } else {
-            None
         };
         if segment.from > Ratio::ZERO {
             let micros = (segment.from.to_f64() * 1_000_000.0) as i64;
@@ -324,106 +457,65 @@ pub fn stream_copy(plan: &CopyPlan, output: &Path) -> Result<CopyReport, MediaEr
                 super::codec_error(format!("{}: seeking", segment.path.display()), e)
             })?;
         }
-        let out_vtb = octx.stream(out_video).expect("added").time_base();
-        let out_atb = out_audio.map(|i| octx.stream(i).expect("added").time_base());
-
-        // The segment starts at the first video keyframe the demuxer
-        // yields; everything is timed relative to it.
+        // The segment starts at the first keyframe the demuxer yields (every
+        // audio packet is one); everything is timed relative to it.
         let mut segment_start: Option<Ratio> = None;
         let mut last_end = segment.from;
         let mut packet = Packet::empty();
         while packet.read(&mut ictx).is_ok() {
-            let idx = packet.stream();
-            let (tb, start) = if idx == vid_idx {
-                (vid_tb, vid_start)
-            } else if aud.is_some_and(|(i, _, _)| i == idx) {
-                let (_, tb, start) = aud.expect("checked");
-                (tb, start)
-            } else {
+            if packet.stream() != in_idx {
                 continue;
-            };
+            }
             let Some(pts) = packet.pts().or(packet.dts()) else {
                 continue;
             };
             let time = ts_to_secs(pts - start, tb);
-            if idx == vid_idx && segment_start.is_none() {
+            if segment_start.is_none() {
                 if !packet.is_key() {
                     continue;
                 }
                 segment_start = Some(time);
             }
-            let Some(seg_start) = segment_start else {
-                continue;
-            };
+            let seg_start = segment_start.expect("set above");
             if time < seg_start {
                 continue;
             }
-            if let Some(to) = segment.to {
-                if time >= to {
-                    if idx == vid_idx {
-                        break;
-                    }
-                    continue;
-                }
+            if segment.to.is_some_and(|to| time >= to) {
+                break;
             }
-            let duration = if packet.duration() > 0 {
+            let packet_duration = if packet.duration() > 0 {
                 ts_to_secs(packet.duration(), tb)
             } else {
                 Ratio::ZERO
             };
-            last_end = last_end.max(time + duration);
+            last_end = last_end.max(time + packet_duration);
             let shifted = time - seg_start + offset;
-            let (out_idx, out_tb) = if idx == vid_idx {
-                (out_video, out_vtb)
-            } else {
-                (
-                    out_audio.expect("audio planned"),
-                    out_atb.expect("audio planned"),
-                )
+            let out_pts = (shifted * out_scale).round();
+            let out_dts = match packet.dts() {
+                Some(d) => ((shifted + ts_to_secs(d - pts, tb)) * out_scale).round(),
+                None => out_pts,
             };
-            let out_pts = (shifted
-                * Ratio::new(
-                    i64::from(out_tb.denominator()),
-                    i64::from(out_tb.numerator()),
-                ))
-            .round();
-            let dts_shift = packet.dts().map(|d| ts_to_secs(d - pts, tb));
             packet.set_stream(out_idx);
             packet.set_pts(Some(out_pts));
-            packet.set_dts(Some(match dts_shift {
-                Some(shift) => ((shifted + shift)
-                    * Ratio::new(
-                        i64::from(out_tb.denominator()),
-                        i64::from(out_tb.numerator()),
-                    ))
-                .round(),
-                None => out_pts,
-            }));
-            let dur = packet.duration();
-            if dur > 0 {
-                packet.set_duration(rescale(dur, tb, out_tb));
+            packet.set_dts(Some(out_dts));
+            if packet.duration() > 0 {
+                packet.set_duration(rescale(packet.duration(), tb, out_tb));
             }
             packet.set_position(-1);
             packet
-                .write_interleaved(&mut octx)
+                .write_interleaved(octx)
                 .map_err(|e| super::codec_error("writing copied packet", e))?;
-            if idx == vid_idx {
-                video_packets += 1;
-            }
+            *packets += 1;
         }
         let seg_start = segment_start.unwrap_or(segment.from);
         let seg_end = segment
             .to
             .map_or(last_end, |t| t.min(last_end).max(seg_start));
-        report_segments.push((segment.from, seg_start, seg_end));
+        // Packets before time zero are encoder priming, not a moved cut.
+        report.push((segment.from, seg_start.max(Ratio::ZERO), seg_end));
         offset = offset + (seg_end - seg_start);
     }
-    octx.write_trailer().map_err(|e| open_error(output, e))?;
-    Ok(CopyReport {
-        segments: report_segments,
-        duration: offset,
-        video_packets,
-    })
+    Ok((report, offset))
 }
 
 fn rescale(value: i64, from: Rational, to: Rational) -> i64 {
