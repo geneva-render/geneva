@@ -9,6 +9,7 @@
 
 #![forbid(unsafe_code)]
 
+use std::path::Path;
 use std::process::Command;
 
 /// Prints the `cargo:` directives that link the media libraries.
@@ -28,63 +29,47 @@ pub fn link_media_libraries() {
             )
         });
     assert!(
-        std::path::Path::new(&prefix)
+        Path::new(&prefix)
             .join("lib/pkgconfig/libavcodec.pc")
             .exists(),
         "no media libraries under {prefix}; run scripts/build-media-libs.sh first"
     );
-    let pkgconfig_dir = format!("{prefix}/lib/pkgconfig");
-    let query = |flag: &str| -> Vec<String> {
-        let out = Command::new("pkg-config")
-            .env("PKG_CONFIG_PATH", &pkgconfig_dir)
-            .env("PKG_CONFIG_LIBDIR", &pkgconfig_dir)
-            .args([
-                "--static",
-                flag,
-                "libavformat",
-                "libavcodec",
-                "libswscale",
-                "libswresample",
-                "libavutil",
-            ])
-            .output()
-            .unwrap_or_else(|e| panic!("running pkg-config: {e}"));
-        assert!(
-            out.status.success(),
-            "pkg-config could not describe the media libraries under {prefix}: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8_lossy(&out.stdout)
-            .split_whitespace()
-            .map(str::to_owned)
-            .collect()
-    };
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+
     println!("cargo:rustc-link-search=native={prefix}/lib");
-    for dir in query("--libs-only-L") {
+    for dir in pkg_config(&prefix, "--libs-only-L") {
         println!(
             "cargo:rustc-link-search=native={}",
             dir.trim_start_matches("-L")
         );
     }
+
     // Archives from the prefix are passed by path so that a same-named
-    // system library can never be picked up instead; anything else (libm,
-    // libdl, the C++ runtime) stays a plain `-l` flag.
+    // system library can never be picked up instead. The C++ runtime the
+    // H.264 and AV1 encoders need is linked statically on Linux when its
+    // archive can be found, so the binary depends on nothing but the C
+    // library. Everything else (libm, libdl, ...) stays a plain `-l` flag.
+    let cxx_runtime = if target_os == "linux" {
+        static_cxx_runtime()
+    } else {
+        None
+    };
     let mut libs: Vec<String> = Vec::new();
-    for l in query("--libs-only-l") {
-        let name = l.trim_start_matches("-l");
-        let archive = std::path::Path::new(&prefix)
-            .join("lib")
-            .join(format!("lib{name}.a"));
+    for flag in pkg_config(&prefix, "--libs-only-l") {
+        let name = flag.trim_start_matches("-l");
+        let archive = Path::new(&prefix).join("lib").join(format!("lib{name}.a"));
         let arg = if archive.exists() {
             archive.display().to_string()
+        } else if name == "stdc++" {
+            cxx_runtime.clone().unwrap_or(flag)
         } else {
-            l.clone()
+            flag
         };
         if !libs.contains(&arg) {
             libs.push(arg);
         }
     }
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+
     // Static archives must be resolvable in any order; GNU ld needs a group
     // for that, Apple's linker does not.
     let grouped = target_os == "linux";
@@ -97,10 +82,51 @@ pub fn link_media_libraries() {
     if grouped {
         println!("cargo:rustc-link-arg=-Wl,--end-group");
     }
-    // The H.264 and AV1 encoders are C++.
     match target_os.as_str() {
         "macos" | "ios" => println!("cargo:rustc-link-arg=-lc++"),
-        "linux" => println!("cargo:rustc-link-arg=-lstdc++"),
+        "linux" => match &cxx_runtime {
+            Some(path) => println!("cargo:rustc-link-arg={path}"),
+            None => println!("cargo:rustc-link-arg=-lstdc++"),
+        },
         _ => {}
     }
+}
+
+/// Runs pkg-config against the prefix only, so nothing from the system
+/// leaks in, and returns the whitespace-separated output.
+fn pkg_config(prefix: &str, flag: &str) -> Vec<String> {
+    let dir = format!("{prefix}/lib/pkgconfig");
+    let out = Command::new("pkg-config")
+        .env("PKG_CONFIG_PATH", &dir)
+        .env("PKG_CONFIG_LIBDIR", &dir)
+        .args([
+            "--static",
+            flag,
+            "libavformat",
+            "libavcodec",
+            "libswscale",
+            "libswresample",
+            "libavutil",
+        ])
+        .output()
+        .unwrap_or_else(|e| panic!("running pkg-config: {e}"));
+    assert!(
+        out.status.success(),
+        "pkg-config could not describe the media libraries under {prefix}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The path of the static C++ runtime archive, if the compiler knows it.
+fn static_cxx_runtime() -> Option<String> {
+    let out = Command::new("cc")
+        .arg("-print-file-name=libstdc++.a")
+        .output()
+        .ok()?;
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    (Path::new(&path).is_absolute() && Path::new(&path).exists()).then_some(path)
 }

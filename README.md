@@ -29,6 +29,35 @@ there yet. Expect breaking changes to the format until the schema reaches
 Geneva ships as a single binary with its media libraries built in; see
 [Building](#building) if you build from source.
 
+## Installing
+
+Prebuilt binaries are published for each release on the
+[releases page](https://github.com/geneva-render/geneva/releases) for Linux
+(x86_64, arm64) and macOS (Apple silicon, Intel). Each archive contains the
+`geneva` binary, this README, the licenses, and nothing else to install.
+
+```sh
+# Linux x86_64 (adjust the version and the target for your machine)
+curl -fsSLO https://github.com/geneva-render/geneva/releases/download/v0.1.0/geneva-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+tar xzf geneva-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+sudo install -m 755 geneva-v0.1.0-x86_64-unknown-linux-gnu/geneva /usr/local/bin/geneva
+geneva --help
+```
+
+Linux binaries need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, RHEL 9
+and later). macOS binaries need macOS 12 or newer. There are no other
+runtime requirements: codecs, container support and font shaping are built
+in.
+
+A first look on a fresh machine:
+
+```sh
+geneva probe input.mp4                          # what is in the file
+geneva validate examples/lower-third.json       # check a timeline
+geneva frame examples/lower-third.json --at 1s -o check.png
+geneva render examples/lower-third.json -o out.mp4
+```
+
 ## Quick look
 
 ```json
@@ -62,29 +91,17 @@ Geneva ships as a single binary with its media libraries built in; see
 See [docs/timeline.md](docs/timeline.md) for the format reference and
 [docs/errors.md](docs/errors.md) for the diagnostic codes.
 
-## Building
-
-Geneva is a Rust workspace. Its media libraries are built once from pinned
-sources into `target/media-libs` and linked statically, so the resulting
-binary has no runtime dependencies beyond the operating system.
+## Building from source
 
 ```sh
-# tools for the one-time library build
-# Debian/Ubuntu: sudo apt install build-essential cmake meson ninja-build nasm pkg-config clang
-# macOS:         brew install cmake meson ninja nasm pkg-config
-
-scripts/build-media-libs.sh      # ~10-20 minutes, once
+scripts/build-media-libs.sh   # builds the media libraries once, ~10-20 minutes
 cargo build --release
-cargo test
-./target/release/geneva --help
 ```
 
-`clang` is only needed while building (for generating bindings). To build
-without media support at all (validation, PNG frames of non-video
-timelines, schema): `cargo build --no-default-features`.
-
-Third-party components and their licenses are listed in
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+The script needs a C/C++ toolchain, cmake, meson, ninja, nasm, pkg-config
+and clang; see [CONTRIBUTING.md](CONTRIBUTING.md) for the per-platform
+package lists and the test workflow. Third-party components and their
+licenses are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## Repository layout
 

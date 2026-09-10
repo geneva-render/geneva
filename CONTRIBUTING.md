@@ -16,6 +16,26 @@ needs it; a bot will guide you.
 
 ## Development
 
+The media libraries are built once from pinned sources into
+`target/media-libs` and linked statically. Install the build tools, run the
+script, then use cargo as usual:
+
+```sh
+# Debian/Ubuntu
+sudo apt install build-essential cmake meson ninja-build nasm pkg-config clang git curl
+# macOS
+brew install cmake meson ninja nasm pkg-config
+
+scripts/build-media-libs.sh        # ~10-20 minutes, once; cached in CI
+cargo build
+```
+
+`clang` is only used while building, to generate bindings. To work on the
+format, validator or renderer without media support at all, skip the
+script and use `--no-default-features`.
+
+Before pushing:
+
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
