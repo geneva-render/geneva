@@ -72,6 +72,19 @@ and rasterized by `swash` into coverage masks. The engine composites the
 masks in linear light, draws the background box, outline and shadow, and
 hands the result to the same placement code as images.
 
+## Stream copy
+
+Before rendering, `geneva render` checks whether the composition is one
+layer of video clips shown as they are: natural size at the frame center,
+full opacity, no rotation, no transitions, nothing else on top, output
+size and rate equal to the sources', the same codec in every source with
+identical coded parameters, and either no audio or the sources' own
+audio. When that holds and no quality setting asks for a re-encode, the
+coded packets are copied into the output instead. Cuts move back to the
+keyframe at or before the requested time and the command reports the
+times used; `--exact` forces decoding and encoding for frame-accurate
+cuts.
+
 ## Media
 
 The media libraries are built from pinned sources by
@@ -109,6 +122,5 @@ real regressions.
   contract, validated against the CPU renderer by the golden harness.
 - **Hardware encoder selection** with probe-and-fallback.
 - **Software H.265 encoding.** Only hardware encoders are available for it.
-- **Stream copy** for cuts and joins that need no re-encoding.
 - **Streaming audio mixing.** The mixer currently holds the whole mix in
   memory.

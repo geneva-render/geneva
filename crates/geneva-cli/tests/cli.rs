@@ -196,3 +196,60 @@ fn validate_with_probe_reports_missing_files() {
         .code(1)
         .stderr(predicate::str::contains("error[E501]"));
 }
+
+#[test]
+#[cfg(feature = "media")]
+fn render_copies_plain_cuts_and_reencodes_with_exact() {
+    let dir = tempfile::tempdir().unwrap();
+    let timeline = dir.path().join("cut.json");
+    std::fs::write(
+        &timeline,
+        r#"{"geneva":"0.1","output":{"width":192,"height":108,"fps":25},
+            "assets":{"clip":{"src":"clip.mp4"}},
+            "layers":[{"clips":[{"source":{"kind":"video","asset":"clip","in":"0.6s","out":"1.5s"}}]}]}"#,
+    )
+    .unwrap();
+    let out = dir.path().join("cut.mp4");
+    let result = geneva()
+        .args(["--format", "json", "render"])
+        .arg(&timeline)
+        .args(["--assets"])
+        .arg(media_dir())
+        .args(["-o"])
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let doc: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(doc["mode"], "copy");
+    let notes: Vec<String> = doc["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["code"] == "N600")
+        .map(|d| d["message"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(
+        notes.iter().any(|n| n.contains("keyframe at 0.48s")),
+        "{notes:?}"
+    );
+
+    let exact = geneva()
+        .args(["--format", "json", "render"])
+        .arg(&timeline)
+        .args(["--assets"])
+        .arg(media_dir())
+        .args(["-o"])
+        .arg(dir.path().join("exact.mp4"))
+        .args(["--exact"])
+        .output()
+        .unwrap();
+    assert!(exact.status.success());
+    let doc: serde_json::Value = serde_json::from_slice(&exact.stdout).unwrap();
+    assert_eq!(doc["mode"], "render");
+    assert_eq!(doc["frames"], 23);
+}

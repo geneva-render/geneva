@@ -11,11 +11,19 @@ pub struct RenderOverrides {
     pub crf: Option<u8>,
     pub preset: Option<String>,
     pub no_audio: bool,
+    pub exact: bool,
 }
 
 /// What a render produced.
 pub struct RenderStats {
+    /// Frames encoded; zero when streams were copied.
     pub frames: u64,
+    /// Output duration in seconds.
+    pub duration: Ratio,
+    /// Whether the output was produced by copying source streams.
+    pub copied: bool,
+    /// Remarks for the user, such as cuts moved to keyframes.
+    pub notes: Vec<String>,
     pub seconds: f64,
 }
 
@@ -229,6 +237,35 @@ mod imp {
             id: output.display().to_string(),
             reason: e.to_string(),
         };
+        // Copy source streams when nothing would change the picture, no
+        // quality setting asks for a re-encode, and the caller did not ask
+        // for exact cuts.
+        let wants_encode = overrides.crf.is_some()
+            || overrides.preset.is_some()
+            || video.is_some_and(|v| v.crf.is_some() || v.preset.is_some());
+        let copyable = !overrides.exact && !wants_encode;
+        if copyable {
+            let requested = video.and_then(|v| v.codec);
+            let mut plan = geneva_media::plan_stream_copy(comp, root, container, requested)
+                .map_err(media_err)?;
+            if let Some(p) = plan.as_mut() {
+                if overrides.no_audio {
+                    p.audio = false;
+                }
+            }
+            if let Some(plan) = plan {
+                let report = geneva_media::stream_copy(&plan, output).map_err(media_err)?;
+                let mut notes = vec![plan.reason.clone()];
+                notes.extend(report.notes());
+                return Ok(RenderStats {
+                    frames: 0,
+                    duration: report.duration,
+                    copied: true,
+                    notes,
+                    seconds: started.elapsed().as_secs_f64(),
+                });
+            }
+        }
         let mut encoder = Encoder::new(output, settings).map_err(media_err)?;
         let mut renderer = CpuRenderer::new(MediaAssets::new(root));
         let total = comp.frame_count();

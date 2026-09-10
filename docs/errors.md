@@ -89,6 +89,12 @@ These are produced when rendering, not by `validate`.
 | E501 | An asset file could not be opened, read or decoded. With `--probe` this is reported at validation time, at `/assets/<id>/src`. |
 | E502 | The requested time is outside the composition. |
 
+## Notes from rendering
+
+| Code | Meaning |
+| --- | --- |
+| N600 | What `render` did that you may want to know: streams were copied instead of re-encoded, or a cut moved to a keyframe. |
+
 ## Exit codes
 
 | Code | Meaning |

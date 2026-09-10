@@ -220,3 +220,144 @@ fn audio_lands_at_its_timeline_position_in_the_output_file() {
     let d = info.duration.unwrap().to_f64();
     assert!((d - 2.0).abs() < 0.1, "duration {d}");
 }
+
+#[test]
+fn stream_copy_trims_at_keyframes_and_joins_compatible_sources() {
+    use geneva_media::{plan_stream_copy, stream_copy};
+    use geneva_timeline::schema::Container;
+    let dir = tempfile::tempdir().unwrap();
+    let root = clip().parent().unwrap().to_path_buf();
+
+    // A plain cut: one video clip at natural size, no other layers.
+    let text = r#"{
+      "geneva": "0.1",
+      "output": { "width": 192, "height": 108, "fps": 25 },
+      "assets": { "clip": { "src": "clip.mp4" } },
+      "layers": [ { "clips": [ { "source": { "kind": "video", "asset": "clip", "in": "0.6s", "out": "1.5s" } } ] } ]
+    }"#;
+    let comp = load(text).composition.unwrap();
+    let plan = plan_stream_copy(&comp, &root, Container::Mp4, None)
+        .unwrap()
+        .expect("copyable");
+    assert!(plan.audio);
+    let out = dir.path().join("cut.mp4");
+    let report = stream_copy(&plan, &out).unwrap();
+    // Keyframes every 12 frames at 25 fps: the cut moves back to 0.48 s.
+    assert_eq!(report.segments[0].1, Ratio::new(12, 25));
+    assert!(!report.notes().is_empty());
+    let info = probe(&out).unwrap();
+    let v = info.video.unwrap();
+    assert_eq!(v.codec, "h264");
+    assert_eq!((v.width, v.height), (192, 108));
+    // 0.48 s to 1.5 s is 25.5 frames; packets cover whole frames.
+    assert!(
+        (25..=26).contains(&v.frames.unwrap()),
+        "frames {:?}",
+        v.frames
+    );
+    assert!(info.audio.is_some());
+
+    // Joining the same file twice is a copy; the output is twice as long.
+    let text = r#"{
+      "geneva": "0.1",
+      "output": { "width": 192, "height": 108, "fps": 25 },
+      "assets": { "clip": { "src": "clip.mp4" } },
+      "layers": [ { "clips": [
+        { "source": { "kind": "video", "asset": "clip", "out": "2s" } },
+        { "source": { "kind": "video", "asset": "clip", "out": "2s" } } ] } ]
+    }"#;
+    let comp = load(text).composition.unwrap();
+    let plan = plan_stream_copy(&comp, &root, Container::Mp4, None)
+        .unwrap()
+        .expect("copyable");
+    assert_eq!(plan.segments.len(), 2);
+    let out = dir.path().join("joined.mp4");
+    let report = stream_copy(&plan, &out).unwrap();
+    assert_eq!(report.video_packets, 100);
+    let info = probe(&out).unwrap();
+    assert_eq!(info.video.unwrap().frames, Some(100));
+    let d = info.duration.unwrap().to_f64();
+    assert!((d - 4.0).abs() < 0.1, "duration {d}");
+    // Video and audio both decode across the join.
+    let mut reader = VideoReader::open(&out, ColorTags::default()).unwrap();
+    let late = reader.frame_at(Ratio::new(7, 2)).unwrap();
+    assert_eq!(late.pixels.len(), 192 * 108);
+    let mut audio = AudioReader::open(&out).unwrap();
+    let tail = audio
+        .read(Ratio::from_int(3), Ratio::new(1, 2), 48000)
+        .unwrap();
+    assert!(rms(&tail) > 0.05);
+}
+
+#[test]
+fn stream_copy_is_refused_when_anything_would_change_the_picture() {
+    use geneva_media::plan_stream_copy;
+    use geneva_timeline::schema::Container;
+    let root = clip().parent().unwrap().to_path_buf();
+    let cases = [
+        // Resized output.
+        r#""output": { "width": 384, "height": 216, "fps": 25 }, "assets": { "clip": { "src": "clip.mp4" } },
+           "layers": [ { "clips": [ { "source": { "kind": "video", "asset": "clip" } } ] } ]"#,
+        // Different frame rate.
+        r#""output": { "width": 192, "height": 108, "fps": 30 }, "assets": { "clip": { "src": "clip.mp4" } },
+           "layers": [ { "clips": [ { "source": { "kind": "video", "asset": "clip" } } ] } ]"#,
+        // An overlay on top.
+        r#""output": { "width": 192, "height": 108, "fps": 25 }, "assets": { "clip": { "src": "clip.mp4" } },
+           "layers": [ { "clips": [ { "source": { "kind": "video", "asset": "clip" } } ] },
+                       { "clips": [ { "source": { "kind": "solid", "color": "white" }, "opacity": 0.2, "duration": "2s" } ] } ]"#,
+        // Reduced opacity.
+        r#""output": { "width": 192, "height": 108, "fps": 25 }, "assets": { "clip": { "src": "clip.mp4" } },
+           "layers": [ { "clips": [ { "source": { "kind": "video", "asset": "clip" }, "opacity": 0.5 } ] } ]"#,
+    ];
+    for body in cases {
+        let text = format!(r#"{{"geneva":"0.1",{body}}}"#);
+        let loaded = geneva_timeline::load_with(&text, &Durations);
+        let comp = loaded
+            .composition
+            .unwrap_or_else(|| panic!("{:#?}", loaded.diagnostics));
+        assert!(
+            plan_stream_copy(&comp, &root, Container::Mp4, None)
+                .unwrap()
+                .is_none(),
+            "{body}"
+        );
+    }
+    // WebM cannot hold H.264, and a different requested codec forces encoding.
+    let text = r#"{"geneva":"0.1","output": { "width": 192, "height": 108, "fps": 25 }, "assets": { "clip": { "src": "clip.mp4" } },
+           "layers": [ { "clips": [ { "source": { "kind": "video", "asset": "clip", "out": "2s" } } ] } ]}"#;
+    let comp = load(text).composition.unwrap();
+    assert!(
+        plan_stream_copy(&comp, &root, Container::Webm, None)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        plan_stream_copy(
+            &comp,
+            &root,
+            Container::Mp4,
+            Some(geneva_timeline::schema::VideoCodec::Vp9)
+        )
+        .unwrap()
+        .is_none()
+    );
+    assert!(
+        plan_stream_copy(
+            &comp,
+            &root,
+            Container::Mkv,
+            Some(geneva_timeline::schema::VideoCodec::H264)
+        )
+        .unwrap()
+        .is_some()
+    );
+}
+
+/// Asset information that knows the test clip is two seconds long.
+struct Durations;
+
+impl geneva_timeline::AssetInfo for Durations {
+    fn duration(&self, _: &str, _: &str) -> Option<Ratio> {
+        Some(Ratio::from_int(2))
+    }
+}

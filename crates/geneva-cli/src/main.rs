@@ -110,6 +110,10 @@ struct RenderArgs {
     /// Write no audio track.
     #[arg(long)]
     no_audio: bool,
+    /// Always decode and re-encode, even when the output could be produced
+    /// by copying the source streams. Cuts then land on the exact frame.
+    #[arg(long)]
+    exact: bool,
 }
 
 #[derive(Args)]
@@ -219,6 +223,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 crf: args.crf,
                 preset: args.preset.clone(),
                 no_audio: args.no_audio,
+                exact: args.exact,
             };
             match media::render(
                 comp,
@@ -228,22 +233,35 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 cli.format == Format::Human,
             ) {
                 Ok(stats) => {
+                    for note in &stats.notes {
+                        diagnostics.push(Diagnostic::note("N600", "", note.clone()));
+                    }
                     let result = serde_json::json!({
                         "ok": true,
                         "output": args.output,
+                        "mode": if stats.copied { "copy" } else { "render" },
                         "frames": stats.frames,
-                        "duration": comp.duration,
+                        "duration": stats.duration,
                         "seconds": stats.seconds,
                     });
                     if cli.format == Format::Human {
                         report(&diagnostics, cli.format, None)?;
-                        println!(
-                            "wrote {} ({} frames, {}s of video, {:.1}s elapsed)",
-                            args.output.display(),
-                            stats.frames,
-                            comp.duration,
-                            stats.seconds
-                        );
+                        if stats.copied {
+                            println!(
+                                "wrote {} ({}s, streams copied without re-encoding, {:.1}s elapsed)",
+                                args.output.display(),
+                                stats.duration,
+                                stats.seconds
+                            );
+                        } else {
+                            println!(
+                                "wrote {} ({} frames, {}s of video, {:.1}s elapsed)",
+                                args.output.display(),
+                                stats.frames,
+                                stats.duration,
+                                stats.seconds
+                            );
+                        }
                     } else {
                         report(&diagnostics, cli.format, Some(result))?;
                     }

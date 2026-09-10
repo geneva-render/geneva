@@ -8,7 +8,7 @@
 //! implemented here in Rust so that the same color pipeline applies to
 //! every source.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 #[cfg(feature = "media")]
 mod assets;
@@ -27,8 +27,8 @@ use thiserror::Error;
 pub use assets::MediaAssets;
 #[cfg(feature = "media")]
 pub use codecs::{
-    AudioReader, AudioSettings, EncodeSettings, Encoder, VideoReader, container_for,
-    default_codecs, probe,
+    AudioReader, AudioSettings, CopyPlan, CopyReport, CopySegment, EncodeSettings, Encoder,
+    VideoReader, container_for, default_codecs, plan_stream_copy, probe, stream_copy,
 };
 pub use info::{AudioInfo, MediaInfo, VideoInfo};
 

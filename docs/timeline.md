@@ -293,6 +293,11 @@ information as one JSON document.
 
 ## Renderer support
 
+`geneva render` copies the source streams instead of rendering when the
+composition is a plain cut or join of video at natural size and no quality
+setting asks for a re-encode (see the architecture page); `--exact` forces
+frame-accurate rendering.
+
 The CPU reference renderer draws every source kind: `solid`, `shape`,
 `image`, `video`, `text` and `composition`, with every transform, opacity,
 blend mode and transition. `geneva render` mixes audio tracks and the audio
