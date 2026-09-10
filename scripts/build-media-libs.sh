@@ -83,7 +83,8 @@ if ! done_marker svtav1; then
   echo "==> building SVT-AV1"
   (cd "$src/svtav1" && rm -rf build && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX="$prefix" -DCMAKE_INSTALL_LIBDIR=lib -DBUILD_SHARED_LIBS=OFF -DBUILD_APPS=OFF \
-      -DBUILD_DEC=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DSVT_AV1_LTO=OFF >/dev/null \
+      -DBUILD_DEC=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DSVT_AV1_LTO=OFF \
+      -DCMAKE_POLICY_VERSION_MINIMUM=3.5 >/dev/null \
       && ninja -C build >/dev/null && ninja -C build install >/dev/null)
   cp "$src/svtav1/LICENSE.md" "$prefix/share/licenses/svt-av1.txt"
   cat "$src/svtav1/PATENTS.md" >> "$prefix/share/licenses/svt-av1.txt"
