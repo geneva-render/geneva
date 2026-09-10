@@ -175,6 +175,14 @@ impl Ord for Ratio {
     }
 }
 
+impl serde::Serialize for Ratio {
+    /// Serializes as a JSON number in seconds; exactness is not preserved
+    /// in this direction, which is fine for reporting.
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_f64(self.to_f64())
+    }
+}
+
 impl fmt::Display for Ratio {
     /// Formats as seconds with up to six decimals, trimming trailing zeros,
     /// so that `3/2` prints as `1.5` and `1/3` as `0.333333`.

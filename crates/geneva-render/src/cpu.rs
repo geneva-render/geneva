@@ -119,11 +119,13 @@ impl<A: AssetSource> CpuRenderer<A> {
                     )?;
                     Paint::Image(Cow::Owned(Image::from_frame(&inner)))
                 }
-                ResolvedSource::Video { .. } => {
-                    return Err(RenderError::Unsupported {
-                        what: "video decoding".to_owned(),
-                        path: clip.path.clone(),
-                    });
+                ResolvedSource::Video { asset, in_, .. } => {
+                    let source_time = *in_ + (t - clip.start);
+                    Paint::Image(Cow::Borrowed(self.assets.video_frame(
+                        comp,
+                        asset,
+                        source_time,
+                    )?))
                 }
                 ResolvedSource::Text(_) => {
                     return Err(RenderError::Unsupported {

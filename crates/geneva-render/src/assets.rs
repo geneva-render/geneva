@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use geneva_color::{LinearRgba, Transfer};
-use geneva_timeline::Composition;
+use geneva_timeline::{Composition, Ratio};
 
 use crate::RenderError;
 
@@ -95,6 +95,22 @@ fn srgb_lut() -> &'static [f32; 256] {
 pub trait AssetSource {
     /// Loads the image asset with the given id.
     fn image(&mut self, comp: &Composition, id: &str) -> Result<&Image, RenderError>;
+
+    /// Returns the frame of a video asset shown at `source_time`.
+    ///
+    /// The default has no decoder and reports the asset as unavailable.
+    fn video_frame(
+        &mut self,
+        comp: &Composition,
+        id: &str,
+        source_time: Ratio,
+    ) -> Result<&Image, RenderError> {
+        let _ = (comp, source_time);
+        Err(RenderError::Asset {
+            id: id.to_owned(),
+            reason: "this asset source cannot decode video".to_owned(),
+        })
+    }
 }
 
 /// Loads assets from files under a root directory, caching decoded images.

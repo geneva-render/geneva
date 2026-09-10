@@ -99,14 +99,35 @@ fn frame_by_number_uses_the_output_rate() {
 #[test]
 fn frame_of_unsupported_source_exits_three_with_e500() {
     let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("text.json");
+    std::fs::write(
+        &path,
+        r#"{"geneva":"0.1","output":{"width":64,"height":64,"fps":30,"duration":"1s"},
+            "layers":[{"clips":[{"source":{"kind":"text","text":"hi"}}]}]}"#,
+    )
+    .unwrap();
+    geneva()
+        .args(["frame"])
+        .arg(&path)
+        .args(["-o"])
+        .arg(dir.path().join("f.png"))
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("error[E500]"));
+}
+
+#[test]
+fn missing_media_assets_are_reported_before_rendering() {
+    let dir = tempfile::tempdir().unwrap();
     geneva()
         .args(["frame"])
         .arg(examples().join("overlay.json"))
         .args(["--at", "5s", "-o"])
         .arg(dir.path().join("f.png"))
         .assert()
-        .code(3)
-        .stderr(predicate::str::contains("error[E500]"));
+        .code(1)
+        .stderr(predicate::str::contains("error[E501]"))
+        .stderr(predicate::str::contains("/assets/main/src"));
 }
 
 #[test]
@@ -126,4 +147,68 @@ fn missing_file_is_a_usage_error() {
         .assert()
         .code(2)
         .stderr(predicate::str::contains("reading"));
+}
+
+fn media_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/media")
+}
+
+#[test]
+fn probe_describes_a_file_in_both_formats() {
+    geneva()
+        .args(["probe"])
+        .arg(media_dir().join("clip.mp4"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("h264 192×108 @ 25 fps"))
+        .stdout(predicate::str::contains("aac 48000 Hz"));
+    let out = geneva()
+        .args(["--format", "json", "probe"])
+        .arg(media_dir().join("clip.mp4"))
+        .output()
+        .unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["video"]["width"], 192);
+    assert_eq!(doc["video"]["color"]["matrix"], "bt709");
+}
+
+#[test]
+fn render_writes_a_playable_file_with_audio() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("demo.mp4");
+    let result = geneva()
+        .args(["--format", "json", "render"])
+        .arg(media_dir().join("overlay-demo.json"))
+        .args(["-o"])
+        .arg(&out)
+        .args(["--preset", "ultrafast"])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let doc: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(doc["frames"], 38);
+    let probe = geneva()
+        .args(["--format", "json", "probe"])
+        .arg(&out)
+        .output()
+        .unwrap();
+    let info: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
+    assert_eq!(info["video"]["frames"], 38);
+    assert_eq!(info["video"]["fps"], 25.0);
+    assert_eq!(info["video"]["color"]["primaries"], "bt709");
+    assert_eq!(info["audio"]["channels"], 2);
+}
+
+#[test]
+fn validate_with_probe_reports_missing_files() {
+    geneva()
+        .args(["validate", "--probe"])
+        .arg(examples().join("overlay.json"))
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error[E501]"));
 }

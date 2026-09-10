@@ -1,0 +1,11 @@
+{
+  "geneva": "0.1",
+  "output": { "width": 384, "height": 216, "fps": 25 },
+  "assets": { "clip": { "src": "clip.mp4" } },
+  "layers": [
+    { "clips": [ { "source": { "kind": "video", "asset": "clip", "in": "0.5s" } } ] },
+    { "clips": [ { "source": { "kind": "shape", "shape": "rect", "width": "60%", "height": 40, "fill": "#101820c0", "radius": 10 },
+        "start": "0.3s", "duration": "1s",
+        "transform": { "position": { "keyframes": [ { "t": 0, "v": { "x": "50%", "y": "120%" }, "ease": "ease-out" }, { "t": "0.4s", "v": { "x": "50%", "y": "85%" } } ] } } } ] }
+  ]
+}

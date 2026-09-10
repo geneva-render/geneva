@@ -306,3 +306,10 @@ fn unknown_and_cyclic_compositions_are_errors() {
     );
     assert!(e.contains(&("E206", "/layers/0/clips/1/source/composition".to_owned())));
 }
+
+#[test]
+fn output_color_defaults_to_bt709_at_any_size() {
+    let text = r#"{"geneva":"0.1","output":{"width":320,"height":180,"fps":30,"duration":1}}"#;
+    let comp = load(text).composition.unwrap();
+    assert_eq!(comp.color, geneva_color::ResolvedTags::SDR_VIDEO);
+}

@@ -1,0 +1,30 @@
+[package]
+name = "geneva-media"
+description = "Media probing, decoding and encoding for the Geneva engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[features]
+default = ["libav"]
+# Media I/O through the libav libraries (libavformat, libavcodec,
+# libswscale, libswresample). Without it the crate only offers the
+# hardware-independent conversions and types.
+libav = ["dep:ffmpeg-next"]
+
+[dependencies]
+geneva-anim = { workspace = true }
+geneva-color = { workspace = true }
+geneva-render = { workspace = true }
+geneva-timeline = { workspace = true }
+ffmpeg-next = { workspace = true, optional = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.10"
+
+[lints]
+workspace = true

@@ -235,11 +235,37 @@ pub struct ResolvedAudioClip {
 /// Anchor, position, scale and rotation of a clip after resolution.
 type ResolvedTransform = (Point, Track<[f64; 2]>, Track<[f64; 2]>, Track<f64>);
 
-/// Resolves a timeline. Returns the composition only when there are no
-/// errors; diagnostics are returned in either case.
+/// Facts about asset files that only reading them can provide.
+pub trait AssetInfo {
+    /// Duration of a media asset in seconds, if known.
+    fn duration(&self, asset_id: &str, src: &str) -> Option<Ratio>;
+}
+
+/// An [`AssetInfo`] that knows nothing, for validation without files.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoAssetInfo;
+
+impl AssetInfo for NoAssetInfo {
+    fn duration(&self, _: &str, _: &str) -> Option<Ratio> {
+        None
+    }
+}
+
+/// Resolves a timeline without reading any files. Returns the composition
+/// only when there are no errors; diagnostics are returned in either case.
 pub fn resolve(timeline: &Timeline) -> (Option<Composition>, Vec<Diagnostic>) {
+    resolve_with(timeline, &NoAssetInfo)
+}
+
+/// Resolves a timeline using `info` to close open-ended media clips at the
+/// end of their files.
+pub fn resolve_with(
+    timeline: &Timeline,
+    info: &dyn AssetInfo,
+) -> (Option<Composition>, Vec<Diagnostic>) {
     let mut r = Resolver {
         tl: timeline,
+        info,
         diags: Vec::new(),
         fps: timeline.output.fps.ratio(),
         used_assets: BTreeSet::new(),
@@ -253,6 +279,7 @@ pub fn resolve(timeline: &Timeline) -> (Option<Composition>, Vec<Diagnostic>) {
 
 struct Resolver<'a> {
     tl: &'a Timeline,
+    info: &'a dyn AssetInfo,
     diags: Vec<Diagnostic>,
     fps: Ratio,
     used_assets: BTreeSet<String>,
@@ -440,7 +467,19 @@ impl Resolver<'_> {
             }
         }
 
-        let (color, _) = geneva_color::infer(out.color.unwrap_or_default(), out.width, out.height);
+        // Outputs default to BT.709 SDR at any size; size-based inference is
+        // for untagged sources, not for what gets written.
+        let requested = out.color.unwrap_or_default();
+        let color = ResolvedTags {
+            primaries: requested
+                .primaries
+                .unwrap_or(ResolvedTags::SDR_VIDEO.primaries),
+            transfer: requested
+                .transfer
+                .unwrap_or(ResolvedTags::SDR_VIDEO.transfer),
+            matrix: requested.matrix.unwrap_or(ResolvedTags::SDR_VIDEO.matrix),
+            range: requested.range.unwrap_or(ResolvedTags::SDR_VIDEO.range),
+        };
         if color.is_hdr() {
             self.push(
                 Diagnostic::error(
@@ -829,7 +868,7 @@ impl Resolver<'_> {
                 audio,
             } => {
                 self.asset_ref(asset, &spath.key("asset"), assets, &[AssetKind::Video]);
-                let (in_secs, length) = self.source_range(*in_, *out, &spath);
+                let (in_secs, length) = self.source_range(*in_, *out, &spath, asset, assets);
                 (
                     ResolvedSource::Video {
                         asset: asset.clone(),
@@ -1036,14 +1075,20 @@ impl Resolver<'_> {
     }
 
     /// Resolves an in/out range, returning the in point and the length when
-    /// it can be known without reading the file.
+    /// it can be known: from `out`, or from the file's duration when the
+    /// asset information provides one.
     fn source_range(
         &mut self,
         in_: Option<Time>,
         out: Option<Time>,
         spath: &Path,
+        asset_id: &str,
+        assets: &BTreeMap<String, ResolvedAsset>,
     ) -> (Ratio, ClipLength) {
         let in_secs = in_.map_or(Ratio::ZERO, |t| self.time(t, &spath.key("in"), "in"));
+        let file_len = assets
+            .get(asset_id)
+            .and_then(|a| self.info.duration(asset_id, &a.src));
         match out {
             Some(o) => {
                 let out_secs = self.time(o, &spath.key("out"), "out");
@@ -1056,12 +1101,39 @@ impl Resolver<'_> {
                         )
                         .with_value(json!(o.to_string())),
                     );
-                    (in_secs, ClipLength::Fixed(Ratio::ZERO))
-                } else {
-                    (in_secs, ClipLength::Fixed(out_secs - in_secs))
+                    return (in_secs, ClipLength::Fixed(Ratio::ZERO));
                 }
+                if let Some(len) = file_len {
+                    if out_secs > len {
+                        self.push(
+                            Diagnostic::warning(
+                                "W305",
+                                spath.key("out"),
+                                format!("out ({out_secs}s) is past the end of the file ({len}s)"),
+                            )
+                            .with_value(json!(o.to_string()))
+                            .with_help("the clip will end where the file ends"),
+                        );
+                        return (in_secs, ClipLength::Fixed((len - in_secs).max(Ratio::ZERO)));
+                    }
+                }
+                (in_secs, ClipLength::Fixed(out_secs - in_secs))
             }
-            None => (in_secs, ClipLength::Open),
+            None => match file_len {
+                Some(len) if in_secs >= len => {
+                    self.push(
+                        Diagnostic::error(
+                            "E301",
+                            spath.key("in"),
+                            format!("in ({in_secs}s) is at or after the end of the file ({len}s)"),
+                        )
+                        .with_value(json!(in_secs.to_string())),
+                    );
+                    (in_secs, ClipLength::Fixed(Ratio::ZERO))
+                }
+                Some(len) => (in_secs, ClipLength::Fixed(len - in_secs)),
+                None => (in_secs, ClipLength::Open),
+            },
         }
     }
 
@@ -1363,7 +1435,8 @@ impl Resolver<'_> {
                 assets,
                 &[AssetKind::Audio, AssetKind::Video],
             );
-            let (in_secs, src_len) = self.source_range(clip.in_, clip.out, &cpath);
+            let (in_secs, src_len) =
+                self.source_range(clip.in_, clip.out, &cpath, &clip.asset, assets);
             let start = clip
                 .start
                 .map_or(cursor, |t| self.time(t, &cpath.key("start"), "start"));

@@ -2,13 +2,15 @@
 
 #![forbid(unsafe_code)]
 
+mod media;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use geneva_render::{CpuRenderer, Renderer};
-use geneva_timeline::{Diagnostic, Loaded, Ratio, Time, load, summarize};
+use geneva_render::{Frame, RenderError, Renderer};
+use geneva_timeline::{Composition, Diagnostic, Loaded, Ratio, Time, summarize};
 
 /// Exit status when the timeline has validation errors.
 const EXIT_INVALID: u8 = 1;
@@ -36,9 +38,13 @@ enum Format {
 #[derive(Subcommand)]
 enum Command {
     /// Check a timeline and report every problem with its location and a fix.
-    Validate(TimelineArgs),
+    Validate(ValidateArgs),
     /// Render one frame of a timeline to a PNG file.
     Frame(FrameArgs),
+    /// Render a whole timeline to a video file.
+    Render(RenderArgs),
+    /// Show what a media file contains.
+    Probe(ProbeArgs),
     /// Print the JSON Schema of the timeline format.
     Schema,
 }
@@ -51,6 +57,24 @@ struct TimelineArgs {
     /// timeline's directory.
     #[arg(long, value_name = "DIR")]
     assets: Option<PathBuf>,
+}
+
+impl TimelineArgs {
+    fn root(&self) -> PathBuf {
+        self.assets
+            .clone()
+            .unwrap_or_else(|| timeline_dir(&self.timeline))
+    }
+}
+
+#[derive(Args)]
+struct ValidateArgs {
+    #[command(flatten)]
+    timeline: TimelineArgs,
+    /// Also open the media assets to check that they exist and to learn
+    /// their lengths.
+    #[arg(long)]
+    probe: bool,
 }
 
 #[derive(Args)]
@@ -67,6 +91,31 @@ struct FrameArgs {
     /// Where to write the PNG.
     #[arg(short, long, value_name = "FILE", default_value = "frame.png")]
     output: PathBuf,
+}
+
+#[derive(Args)]
+struct RenderArgs {
+    #[command(flatten)]
+    timeline: TimelineArgs,
+    /// Output file. The extension selects the container unless the
+    /// timeline sets one.
+    #[arg(short, long, value_name = "FILE")]
+    output: PathBuf,
+    /// Constant-quality level, overriding the timeline.
+    #[arg(long)]
+    crf: Option<u8>,
+    /// Encoder preset, overriding the timeline.
+    #[arg(long)]
+    preset: Option<String>,
+    /// Write no audio track.
+    #[arg(long)]
+    no_audio: bool,
+}
+
+#[derive(Args)]
+struct ProbeArgs {
+    /// Media file to inspect.
+    file: PathBuf,
 }
 
 fn main() -> ExitCode {
@@ -90,7 +139,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Validate(args) => {
-            let loaded = load_timeline(&args.timeline)?;
+            let loaded = load_timeline(&args.timeline, args.probe)?;
             report(&loaded.diagnostics, cli.format, None)?;
             Ok(if loaded.is_ok() {
                 ExitCode::SUCCESS
@@ -98,8 +147,16 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 ExitCode::from(EXIT_INVALID)
             })
         }
+        Command::Probe(args) => {
+            let info = media::probe(&args.file)?;
+            match cli.format {
+                Format::Json => println!("{}", serde_json::to_string_pretty(&info)?),
+                Format::Human => print!("{}", media::describe(&args.file, &info)),
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Frame(args) => {
-            let loaded = load_timeline(&args.timeline.timeline)?;
+            let loaded = load_timeline(&args.timeline, true)?;
             let Some(comp) = &loaded.composition else {
                 report(&loaded.diagnostics, cli.format, None)?;
                 return Ok(ExitCode::from(EXIT_INVALID));
@@ -111,18 +168,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 (None, Some(n)) => comp.frame_time(n),
                 (None, None) => Ratio::ZERO,
             };
-            let root = args
-                .timeline
-                .assets
-                .clone()
-                .unwrap_or_else(|| timeline_dir(&args.timeline.timeline));
-            let mut renderer = CpuRenderer::with_asset_root(root);
+            let mut renderer = media::renderer(args.timeline.root());
             let mut diagnostics = loaded.diagnostics.clone();
             match renderer.render_frame(comp, time) {
                 Ok(frame) => {
-                    let png = frame.to_png().context("encoding PNG")?;
-                    std::fs::write(&args.output, png)
-                        .with_context(|| format!("writing {}", args.output.display()))?;
+                    write_png(&frame, &args.output)?;
                     let frame_index = (time * comp.fps).floor();
                     let result = serde_json::json!({
                         "ok": true,
@@ -148,11 +198,59 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     Ok(ExitCode::SUCCESS)
                 }
                 Err(err) => {
-                    let path = match &err {
-                        geneva_render::RenderError::Unsupported { path, .. } => path.clone(),
-                        _ => String::new(),
-                    };
-                    diagnostics.push(Diagnostic::error(err.code(), path, err.to_string()));
+                    diagnostics.push(render_diagnostic(&err));
+                    report(
+                        &diagnostics,
+                        cli.format,
+                        Some(serde_json::json!({ "ok": false })),
+                    )?;
+                    Ok(ExitCode::from(EXIT_RENDER))
+                }
+            }
+        }
+        Command::Render(args) => {
+            let loaded = load_timeline(&args.timeline, true)?;
+            let Some(comp) = &loaded.composition else {
+                report(&loaded.diagnostics, cli.format, None)?;
+                return Ok(ExitCode::from(EXIT_INVALID));
+            };
+            let mut diagnostics = loaded.diagnostics.clone();
+            let overrides = media::RenderOverrides {
+                crf: args.crf,
+                preset: args.preset.clone(),
+                no_audio: args.no_audio,
+            };
+            match media::render(
+                comp,
+                &args.timeline.root(),
+                &args.output,
+                &overrides,
+                cli.format == Format::Human,
+            ) {
+                Ok(stats) => {
+                    let result = serde_json::json!({
+                        "ok": true,
+                        "output": args.output,
+                        "frames": stats.frames,
+                        "duration": comp.duration,
+                        "seconds": stats.seconds,
+                    });
+                    if cli.format == Format::Human {
+                        report(&diagnostics, cli.format, None)?;
+                        println!(
+                            "wrote {} ({} frames, {}s of video, {:.1}s elapsed)",
+                            args.output.display(),
+                            stats.frames,
+                            comp.duration,
+                            stats.seconds
+                        );
+                    } else {
+                        report(&diagnostics, cli.format, Some(result))?;
+                    }
+                    Ok(ExitCode::SUCCESS)
+                }
+                Err(err) => {
+                    diagnostics.push(render_diagnostic(&err));
                     report(
                         &diagnostics,
                         cli.format,
@@ -165,10 +263,39 @@ fn run(cli: Cli) -> Result<ExitCode> {
     }
 }
 
-fn load_timeline(path: &Path) -> Result<Loaded> {
-    let text =
-        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    Ok(load(&text))
+fn render_diagnostic(err: &RenderError) -> Diagnostic {
+    let path = match err {
+        RenderError::Unsupported { path, .. } => path.clone(),
+        _ => String::new(),
+    };
+    Diagnostic::error(err.code(), path, err.to_string())
+}
+
+fn write_png(frame: &Frame, path: &Path) -> Result<()> {
+    let png = frame.to_png().context("encoding PNG")?;
+    std::fs::write(path, png).with_context(|| format!("writing {}", path.display()))
+}
+
+/// Reads and resolves a timeline, probing media assets for their lengths
+/// when `probe` is set and media support is available.
+fn load_timeline(args: &TimelineArgs, probe: bool) -> Result<Loaded> {
+    let text = std::fs::read_to_string(&args.timeline)
+        .with_context(|| format!("reading {}", args.timeline.display()))?;
+    if !probe {
+        return Ok(geneva_timeline::load(&text));
+    }
+    let info = media::probe_assets(&text, &args.root());
+    let mut loaded = geneva_timeline::load_with(&text, &info);
+    loaded.diagnostics.extend(info.diagnostics());
+    loaded.diagnostics.sort_by(|a, b| {
+        b.severity
+            .cmp(&a.severity)
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    if loaded.diagnostics.iter().any(Diagnostic::is_error) {
+        loaded.composition = None;
+    }
+    Ok(loaded)
 }
 
 fn timeline_dir(path: &Path) -> PathBuf {
@@ -219,3 +346,6 @@ fn report(
     }
     Ok(())
 }
+
+#[allow(dead_code)]
+fn _assert_composition_is_used(_: &Composition) {}

@@ -1,0 +1,414 @@
+use std::path::{Path, PathBuf};
+
+use ffmpeg_next::codec;
+use ffmpeg_next::software::resampling;
+use ffmpeg_next::util::channel_layout::ChannelLayout;
+use ffmpeg_next::util::format::{Pixel, Sample, sample};
+use ffmpeg_next::util::frame;
+use ffmpeg_next::{Dictionary, Error as FfError, Packet, Rational};
+use geneva_color::ResolvedTags;
+use geneva_render::Frame;
+use geneva_timeline::Ratio;
+use geneva_timeline::schema::{AudioCodec, Container, VideoCodec};
+
+use super::{codec_error, init, open_error, tags};
+use crate::MediaError;
+use crate::convert::frame_to_yuv420p;
+
+/// What to write and how.
+#[derive(Debug, Clone)]
+pub struct EncodeSettings {
+    /// Frame width.
+    pub width: u32,
+    /// Frame height.
+    pub height: u32,
+    /// Frame rate.
+    pub fps: Ratio,
+    /// Container. Chosen from the output path's extension when `None`.
+    pub container: Option<Container>,
+    /// Video codec.
+    pub video_codec: VideoCodec,
+    /// Constant-quality level, when the codec supports one.
+    pub crf: Option<u8>,
+    /// Encoder speed preset name.
+    pub preset: Option<String>,
+    /// Output color tags; frames are converted to and tagged with these.
+    pub color: ResolvedTags,
+    /// Audio track settings; `None` writes no audio.
+    pub audio: Option<AudioSettings>,
+}
+
+/// Audio track settings.
+#[derive(Debug, Clone)]
+pub struct AudioSettings {
+    /// Codec.
+    pub codec: AudioCodec,
+    /// Bitrate in kilobits per second.
+    pub bitrate_kbps: u32,
+    /// Sample rate in Hz of the samples pushed and of the output.
+    pub sample_rate: u32,
+}
+
+/// Picks the container from settings or the file extension.
+pub fn container_for(path: &Path, requested: Option<Container>) -> Option<Container> {
+    requested.or_else(
+        || match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+            "mp4" | "m4v" => Some(Container::Mp4),
+            "mov" => Some(Container::Mov),
+            "mkv" => Some(Container::Mkv),
+            "webm" => Some(Container::Webm),
+            _ => None,
+        },
+    )
+}
+
+/// Default codecs per container.
+pub fn default_codecs(container: Container) -> (VideoCodec, AudioCodec) {
+    match container {
+        Container::Webm => (VideoCodec::Vp9, AudioCodec::Opus),
+        Container::Mp4 | Container::Mov | Container::Mkv => (VideoCodec::H264, AudioCodec::Aac),
+    }
+}
+
+fn video_encoder_names(codec: VideoCodec) -> &'static [&'static str] {
+    match codec {
+        VideoCodec::H264 => &["libx264"],
+        VideoCodec::H265 => &["libx265"],
+        VideoCodec::Vp9 => &["libvpx-vp9"],
+        VideoCodec::Av1 => &["libsvtav1", "libaom-av1"],
+    }
+}
+
+fn audio_encoder_names(codec: AudioCodec) -> &'static [&'static str] {
+    match codec {
+        AudioCodec::Aac => &["aac"],
+        AudioCodec::Opus => &["libopus"],
+    }
+}
+
+fn find_encoder(names: &[&str]) -> Result<ffmpeg_next::Codec, MediaError> {
+    names
+        .iter()
+        .find_map(|n| ffmpeg_next::encoder::find_by_name(n))
+        .ok_or_else(|| MediaError::MissingEncoder {
+            name: names.join(" or "),
+        })
+}
+
+struct AudioTrack {
+    encoder: codec::encoder::audio::Encoder,
+    stream_index: usize,
+    time_base: Rational,
+    resampler: resampling::Context,
+    frame_size: usize,
+    /// Interleaved stereo samples waiting to fill a frame.
+    pending: Vec<f32>,
+    /// Sample position of the next frame to send.
+    next_pts: i64,
+}
+
+/// Writes video (and optionally audio) to a file.
+pub struct Encoder {
+    path: PathBuf,
+    octx: ffmpeg_next::format::context::Output,
+    video: codec::encoder::video::Encoder,
+    video_stream: usize,
+    video_time_base: Rational,
+    settings: EncodeSettings,
+    frame_index: i64,
+    audio: Option<AudioTrack>,
+    finished: bool,
+}
+
+impl Encoder {
+    /// Creates the output file and writes its header.
+    pub fn new(path: &Path, settings: EncodeSettings) -> Result<Self, MediaError> {
+        init();
+        let mut octx = ffmpeg_next::format::output(path).map_err(|e| open_error(path, e))?;
+        let global_header = octx
+            .format()
+            .flags()
+            .contains(ffmpeg_next::format::Flags::GLOBAL_HEADER);
+        let fps = Rational::new(settings.fps.numer() as i32, settings.fps.denom() as i32);
+        let video_time_base = Rational::new(fps.denominator(), fps.numerator());
+
+        // Video stream.
+        let vcodec = find_encoder(video_encoder_names(settings.video_codec))?;
+        let mut vstream = octx.add_stream(vcodec).map_err(|e| open_error(path, e))?;
+        let video_stream = vstream.index();
+        vstream.set_time_base(video_time_base);
+        vstream.set_avg_frame_rate(fps);
+        vstream.set_rate(fps);
+        let mut vctx = codec::context::Context::new_with_codec(vcodec);
+        if global_header {
+            vctx.set_flags(codec::Flags::GLOBAL_HEADER);
+        }
+        let mut venc = vctx
+            .encoder()
+            .video()
+            .map_err(|e| codec_error("video encoder setup", e))?;
+        venc.set_width(settings.width);
+        venc.set_height(settings.height);
+        venc.set_format(Pixel::YUV420P);
+        venc.set_time_base(video_time_base);
+        venc.set_frame_rate(Some(fps));
+        let (space, range, primaries, transfer) = tags::to_libav(settings.color);
+        venc.set_colorspace(space);
+        venc.set_color_range(range);
+        venc.set_color_primaries(primaries);
+        venc.set_color_transfer_characteristic(transfer);
+        let mut opts = Dictionary::new();
+        match settings.video_codec {
+            VideoCodec::H264 | VideoCodec::H265 => {
+                opts.set("crf", &settings.crf.unwrap_or(23).to_string());
+                opts.set("preset", settings.preset.as_deref().unwrap_or("medium"));
+            }
+            VideoCodec::Vp9 => {
+                opts.set("crf", &settings.crf.unwrap_or(31).to_string());
+                opts.set("b", "0");
+                opts.set("row-mt", "1");
+            }
+            VideoCodec::Av1 => {
+                opts.set("crf", &settings.crf.unwrap_or(30).to_string());
+                if let Some(p) = &settings.preset {
+                    opts.set("preset", p);
+                }
+            }
+        }
+        let video = venc
+            .open_with(opts)
+            .map_err(|e| codec_error("opening video encoder", e))?;
+        octx.stream_mut(video_stream)
+            .expect("stream added")
+            .set_parameters(&video);
+
+        // Audio stream.
+        let audio = match &settings.audio {
+            None => None,
+            Some(a) => {
+                let acodec = find_encoder(audio_encoder_names(a.codec))?;
+                let mut astream = octx.add_stream(acodec).map_err(|e| open_error(path, e))?;
+                let stream_index = astream.index();
+                let time_base = Rational::new(1, a.sample_rate as i32);
+                astream.set_time_base(time_base);
+                let mut actx = codec::context::Context::new_with_codec(acodec);
+                if global_header {
+                    actx.set_flags(codec::Flags::GLOBAL_HEADER);
+                }
+                let mut aenc = actx
+                    .encoder()
+                    .audio()
+                    .map_err(|e| codec_error("audio encoder setup", e))?;
+                let format = match a.codec {
+                    AudioCodec::Aac => Sample::F32(sample::Type::Planar),
+                    AudioCodec::Opus => Sample::F32(sample::Type::Packed),
+                };
+                aenc.set_rate(a.sample_rate as i32);
+                aenc.set_format(format);
+                aenc.set_channel_layout(ChannelLayout::STEREO);
+                aenc.set_time_base(time_base);
+                aenc.set_bit_rate(a.bitrate_kbps as usize * 1000);
+                let encoder = aenc
+                    .open()
+                    .map_err(|e| codec_error("opening audio encoder", e))?;
+                let frame_size = match encoder.frame_size() {
+                    0 => 1024,
+                    n => n as usize,
+                };
+                octx.stream_mut(stream_index)
+                    .expect("stream added")
+                    .set_parameters(&encoder);
+                let resampler = resampling::Context::get(
+                    Sample::F32(sample::Type::Packed),
+                    ChannelLayout::STEREO,
+                    a.sample_rate,
+                    format,
+                    ChannelLayout::STEREO,
+                    a.sample_rate,
+                )
+                .map_err(|e| codec_error("audio sample format conversion", e))?;
+                Some(AudioTrack {
+                    encoder,
+                    stream_index,
+                    time_base,
+                    resampler,
+                    frame_size,
+                    pending: Vec::new(),
+                    next_pts: 0,
+                })
+            }
+        };
+
+        octx.write_header().map_err(|e| open_error(path, e))?;
+        Ok(Self {
+            path: path.to_owned(),
+            octx,
+            video,
+            video_stream,
+            video_time_base,
+            settings,
+            frame_index: 0,
+            audio,
+            finished: false,
+        })
+    }
+
+    /// Encodes one frame. Frames must be pushed in order; each is shown
+    /// for exactly one frame period.
+    pub fn push_frame(&mut self, frame: &Frame) -> Result<(), MediaError> {
+        let yuv = frame_to_yuv420p(frame, self.settings.color);
+        let mut out = frame::Video::new(Pixel::YUV420P, yuv.width, yuv.height);
+        let strides = [out.stride(0), out.stride(1), out.stride(2)];
+        copy_plane(
+            out.data_mut(0),
+            strides[0],
+            &yuv.y,
+            yuv.width as usize,
+            yuv.height as usize,
+        );
+        let (cw, ch) = (yuv.chroma_width() as usize, yuv.chroma_height() as usize);
+        copy_plane(out.data_mut(1), strides[1], &yuv.cb, cw, ch);
+        copy_plane(out.data_mut(2), strides[2], &yuv.cr, cw, ch);
+        let (space, range, primaries, transfer) = tags::to_libav(self.settings.color);
+        out.set_color_space(space);
+        out.set_color_range(range);
+        out.set_color_primaries(primaries);
+        out.set_color_transfer_characteristic(transfer);
+        out.set_pts(Some(self.frame_index));
+        self.frame_index += 1;
+        self.video
+            .send_frame(&out)
+            .map_err(|e| codec_error("encoding video", e))?;
+        self.drain_video()
+    }
+
+    /// Queues interleaved stereo samples at the configured sample rate.
+    pub fn push_audio(&mut self, samples: &[f32]) -> Result<(), MediaError> {
+        let Some(track) = self.audio.as_mut() else {
+            return Ok(());
+        };
+        track.pending.extend_from_slice(samples);
+        while track.pending.len() >= track.frame_size * 2 {
+            let chunk: Vec<f32> = track.pending.drain(..track.frame_size * 2).collect();
+            Self::send_audio_chunk(&mut self.octx, track, &chunk)?;
+        }
+        Ok(())
+    }
+
+    fn send_audio_chunk(
+        octx: &mut ffmpeg_next::format::context::Output,
+        track: &mut AudioTrack,
+        chunk: &[f32],
+    ) -> Result<(), MediaError> {
+        let n = chunk.len() / 2;
+        let mut packed =
+            frame::Audio::new(Sample::F32(sample::Type::Packed), n, ChannelLayout::STEREO);
+        packed.set_rate(track.encoder.rate());
+        let bytes: Vec<u8> = chunk.iter().flat_map(|v| v.to_le_bytes()).collect();
+        packed.data_mut(0)[..bytes.len()].copy_from_slice(&bytes);
+        let mut converted = frame::Audio::empty();
+        track
+            .resampler
+            .run(&packed, &mut converted)
+            .map_err(|e| codec_error("audio sample format conversion", e))?;
+        converted.set_pts(Some(track.next_pts));
+        track.next_pts += n as i64;
+        track
+            .encoder
+            .send_frame(&converted)
+            .map_err(|e| codec_error("encoding audio", e))?;
+        Self::drain(
+            octx,
+            &mut track.encoder,
+            track.stream_index,
+            track.time_base,
+            n as i64,
+        )
+    }
+
+    fn drain_video(&mut self) -> Result<(), MediaError> {
+        Self::drain(
+            &mut self.octx,
+            &mut self.video,
+            self.video_stream,
+            self.video_time_base,
+            1,
+        )
+    }
+
+    fn drain(
+        octx: &mut ffmpeg_next::format::context::Output,
+        encoder: &mut codec::encoder::Encoder,
+        stream_index: usize,
+        time_base: Rational,
+        duration: i64,
+    ) -> Result<(), MediaError> {
+        let mut packet = Packet::empty();
+        loop {
+            match encoder.receive_packet(&mut packet) {
+                Ok(()) => {
+                    packet.set_stream(stream_index);
+                    if packet.duration() == 0 {
+                        packet.set_duration(duration);
+                    }
+                    let stream_tb = octx
+                        .stream(stream_index)
+                        .expect("stream exists")
+                        .time_base();
+                    packet.rescale_ts(time_base, stream_tb);
+                    packet
+                        .write_interleaved(octx)
+                        .map_err(|e| codec_error("writing packet", e))?;
+                }
+                Err(FfError::Other { errno }) if errno == ffmpeg_next::error::EAGAIN => {
+                    return Ok(());
+                }
+                Err(FfError::Eof) => return Ok(()),
+                Err(e) => return Err(codec_error("encoding", e)),
+            }
+        }
+    }
+
+    /// Flushes both encoders and writes the trailer.
+    pub fn finish(mut self) -> Result<(), MediaError> {
+        if let Some(mut track) = self.audio.take() {
+            if !track.pending.is_empty() {
+                let mut chunk = std::mem::take(&mut track.pending);
+                chunk.resize(track.frame_size * 2, 0.0);
+                Self::send_audio_chunk(&mut self.octx, &mut track, &chunk)?;
+            }
+            track
+                .encoder
+                .send_eof()
+                .map_err(|e| codec_error("flushing audio", e))?;
+            Self::drain(
+                &mut self.octx,
+                &mut track.encoder,
+                track.stream_index,
+                track.time_base,
+                track.frame_size as i64,
+            )?;
+        }
+        self.video
+            .send_eof()
+            .map_err(|e| codec_error("flushing video", e))?;
+        self.drain_video()?;
+        self.octx
+            .write_trailer()
+            .map_err(|e| open_error(&self.path, e))?;
+        self.finished = true;
+        Ok(())
+    }
+
+    /// Number of frames pushed so far.
+    pub fn frames_written(&self) -> u64 {
+        self.frame_index as u64
+    }
+}
+
+fn copy_plane(dst: &mut [u8], stride: usize, src: &[u8], width: usize, height: usize) {
+    for row in 0..height {
+        dst[row * stride..row * stride + width]
+            .copy_from_slice(&src[row * width..(row + 1) * width]);
+    }
+}

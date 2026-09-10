@@ -39,8 +39,9 @@ pub use length::{Length, Point, Scale};
 pub use parse::parse;
 pub use ratio::Ratio;
 pub use resolve::{
-    Composition, ResolvedAsset, ResolvedAudioClip, ResolvedAudioTrack, ResolvedClip,
-    ResolvedComposition, ResolvedLayer, ResolvedSource, ResolvedText, resolve,
+    AssetInfo, Composition, NoAssetInfo, ResolvedAsset, ResolvedAudioClip, ResolvedAudioTrack,
+    ResolvedClip, ResolvedComposition, ResolvedLayer, ResolvedSource, ResolvedText, resolve,
+    resolve_with,
 };
 pub use schema::{FORMAT_VERSION, Timeline};
 pub use time::{Fps, Time};
@@ -64,8 +65,15 @@ impl Loaded {
     }
 }
 
-/// Parses, validates and resolves timeline JSON in one step.
+/// Parses, validates and resolves timeline JSON in one step, without
+/// reading any asset files.
 pub fn load(text: &str) -> Loaded {
+    load_with(text, &NoAssetInfo)
+}
+
+/// Like [`load`], with asset information for closing open-ended media
+/// clips at the end of their files.
+pub fn load_with(text: &str, info: &dyn AssetInfo) -> Loaded {
     let timeline = match parse(text) {
         Ok(tl) => tl,
         Err(d) => {
@@ -76,7 +84,7 @@ pub fn load(text: &str) -> Loaded {
             };
         }
     };
-    let (composition, mut diagnostics) = resolve(&timeline);
+    let (composition, mut diagnostics) = resolve_with(&timeline, info);
     diagnostics.sort_by(|a, b| {
         b.severity
             .cmp(&a.severity)
