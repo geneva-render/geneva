@@ -61,7 +61,11 @@ pub fn link_media_libraries() {
         let arg = if archive.exists() {
             archive.display().to_string()
         } else if name == "stdc++" {
-            cxx_runtime.clone().unwrap_or(flag)
+            match target_os.as_str() {
+                // Apple's C++ runtime goes by another name.
+                "macos" | "ios" => "-lc++".to_owned(),
+                _ => cxx_runtime.clone().unwrap_or(flag),
+            }
         } else {
             flag
         };
@@ -84,12 +88,33 @@ pub fn link_media_libraries() {
     }
     match target_os.as_str() {
         "macos" | "ios" => println!("cargo:rustc-link-arg=-lc++"),
-        "linux" => match &cxx_runtime {
-            Some(path) => println!("cargo:rustc-link-arg={path}"),
-            None => println!("cargo:rustc-link-arg=-lstdc++"),
-        },
+        "linux" => {
+            match &cxx_runtime {
+                Some(path) => println!("cargo:rustc-link-arg={path}"),
+                None => println!("cargo:rustc-link-arg=-lstdc++"),
+            }
+            // GCC emits calls to its out-of-line atomics helpers on
+            // AArch64; they live in the static libgcc, which Rust does
+            // not link on its own.
+            let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+            if arch == "aarch64" {
+                if let Some(libgcc) = static_libgcc() {
+                    println!("cargo:rustc-link-arg={libgcc}");
+                }
+            }
+        }
         _ => {}
     }
+}
+
+/// The path of the static libgcc archive, if the compiler knows it.
+fn static_libgcc() -> Option<String> {
+    let out = Command::new("cc")
+        .arg("-print-libgcc-file-name")
+        .output()
+        .ok()?;
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    (Path::new(&path).is_absolute() && Path::new(&path).exists()).then_some(path)
 }
 
 /// Runs pkg-config against the prefix only, so nothing from the system
