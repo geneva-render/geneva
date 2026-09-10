@@ -7,6 +7,7 @@ members = [
     "crates/geneva-render",
     "crates/geneva-golden",
     "crates/geneva-media",
+    "crates/geneva-media-link",
     "crates/geneva-cli",
 ]
 
@@ -26,6 +27,7 @@ geneva-timeline = { path = "crates/geneva-timeline", version = "0.0.1" }
 geneva-render = { path = "crates/geneva-render", version = "0.0.1" }
 geneva-golden = { path = "crates/geneva-golden", version = "0.0.1" }
 geneva-media = { path = "crates/geneva-media", version = "0.0.1", default-features = false }
+geneva-media-link = { path = "crates/geneva-media-link", version = "0.0.1" }
 
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }

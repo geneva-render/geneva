@@ -63,7 +63,7 @@ pub fn probe(path: &Path) -> Result<MediaInfo, MediaError> {
                 .then(|| ts_to_secs(stream.duration(), stream.time_base())),
             frames: (stream.frames() > 0).then(|| stream.frames() as u64),
             pixel_format: format!("{fmt:?}").to_ascii_lowercase(),
-            color: tags::from_libav(
+            color: tags::from_codec_tags(
                 decoder.color_space(),
                 decoder.color_range(),
                 decoder.color_primaries(),

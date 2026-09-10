@@ -26,8 +26,8 @@ there yet. Expect breaking changes to the format until the schema reaches
   tags, including which tags had to be assumed.
 - `geneva schema` — prints the JSON Schema for the current timeline version.
 
-Media support needs the libav libraries (FFmpeg 6 or 7) installed as shared
-libraries with development headers; see [Building](#building).
+Geneva ships as a single binary with its media libraries built in; see
+[Building](#building) if you build from source.
 
 ## Quick look
 
@@ -64,26 +64,27 @@ See [docs/timeline.md](docs/timeline.md) for the format reference and
 
 ## Building
 
-Geneva is a Rust workspace. It links against the libav libraries for media
-I/O, so install them first:
+Geneva is a Rust workspace. Its media libraries are built once from pinned
+sources into `target/media-libs` and linked statically, so the resulting
+binary has no runtime dependencies beyond the operating system.
 
 ```sh
-# Debian/Ubuntu
-sudo apt install libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev clang
-# macOS
-brew install ffmpeg
-```
+# tools for the one-time library build
+# Debian/Ubuntu: sudo apt install build-essential cmake meson ninja-build nasm pkg-config clang
+# macOS:         brew install cmake meson ninja nasm pkg-config
 
-Then, with a stable Rust toolchain:
-
-```sh
+scripts/build-media-libs.sh      # ~10-20 minutes, once
 cargo build --release
 cargo test
 ./target/release/geneva --help
 ```
 
-To build without media support (validation, PNG frames of non-video
+`clang` is only needed while building (for generating bindings). To build
+without media support at all (validation, PNG frames of non-video
 timelines, schema): `cargo build --no-default-features`.
+
+Third-party components and their licenses are listed in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## Repository layout
 
@@ -94,12 +95,14 @@ timelines, schema): `cargo build --no-default-features`.
 | `crates/geneva-color` | Color tags, inference, transfer functions, matrices, linear-light blending |
 | `crates/geneva-render` | Renderer interface and the CPU reference renderer |
 | `crates/geneva-golden` | Perceptual image comparison and the golden-frame test driver |
-| `crates/geneva-media` | Probing, decoding, encoding and audio mixing over the libav libraries |
+| `crates/geneva-media` | Probing, decoding, encoding and audio mixing over the bundled media libraries |
 | `crates/geneva-cli` | The `geneva` command-line tool |
 | `schema/` | Published JSON Schema files, one per timeline version |
 | `docs/` | Format reference, diagnostics, color pipeline, architecture |
 | `tests/golden/` | Golden scenes, their reference frames, and the fonts they use |
 | `tests/media/` | Small media files used by tests |
+| `scripts/` | The media library build and the benchmark script |
+| `licenses/` | License texts of the bundled third-party components |
 
 ## License
 

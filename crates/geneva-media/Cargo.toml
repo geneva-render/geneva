@@ -8,11 +8,11 @@ license-file.workspace = true
 repository.workspace = true
 
 [features]
-default = ["libav"]
-# Media I/O through the libav libraries (libavformat, libavcodec,
-# libswscale, libswresample). Without it the crate only offers the
+default = ["media"]
+# Media I/O through the media libraries built by scripts/build-media-libs.sh
+# and linked statically. Without it the crate only offers the
 # hardware-independent conversions and types.
-libav = ["dep:ffmpeg-next"]
+media = ["dep:ffmpeg-next", "ffmpeg-next/static"]
 
 [dependencies]
 geneva-anim = { workspace = true }
@@ -22,6 +22,9 @@ geneva-timeline = { workspace = true }
 ffmpeg-next = { workspace = true, optional = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+
+[build-dependencies]
+geneva-media-link = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.10"

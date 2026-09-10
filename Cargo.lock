@@ -534,6 +534,7 @@ dependencies = [
  "clap",
  "geneva-color",
  "geneva-media",
+ "geneva-media-link",
  "geneva-render",
  "geneva-timeline",
  "predicates",
@@ -571,12 +572,17 @@ dependencies = [
  "ffmpeg-next",
  "geneva-anim",
  "geneva-color",
+ "geneva-media-link",
  "geneva-render",
  "geneva-timeline",
  "serde",
  "tempfile",
  "thiserror",
 ]
+
+[[package]]
+name = "geneva-media-link"
+version = "0.0.1"
 
 [[package]]
 name = "geneva-render"

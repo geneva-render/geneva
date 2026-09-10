@@ -12,9 +12,10 @@ name = "geneva"
 path = "src/main.rs"
 
 [features]
-default = ["libav"]
-# Media probing, video decoding and rendering to files.
-libav = ["geneva-media/libav"]
+default = ["media"]
+# Media probing, video decoding and rendering to files, with the media
+# libraries built by scripts/build-media-libs.sh linked statically.
+media = ["geneva-media/media"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -24,6 +25,9 @@ geneva-media = { workspace = true }
 geneva-render = { workspace = true }
 geneva-timeline = { workspace = true }
 serde_json = { workspace = true }
+
+[build-dependencies]
+geneva-media-link = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = "2.0"

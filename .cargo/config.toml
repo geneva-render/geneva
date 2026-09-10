@@ -1,0 +1,5 @@
+# The media libraries are built once by scripts/build-media-libs.sh into
+# target/media-libs and linked statically from there.
+[env]
+FFMPEG_DIR = { value = "target/media-libs", relative = true }
+MEDIA_LIBS_DIR = { value = "target/media-libs", relative = true }

@@ -1,4 +1,4 @@
-//! Media I/O over the libav libraries.
+//! Media I/O over the bundled media libraries.
 
 mod decode;
 mod encode;

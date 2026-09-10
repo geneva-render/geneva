@@ -27,12 +27,22 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Install libav (Linux)
+      - name: Install build tools (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev clang pkg-config
-      - name: Install libav (macOS)
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake meson ninja-build nasm pkg-config clang
+      - name: Install build tools (macOS)
         if: runner.os == 'macOS'
-        run: brew install ffmpeg pkg-config
+        run: brew install cmake meson ninja nasm pkg-config
+      - name: Cache media libraries
+        if: runner.os != 'Windows'
+        id: media-libs
+        uses: actions/cache@v4
+        with:
+          path: target/media-libs
+          key: media-libs-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-media-libs.sh') }}
+      - name: Build media libraries
+        if: runner.os != 'Windows' && steps.media-libs.outputs.cache-hit != 'true'
+        run: scripts/build-media-libs.sh
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy

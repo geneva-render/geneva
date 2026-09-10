@@ -91,7 +91,7 @@ pub fn probe_assets(text: &str, root: &Path) -> ProbedAssets {
 
 pub use imp::{describe, probe, render, renderer};
 
-#[cfg(feature = "libav")]
+#[cfg(feature = "media")]
 mod imp {
     use std::path::Path;
     use std::time::Instant;
@@ -210,6 +210,9 @@ mod imp {
                 .preset
                 .clone()
                 .or_else(|| video.and_then(|v| v.preset.clone())),
+            hardware: video
+                .and_then(|v| v.hardware)
+                .unwrap_or(geneva_timeline::schema::HardwarePolicy::Auto),
             color: comp.color,
             audio: if overrides.no_audio {
                 None
@@ -251,7 +254,7 @@ mod imp {
     }
 }
 
-#[cfg(not(feature = "libav"))]
+#[cfg(not(feature = "media"))]
 mod imp {
     use std::path::Path;
 

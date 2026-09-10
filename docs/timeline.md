@@ -110,9 +110,9 @@ object with a `keyframes` array:
 | `audio.sample_rate` | no | 48000 | Output sample rate. |
 | `audio.channels` | no | 2 | 1 or 2. |
 | `encode.container` | no | from the output file extension | `mp4`, `mov`, `mkv`, `webm`. |
-| `encode.video.codec` | no | `h264` (`vp9` for webm) | `h264`, `h265`, `vp9`, `av1`. |
+| `encode.video.codec` | no | `h264` (`vp9` for webm) | `h264`, `h265`, `vp9`, `av1`. H.265 needs a hardware encoder. |
 | `encode.video.crf` | no | per codec | Constant quality; lower is better. |
-| `encode.video.preset` | no | per codec | Encoder speed preset name. |
+| `encode.video.preset` | no | per codec | Encoder speed preset name (`ultrafast` to `veryslow`); ignored by encoders without presets. |
 | `encode.video.hardware` | no | `auto` | `auto`, `never`, `require`. |
 | `encode.audio.codec` | no | `aac` (`opus` for webm) | `aac`, `opus`. |
 | `encode.audio.bitrate_kbps` | no | 160 | Audio bitrate. |
@@ -262,7 +262,7 @@ Tracks have `id`, `enabled` and `clips` like layers. Audio clips:
 1. A clip without `start` begins where the previous clip in the same layer
    ends; the first clip begins at 0.
 2. Video and audio clips last `duration` if given, otherwise `out - in`.
-   With neither, they play to the end of the file, as ffmpeg would. Until
+   With neither, they play to the end of the file. Until
    media probing is available the file length is unknown, so such a clip
    is treated like an open-ended source (rule 3).
 3. Images, solids, shapes and text are open-ended: without `duration` they

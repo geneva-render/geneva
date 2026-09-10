@@ -11,7 +11,7 @@ use geneva_anim::Track;
 use geneva_timeline::{Composition, Ratio, ResolvedLayer, ResolvedSource};
 
 use crate::MediaError;
-use crate::libav::AudioReader;
+use crate::codecs::AudioReader;
 
 /// Gain is sampled once per block of this many frames.
 const GAIN_BLOCK: usize = 64;

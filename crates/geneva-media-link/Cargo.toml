@@ -1,0 +1,14 @@
+[package]
+name = "geneva-media-link"
+description = "Build-script helper that links the statically built media libraries"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

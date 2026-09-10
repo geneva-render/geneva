@@ -1,13 +1,13 @@
 //! Probe, decode, encode and mix against the committed test clip.
 
-#![cfg(feature = "libav")]
+#![cfg(feature = "media")]
 
 use std::path::{Path, PathBuf};
 
 use geneva_color::{Color, ColorTags, Matrix, Primaries, Range, ResolvedTags, Transfer};
 use geneva_media::{AudioReader, AudioSettings, EncodeSettings, Encoder, VideoReader, mix, probe};
 use geneva_render::Frame;
-use geneva_timeline::schema::{AudioCodec, VideoCodec};
+use geneva_timeline::schema::{AudioCodec, HardwarePolicy, VideoCodec};
 use geneva_timeline::{Ratio, load};
 
 fn clip() -> PathBuf {
@@ -99,6 +99,7 @@ fn encoded_solid_color_survives_the_round_trip() {
         video_codec: VideoCodec::H264,
         crf: Some(16),
         preset: Some("veryfast".to_owned()),
+        hardware: HardwarePolicy::Never,
         color: ResolvedTags::SDR_VIDEO,
         audio: Some(AudioSettings {
             codec: AudioCodec::Aac,
@@ -189,6 +190,7 @@ fn audio_lands_at_its_timeline_position_in_the_output_file() {
         video_codec: VideoCodec::H264,
         crf: Some(30),
         preset: Some("ultrafast".to_owned()),
+        hardware: HardwarePolicy::Never,
         color: ResolvedTags::SDR_VIDEO,
         audio: Some(AudioSettings {
             codec: AudioCodec::Aac,

@@ -9,7 +9,7 @@ use ffmpeg_next::{Dictionary, Error as FfError, Packet, Rational};
 use geneva_color::ResolvedTags;
 use geneva_render::Frame;
 use geneva_timeline::Ratio;
-use geneva_timeline::schema::{AudioCodec, Container, VideoCodec};
+use geneva_timeline::schema::{AudioCodec, Container, HardwarePolicy, VideoCodec};
 
 use super::{codec_error, init, open_error, tags};
 use crate::MediaError;
@@ -32,6 +32,8 @@ pub struct EncodeSettings {
     pub crf: Option<u8>,
     /// Encoder speed preset name.
     pub preset: Option<String>,
+    /// Whether to use a hardware encoder. Defaults to trying hardware first.
+    pub hardware: HardwarePolicy,
     /// Output color tags; frames are converted to and tagged with these.
     pub color: ResolvedTags,
     /// Audio track settings; `None` writes no audio.
@@ -70,13 +72,53 @@ pub fn default_codecs(container: Container) -> (VideoCodec, AudioCodec) {
     }
 }
 
-fn video_encoder_names(codec: VideoCodec) -> &'static [&'static str] {
+/// Hardware encoder implementations, most capable first.
+fn hardware_encoder_names(codec: VideoCodec) -> &'static [&'static str] {
     match codec {
-        VideoCodec::H264 => &["libx264"],
-        VideoCodec::H265 => &["libx265"],
-        VideoCodec::Vp9 => &["libvpx-vp9"],
-        VideoCodec::Av1 => &["libsvtav1", "libaom-av1"],
+        VideoCodec::H264 => &["h264_videotoolbox", "h264_nvenc"],
+        VideoCodec::H265 => &["hevc_videotoolbox", "hevc_nvenc"],
+        VideoCodec::Vp9 | VideoCodec::Av1 => &[],
     }
+}
+
+/// Software encoder implementations.
+fn software_encoder_names(codec: VideoCodec) -> &'static [&'static str] {
+    match codec {
+        VideoCodec::H264 => &["libopenh264"],
+        VideoCodec::H265 => &[],
+        VideoCodec::Vp9 => &["libvpx-vp9"],
+        VideoCodec::Av1 => &["libsvtav1"],
+    }
+}
+
+/// Candidate encoders for a codec under a hardware policy, in the order
+/// they are tried. Hardware encoders are compiled in whether or not the
+/// machine has the device, so each candidate is opened to find out.
+fn video_encoder_candidates(codec: VideoCodec, policy: HardwarePolicy) -> Vec<&'static str> {
+    let hw = hardware_encoder_names(codec);
+    let sw = software_encoder_names(codec);
+    match policy {
+        HardwarePolicy::Auto => hw.iter().chain(sw.iter()).copied().collect(),
+        HardwarePolicy::Require => hw.to_vec(),
+        HardwarePolicy::Never => sw.to_vec(),
+    }
+}
+
+/// Maps the named speed presets onto SVT-AV1's numeric scale.
+fn svt_preset(name: &str) -> String {
+    match name {
+        "ultrafast" => "12",
+        "superfast" => "11",
+        "veryfast" => "10",
+        "faster" => "9",
+        "fast" => "8",
+        "medium" => "6",
+        "slow" => "4",
+        "slower" => "3",
+        "veryslow" => "2",
+        other => other,
+    }
+    .to_owned()
 }
 
 fn audio_encoder_names(codec: AudioCodec) -> &'static [&'static str] {
@@ -93,6 +135,77 @@ fn find_encoder(names: &[&str]) -> Result<ffmpeg_next::Codec, MediaError> {
         .ok_or_else(|| MediaError::MissingEncoder {
             name: names.join(" or "),
         })
+}
+
+/// Configures and opens one video encoder implementation.
+fn open_video_encoder(
+    vcodec: ffmpeg_next::Codec,
+    settings: &EncodeSettings,
+    video_time_base: Rational,
+    fps: Rational,
+    global_header: bool,
+) -> Result<codec::encoder::video::Encoder, MediaError> {
+    let name = vcodec.name().to_owned();
+    let mut vctx = codec::context::Context::new_with_codec(vcodec);
+    if global_header {
+        vctx.set_flags(codec::Flags::GLOBAL_HEADER);
+    }
+    let mut venc = vctx
+        .encoder()
+        .video()
+        .map_err(|e| codec_error(format!("{name}: encoder setup"), e))?;
+    venc.set_width(settings.width);
+    venc.set_height(settings.height);
+    venc.set_format(Pixel::YUV420P);
+    venc.set_time_base(video_time_base);
+    venc.set_frame_rate(Some(fps));
+    let (space, range, primaries, transfer) = tags::to_codec_tags(settings.color);
+    venc.set_colorspace(space);
+    venc.set_color_range(range);
+    venc.set_color_primaries(primaries);
+    venc.set_color_transfer_characteristic(transfer);
+    let quality = i32::from(settings.crf.unwrap_or(23).clamp(1, 51));
+    let mut opts = Dictionary::new();
+    match name.as_str() {
+        "libopenh264" => {
+            // Quality-mode rate control with the quantizer pinned gives a
+            // constant quantizer; the quality level maps onto the same
+            // 0..=51 scale the other encoders use.
+            opts.set("rc_mode", "quality");
+            opts.set("profile", "high");
+            opts.set("coder", "cabac");
+            venc.set_qmin(quality);
+            venc.set_qmax(quality);
+            venc.set_bit_rate(50_000_000);
+            venc.set_gop(u32::try_from(settings.fps.round().max(1) * 2).unwrap_or(60));
+        }
+        "libvpx-vp9" => {
+            opts.set("crf", &settings.crf.unwrap_or(31).to_string());
+            opts.set("b", "0");
+            opts.set("row-mt", "1");
+        }
+        "libsvtav1" => {
+            opts.set("crf", &settings.crf.unwrap_or(30).to_string());
+            opts.set(
+                "preset",
+                &svt_preset(settings.preset.as_deref().unwrap_or("medium")),
+            );
+        }
+        n if n.ends_with("_nvenc") => {
+            opts.set("rc", "constqp");
+            opts.set("qp", &quality.to_string());
+            opts.set("preset", "p4");
+        }
+        n if n.ends_with("_videotoolbox") => {
+            // Quality is 0..=1 with 1 best; invert the 0..=51 scale.
+            let q = 1.0 - f64::from(quality) / 51.0;
+            opts.set("q:v", &format!("{}", (q * 100.0).round() as i64));
+            opts.set("realtime", "0");
+        }
+        _ => {}
+    }
+    venc.open_with(opts)
+        .map_err(|e| codec_error(format!("opening {name} encoder"), e))
 }
 
 struct AudioTrack {
@@ -132,55 +245,46 @@ impl Encoder {
         let fps = Rational::new(settings.fps.numer() as i32, settings.fps.denom() as i32);
         let video_time_base = Rational::new(fps.denominator(), fps.numerator());
 
-        // Video stream.
-        let vcodec = find_encoder(video_encoder_names(settings.video_codec))?;
+        // Video stream: the first candidate that opens wins.
+        let candidates = video_encoder_candidates(settings.video_codec, settings.hardware);
+        if candidates.is_empty() {
+            return Err(MediaError::MissingEncoder {
+                name: format!(
+                    "{:?} ({:?} hardware policy)",
+                    settings.video_codec, settings.hardware
+                ),
+            });
+        }
+        let mut video = None;
+        let mut last_error = None;
+        for name in &candidates {
+            let Some(vcodec) = ffmpeg_next::encoder::find_by_name(name) else {
+                continue;
+            };
+            match open_video_encoder(vcodec, &settings, video_time_base, fps, global_header) {
+                Ok(enc) => {
+                    video = Some(enc);
+                    break;
+                }
+                Err(e) => last_error = Some(e),
+            }
+        }
+        let video = match (video, last_error) {
+            (Some(v), _) => v,
+            (None, Some(e)) => return Err(e),
+            (None, None) => {
+                return Err(MediaError::MissingEncoder {
+                    name: candidates.join(" or "),
+                });
+            }
+        };
+        let vcodec = video.codec().expect("opened encoder has a codec");
         let mut vstream = octx.add_stream(vcodec).map_err(|e| open_error(path, e))?;
         let video_stream = vstream.index();
         vstream.set_time_base(video_time_base);
         vstream.set_avg_frame_rate(fps);
         vstream.set_rate(fps);
-        let mut vctx = codec::context::Context::new_with_codec(vcodec);
-        if global_header {
-            vctx.set_flags(codec::Flags::GLOBAL_HEADER);
-        }
-        let mut venc = vctx
-            .encoder()
-            .video()
-            .map_err(|e| codec_error("video encoder setup", e))?;
-        venc.set_width(settings.width);
-        venc.set_height(settings.height);
-        venc.set_format(Pixel::YUV420P);
-        venc.set_time_base(video_time_base);
-        venc.set_frame_rate(Some(fps));
-        let (space, range, primaries, transfer) = tags::to_libav(settings.color);
-        venc.set_colorspace(space);
-        venc.set_color_range(range);
-        venc.set_color_primaries(primaries);
-        venc.set_color_transfer_characteristic(transfer);
-        let mut opts = Dictionary::new();
-        match settings.video_codec {
-            VideoCodec::H264 | VideoCodec::H265 => {
-                opts.set("crf", &settings.crf.unwrap_or(23).to_string());
-                opts.set("preset", settings.preset.as_deref().unwrap_or("medium"));
-            }
-            VideoCodec::Vp9 => {
-                opts.set("crf", &settings.crf.unwrap_or(31).to_string());
-                opts.set("b", "0");
-                opts.set("row-mt", "1");
-            }
-            VideoCodec::Av1 => {
-                opts.set("crf", &settings.crf.unwrap_or(30).to_string());
-                if let Some(p) = &settings.preset {
-                    opts.set("preset", p);
-                }
-            }
-        }
-        let video = venc
-            .open_with(opts)
-            .map_err(|e| codec_error("opening video encoder", e))?;
-        octx.stream_mut(video_stream)
-            .expect("stream added")
-            .set_parameters(&video);
+        vstream.set_parameters(&video);
 
         // Audio stream.
         let audio = match &settings.audio {
@@ -269,7 +373,7 @@ impl Encoder {
         let (cw, ch) = (yuv.chroma_width() as usize, yuv.chroma_height() as usize);
         copy_plane(out.data_mut(1), strides[1], &yuv.cb, cw, ch);
         copy_plane(out.data_mut(2), strides[2], &yuv.cr, cw, ch);
-        let (space, range, primaries, transfer) = tags::to_libav(self.settings.color);
+        let (space, range, primaries, transfer) = tags::to_codec_tags(self.settings.color);
         out.set_color_space(space);
         out.set_color_range(range);
         out.set_color_primaries(primaries);

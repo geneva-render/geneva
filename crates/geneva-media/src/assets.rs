@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use geneva_render::{AssetSource, FileAssets, Image, RenderError};
 use geneva_timeline::{Composition, Ratio};
 
-use crate::libav::VideoReader;
+use crate::codecs::VideoReader;
 
 /// Loads images and video frames from files under a root directory.
 ///

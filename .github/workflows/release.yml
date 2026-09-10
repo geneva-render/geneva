@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-13
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install build tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake meson ninja-build nasm pkg-config clang
+      - name: Install build tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake meson ninja nasm pkg-config
+      - name: Cache media libraries
+        id: media-libs
+        uses: actions/cache@v4
+        with:
+          path: target/media-libs
+          key: media-libs-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-media-libs.sh') }}
+      - name: Build media libraries
+        if: steps.media-libs.outputs.cache-hit != 'true'
+        run: scripts/build-media-libs.sh
+      - name: Build
+        run: cargo build --release --locked
+      - name: Package
+        run: |
+          name=geneva-${GITHUB_REF_NAME}-${{ matrix.target }}
+          mkdir -p "$name/licenses"
+          cp target/release/geneva README.md LICENSE.md THIRD-PARTY-NOTICES.md "$name/"
+          cp licenses/* target/media-libs/share/licenses/* "$name/licenses/"
+          tar czf "$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: geneva-${{ matrix.target }}
+          path: geneva-*.tar.gz
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: geneva-*.tar.gz

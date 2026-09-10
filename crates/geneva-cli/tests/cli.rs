@@ -129,13 +129,13 @@ fn missing_file_is_a_usage_error() {
         .stderr(predicate::str::contains("reading"));
 }
 
-#[cfg(feature = "libav")]
+#[cfg(feature = "media")]
 fn media_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/media")
 }
 
 #[test]
-#[cfg(feature = "libav")]
+#[cfg(feature = "media")]
 fn probe_describes_a_file_in_both_formats() {
     geneva()
         .args(["probe"])
@@ -155,7 +155,7 @@ fn probe_describes_a_file_in_both_formats() {
 }
 
 #[test]
-#[cfg(feature = "libav")]
+#[cfg(feature = "media")]
 fn render_writes_a_playable_file_with_audio() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("demo.mp4");
@@ -187,7 +187,7 @@ fn render_writes_a_playable_file_with_audio() {
 }
 
 #[test]
-#[cfg(feature = "libav")]
+#[cfg(feature = "media")]
 fn validate_with_probe_reports_missing_files() {
     geneva()
         .args(["validate", "--probe"])

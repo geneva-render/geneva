@@ -154,7 +154,7 @@ impl VideoReader {
         let fps = ratio(stream.avg_frame_rate())
             .or_else(|| ratio(stream.rate()))
             .unwrap_or(Ratio::from_int(25));
-        let file_tags = tags::from_libav(
+        let file_tags = tags::from_codec_tags(
             decoder.color_space(),
             decoder.color_range(),
             decoder.color_primaries(),

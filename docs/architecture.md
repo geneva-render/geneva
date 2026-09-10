@@ -18,7 +18,7 @@ timeline JSON ──parse──▶ Timeline ──resolve──▶ Composition �
 | `geneva-timeline` | The format: document types (also the JSON Schema source), exact `Ratio` time, parsing with path-precise errors, resolution into `Composition`, diagnostics. | geneva-anim, geneva-color |
 | `geneva-render` | The `Renderer` trait, `Frame`, asset loading, and `CpuRenderer`. | geneva-timeline, geneva-color |
 | `geneva-golden` | Perceptual comparison (per-channel epsilon, PSNR, SSIM), diff images, and the golden case runner. | geneva-render |
-| `geneva-media` | Probe, decode, encode and audio mixing over the libav libraries, behind the `libav` feature; the only crate that knows about containers and codecs. | geneva-render, geneva-color |
+| `geneva-media` | Probe, decode, encode and audio mixing over the bundled media libraries, behind the `media` feature; the only crate that knows about containers and codecs. | geneva-render, geneva-color |
 | `geneva-cli` | The `geneva` binary. | everything above |
 
 Lower crates never depend on higher ones. `geneva-timeline` knows nothing
@@ -74,7 +74,14 @@ hands the result to the same placement code as images.
 
 ## Media
 
-Decoded frames are converted by `libswscale` to 16-bit 4:4:4 (or RGBA for
+The media libraries are built from pinned sources by
+`scripts/build-media-libs.sh` with only the demuxers, muxers, decoders and
+encoders Geneva supports, and linked statically. Every component is LGPL
+or BSD licensed; see `THIRD-PARTY-NOTICES.md`. Software H.264 encoding is
+OpenH264 at a constant quantizer; hardware encoders (NVIDIA on Linux,
+VideoToolbox on macOS) are included in the build for later use.
+
+Decoded frames are converted by the scaler to 16-bit 4:4:4 (or RGBA for
 R'G'B' sources) and then, in Rust, through range normalization, the
 tagged matrix and the tagged transfer function into the compositing
 format. Encoding goes the other way: linear to the output transfer, to
@@ -100,7 +107,8 @@ real regressions.
 
 - **GPU renderer.** A second `Renderer` implementation with the same
   contract, validated against the CPU renderer by the golden harness.
-- **Hardware encoders** with probe-and-fallback.
+- **Hardware encoder selection** with probe-and-fallback.
+- **Software H.265 encoding.** Only hardware encoders are available for it.
 - **Stream copy** for cuts and joins that need no re-encoding.
 - **Streaming audio mixing.** The mixer currently holds the whole mix in
   memory.

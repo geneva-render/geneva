@@ -1,9 +1,9 @@
-//! Mapping between libav color enums and `geneva-color` tags.
+//! Mapping between the media libraries' color enums and `geneva-color` tags.
 
 use ffmpeg_next::util::color;
 use geneva_color::{ColorTags, Matrix, Primaries, Range, ResolvedTags, Transfer};
 
-pub fn from_libav(
+pub fn from_codec_tags(
     space: color::Space,
     range: color::Range,
     primaries: color::Primaries,
@@ -45,7 +45,7 @@ pub fn from_libav(
     }
 }
 
-pub fn to_libav(
+pub fn to_codec_tags(
     tags: ResolvedTags,
 ) -> (
     color::Space,

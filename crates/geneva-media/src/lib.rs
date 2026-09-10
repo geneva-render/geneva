@@ -2,34 +2,35 @@
 //!
 //! This crate is the only place that touches container formats and codecs.
 //! Everything above it works with [`geneva_render::Frame`]s, linear-light
-//! images and `f32` audio samples. The libav libraries do the demuxing,
-//! decoding and encoding behind the `libav` feature; the color conversions
-//! between coded pixels and the compositing format are implemented here in
-//! Rust so that the same color pipeline applies to every source.
+//! images and `f32` audio samples. The bundled media libraries do the
+//! demuxing, decoding and encoding behind the `media` feature; the color
+//! conversions between coded pixels and the compositing format are
+//! implemented here in Rust so that the same color pipeline applies to
+//! every source.
 
 #![forbid(unsafe_code)]
 
-#[cfg(feature = "libav")]
+#[cfg(feature = "media")]
 mod assets;
+#[cfg(feature = "media")]
+mod codecs;
 pub mod convert;
 mod info;
-#[cfg(feature = "libav")]
-mod libav;
-#[cfg(feature = "libav")]
+#[cfg(feature = "media")]
 pub mod mix;
 
 use std::path::PathBuf;
 
 use thiserror::Error;
 
-#[cfg(feature = "libav")]
+#[cfg(feature = "media")]
 pub use assets::MediaAssets;
-pub use info::{AudioInfo, MediaInfo, VideoInfo};
-#[cfg(feature = "libav")]
-pub use libav::{
+#[cfg(feature = "media")]
+pub use codecs::{
     AudioReader, AudioSettings, EncodeSettings, Encoder, VideoReader, container_for,
     default_codecs, probe,
 };
+pub use info::{AudioInfo, MediaInfo, VideoInfo};
 
 /// Errors from reading or writing media.
 #[derive(Debug, Error)]
@@ -65,6 +66,6 @@ pub enum MediaError {
         name: String,
     },
     /// Media support was compiled out.
-    #[error("this build has no media support; rebuild with the `libav` feature")]
+    #[error("this build has no media support; rebuild with the `media` feature")]
     Unavailable,
 }
