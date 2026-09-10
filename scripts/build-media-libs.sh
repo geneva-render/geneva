@@ -20,7 +20,9 @@ OPUS_VERSION=1.5.2
 NVCODEC_VERSION=12.2.72.0
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-prefix=$(cd "$(dirname "${1:-$root/target/media-libs}")" 2>/dev/null && pwd)/$(basename "${1:-$root/target/media-libs}")
+prefix_arg=${1:-$root/target/media-libs}
+mkdir -p "$prefix_arg"
+prefix=$(cd "$prefix_arg" && pwd)
 src=$root/target/media-src
 jobs=${JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}
 mkdir -p "$prefix" "$src" "$prefix/share/licenses"
