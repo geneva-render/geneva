@@ -5,10 +5,11 @@ declarative, versioned timeline format. It owns compositing, typography,
 animation, color management and audio mixing, and delegates container
 parsing, decoding and encoding to established media libraries.
 
-**Status: pre-release (0.0.x).** The timeline format, validation, the CPU
-reference renderer, text layout, media decoding and encoding, stream copy
-and the everyday verbs work end to end. GPU rendering is not there yet.
-Expect breaking changes to the format until the schema reaches 1.0.
+**Status: 0.1.** The timeline format, validation, the CPU reference
+renderer, text layout, media decoding and encoding, stream copy and the
+everyday verbs work end to end. GPU rendering is not there yet. Expect
+breaking changes to the format until the schema reaches 1.0; see
+[CHANGELOG.md](CHANGELOG.md).
 
 ## What works today
 
@@ -31,7 +32,9 @@ Expect breaking changes to the format until the schema reaches 1.0.
 
 Geneva ships as a single binary with its media libraries built in; see
 [Building from source](#building-from-source) if you build it yourself.
-The [command-line reference](docs/cli.md) lists every command and option.
+The [command-line reference](docs/cli.md) lists every command and option;
+[docs/agents.md](docs/agents.md) is the short version for programs and AI
+agents driving `geneva`.
 
 ## Everyday tasks
 
@@ -137,7 +140,7 @@ licenses are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 | `crates/geneva-media` | Probing, decoding, encoding and audio mixing over the bundled media libraries |
 | `crates/geneva-cli` | The `geneva` command-line tool |
 | `schema/` | Published JSON Schema files, one per timeline version |
-| `docs/` | Format reference, command-line reference, diagnostics, color pipeline, architecture |
+| `docs/` | Format reference, command-line reference, agent guide, diagnostics, color pipeline, architecture |
 | `tests/golden/` | Golden scenes, their reference frames, and the fonts they use |
 | `tests/media/` | Small media files used by tests |
 | `scripts/` | The media library build and the benchmark script |

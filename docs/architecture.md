@@ -44,9 +44,10 @@ document.
 
 ## Rendering
 
-`Renderer::render_frame(&Composition, Ratio) -> Frame` is the whole
-contract. A `Frame` is premultiplied linear-light RGBA; conversion to 8-bit
-sRGB happens at the edge.
+`Renderer::render_into(&Composition, Ratio, &mut Frame)` is the whole
+contract (`render_frame` is the allocating convenience). A `Frame` is
+premultiplied linear-light RGBA; conversion to 8-bit sRGB or to the
+encoder's Y'CbCr happens at the edge.
 
 `CpuRenderer` is the reference implementation:
 
@@ -59,6 +60,13 @@ sRGB happens at the edge.
   bit-exact.
 - The result is scaled by opacity (and by the crossfade ramp when a
   transition is active) and composited with the clip's blend mode.
+- Rows are independent, so drawing, the decoder's 16-bit-to-linear
+  conversion and the packing to 4:2:0 run row-parallel on a thread pool.
+  Determinism is unaffected: every pixel depends only on its inputs, never
+  on the order rows finish.
+
+`geneva render` keeps the encoder on its own thread with a short queue of
+converted frames, so decoding, compositing and encoding overlap.
 
 Assets reach the renderer through the `AssetSource` trait: images, font
 bytes, and video frames by source time. The file implementation resolves
@@ -131,7 +139,6 @@ real regressions.
 
 - **GPU renderer.** A second `Renderer` implementation with the same
   contract, validated against the CPU renderer by the golden harness.
-- **Hardware encoder selection** with probe-and-fallback.
 - **Software H.265 encoding.** Only hardware encoders are available for it.
 - **Streaming audio mixing.** The mixer currently holds the whole mix in
   memory.
