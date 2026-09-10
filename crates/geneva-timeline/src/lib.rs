@@ -39,8 +39,8 @@ pub use length::{Length, Point, Scale};
 pub use parse::parse;
 pub use ratio::Ratio;
 pub use resolve::{
-    Composition, ResolvedAsset, ResolvedAudioClip, ResolvedAudioTrack, ResolvedClip, ResolvedLayer,
-    ResolvedSource, ResolvedText, resolve,
+    Composition, ResolvedAsset, ResolvedAudioClip, ResolvedAudioTrack, ResolvedClip,
+    ResolvedComposition, ResolvedLayer, ResolvedSource, ResolvedText, resolve,
 };
 pub use schema::{FORMAT_VERSION, Timeline};
 pub use time::{Fps, Time};

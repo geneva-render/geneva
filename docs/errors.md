@@ -46,7 +46,10 @@ result is not what was intended. Notes are informational.
 | E201 | Asset kind does not match its use (for example an image source pointing at a video asset). |
 | E202 | Asset path is absolute, empty, or contains `..`. Paths must stay under the asset root. |
 | E203 | Asset kind could not be inferred from the extension; set `kind`. |
+| E206 | Unknown composition name. The help suggests the closest declared name. |
+| E207 | A composition contains itself, directly or through another composition, or nesting exceeds 8 levels. |
 | W201 | (note) An asset is declared but never used. |
+| W202 | (note) A composition is declared but never used. |
 
 ## Timing (E300–E399)
 

@@ -17,8 +17,8 @@ use crate::diagnostic::{Diagnostic, Path};
 use crate::length::{Length, Point, Scale};
 use crate::ratio::Ratio;
 use crate::schema::{
-    Asset, AssetKind, AudioOutput, AudioTrack, BlendMode, Encode, FORMAT_VERSION, Fit, Layer,
-    ShapeKind, Source, TextSource, Timeline, Transform, TransitionKind,
+    Asset, AssetKind, AudioOutput, AudioTrack, BlendMode, CompositionDef, Encode, FORMAT_VERSION,
+    Fit, Layer, ShapeKind, Source, TextSource, Timeline, Transform, TransitionKind,
 };
 use crate::time::Time;
 
@@ -169,6 +169,24 @@ pub enum ResolvedSource {
     },
     /// Text.
     Text(Box<ResolvedText>),
+    /// A nested composition, rendered as a unit.
+    Composition(Box<ResolvedComposition>),
+}
+
+/// A nested composition with its layers resolved relative to the clip
+/// that shows it.
+#[derive(Debug, Clone)]
+pub struct ResolvedComposition {
+    /// Name under "compositions".
+    pub name: String,
+    /// Frame width in pixels.
+    pub width: u32,
+    /// Frame height in pixels.
+    pub height: u32,
+    /// Clear color.
+    pub background: Color,
+    /// Layers, with times relative to the clip start.
+    pub layers: Vec<ResolvedLayer>,
 }
 
 /// Text content with defaults applied.
@@ -225,6 +243,8 @@ pub fn resolve(timeline: &Timeline) -> (Option<Composition>, Vec<Diagnostic>) {
         diags: Vec::new(),
         fps: timeline.output.fps.ratio(),
         used_assets: BTreeSet::new(),
+        used_compositions: BTreeSet::new(),
+        composition_stack: Vec::new(),
     };
     let comp = r.run();
     let has_errors = r.diags.iter().any(Diagnostic::is_error);
@@ -236,6 +256,26 @@ struct Resolver<'a> {
     diags: Vec<Diagnostic>,
     fps: Ratio,
     used_assets: BTreeSet<String>,
+    used_compositions: BTreeSet<String>,
+    /// Names of the compositions currently being resolved, for cycle checks.
+    composition_stack: Vec<String>,
+}
+
+/// Deepest allowed nesting of compositions inside compositions.
+const MAX_COMPOSITION_DEPTH: usize = 8;
+
+/// The frame a layer is resolved against: the output, or a composition.
+#[derive(Clone, Copy)]
+struct FrameSize {
+    width: u32,
+    height: u32,
+}
+
+/// Layers of a frame after resolution, plus whether any clip was
+/// open-ended (took its length from the frame's duration).
+struct ResolvedLayers {
+    layers: Vec<ResolvedLayer>,
+    any_open: bool,
 }
 
 /// The length of a clip before its end is known.
@@ -318,14 +358,19 @@ impl Resolver<'_> {
 
         let assets = self.resolve_assets();
 
-        let mut layers = Vec::new();
-        for (i, layer) in tl.layers.iter().enumerate() {
-            let path = Path::root().key("layers").index(i);
-            if !layer.enabled {
-                continue;
-            }
-            layers.push(self.resolve_layer(layer, i, &path, &assets, explicit_duration));
-        }
+        let frame = FrameSize {
+            width: out.width,
+            height: out.height,
+        };
+        let mut layers = self
+            .resolve_layers(
+                &tl.layers,
+                &Path::root().key("layers"),
+                &assets,
+                frame,
+                explicit_duration,
+            )
+            .layers;
         let mut audio = Vec::new();
         for (i, track) in tl.audio.iter().enumerate() {
             let path = Path::root().key("audio").index(i);
@@ -376,6 +421,15 @@ impl Resolver<'_> {
             }
         }
 
+        for name in tl.compositions.keys() {
+            if !self.used_compositions.contains(name) {
+                self.diags.push(Diagnostic::note(
+                    "W202",
+                    Path::root().key("compositions").key(name),
+                    format!("composition {name:?} is never used"),
+                ));
+            }
+        }
         for (id, asset) in &tl.assets {
             if asset.kind != Some(AssetKind::Font) && !self.used_assets.contains(id) {
                 self.diags.push(Diagnostic::note(
@@ -549,14 +603,42 @@ impl Resolver<'_> {
         t.resolve(self.fps)
     }
 
+    fn resolve_layers(
+        &mut self,
+        layers: &[Layer],
+        path: &Path,
+        assets: &BTreeMap<String, ResolvedAsset>,
+        frame: FrameSize,
+        frame_duration: Option<Ratio>,
+    ) -> ResolvedLayers {
+        let mut out = Vec::new();
+        let mut any_open = false;
+        for (i, layer) in layers.iter().enumerate() {
+            if !layer.enabled {
+                continue;
+            }
+            let (resolved, open) =
+                self.resolve_layer(layer, i, &path.index(i), assets, frame, frame_duration);
+            any_open |= open;
+            out.push(resolved);
+        }
+        ResolvedLayers {
+            layers: out,
+            any_open,
+        }
+    }
+
+    /// Resolves one layer; the flag reports whether any clip took its
+    /// length from the frame duration.
     fn resolve_layer(
         &mut self,
         layer: &Layer,
         index: usize,
         path: &Path,
         assets: &BTreeMap<String, ResolvedAsset>,
+        frame: FrameSize,
         output_duration: Option<Ratio>,
-    ) -> ResolvedLayer {
+    ) -> (ResolvedLayer, bool) {
         let id = layer.id.clone().unwrap_or_else(|| format!("layer {index}"));
         if layer.clips.is_empty() {
             self.push(Diagnostic::warning(
@@ -567,6 +649,7 @@ impl Resolver<'_> {
         }
         let mut clips: Vec<ResolvedClip> = Vec::new();
         let mut cursor = Ratio::ZERO;
+        let mut any_open = false;
         for (i, clip) in layer.clips.iter().enumerate() {
             let cpath = path.key("clips").index(i);
             let clip_id = clip
@@ -574,12 +657,19 @@ impl Resolver<'_> {
                 .clone()
                 .unwrap_or_else(|| format!("clip {i} of {id}"));
 
-            let (source, length) = self.resolve_source(&clip.source, &cpath, assets);
-
             let mut start = match clip.start {
                 Some(t) => self.time(t, &cpath.key("start"), "start"),
                 None => cursor,
             };
+            // The longest this clip can run if it is open-ended: an explicit
+            // duration, or the rest of the frame.
+            let explicit_len = clip
+                .duration
+                .map(|d| self.time(d, &cpath.key("duration"), "duration"));
+            let open_hint =
+                explicit_len.or_else(|| output_duration.map(|d| (d - start).max(Ratio::ZERO)));
+            let (source, length) =
+                self.resolve_source(&clip.source, &cpath, assets, frame, open_hint);
             let mut transition_in = None;
             if let Some(tr) = &clip.transition {
                 let tdur = self.time(
@@ -600,9 +690,8 @@ impl Resolver<'_> {
                 }
             }
 
-            let length = match clip.duration {
-                Some(d) => {
-                    let secs = self.time(d, &cpath.key("duration"), "duration");
+            let length = match (explicit_len, clip.duration) {
+                (Some(secs), Some(d)) => {
                     if let ClipLength::Fixed(src_len) = length {
                         if secs > src_len {
                             self.push(
@@ -614,10 +703,13 @@ impl Resolver<'_> {
                     }
                     secs
                 }
-                None => match length {
+                _ => match length {
                     ClipLength::Fixed(l) => l,
                     ClipLength::Open => match output_duration {
-                        Some(d) if d > start => d - start,
+                        Some(d) if d > start => {
+                            any_open = true;
+                            d - start
+                        }
                         Some(_) => Ratio::ZERO,
                         None => {
                             self.push(
@@ -679,8 +771,8 @@ impl Resolver<'_> {
                 }
             }
 
-            let width = f64::from(self.tl.output.width);
-            let height = f64::from(self.tl.output.height);
+            let width = f64::from(frame.width);
+            let height = f64::from(frame.height);
             let transform = clip.transform.clone().unwrap_or_default();
             let tpath = cpath.key("transform");
             let (anchor, position, scale, rotation) =
@@ -714,14 +806,19 @@ impl Resolver<'_> {
             });
             cursor = end;
         }
-        ResolvedLayer { id, clips }
+        (ResolvedLayer { id, clips }, any_open)
     }
 
+    /// Resolves a clip's source. `frame` is the frame percentages refer to
+    /// and `open_hint` the length an open-ended source would get, which a
+    /// nested composition needs to close its own open-ended clips.
     fn resolve_source(
         &mut self,
         source: &Source,
         cpath: &Path,
         assets: &BTreeMap<String, ResolvedAsset>,
+        frame: FrameSize,
+        open_hint: Option<Ratio>,
     ) -> (ResolvedSource, ClipLength) {
         let spath = cpath.key("source");
         match source {
@@ -766,13 +863,13 @@ impl Resolver<'_> {
                 let w = self.positive_length(
                     *width,
                     &spath.key("width"),
-                    f64::from(self.tl.output.width),
+                    f64::from(frame.width),
                     "width",
                 );
                 let h = self.positive_length(
                     *height,
                     &spath.key("height"),
-                    f64::from(self.tl.output.height),
+                    f64::from(frame.height),
                     "height",
                 );
                 let fill = self.track_color(fill.as_ref(), &spath.key("fill"), Color::WHITE);
@@ -813,10 +910,129 @@ impl Resolver<'_> {
                 )
             }
             Source::Text(text) => {
-                let resolved = self.resolve_text(text, &spath, assets);
+                let resolved = self.resolve_text(text, &spath, assets, frame);
                 (ResolvedSource::Text(Box::new(resolved)), ClipLength::Open)
             }
+            Source::Composition { composition } => {
+                self.resolve_composition(composition, &spath, assets, open_hint)
+            }
         }
+    }
+
+    fn resolve_composition(
+        &mut self,
+        name: &str,
+        spath: &Path,
+        assets: &BTreeMap<String, ResolvedAsset>,
+        open_hint: Option<Ratio>,
+    ) -> (ResolvedSource, ClipLength) {
+        let ref_path = spath.key("composition");
+        let placeholder = |name: &str| {
+            ResolvedSource::Composition(Box::new(ResolvedComposition {
+                name: name.to_owned(),
+                width: 1,
+                height: 1,
+                background: Color::TRANSPARENT,
+                layers: Vec::new(),
+            }))
+        };
+        let Some(def): Option<&CompositionDef> = self.tl.compositions.get(name) else {
+            let mut d =
+                Diagnostic::error("E206", ref_path, format!("unknown composition {name:?}"))
+                    .with_value(name);
+            let known: Vec<&str> = self.tl.compositions.keys().map(String::as_str).collect();
+            d = match nearest(name, known.iter().copied()) {
+                Some(near) => d.with_help(format!(
+                    "did you mean {near:?}? compositions are declared under \"compositions\""
+                )),
+                None if known.is_empty() => d.with_help("declare it under \"compositions\""),
+                None => d.with_help(format!(
+                    "declared compositions: {}",
+                    known
+                        .iter()
+                        .map(|k| format!("{k:?}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )),
+            };
+            self.push(d);
+            return (placeholder(name), ClipLength::Open);
+        };
+        if self.composition_stack.iter().any(|n| n == name) {
+            let chain = self
+                .composition_stack
+                .iter()
+                .map(String::as_str)
+                .chain(std::iter::once(name))
+                .map(|n| format!("{n:?}"))
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            self.push(
+                Diagnostic::error(
+                    "E207",
+                    ref_path,
+                    format!("composition {name:?} contains itself ({chain})"),
+                )
+                .with_help(
+                    "a composition cannot include itself, directly or through another composition",
+                ),
+            );
+            return (placeholder(name), ClipLength::Open);
+        }
+        if self.composition_stack.len() >= MAX_COMPOSITION_DEPTH {
+            self.push(
+                Diagnostic::error(
+                    "E207",
+                    ref_path,
+                    format!(
+                        "compositions are nested more than {MAX_COMPOSITION_DEPTH} levels deep"
+                    ),
+                )
+                .with_help("flatten the structure"),
+            );
+            return (placeholder(name), ClipLength::Open);
+        }
+        self.used_compositions.insert(name.to_owned());
+        let cpath = Path::root().key("compositions").key(name);
+        for (field, v) in [("width", def.width), ("height", def.height)] {
+            if v == 0 {
+                self.push(
+                    Diagnostic::error(
+                        "E402",
+                        cpath.key(field),
+                        format!("composition {field} must be greater than 0"),
+                    )
+                    .with_value(v),
+                );
+            }
+        }
+        let frame = FrameSize {
+            width: def.width.max(1),
+            height: def.height.max(1),
+        };
+        self.composition_stack.push(name.to_owned());
+        let inner =
+            self.resolve_layers(&def.layers, &cpath.key("layers"), assets, frame, open_hint);
+        self.composition_stack.pop();
+        let natural = inner
+            .layers
+            .iter()
+            .flat_map(|l| l.clips.iter().map(|c| c.end))
+            .max()
+            .unwrap_or(Ratio::ZERO);
+        let length = if inner.any_open || natural <= Ratio::ZERO {
+            ClipLength::Open
+        } else {
+            ClipLength::Fixed(natural)
+        };
+        let resolved = ResolvedComposition {
+            name: name.to_owned(),
+            width: frame.width,
+            height: frame.height,
+            background: def.background.map_or(Color::TRANSPARENT, |c| c.0),
+            layers: inner.layers,
+        };
+        (ResolvedSource::Composition(Box::new(resolved)), length)
     }
 
     /// Resolves an in/out range, returning the in point and the length when
@@ -869,6 +1085,7 @@ impl Resolver<'_> {
         text: &TextSource,
         spath: &Path,
         assets: &BTreeMap<String, ResolvedAsset>,
+        frame: FrameSize,
     ) -> ResolvedText {
         let mut words = Vec::new();
         if let Some(list) = &text.words {
@@ -959,7 +1176,7 @@ impl Resolver<'_> {
                 }
             }
         }
-        let width = f64::from(self.tl.output.width);
+        let width = f64::from(frame.width);
         let max_width = text.max_width.map_or(width, |m| {
             self.positive_length(m, &spath.key("max_width"), width, "max_width")
         });

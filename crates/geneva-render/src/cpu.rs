@@ -1,6 +1,8 @@
-use geneva_color::LinearRgba;
+use std::borrow::Cow;
+
+use geneva_color::{Color, LinearRgba};
 use geneva_timeline::schema::{BlendMode, Fit, ShapeKind};
-use geneva_timeline::{Composition, Ratio, ResolvedClip, ResolvedSource};
+use geneva_timeline::{Composition, Ratio, ResolvedClip, ResolvedLayer, ResolvedSource};
 
 use crate::assets::{AssetSource, FileAssets, Image};
 use crate::frame::Frame;
@@ -43,8 +45,35 @@ impl<A: AssetSource> Renderer for CpuRenderer<A> {
                 duration: comp.duration,
             });
         }
-        let mut frame = Frame::new(comp.width, comp.height, comp.background);
-        for (_, clip) in comp.clips_at(t) {
+        self.render_layers(
+            comp,
+            &comp.layers,
+            comp.width,
+            comp.height,
+            comp.background,
+            t,
+        )
+    }
+}
+
+impl<A: AssetSource> CpuRenderer<A> {
+    /// Renders a set of layers into a fresh frame at time `t`, which is
+    /// relative to the layers' own origin (the output, or the clip that
+    /// shows a nested composition).
+    fn render_layers(
+        &mut self,
+        comp: &Composition,
+        layers: &[ResolvedLayer],
+        width: u32,
+        height: u32,
+        background: Color,
+        t: Ratio,
+    ) -> Result<Frame, RenderError> {
+        let mut frame = Frame::new(width, height, background);
+        let visible = layers
+            .iter()
+            .flat_map(|layer| layer.clips.iter().filter(|c| c.start <= t && t < c.end));
+        for clip in visible {
             let local = (t - clip.start).to_f64();
             let mut opacity = clip.opacity.sample(local).clamp(0.0, 1.0);
             if let Some((_, fade)) = clip.transition_in {
@@ -76,7 +105,20 @@ impl<A: AssetSource> Renderer for CpuRenderer<A> {
                     stroke: *stroke,
                     radius: *radius,
                 },
-                ResolvedSource::Image { asset } => Paint::Image(self.assets.image(comp, asset)?),
+                ResolvedSource::Image { asset } => {
+                    Paint::Image(Cow::Borrowed(self.assets.image(comp, asset)?))
+                }
+                ResolvedSource::Composition(nested) => {
+                    let inner = self.render_layers(
+                        comp,
+                        &nested.layers,
+                        nested.width,
+                        nested.height,
+                        nested.background,
+                        t - clip.start,
+                    )?;
+                    Paint::Image(Cow::Owned(Image::from_frame(&inner)))
+                }
                 ResolvedSource::Video { .. } => {
                     return Err(RenderError::Unsupported {
                         what: "video decoding".to_owned(),
@@ -90,7 +132,7 @@ impl<A: AssetSource> Renderer for CpuRenderer<A> {
                     });
                 }
             };
-            let Some(placement) = Placement::new(comp, clip, local, paint.size()) else {
+            let Some(placement) = Placement::new(width, height, clip, local, paint.size()) else {
                 continue;
             };
             draw(&mut frame, &paint, &placement, opacity as f32, clip.blend);
@@ -115,7 +157,7 @@ enum Paint<'a> {
         stroke: Option<(LinearRgba, f64)>,
         radius: f64,
     },
-    Image(&'a Image),
+    Image(Cow<'a, Image>),
 }
 
 impl Paint<'_> {
@@ -197,13 +239,14 @@ struct Placement {
 
 impl Placement {
     fn new(
-        comp: &Composition,
+        frame_w: u32,
+        frame_h: u32,
         clip: &ResolvedClip,
         local: f64,
         (w, h): (f64, f64),
     ) -> Option<Self> {
-        let out_w = f64::from(comp.width);
-        let out_h = f64::from(comp.height);
+        let out_w = f64::from(frame_w);
+        let out_h = f64::from(frame_h);
         let fit = match clip.fit {
             Fit::None => [1.0, 1.0],
             Fit::Contain => {

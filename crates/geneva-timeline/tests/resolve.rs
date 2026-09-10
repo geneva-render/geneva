@@ -237,3 +237,72 @@ fn diagnostics_serialize_for_machines() {
     assert_eq!(first["path"], "/layers/0/clips/0/opacity");
     assert_eq!(first["value"], 3.0);
 }
+
+#[test]
+fn compositions_resolve_relative_to_their_clip_and_can_be_reused() {
+    let text = doc(
+        r#""compositions":{"badge":{"width":200,"height":100,"layers":[
+            {"clips":[{"source":{"kind":"shape","shape":"rect","width":"100%","height":"50%","fill":"red"},"duration":"1s"}]}]}},
+        "layers":[{"clips":[
+            {"source":{"kind":"composition","composition":"badge"},"start":"1s"},
+            {"source":{"kind":"composition","composition":"badge"},"start":"3s","duration":"0.5s"}]}]"#,
+    );
+    let l = load(&text);
+    assert!(l.is_ok(), "{:#?}", l.diagnostics);
+    let comp = l.composition.unwrap();
+    let clips = &comp.layers[0].clips;
+    // Natural length of the composition (its inner clip lasts 1s).
+    assert_eq!(clips[0].start, Ratio::from_int(1));
+    assert_eq!(clips[0].end, Ratio::from_int(2));
+    // An explicit duration wins.
+    assert_eq!(clips[1].end, Ratio::new(7, 2));
+    match &clips[0].source {
+        ResolvedSource::Composition(c) => {
+            assert_eq!((c.width, c.height), (200, 100));
+            let inner = &c.layers[0].clips[0];
+            assert_eq!(inner.start, Ratio::ZERO);
+            assert_eq!(inner.end, Ratio::from_int(1));
+            // Percentages inside refer to the composition's own frame.
+            match &inner.source {
+                ResolvedSource::Shape { width, height, .. } => {
+                    assert_eq!((*width, *height), (200.0, 50.0));
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn open_ended_compositions_take_the_clip_length() {
+    let text = doc(r#""compositions":{"bg":{"width":10,"height":10,"layers":[
+            {"clips":[{"source":{"kind":"solid","color":"red"}}]}]}},
+        "layers":[{"clips":[{"source":{"kind":"composition","composition":"bg"},"start":"1s"}]}]"#);
+    let l = load(&text);
+    assert!(l.is_ok(), "{:#?}", l.diagnostics);
+    let comp = l.composition.unwrap();
+    let clip = &comp.layers[0].clips[0];
+    assert_eq!(clip.end, Ratio::from_int(4));
+    match &clip.source {
+        ResolvedSource::Composition(c) => assert_eq!(c.layers[0].clips[0].end, Ratio::from_int(3)),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn unknown_and_cyclic_compositions_are_errors() {
+    let text = doc(r#""compositions":{
+            "a":{"width":10,"height":10,"layers":[{"clips":[{"source":{"kind":"composition","composition":"b"}}]}]},
+            "b":{"width":10,"height":10,"layers":[{"clips":[{"source":{"kind":"composition","composition":"a"}}]}]}},
+        "layers":[{"clips":[
+            {"source":{"kind":"composition","composition":"a"},"duration":"1s"},
+            {"source":{"kind":"composition","composition":"bdge"},"duration":"1s"}]}]"#);
+    let e = errors(&text);
+    assert!(
+        e.iter().any(|(c, p)| *c == "E207"
+            && p.starts_with("/compositions/b/layers/0/clips/0/source/composition")),
+        "{e:?}"
+    );
+    assert!(e.contains(&("E206", "/layers/0/clips/1/source/composition".to_owned())));
+}

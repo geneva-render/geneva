@@ -18,6 +18,13 @@
       },
       "description": "Media files the composition may reference, keyed by a short id.\nLayers refer to assets by id and never by path."
     },
+    "compositions": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/CompositionDef"
+      },
+      "description": "Reusable sub-compositions, keyed by name. A clip shows one with a\nsource of kind \"composition\"."
+    },
     "layers": {
       "type": "array",
       "items": {
@@ -587,6 +594,48 @@
       ],
       "description": "The kind of content in an asset."
     },
+    "CompositionDef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Frame width in pixels."
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Frame height in pixels."
+        },
+        "background": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Clear color. Defaults to transparent."
+        },
+        "layers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Layer"
+          },
+          "description": "Visual layers, composited from first (bottom) to last (top)."
+        }
+      },
+      "required": [
+        "width",
+        "height",
+        "layers"
+      ],
+      "description": "A reusable composition: its own frame, its own layers, rendered as a\nunit and placed like an image. Times inside it are relative to the\nclip that shows it, and percentages refer to its own size."
+    },
     "Layer": {
       "type": "object",
       "additionalProperties": false,
@@ -1032,6 +1081,25 @@
           "required": [
             "kind"
           ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "composition": {
+              "type": "string",
+              "description": "Name of the composition."
+            },
+            "kind": {
+              "type": "string",
+              "const": "composition"
+            }
+          },
+          "required": [
+            "kind",
+            "composition"
+          ],
+          "description": "A reusable composition declared under \"compositions\"."
         }
       ],
       "description": "What a clip shows, selected by \"kind\"."

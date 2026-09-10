@@ -30,12 +30,33 @@ pub struct Timeline {
     /// Layers refer to assets by id and never by path.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub assets: BTreeMap<String, Asset>,
+    /// Reusable sub-compositions, keyed by name. A clip shows one with a
+    /// source of kind "composition".
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub compositions: BTreeMap<String, CompositionDef>,
     /// Visual layers, composited from first (bottom) to last (top).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layers: Vec<Layer>,
     /// Audio-only tracks, mixed together with the audio of video clips.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub audio: Vec<AudioTrack>,
+}
+
+/// A reusable composition: its own frame, its own layers, rendered as a
+/// unit and placed like an image. Times inside it are relative to the
+/// clip that shows it, and percentages refer to its own size.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CompositionDef {
+    /// Frame width in pixels.
+    pub width: u32,
+    /// Frame height in pixels.
+    pub height: u32,
+    /// Clear color. Defaults to transparent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<ColorValue>,
+    /// Visual layers, composited from first (bottom) to last (top).
+    pub layers: Vec<Layer>,
 }
 
 /// Output frame and encoding settings.
@@ -416,6 +437,11 @@ pub enum Source {
     },
     /// Styled text, optionally with per-word timing.
     Text(Box<TextSource>),
+    /// A reusable composition declared under "compositions".
+    Composition {
+        /// Name of the composition.
+        composition: String,
+    },
 }
 
 /// Shape geometry.

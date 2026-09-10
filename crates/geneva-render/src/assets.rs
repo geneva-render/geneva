@@ -41,6 +41,15 @@ impl Image {
         }
     }
 
+    /// Wraps a rendered frame as an image, without conversion.
+    pub fn from_frame(frame: &crate::Frame) -> Self {
+        Self {
+            width: frame.width(),
+            height: frame.height(),
+            pixels: frame.pixels().to_vec(),
+        }
+    }
+
     /// The pixel at integer coordinates, or transparent outside the image.
     pub fn texel(&self, x: i64, y: i64) -> LinearRgba {
         if x < 0 || y < 0 || x >= i64::from(self.width) || y >= i64::from(self.height) {

@@ -94,6 +94,7 @@ object with a `keyframes` array:
 | `geneva` | yes | Format version, `"0.1"`. |
 | `output` | yes | Frame size, rate, duration, background, color, audio and encoding settings. |
 | `assets` | no | Map of asset id to asset. |
+| `compositions` | no | Map of name to reusable composition. |
 | `layers` | no | Visual layers, composited bottom to top. |
 | `audio` | no | Audio-only tracks. |
 
@@ -126,6 +127,25 @@ clips never contain paths.
 | `src` | yes | Path relative to the asset root (the timeline's directory, or `--assets`). Absolute paths and `..` are rejected (E202). |
 | `kind` | no | `video`, `image`, `audio`, `font`. Inferred from the extension; set it when inference fails (E203). |
 | `color` | no | Color tag overrides for files that are untagged or mistagged. |
+
+### `compositions`
+
+A composition is a small timeline of its own: a frame size, an optional
+background (default transparent), and layers. A clip shows it with a source
+of kind `composition`, and the same composition can be placed any number
+of times with different transforms and timing.
+
+| Field | Required | Default | Description |
+| --- | --- | --- | --- |
+| `width`, `height` | yes | | Frame size in pixels. Percentages inside the composition refer to this frame. |
+| `background` | no | `transparent` | Clear color. |
+| `layers` | yes | | Layers, as at the top level. Audio tracks are top-level only. |
+
+Times inside a composition are relative to the clip that shows it. The
+clip's length is the composition's natural length (the end of its last
+fixed-length clip) unless the clip sets `duration`; if the composition
+contains open-ended clips, they run for the clip's length. Compositions may
+contain other compositions up to 8 levels deep, and never themselves (E207).
 
 ### `layers[]`
 
@@ -195,6 +215,12 @@ Every source has a `kind`.
 | `fill` | no | `white` | Animatable color. |
 | `stroke` | no | | `{ "color": ..., "width": px }`, drawn inside the edge. |
 | `radius` | no | `0` | Corner radius for `rect`. |
+
+`composition`
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `composition` | yes | Name of an entry under `compositions`. The box is the composition's frame. |
 
 `text`
 
@@ -267,7 +293,7 @@ information as one JSON document.
 
 ## Renderer support
 
-The CPU reference renderer currently draws `solid`, `shape` and `image`
-sources with every transform, opacity, blend mode and transition. `video`
+The CPU reference renderer currently draws `solid`, `shape`, `image` and
+`composition` sources with every transform, opacity, blend mode and transition. `video`
 and `text` sources validate but render with error E500 until media decoding
 and text layout land. Audio tracks validate and are not mixed yet.
