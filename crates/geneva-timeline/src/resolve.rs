@@ -656,7 +656,7 @@ impl Resolver<'_> {
                         _ => {
                             self.push(
                                 Diagnostic::error("E302", cpath.key("start"), format!("{clip_id} starts at {start}s, before {} ends at {}s", prev.id, prev.end))
-                                    .with_value(json!(start.to_string()))
+                                    .with_value(json!(format!("{start}s")))
                                     .with_help(format!("start it at {}s or later, move it to another layer, or add a transition to blend the overlap", prev.end)),
                             );
                         }
@@ -1187,7 +1187,7 @@ impl Resolver<'_> {
                                 prev.id, prev.end
                             ),
                         )
-                        .with_value(json!(start.to_string()))
+                        .with_value(json!(format!("{start}s")))
                         .with_help(format!(
                             "start it at {}s or later, or move it to another audio track",
                             prev.end
