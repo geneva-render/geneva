@@ -281,9 +281,14 @@ mod imp {
         _: &Composition,
         _: &Path,
         output: &Path,
-        _: &RenderOverrides,
+        overrides: &RenderOverrides,
         _: bool,
     ) -> Result<RenderStats, RenderError> {
+        let _ = (
+            overrides.crf,
+            overrides.preset.as_deref(),
+            overrides.no_audio,
+        );
         Err(RenderError::Asset {
             id: output.display().to_string(),
             reason: geneva_media::MediaError::Unavailable.to_string(),

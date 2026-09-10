@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env bash
 # Times a plain re-encode of one file with geneva and with ffmpeg at the
 # same codec settings, as a baseline for performance work.
 #
@@ -20,7 +20,7 @@ cat > "$work/timeline.json" <<JSON
 { "geneva": "0.1",
   "output": { "width": $width, "height": $height, "fps": $fps,
               "encode": { "video": { "codec": "h264", "crf": $crf, "preset": "$preset" } } },
-  "assets": { "in": { "src": "input" } },
+  "assets": { "in": { "src": "input", "kind": "video" } },
   "layers": [ { "clips": [ { "source": { "kind": "video", "asset": "in" }, "fit": "none" } ] } ] }
 JSON
 cp "$input" "$work/input"
