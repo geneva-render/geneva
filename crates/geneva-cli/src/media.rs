@@ -286,6 +286,9 @@ mod imp {
         encoder.finish().map_err(media_err)?;
         Ok(RenderStats {
             frames: total,
+            duration: comp.duration,
+            copied: false,
+            notes: Vec::new(),
             seconds: started.elapsed().as_secs_f64(),
         })
     }
