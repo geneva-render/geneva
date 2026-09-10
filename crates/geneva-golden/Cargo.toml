@@ -1,0 +1,19 @@
+[package]
+name = "geneva-golden"
+description = "Perceptual image comparison and the golden-frame test harness for the Geneva engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+geneva-render = { workspace = true }
+geneva-timeline = { workspace = true }
+image = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

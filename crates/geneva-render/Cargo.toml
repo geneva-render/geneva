@@ -1,0 +1,17 @@
+[package]
+name = "geneva-render"
+description = "Renderer interface and CPU reference renderer for the Geneva engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+geneva-color = { workspace = true }
+geneva-timeline = { workspace = true }
+image = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

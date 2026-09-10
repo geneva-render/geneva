@@ -1,0 +1,22 @@
+[package]
+name = "geneva-timeline"
+description = "The Geneva timeline format: types, parsing, validation and resolution"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+geneva-anim = { workspace = true }
+geneva-color = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_path_to_error = { workspace = true }
+
+[dev-dependencies]
+jsonschema = { version = "0.56", default-features = false }
+
+[lints]
+workspace = true

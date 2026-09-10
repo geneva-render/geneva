@@ -1,0 +1,1847 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "geneva": {
+      "type": "string",
+      "description": "Format version. Must be \"0.1\".",
+      "const": "0.1"
+    },
+    "output": {
+      "$ref": "#/$defs/Output",
+      "description": "Frame size, rate, duration and encoding settings of the output."
+    },
+    "assets": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Asset"
+      },
+      "description": "Media files the composition may reference, keyed by a short id.\nLayers refer to assets by id and never by path."
+    },
+    "layers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Layer"
+      },
+      "description": "Visual layers, composited from first (bottom) to last (top)."
+    },
+    "audio": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/AudioTrack"
+      },
+      "description": "Audio-only tracks, mixed together with the audio of video clips."
+    }
+  },
+  "required": [
+    "geneva",
+    "output"
+  ],
+  "title": "Geneva timeline",
+  "description": "Geneva timeline format 0.1: a declarative video composition.",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Output": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Frame width in pixels."
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Frame height in pixels."
+        },
+        "fps": {
+          "$ref": "#/$defs/Fps",
+          "description": "Frame rate."
+        },
+        "duration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Total duration. Defaults to the end of the last clip."
+        },
+        "background": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Color the frame is cleared to before compositing. Defaults to opaque\nblack; use \"transparent\" for outputs with alpha."
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ColorTags"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Color tags written to the output. Defaults to BT.709 SDR, limited\nrange."
+        },
+        "audio": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AudioOutput"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Audio output format."
+        },
+        "encode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Encode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Encoder settings. Defaults are chosen per container."
+        }
+      },
+      "required": [
+        "width",
+        "height",
+        "fps"
+      ],
+      "description": "Output frame and encoding settings."
+    },
+    "Fps": {
+      "title": "Fps",
+      "description": "Frames per second: a positive number (30, 29.97) or an exact ratio string (\"30000/1001\").",
+      "anyOf": [
+        {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        {
+          "type": "string",
+          "pattern": "^\\s*\\d+(\\.\\d+)?(\\s*/\\s*\\d+)?\\s*$"
+        }
+      ]
+    },
+    "Time": {
+      "title": "Time",
+      "description": "A time or duration: seconds as a number, or a string with a unit (\"1.5s\", \"500ms\", \"45f\" for frames at the output rate) or a timecode (\"00:01:02.5\").",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "string",
+          "pattern": "^\\s*-?(\\d+(\\.\\d+)?(s|ms)?|\\d+f|(\\d+:){1,2}\\d+(\\.\\d+)?)\\s*$"
+        }
+      ]
+    },
+    "Color": {
+      "title": "Color",
+      "description": "An sRGB color: \"#rgb\", \"#rrggbb\", \"#rrggbbaa\", \"rgb(r, g, b)\", \"rgba(r, g, b, a)\" or a basic name (black, white, red, green, blue, yellow, cyan, magenta, gray, orange, transparent).",
+      "type": "string"
+    },
+    "ColorTags": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "primaries": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Primaries"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Primaries, if tagged."
+        },
+        "transfer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Transfer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Transfer characteristic, if tagged."
+        },
+        "matrix": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Matrix"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Y'CbCr matrix, if tagged."
+        },
+        "range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Range"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Sample range, if tagged."
+        }
+      },
+      "description": "Color metadata as reported by a decoder or written in a timeline.\n\nEach field is optional: `None` means \"not tagged\", which is exactly the\nsituation [`crate::infer`] resolves."
+    },
+    "Primaries": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "bt709",
+          "description": "ITU-R BT.709, shared by sRGB. The default for HD material."
+        },
+        {
+          "type": "string",
+          "const": "bt601-625",
+          "description": "ITU-R BT.601 as used with 625-line systems (BT.470 B/G, PAL)."
+        },
+        {
+          "type": "string",
+          "const": "bt601-525",
+          "description": "ITU-R BT.601 as used with 525-line systems (SMPTE 170M, NTSC)."
+        },
+        {
+          "type": "string",
+          "const": "bt2020",
+          "description": "ITU-R BT.2020, used by HDR and wide-gamut UHD material."
+        }
+      ],
+      "description": "Chromaticity of the red, green and blue primaries and the white point."
+    },
+    "Transfer": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "srgb",
+          "description": "The piecewise sRGB curve (IEC 61966-2-1). The default for still images\nand graphics."
+        },
+        {
+          "type": "string",
+          "const": "bt709",
+          "description": "The ITU-R BT.709 curve, shared by BT.601 and BT.2020 SDR. The default\nfor SDR video."
+        },
+        {
+          "type": "string",
+          "const": "linear",
+          "description": "Linear light; samples are proportional to radiance."
+        },
+        {
+          "type": "string",
+          "const": "pq",
+          "description": "SMPTE ST 2084 perceptual quantizer (HDR10)."
+        },
+        {
+          "type": "string",
+          "const": "hlg",
+          "description": "ARIB STD-B67 hybrid log-gamma."
+        }
+      ],
+      "description": "The opto-electronic transfer characteristic of encoded samples."
+    },
+    "Matrix": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "bt709",
+          "description": "ITU-R BT.709 coefficients. The default for HD material."
+        },
+        {
+          "type": "string",
+          "const": "bt601",
+          "description": "ITU-R BT.601 coefficients. The default for SD material."
+        },
+        {
+          "type": "string",
+          "const": "bt2020-ncl",
+          "description": "ITU-R BT.2020 non-constant luminance."
+        },
+        {
+          "type": "string",
+          "const": "identity",
+          "description": "No matrix: samples are R'G'B'."
+        }
+      ],
+      "description": "The matrix used to derive Y'CbCr from R'G'B'."
+    },
+    "Range": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "limited",
+          "description": "Y' in 16..=235 and Cb/Cr in 16..=240 at 8 bits, scaled with bit depth."
+        },
+        {
+          "type": "string",
+          "const": "full",
+          "description": "All codes from 0 to the maximum are used."
+        }
+      ],
+      "description": "Whether coded samples use the full code range or the video (limited) range."
+    },
+    "AudioOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sample_rate": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Sample rate in Hz. Defaults to 48000."
+        },
+        "channels": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "Channel count: 1 (mono) or 2 (stereo). Defaults to 2."
+        }
+      },
+      "description": "Audio output format."
+    },
+    "Encode": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "container": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Container"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Container format. Defaults to the extension of the output path."
+        },
+        "video": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoEncode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Video encoder settings."
+        },
+        "audio": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AudioEncode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Audio encoder settings."
+        }
+      },
+      "description": "Encoder settings for the rendered file."
+    },
+    "Container": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "mp4",
+          "description": "MP4 (ISO base media)."
+        },
+        {
+          "type": "string",
+          "const": "mov",
+          "description": "QuickTime."
+        },
+        {
+          "type": "string",
+          "const": "mkv",
+          "description": "Matroska."
+        },
+        {
+          "type": "string",
+          "const": "webm",
+          "description": "WebM."
+        }
+      ],
+      "description": "Output container format."
+    },
+    "VideoEncode": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "codec": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoCodec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Codec. Defaults to h264 for mp4/mov/mkv and vp9 for webm."
+        },
+        "crf": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "Constant-quality level; lower is better quality and larger files.\nThe useful range is roughly 18 to 30 for h264 and h265."
+        },
+        "preset": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Encoder speed/efficiency preset, for example \"medium\" or \"slow\"."
+        },
+        "hardware": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HardwarePolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Hardware encoder policy. Defaults to \"auto\"."
+        }
+      },
+      "description": "Video encoder settings."
+    },
+    "VideoCodec": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "h264",
+          "description": "H.264 / AVC."
+        },
+        {
+          "type": "string",
+          "const": "h265",
+          "description": "H.265 / HEVC."
+        },
+        {
+          "type": "string",
+          "const": "vp9",
+          "description": "VP9."
+        },
+        {
+          "type": "string",
+          "const": "av1",
+          "description": "AV1."
+        }
+      ],
+      "description": "Video codec."
+    },
+    "HardwarePolicy": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "auto",
+          "description": "Use a hardware encoder when one is available and works, otherwise\nfall back to software."
+        },
+        {
+          "type": "string",
+          "const": "never",
+          "description": "Always use the software encoder."
+        },
+        {
+          "type": "string",
+          "const": "require",
+          "description": "Fail if no hardware encoder is available."
+        }
+      ],
+      "description": "Whether to use a hardware encoder."
+    },
+    "AudioEncode": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "codec": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AudioCodec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Codec. Defaults to aac for mp4/mov/mkv and opus for webm."
+        },
+        "bitrate_kbps": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Bitrate in kilobits per second. Defaults to 160."
+        }
+      },
+      "description": "Audio encoder settings."
+    },
+    "AudioCodec": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "aac",
+          "description": "AAC-LC."
+        },
+        {
+          "type": "string",
+          "const": "opus",
+          "description": "Opus."
+        }
+      ],
+      "description": "Audio codec."
+    },
+    "Asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "src": {
+          "type": "string",
+          "description": "Path relative to the asset root. Absolute paths and \"..\" segments\nare not allowed."
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AssetKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the file contains. Inferred from the extension when omitted."
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ColorTags"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Color tags that override or complete what the file declares."
+        }
+      },
+      "required": [
+        "src"
+      ],
+      "description": "A media file referenced by the composition."
+    },
+    "AssetKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "video",
+          "description": "A video file, possibly with audio."
+        },
+        {
+          "type": "string",
+          "const": "image",
+          "description": "A still image."
+        },
+        {
+          "type": "string",
+          "const": "audio",
+          "description": "An audio file."
+        },
+        {
+          "type": "string",
+          "const": "font",
+          "description": "A font file (TrueType or OpenType)."
+        }
+      ],
+      "description": "The kind of content in an asset."
+    },
+    "Layer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional identifier used in diagnostics."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Set to false to skip the layer without removing it.",
+          "default": true
+        },
+        "clips": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Clip"
+          },
+          "description": "Clips in time order. A clip without \"start\" begins where the\nprevious clip ends."
+        }
+      },
+      "required": [
+        "clips"
+      ],
+      "description": "A visual layer: a sequence of non-overlapping clips."
+    },
+    "Clip": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional identifier used in diagnostics."
+        },
+        "source": {
+          "$ref": "#/$defs/Source",
+          "description": "What the clip shows."
+        },
+        "start": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When the clip begins on the timeline. Defaults to the end of the\nprevious clip in the layer, or 0 for the first clip."
+        },
+        "duration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How long the clip lasts. Defaults to the source range for video and\naudio, and to the end of the output for images, solids, shapes and\ntext."
+        },
+        "transition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Transition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A transition from the previous clip in the layer. The clip starts\nearly by the transition duration and blends over the previous one."
+        },
+        "fit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the source is sized to the output frame before the transform.\nDefaults to \"none\" (natural size)."
+        },
+        "transform": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Transform"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Position, scale and rotation."
+        },
+        "opacity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_double"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Opacity from 0 (invisible) to 1 (opaque). Defaults to 1."
+        },
+        "blend": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BlendMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Blend mode against the layers below. Defaults to \"normal\"."
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "description": "A clip: a source placed on the timeline with a transform and opacity."
+    },
+    "Source": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "asset": {
+              "type": "string",
+              "description": "Id of an asset of kind \"video\"."
+            },
+            "in": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Where in the source to start. Defaults to 0."
+            },
+            "out": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Where in the source to stop. Defaults to the end of the file."
+            },
+            "audio": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Whether the asset's audio is mixed into the output. Defaults to\ntrue."
+            },
+            "kind": {
+              "type": "string",
+              "const": "video"
+            }
+          },
+          "required": [
+            "kind",
+            "asset"
+          ],
+          "description": "Frames (and optionally audio) from a video asset."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "asset": {
+              "type": "string",
+              "description": "Id of an asset of kind \"image\"."
+            },
+            "kind": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "required": [
+            "kind",
+            "asset"
+          ],
+          "description": "A still image asset."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "color": {
+              "$ref": "#/$defs/Animated_Color",
+              "description": "Fill color."
+            },
+            "kind": {
+              "type": "string",
+              "const": "solid"
+            }
+          },
+          "required": [
+            "kind",
+            "color"
+          ],
+          "description": "A frame-sized rectangle of one color."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "shape": {
+              "$ref": "#/$defs/ShapeKind",
+              "description": "Geometry."
+            },
+            "width": {
+              "$ref": "#/$defs/Length",
+              "description": "Width of the shape's box."
+            },
+            "height": {
+              "$ref": "#/$defs/Length",
+              "description": "Height of the shape's box."
+            },
+            "fill": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Animated_Color"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Fill color. Defaults to white."
+            },
+            "stroke": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Stroke"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Outline drawn inside the box edge."
+            },
+            "radius": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double",
+              "description": "Corner radius for rectangles, in pixels."
+            },
+            "kind": {
+              "type": "string",
+              "const": "shape"
+            }
+          },
+          "required": [
+            "kind",
+            "shape",
+            "width",
+            "height"
+          ],
+          "description": "A vector shape."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "text": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The text to show. Required unless \"words\" is given, in which case it\ndefaults to the words joined by spaces."
+            },
+            "words": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/$defs/Word"
+              },
+              "description": "Timed words for caption-style highlighting. Times are relative to the\nclip start."
+            },
+            "highlight": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TextStyle"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Style applied to the word whose time range contains the current\ntime."
+            },
+            "font": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Font: the id of an asset of kind \"font\", or a family name available\non the system."
+            },
+            "size": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double",
+              "description": "Font size in pixels. Defaults to 48."
+            },
+            "weight": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint16",
+              "minimum": 0,
+              "maximum": 65535,
+              "description": "Weight from 100 to 900. Defaults to 400."
+            },
+            "italic": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Italic."
+            },
+            "color": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Color"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Text color. Defaults to white."
+            },
+            "letter_spacing": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double",
+              "description": "Extra spacing between letters in pixels."
+            },
+            "max_width": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Length"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Maximum line width before wrapping. Defaults to the output width."
+            },
+            "align": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TextAlign"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Horizontal alignment within the box. Defaults to \"center\"."
+            },
+            "line_height": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double",
+              "description": "Line height as a multiple of the font size. Defaults to 1.2."
+            },
+            "padding": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double",
+              "description": "Padding between the text and its background box, in pixels."
+            },
+            "background": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Color"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Background box color. Defaults to none."
+            },
+            "radius": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double",
+              "description": "Background box corner radius in pixels."
+            },
+            "outline": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Stroke"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Text outline."
+            },
+            "shadow": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Shadow"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Drop shadow."
+            },
+            "kind": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "description": "Styled text, optionally with per-word timing.",
+          "required": [
+            "kind"
+          ]
+        }
+      ],
+      "description": "What a clip shows, selected by \"kind\"."
+    },
+    "Animated_Color": {
+      "description": "Either a constant value or {\"keyframes\": [...]} with values interpolated over time.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Color"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "keyframes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/KeyframeSpec"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "keyframes"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "KeyframeSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "t": {
+          "$ref": "#/$defs/Time",
+          "description": "Time of the keyframe, relative to the start of the clip."
+        },
+        "v": {
+          "$ref": "#/$defs/Color",
+          "description": "Value at that time."
+        },
+        "ease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Easing"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Easing applied between this keyframe and the next. Defaults to linear."
+        }
+      },
+      "required": [
+        "t",
+        "v"
+      ],
+      "description": "One keyframe as written in a timeline."
+    },
+    "Easing": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/NamedEasing",
+          "description": "A named preset."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "cubic-bezier": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "double"
+              },
+              "minItems": 4,
+              "maxItems": 4,
+              "description": "Control points; `x1` and `x2` must lie in `[0, 1]`."
+            }
+          },
+          "required": [
+            "cubic-bezier"
+          ],
+          "description": "A cubic bezier with control points `[x1, y1, x2, y2]`, as in CSS."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "spring": {
+              "$ref": "#/$defs/Spring",
+              "description": "Spring parameters."
+            }
+          },
+          "required": [
+            "spring"
+          ],
+          "description": "A damped spring, rescaled to settle at the end of the segment."
+        }
+      ],
+      "description": "An easing curve applied to the segment that starts at a keyframe.\n\nIn JSON an easing is either a preset name (`\"ease-out\"`), an object with a\n`cubic-bezier` array, or an object with a `spring` block."
+    },
+    "NamedEasing": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "linear",
+          "description": "Constant speed."
+        },
+        {
+          "type": "string",
+          "const": "ease",
+          "description": "CSS `ease`: gentle acceleration, longer deceleration."
+        },
+        {
+          "type": "string",
+          "const": "ease-in",
+          "description": "CSS `ease-in`: starts slowly."
+        },
+        {
+          "type": "string",
+          "const": "ease-out",
+          "description": "CSS `ease-out`: ends slowly."
+        },
+        {
+          "type": "string",
+          "const": "ease-in-out",
+          "description": "CSS `ease-in-out`: slow at both ends."
+        },
+        {
+          "type": "string",
+          "const": "hold",
+          "description": "Holds the starting value for the whole segment, then jumps."
+        }
+      ],
+      "description": "A named easing preset."
+    },
+    "Spring": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stiffness": {
+          "type": "number",
+          "format": "double",
+          "description": "Spring constant. Higher values make a snappier motion.",
+          "default": 170.0
+        },
+        "damping": {
+          "type": "number",
+          "format": "double",
+          "description": "Damping coefficient. Lower values bounce more.",
+          "default": 26.0
+        },
+        "mass": {
+          "type": "number",
+          "format": "double",
+          "description": "Attached mass. Higher values make a slower, heavier motion.",
+          "default": 1.0
+        }
+      },
+      "description": "Parameters of a damped spring.\n\nThe spring is solved analytically and rescaled so that it settles exactly\nat the end of the keyframe segment; the parameters control the shape of\nthe motion (overshoot and bounce), not its duration."
+    },
+    "ShapeKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "rect",
+          "description": "An axis-aligned rectangle filling the box."
+        },
+        {
+          "type": "string",
+          "const": "ellipse",
+          "description": "An ellipse inscribed in the box."
+        }
+      ],
+      "description": "Shape geometry."
+    },
+    "Length": {
+      "title": "Length",
+      "description": "Pixels as a number (120) or a string with a unit (\"120px\", \"50%\"). Percentages refer to the output width for x values and the output height for y values.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "string",
+          "pattern": "^\\s*-?\\d+(\\.\\d+)?\\s*(px|%)?\\s*$"
+        }
+      ]
+    },
+    "Stroke": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/Color",
+          "description": "Outline color."
+        },
+        "width": {
+          "type": "number",
+          "format": "double",
+          "description": "Outline width in pixels."
+        }
+      },
+      "required": [
+        "color",
+        "width"
+      ],
+      "description": "An outline."
+    },
+    "Word": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "The word."
+        },
+        "start": {
+          "$ref": "#/$defs/Time",
+          "description": "When the word becomes current, relative to the clip start."
+        },
+        "end": {
+          "$ref": "#/$defs/Time",
+          "description": "When the word stops being current."
+        }
+      },
+      "required": [
+        "text",
+        "start",
+        "end"
+      ],
+      "description": "One timed word."
+    },
+    "TextStyle": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "font": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Font: the id of an asset of kind \"font\", or a family name available\non the system."
+        },
+        "size": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Font size in pixels. Defaults to 48."
+        },
+        "weight": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Weight from 100 to 900. Defaults to 400."
+        },
+        "italic": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Italic."
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Text color. Defaults to white."
+        },
+        "letter_spacing": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Extra spacing between letters in pixels."
+        }
+      },
+      "description": "Font and color properties of text."
+    },
+    "TextAlign": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "left",
+          "description": "Left."
+        },
+        {
+          "type": "string",
+          "const": "center",
+          "description": "Center."
+        },
+        {
+          "type": "string",
+          "const": "right",
+          "description": "Right."
+        }
+      ],
+      "description": "Horizontal text alignment."
+    },
+    "Shadow": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Shadow color. Defaults to 50% black."
+        },
+        "x": {
+          "type": "number",
+          "format": "double",
+          "description": "Horizontal offset in pixels.",
+          "default": 0.0
+        },
+        "y": {
+          "type": "number",
+          "format": "double",
+          "description": "Vertical offset in pixels.",
+          "default": 0.0
+        },
+        "blur": {
+          "type": "number",
+          "format": "double",
+          "description": "Blur radius in pixels.",
+          "default": 0.0
+        }
+      },
+      "description": "A drop shadow."
+    },
+    "Transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/TransitionKind",
+          "description": "Transition type."
+        },
+        "duration": {
+          "$ref": "#/$defs/Time",
+          "description": "How long the two clips overlap."
+        }
+      },
+      "required": [
+        "kind",
+        "duration"
+      ],
+      "description": "A transition into a clip."
+    },
+    "TransitionKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "crossfade",
+          "description": "Fade the incoming clip in over the outgoing one."
+        }
+      ],
+      "description": "Transition types."
+    },
+    "Fit": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "none",
+          "description": "Natural size, one source pixel per output pixel."
+        },
+        {
+          "type": "string",
+          "const": "contain",
+          "description": "Scale uniformly so the whole source fits inside the frame."
+        },
+        {
+          "type": "string",
+          "const": "cover",
+          "description": "Scale uniformly so the source covers the whole frame, cropping edges."
+        },
+        {
+          "type": "string",
+          "const": "fill",
+          "description": "Stretch to the frame, ignoring aspect ratio."
+        }
+      ],
+      "description": "How a source is sized to the output frame."
+    },
+    "Transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "position": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_Point"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where the anchor lands in the output frame. Defaults to the frame\ncenter (\"50%\", \"50%\")."
+        },
+        "anchor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Point"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The point of the clip's box that is placed at \"position\".\nPercentages refer to the box size. Defaults to the box center."
+        },
+        "scale": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_Scale"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Scale factor around the anchor. Defaults to 1."
+        },
+        "rotation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_double"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Rotation around the anchor in degrees, clockwise. Defaults to 0."
+        }
+      },
+      "description": "Position, anchor, scale and rotation of a clip.\n\nThe anchor is a point on the clip's own box, expressed as a percentage of\nthe box or in pixels of the box. It is placed at \"position\" in the output\nframe; scale and rotation are applied around it."
+    },
+    "Animated_Point": {
+      "description": "Either a constant value or {\"keyframes\": [...]} with values interpolated over time.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Point"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "keyframes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/KeyframeSpec2"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "keyframes"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Point": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/Length",
+          "description": "Horizontal component; percentages refer to the output width."
+        },
+        "y": {
+          "$ref": "#/$defs/Length",
+          "description": "Vertical component; percentages refer to the output height."
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "description": "A 2D point or size with independent units per axis."
+    },
+    "KeyframeSpec2": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "t": {
+          "$ref": "#/$defs/Time",
+          "description": "Time of the keyframe, relative to the start of the clip."
+        },
+        "v": {
+          "$ref": "#/$defs/Point",
+          "description": "Value at that time."
+        },
+        "ease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Easing"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Easing applied between this keyframe and the next. Defaults to linear."
+        }
+      },
+      "required": [
+        "t",
+        "v"
+      ],
+      "description": "One keyframe as written in a timeline."
+    },
+    "Animated_Scale": {
+      "description": "Either a constant value or {\"keyframes\": [...]} with values interpolated over time.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Scale"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "keyframes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/KeyframeSpec3"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "keyframes"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Scale": {
+      "title": "Scale",
+      "description": "A uniform scale factor (1.5) or separate factors per axis ({\"x\": 1, \"y\": 2}). 1 is natural size.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "x",
+            "y"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "KeyframeSpec3": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "t": {
+          "$ref": "#/$defs/Time",
+          "description": "Time of the keyframe, relative to the start of the clip."
+        },
+        "v": {
+          "$ref": "#/$defs/Scale",
+          "description": "Value at that time."
+        },
+        "ease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Easing"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Easing applied between this keyframe and the next. Defaults to linear."
+        }
+      },
+      "required": [
+        "t",
+        "v"
+      ],
+      "description": "One keyframe as written in a timeline."
+    },
+    "Animated_double": {
+      "description": "Either a constant value or {\"keyframes\": [...]} with values interpolated over time.",
+      "anyOf": [
+        {
+          "type": "number",
+          "format": "double"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "keyframes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/KeyframeSpec4"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "keyframes"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "KeyframeSpec4": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "t": {
+          "$ref": "#/$defs/Time",
+          "description": "Time of the keyframe, relative to the start of the clip."
+        },
+        "v": {
+          "type": "number",
+          "format": "double",
+          "description": "Value at that time."
+        },
+        "ease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Easing"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Easing applied between this keyframe and the next. Defaults to linear."
+        }
+      },
+      "required": [
+        "t",
+        "v"
+      ],
+      "description": "One keyframe as written in a timeline."
+    },
+    "BlendMode": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "normal",
+          "description": "Source over destination."
+        },
+        {
+          "type": "string",
+          "const": "multiply",
+          "description": "Multiply."
+        },
+        {
+          "type": "string",
+          "const": "screen",
+          "description": "Screen."
+        },
+        {
+          "type": "string",
+          "const": "add",
+          "description": "Additive."
+        }
+      ],
+      "description": "Blend modes."
+    },
+    "AudioTrack": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional identifier used in diagnostics."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Set to false to mute the track without removing it.",
+          "default": true
+        },
+        "clips": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AudioClip"
+          },
+          "description": "Clips in time order. A clip without \"start\" begins where the\nprevious clip ends."
+        }
+      },
+      "required": [
+        "clips"
+      ],
+      "description": "An audio-only track."
+    },
+    "AudioClip": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional identifier used in diagnostics."
+        },
+        "asset": {
+          "type": "string",
+          "description": "Id of an asset of kind \"audio\" or \"video\"."
+        },
+        "in": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where in the source to start. Defaults to 0."
+        },
+        "out": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where in the source to stop. Defaults to the end of the file."
+        },
+        "start": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When the clip begins on the timeline."
+        },
+        "duration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How long the clip lasts. Defaults to the source range."
+        },
+        "gain_db": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_double"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Gain in decibels. Defaults to 0."
+        },
+        "fade_in": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Fade-in duration from silence."
+        },
+        "fade_out": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Fade-out duration to silence."
+        }
+      },
+      "required": [
+        "asset"
+      ],
+      "description": "A clip on an audio track."
+    }
+  },
+  "$id": "https://geneva-render.github.io/schema/geneva-timeline-0.1.schema.json"
+}

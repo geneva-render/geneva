@@ -1,0 +1,20 @@
+[package]
+name = "geneva-color"
+description = "Color tags, transfer functions, matrices and linear-light blending for the Geneva engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+geneva-anim = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

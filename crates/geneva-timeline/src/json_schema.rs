@@ -1,0 +1,53 @@
+use schemars::generate::SchemaSettings;
+use serde_json::{Value, json};
+
+use crate::schema::{FORMAT_VERSION, Timeline};
+
+/// Canonical URL of the published schema for the current format version.
+pub fn schema_url() -> String {
+    format!("https://geneva-render.github.io/schema/geneva-timeline-{FORMAT_VERSION}.schema.json")
+}
+
+/// Generates the JSON Schema (draft 2020-12) for the current timeline format.
+pub fn json_schema() -> Value {
+    let generator = SchemaSettings::draft2020_12().into_generator();
+    let mut schema = generator.into_root_schema_for::<Timeline>().to_value();
+    let root = schema.as_object_mut().expect("root schema is an object");
+    root.insert("$id".to_owned(), Value::String(schema_url()));
+    root.insert(
+        "description".to_owned(),
+        Value::String(format!(
+            "Geneva timeline format {FORMAT_VERSION}: a declarative video composition."
+        )),
+    );
+    if let Some(geneva) = root
+        .get_mut("properties")
+        .and_then(Value::as_object_mut)
+        .and_then(|p| p.get_mut("geneva"))
+        .and_then(Value::as_object_mut)
+    {
+        geneva.insert("const".to_owned(), json!(FORMAT_VERSION));
+    }
+    schema
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schema_pins_the_version() {
+        let s = json_schema();
+        assert_eq!(s["properties"]["geneva"]["const"], json!("0.1"));
+        assert_eq!(
+            s["$schema"],
+            json!("https://json-schema.org/draft/2020-12/schema")
+        );
+        assert!(
+            s["$id"]
+                .as_str()
+                .unwrap()
+                .ends_with("geneva-timeline-0.1.schema.json")
+        );
+    }
+}

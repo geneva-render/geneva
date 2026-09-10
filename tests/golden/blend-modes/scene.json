@@ -1,0 +1,13 @@
+{
+  "geneva": "0.1",
+  "output": { "width": 320, "height": 180, "fps": 30, "duration": "1s", "background": "#404040" },
+  "layers": [
+    { "clips": [ { "source": { "kind": "shape", "shape": "rect", "width": 200, "height": 100, "fill": "#3060c0" } } ] },
+    { "clips": [ { "source": { "kind": "shape", "shape": "ellipse", "width": 120, "height": 120, "fill": "#e0a030" },
+                  "transform": { "position": { "x": 100, "y": 90 } }, "blend": "multiply" } ] },
+    { "clips": [ { "source": { "kind": "shape", "shape": "ellipse", "width": 120, "height": 120, "fill": "#e0a030" },
+                  "transform": { "position": { "x": 220, "y": 90 } }, "blend": "screen" } ] },
+    { "clips": [ { "source": { "kind": "shape", "shape": "rect", "width": 320, "height": 30, "fill": "#ffffff", "radius": 15 },
+                  "transform": { "position": { "x": "50%", "y": 160 } }, "opacity": 0.5, "blend": "add" } ] }
+  ]
+}

@@ -1,0 +1,68 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/geneva-anim",
+    "crates/geneva-color",
+    "crates/geneva-timeline",
+    "crates/geneva-render",
+    "crates/geneva-golden",
+    "crates/geneva-cli",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.85"
+license-file = "LICENSE.md"
+repository = "https://github.com/geneva-render/geneva"
+homepage = "https://github.com/geneva-render/geneva"
+authors = ["Geneva contributors"]
+
+[workspace.dependencies]
+geneva-anim = { path = "crates/geneva-anim", version = "0.0.1" }
+geneva-color = { path = "crates/geneva-color", version = "0.0.1" }
+geneva-timeline = { path = "crates/geneva-timeline", version = "0.0.1" }
+geneva-render = { path = "crates/geneva-render", version = "0.0.1" }
+geneva-golden = { path = "crates/geneva-golden", version = "0.0.1" }
+
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+schemars = { version = "1.0", features = ["preserve_order"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+serde_path_to_error = "0.1"
+thiserror = "2.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+similar_names = "allow"
+too_many_lines = "allow"
+doc_markdown = "allow"
+return_self_not_must_use = "allow"
+float_cmp = "allow"
+many_single_char_names = "allow"
+needless_raw_string_hashes = "allow"
+single_match_else = "allow"
+result_large_err = "allow"
+cast_possible_wrap = "allow"
+explicit_iter_loop = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[profile.dev.package."*"]
+opt-level = 2

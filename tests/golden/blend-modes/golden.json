@@ -1,0 +1,1 @@
+{ "frames": ["0s"], "tolerance": { "channel_epsilon": 1, "max_mismatch_fraction": 0.001, "min_ssim": 0.999 } }
