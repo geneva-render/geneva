@@ -19,9 +19,8 @@ binary distribution.
 
 The LGPL-licensed libraries are statically linked. Their complete source,
 the exact versions and the configuration used are given by the build
-script in this repository, and Geneva's own source is available under its
-license, so the libraries can be modified and the program relinked as the
-LGPL provides.
+script in this repository, and Geneva itself is MIT licensed, so the
+libraries can be modified and the program relinked as the LGPL provides.
 
 Rust crates used by Geneva are listed with their licenses by
 `cargo license` and are all MIT or Apache-2.0 licensed unless noted in

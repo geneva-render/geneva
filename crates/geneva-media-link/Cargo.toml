@@ -4,7 +4,7 @@ description = "Build-script helper that links the statically built media librari
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license-file.workspace = true
+license.workspace = true
 repository.workspace = true
 publish = false
 

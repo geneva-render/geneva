@@ -34,7 +34,7 @@ Geneva ships as a single binary with its media libraries built in; see
 Prebuilt binaries are published for each release on the
 [releases page](https://github.com/geneva-render/geneva/releases) for Linux
 (x86_64, arm64) and macOS (Apple silicon, Intel). Each archive contains the
-`geneva` binary, this README, the licenses, and nothing else to install.
+`geneva` binary, this README, the license texts, and nothing else to install.
 
 ```sh
 # Linux x86_64 (adjust the version and the target for your machine)
@@ -123,7 +123,6 @@ licenses are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## License
 
-Geneva is source-available under the [Geneva License 1.0](LICENSE.md). It is
-free for individuals, non-profits, education, evaluation, and companies of up
-to three people. Larger companies need a commercial license; see
-[COMMERCIAL.md](COMMERCIAL.md).
+Geneva is open source under the [MIT License](LICENSE). The bundled
+third-party components and their licenses are listed in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

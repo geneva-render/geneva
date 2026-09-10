@@ -5,14 +5,19 @@ most useful contributions right now are bug reports with reproducible
 timelines, sample files that render incorrectly, and review of the timeline
 format.
 
-## Contributor License Agreement
+## Certifying your contributions
 
-Geneva is source-available and the licensor offers commercial licenses. To
-keep that possible, all code contributions require a signed Contributor
-License Agreement (CLA) granting the licensor the rights needed to distribute
-the contribution under both the Geneva License and commercial terms. The
-CLA text and signing flow will be linked from the first pull request that
-needs it; a bot will guide you.
+Geneva is MIT licensed and contributions are accepted under the same
+license. Instead of a contributor agreement, every commit carries a
+Developer Certificate of Origin sign-off stating that you have the right to
+submit it:
+
+```sh
+git commit -s
+```
+
+adds a `Signed-off-by: Your Name <you@example.com>` line; see
+<https://developercertificate.org> for the text you are certifying.
 
 ## Development
 
