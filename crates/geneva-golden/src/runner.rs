@@ -91,7 +91,8 @@ pub fn discover_cases(root: &Path) -> Vec<PathBuf> {
 }
 
 /// Renders every frame listed in a case's `golden.json` with the CPU
-/// renderer and compares it with `expected/<time>.png`.
+/// renderer and compares it with `expected/<time>.png`. Asset paths in
+/// `scene.json` are relative to the golden root (the case's parent).
 ///
 /// On failure the rendered frame and a diff image are written under
 /// `failure_dir` for inspection. With [`UPDATE_ENV`] set, references are
@@ -125,7 +126,10 @@ pub fn run_case(case_dir: &Path, failure_dir: &Path) -> Result<CaseOutcome, Gold
         return Err(GoldenError::Scene(text));
     };
     let update = std::env::var_os(UPDATE_ENV).is_some();
-    let mut renderer = CpuRenderer::with_asset_root(case_dir);
+    // Assets resolve against the golden root so cases can share files such
+    // as fonts.
+    let root = case_dir.parent().unwrap_or(case_dir);
+    let mut renderer = CpuRenderer::with_asset_root(root);
     let expected_dir = case_dir.join("expected");
     let mut frames = Vec::new();
     for time_text in &spec.frames {

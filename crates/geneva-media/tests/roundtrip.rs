@@ -165,3 +165,56 @@ fn mixing_applies_gain_and_skips_muted_video_audio() {
         "-6 dB should halve the level, got ratio {ratio}"
     );
 }
+
+#[test]
+fn audio_lands_at_its_timeline_position_in_the_output_file() {
+    // A tone placed at 1s on an otherwise silent timeline must start at 1s
+    // in the muxed file, which checks audio/video alignment end to end.
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("sync.mp4");
+    let root = clip().parent().unwrap().to_path_buf();
+    let text = r#"{
+      "geneva": "0.1",
+      "output": { "width": 64, "height": 64, "fps": 25, "duration": "2s" },
+      "assets": { "clip": { "src": "clip.mp4" } },
+      "layers": [ { "clips": [ { "source": { "kind": "solid", "color": "black" } } ] } ],
+      "audio": [ { "clips": [ { "asset": "clip", "start": "1s", "duration": "1s" } ] } ]
+    }"#;
+    let comp = load(text).composition.unwrap();
+    let settings = EncodeSettings {
+        width: 64,
+        height: 64,
+        fps: Ratio::from_int(25),
+        container: None,
+        video_codec: VideoCodec::H264,
+        crf: Some(30),
+        preset: Some("ultrafast".to_owned()),
+        color: ResolvedTags::SDR_VIDEO,
+        audio: Some(AudioSettings {
+            codec: AudioCodec::Aac,
+            bitrate_kbps: 96,
+            sample_rate: 48000,
+        }),
+    };
+    let mut enc = Encoder::new(&out, settings).unwrap();
+    let frame = Frame::new(64, 64, Color::BLACK);
+    for _ in 0..50 {
+        enc.push_frame(&frame).unwrap();
+    }
+    enc.push_audio(&mix::mix(&comp, &root, 48000).unwrap())
+        .unwrap();
+    enc.finish().unwrap();
+
+    let mut audio = AudioReader::open(&out).unwrap();
+    let all = audio.read(Ratio::ZERO, Ratio::from_int(2), 48000).unwrap();
+    let before = rms(&all[..48000 * 2 * 9 / 10]);
+    let after = rms(&all[48000 * 2 * 11 / 10..48000 * 2 * 15 / 10]);
+    assert!(
+        before < 0.01,
+        "silence expected before 1s, got rms {before}"
+    );
+    assert!(after > 0.05, "tone expected after 1s, got rms {after}");
+    let info = probe(&out).unwrap();
+    let d = info.duration.unwrap().to_f64();
+    assert!((d - 2.0).abs() < 0.1, "duration {d}");
+}

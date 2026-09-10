@@ -1,0 +1,17 @@
+{
+  "geneva": "0.1",
+  "output": { "width": 1280, "height": 720, "fps": 30, "duration": "3s", "background": "#202830" },
+  "layers": [
+    { "clips": [ { "source": { "kind": "text",
+        "words": [ { "text": "Captions", "start": 0, "end": "0.6s" }, { "text": "highlight", "start": "0.6s", "end": "1.2s" },
+                   { "text": "each", "start": "1.2s", "end": "1.6s" }, { "text": "word", "start": "1.6s", "end": "2.2s" },
+                   { "text": "in", "start": "2.2s", "end": "2.5s" }, { "text": "turn", "start": "2.5s", "end": "3s" } ],
+        "font": "Liberation Sans", "size": 64, "weight": 700, "color": "white",
+        "highlight": { "color": "#ffb347" },
+        "outline": { "color": "black", "width": 3 },
+        "background": "#00000099", "padding": 20, "radius": 14 },
+        "transform": { "position": { "x": "50%", "y": "85%" } } } ] },
+    { "clips": [ { "source": { "kind": "text", "text": "مرحبا بالعالم — שלום עולם — สวัสดีชาวโลก", "size": 48, "color": "#e0e6ee" },
+        "transform": { "position": { "x": "50%", "y": "40%" } } } ] }
+  ]
+}

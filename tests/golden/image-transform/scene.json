@@ -1,7 +1,7 @@
 {
   "geneva": "0.1",
   "output": { "width": 256, "height": 144, "fps": 24, "duration": "2s", "background": "#202020" },
-  "assets": { "checker": { "src": "checker.png" } },
+  "assets": { "checker": { "src": "image-transform/checker.png" } },
   "layers": [
     { "id": "aligned", "clips": [ { "source": { "kind": "image", "asset": "checker" },
         "transform": { "anchor": { "x": 0, "y": 0 }, "position": { "x": 8, "y": 8 } } } ] },

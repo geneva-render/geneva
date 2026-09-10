@@ -14,6 +14,7 @@
 mod assets;
 mod cpu;
 mod frame;
+mod text;
 
 use geneva_timeline::{Composition, Ratio};
 use thiserror::Error;
@@ -21,6 +22,7 @@ use thiserror::Error;
 pub use assets::{AssetSource, FileAssets, Image, NoAssets};
 pub use cpu::CpuRenderer;
 pub use frame::Frame;
+pub use text::TextEngine;
 
 /// Errors that prevent a frame from being rendered.
 #[derive(Debug, Error)]

@@ -229,7 +229,7 @@ Every source has a `kind`.
 | `text` | unless `words` | | The text. |
 | `words` | no | | `[{ "text", "start", "end" }]` with clip-relative times, in order, non-overlapping (E411). |
 | `highlight` | no | | Style overrides for the word whose range contains the current time. |
-| `font` | no | system default | Id of a `font` asset, or a family name. |
+| `font` | no | system sans-serif | Id of a `font` asset, or a family name. A font asset also supplies its weight and style unless set here. |
 | `size` | no | `48` | Font size in pixels. |
 | `weight` | no | `400` | 100 to 900. |
 | `italic` | no | `false` | |
@@ -293,7 +293,12 @@ information as one JSON document.
 
 ## Renderer support
 
-The CPU reference renderer currently draws `solid`, `shape`, `image` and
-`composition` sources with every transform, opacity, blend mode and transition. `video`
-and `text` sources validate but render with error E500 until media decoding
-and text layout land. Audio tracks validate and are not mixed yet.
+The CPU reference renderer draws every source kind: `solid`, `shape`,
+`image`, `video`, `text` and `composition`, with every transform, opacity,
+blend mode and transition. `geneva render` mixes audio tracks and the audio
+of video clips. Hardware encoders are not used yet; `encode.video.hardware`
+is accepted and ignored.
+
+Text uses fonts from `font` assets first and falls back to fonts installed
+on the system. Output that depends on system fonts can differ between
+machines; ship the fonts as assets when the result must be identical.

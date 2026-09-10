@@ -6,6 +6,7 @@ use geneva_timeline::{Composition, Ratio, ResolvedClip, ResolvedLayer, ResolvedS
 
 use crate::assets::{AssetSource, FileAssets, Image};
 use crate::frame::Frame;
+use crate::text::TextEngine;
 use crate::{RenderError, Renderer};
 
 /// Sub-pixel sample offsets: a 2×2 grid at quarter-pixel positions.
@@ -16,9 +17,15 @@ const SUBSAMPLES: [(f64, f64); 4] = [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (
 /// Every clip is drawn by mapping output pixels back into the clip's own
 /// coordinate space, so transforms are exact and edges are anti-aliased by
 /// supersampling. Compositing happens in premultiplied linear light.
-#[derive(Debug)]
 pub struct CpuRenderer<A: AssetSource> {
     assets: A,
+    text: TextEngine,
+}
+
+impl<A: AssetSource> std::fmt::Debug for CpuRenderer<A> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CpuRenderer").finish_non_exhaustive()
+    }
 }
 
 impl CpuRenderer<FileAssets> {
@@ -26,6 +33,7 @@ impl CpuRenderer<FileAssets> {
     pub fn with_asset_root(root: impl Into<std::path::PathBuf>) -> Self {
         Self {
             assets: FileAssets::new(root),
+            text: TextEngine::new(),
         }
     }
 }
@@ -33,7 +41,10 @@ impl CpuRenderer<FileAssets> {
 impl<A: AssetSource> CpuRenderer<A> {
     /// Creates a renderer with a custom asset source.
     pub fn new(assets: A) -> Self {
-        Self { assets }
+        Self {
+            assets,
+            text: TextEngine::new(),
+        }
     }
 }
 
@@ -57,6 +68,30 @@ impl<A: AssetSource> Renderer for CpuRenderer<A> {
 }
 
 impl<A: AssetSource> CpuRenderer<A> {
+    /// Registers the font assets a text source refers to, once each.
+    fn load_fonts(
+        &mut self,
+        comp: &Composition,
+        text: &geneva_timeline::ResolvedText,
+    ) -> Result<(), RenderError> {
+        let fonts = [
+            text.spec.style.font.as_deref(),
+            text.spec.highlight.as_ref().and_then(|h| h.font.as_deref()),
+        ];
+        for id in fonts.into_iter().flatten() {
+            if comp.assets.contains_key(id) && !self.text.has_font(id) {
+                let data = self.assets.font(comp, id)?;
+                if self.text.add_font(id, data.as_ref().clone()).is_none() {
+                    return Err(RenderError::Asset {
+                        id: id.to_owned(),
+                        reason: "not a usable font file".to_owned(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Renders a set of layers into a fresh frame at time `t`, which is
     /// relative to the layers' own origin (the output, or the clip that
     /// shows a nested composition).
@@ -127,11 +162,9 @@ impl<A: AssetSource> CpuRenderer<A> {
                         source_time,
                     )?))
                 }
-                ResolvedSource::Text(_) => {
-                    return Err(RenderError::Unsupported {
-                        what: "text rendering".to_owned(),
-                        path: clip.path.clone(),
-                    });
+                ResolvedSource::Text(text) => {
+                    self.load_fonts(comp, text)?;
+                    Paint::Image(Cow::Owned(self.text.render(text, local)))
                 }
             };
             let Some(placement) = Placement::new(width, height, clip, local, paint.size()) else {
@@ -561,16 +594,16 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_sources_fail_with_the_clip_path() {
+    fn video_without_a_decoder_fails_with_the_asset_id() {
         let loaded = load(&doc(
-            r##""layers":[{"clips":[{"source":{"kind":"text","text":"hi"}}]}]"##,
+            r##""assets":{"v":{"src":"v.mp4"}},"layers":[{"clips":[{"source":{"kind":"video","asset":"v","out":"1s"}}]}]"##,
         ));
         let comp = loaded.composition.unwrap();
         let err = CpuRenderer::new(NoAssets)
             .render_frame(&comp, Ratio::ZERO)
             .unwrap_err();
-        assert_eq!(err.code(), "E500");
-        assert!(err.to_string().contains("/layers/0/clips/0"));
+        assert_eq!(err.code(), "E501");
+        assert!(err.to_string().contains("\"v\""));
     }
 
     #[test]

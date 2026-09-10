@@ -66,6 +66,7 @@ result is not what was intended. Notes are informational.
 | W302 | A layer or track has no clips. |
 | W303 | The first clip of a layer has a transition, which has nothing to blend from. |
 | W304 | An audio clip's fades add up to more than its length. |
+| W305 | `out` is past the end of the file; the clip ends where the file ends. |
 
 ## Values (E400–E499)
 
@@ -85,7 +86,7 @@ These are produced when rendering, not by `validate`.
 | Code | Meaning |
 | --- | --- |
 | E500 | The clip uses a source kind this renderer does not implement yet. |
-| E501 | An asset file could not be read or decoded. |
+| E501 | An asset file could not be opened, read or decoded. With `--probe` this is reported at validation time, at `/assets/<id>/src`. |
 | E502 | The requested time is outside the composition. |
 
 ## Exit codes

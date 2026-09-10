@@ -8,9 +8,11 @@ license-file.workspace = true
 repository.workspace = true
 
 [dependencies]
+cosmic-text = { workspace = true }
 geneva-color = { workspace = true }
 geneva-timeline = { workspace = true }
 image = { workspace = true }
+swash = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]

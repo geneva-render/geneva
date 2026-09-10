@@ -18,6 +18,7 @@ timeline JSON ──parse──▶ Timeline ──resolve──▶ Composition �
 | `geneva-timeline` | The format: document types (also the JSON Schema source), exact `Ratio` time, parsing with path-precise errors, resolution into `Composition`, diagnostics. | geneva-anim, geneva-color |
 | `geneva-render` | The `Renderer` trait, `Frame`, asset loading, and `CpuRenderer`. | geneva-timeline, geneva-color |
 | `geneva-golden` | Perceptual comparison (per-channel epsilon, PSNR, SSIM), diff images, and the golden case runner. | geneva-render |
+| `geneva-media` | Probe, decode, encode and audio mixing over the libav libraries, behind the `libav` feature; the only crate that knows about containers and codecs. | geneva-render, geneva-color |
 | `geneva-cli` | The `geneva` binary. | everything above |
 
 Lower crates never depend on higher ones. `geneva-timeline` knows nothing
@@ -59,10 +60,28 @@ sRGB happens at the edge.
 - The result is scaled by opacity (and by the crossfade ramp when a
   transition is active) and composited with the clip's blend mode.
 
-Assets reach the renderer through the `AssetSource` trait. The file
-implementation resolves `assets.<id>.src` under one root directory; the
-validator has already rejected absolute paths and `..`, so the root is a
-real boundary.
+Assets reach the renderer through the `AssetSource` trait: images, font
+bytes, and video frames by source time. The file implementation resolves
+`assets.<id>.src` under one root directory; the validator has already
+rejected absolute paths and `..`, so the root is a real boundary. The
+media crate's implementation adds video, keeping one decoder open per asset
+so sequential frames decode once.
+
+Text is laid out by `cosmic-text` (shaping, bidi, line breaking, fallback)
+and rasterized by `swash` into coverage masks. The engine composites the
+masks in linear light, draws the background box, outline and shadow, and
+hands the result to the same placement code as images.
+
+## Media
+
+Decoded frames are converted by `libswscale` to 16-bit 4:4:4 (or RGBA for
+R'G'B' sources) and then, in Rust, through range normalization, the
+tagged matrix and the tagged transfer function into the compositing
+format. Encoding goes the other way: linear to the output transfer, to
+Y'CbCr, 2×2 chroma averaging, 8-bit 4:2:0, then the encoder. Color tags
+travel with the stream in both directions. Audio is decoded and resampled
+to stereo `f32` at the output rate, shaped by gain tracks and fades, and
+summed.
 
 ## Golden tests
 
@@ -79,14 +98,9 @@ real regressions.
 
 ## Not here yet
 
-The following are planned and have their seams in place:
-
-- **Media I/O.** A backend trait for demux, decode and encode with an
-  implementation over libav, isolated in its own crate. `ResolvedSource::Video`
-  and the `Encode` settings already carry what it needs.
-- **Text layout.** Shaping and layout for `TextSource` producing glyph runs
-  the renderer can paint.
 - **GPU renderer.** A second `Renderer` implementation with the same
   contract, validated against the CPU renderer by the golden harness.
-- **Rendering whole outputs.** Iterating `Composition::frame_time` over
-  `frame_count` and feeding an encoder, plus audio mixing.
+- **Hardware encoders** with probe-and-fallback.
+- **Stream copy** for cuts and joins that need no re-encoding.
+- **Streaming audio mixing.** The mixer currently holds the whole mix in
+  memory.

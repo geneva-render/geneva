@@ -27,12 +27,26 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Install libav (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev clang pkg-config
+      - name: Install libav (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg pkg-config
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
+        if: runner.os != 'Windows'
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
+        if: runner.os != 'Windows'
         run: cargo test --workspace
+      - name: Clippy without media support (Windows)
+        if: runner.os == 'Windows'
+        run: cargo clippy --workspace --all-targets --no-default-features -- -D warnings
+      - name: Test without media support (Windows)
+        if: runner.os == 'Windows'
+        run: cargo test --workspace --no-default-features
       - name: Schema is up to date
         run: cargo run -q -p geneva-cli -- schema | diff - schema/geneva-timeline-0.1.schema.json
       - name: Upload golden failures

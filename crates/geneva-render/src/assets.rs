@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use geneva_color::{LinearRgba, Transfer};
 use geneva_timeline::{Composition, Ratio};
@@ -96,6 +96,15 @@ pub trait AssetSource {
     /// Loads the image asset with the given id.
     fn image(&mut self, comp: &Composition, id: &str) -> Result<&Image, RenderError>;
 
+    /// Returns the bytes of a font asset.
+    fn font(&mut self, comp: &Composition, id: &str) -> Result<Arc<Vec<u8>>, RenderError> {
+        let _ = comp;
+        Err(RenderError::Asset {
+            id: id.to_owned(),
+            reason: "this asset source cannot load fonts".to_owned(),
+        })
+    }
+
     /// Returns the frame of a video asset shown at `source_time`.
     ///
     /// The default has no decoder and reports the asset as unavailable.
@@ -118,6 +127,7 @@ pub trait AssetSource {
 pub struct FileAssets {
     root: PathBuf,
     images: HashMap<String, Image>,
+    fonts: HashMap<String, Arc<Vec<u8>>>,
 }
 
 impl FileAssets {
@@ -126,6 +136,7 @@ impl FileAssets {
         Self {
             root: root.into(),
             images: HashMap::new(),
+            fonts: HashMap::new(),
         }
     }
 
@@ -136,6 +147,24 @@ impl FileAssets {
 }
 
 impl AssetSource for FileAssets {
+    fn font(&mut self, comp: &Composition, id: &str) -> Result<Arc<Vec<u8>>, RenderError> {
+        if let Some(data) = self.fonts.get(id) {
+            return Ok(Arc::clone(data));
+        }
+        let asset = comp.assets.get(id).ok_or_else(|| RenderError::Asset {
+            id: id.to_owned(),
+            reason: "not declared in the composition".to_owned(),
+        })?;
+        let path = self.root.join(&asset.src);
+        let data = std::fs::read(&path).map_err(|e| RenderError::Asset {
+            id: id.to_owned(),
+            reason: format!("{} ({e})", path.display()),
+        })?;
+        let data = Arc::new(data);
+        self.fonts.insert(id.to_owned(), Arc::clone(&data));
+        Ok(data)
+    }
+
     fn image(&mut self, comp: &Composition, id: &str) -> Result<&Image, RenderError> {
         if !self.images.contains_key(id) {
             let asset = comp.assets.get(id).ok_or_else(|| RenderError::Asset {
