@@ -105,6 +105,19 @@ pub struct EncodeArgs {
     /// Print the compiled timeline as JSON instead of rendering.
     #[arg(long)]
     pub show_timeline: bool,
+    /// Where the file is going: a device class (phone, tablet, desktop,
+    /// tv, web) or a platform (youtube, instagram, tiktok, x, linkedin,
+    /// email). Picks size ceiling, codec, quality, bitrate cap, keyframes,
+    /// fast start and audio from a table; `geneva targets` prints it.
+    #[arg(long = "for", value_name = "TARGET")]
+    pub for_: Option<String>,
+    /// Quality tier for --for: best, good (default) or eco.
+    #[arg(long, value_enum, requires = "for_")]
+    pub quality: Option<crate::targets::Quality>,
+    /// Size budget for --for, such as 25MB; caps the bitrate so the file
+    /// fits, and warns when the result is still larger.
+    #[arg(long, value_name = "SIZE", requires = "for_")]
+    pub budget: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -281,8 +294,12 @@ fn encode_block(args: &EncodeArgs) -> Option<Encode> {
             preset: args.preset.clone(),
             hardware: None,
             profile,
+            keyframe_interval: None,
+            max_bitrate_kbps: None,
+            level: None,
         }),
         audio: None,
+        fast_start: None,
     })
 }
 

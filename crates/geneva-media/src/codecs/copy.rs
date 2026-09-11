@@ -494,6 +494,7 @@ pub fn stream_copy(
     plan: &CopyPlan,
     output: &Path,
     subtitles: &[SubtitleSettings],
+    fast_start: bool,
 ) -> Result<CopyReport, MediaError> {
     init();
     let container = super::encode::container_for(output, None);
@@ -544,7 +545,7 @@ pub fn stream_copy(
         });
     }
     let mut cues = SubtitleWriter::add_streams(&mut octx, container, subtitles, output)?;
-    octx.write_header().map_err(|e| open_error(output, e))?;
+    super::encode::write_header(&mut octx, container, fast_start, output)?;
 
     let mut report_segments = Vec::new();
     let mut video_packets = 0u64;

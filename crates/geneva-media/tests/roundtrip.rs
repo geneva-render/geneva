@@ -104,9 +104,13 @@ fn encoded_solid_color_survives_the_round_trip() {
             hardware: HardwarePolicy::Never,
             color: ResolvedTags::SDR_VIDEO,
             profile: None,
+            keyframe_interval: None,
+            max_bitrate_kbps: None,
+            level: None,
         }),
         container: None,
         subtitles: Vec::new(),
+        fast_start: true,
         audio: Some(AudioSettings {
             codec: AudioCodec::Aac,
             bitrate_kbps: 96,
@@ -199,9 +203,13 @@ fn audio_lands_at_its_timeline_position_in_the_output_file() {
             hardware: HardwarePolicy::Never,
             color: ResolvedTags::SDR_VIDEO,
             profile: None,
+            keyframe_interval: None,
+            max_bitrate_kbps: None,
+            level: None,
         }),
         container: None,
         subtitles: Vec::new(),
+        fast_start: true,
         audio: Some(AudioSettings {
             codec: AudioCodec::Aac,
             bitrate_kbps: 96,
@@ -251,7 +259,7 @@ fn stream_copy_trims_at_keyframes_and_joins_compatible_sources() {
         .expect("copyable");
     assert_eq!(plan.audio.len(), 1);
     let out = dir.path().join("cut.mp4");
-    let report = stream_copy(&plan, &out, &[]).unwrap();
+    let report = stream_copy(&plan, &out, &[], true).unwrap();
     // Keyframes every 12 frames at 25 fps: the cut moves back to 0.48 s.
     assert_eq!(report.segments[0].1, Ratio::new(12, 25));
     assert!(!report.notes().is_empty());
@@ -282,7 +290,7 @@ fn stream_copy_trims_at_keyframes_and_joins_compatible_sources() {
         .expect("copyable");
     assert_eq!(plan.segments.len(), 2);
     let out = dir.path().join("joined.mp4");
-    let report = stream_copy(&plan, &out, &[]).unwrap();
+    let report = stream_copy(&plan, &out, &[], true).unwrap();
     assert_eq!(report.video_packets, 100);
     let info = probe(&out).unwrap();
     assert_eq!(info.video.unwrap().frames, Some(100));
@@ -511,6 +519,7 @@ fn audio_only_outputs_round_trip_through_wav() {
         video: None,
         container: None,
         subtitles: Vec::new(),
+        fast_start: true,
         audio: Some(AudioSettings {
             codec: AudioCodec::Pcm,
             bitrate_kbps: 0,
@@ -642,9 +651,13 @@ fn solid_settings(
             hardware: HardwarePolicy::Never,
             color: ResolvedTags::SDR_VIDEO,
             profile,
+            keyframe_interval: None,
+            max_bitrate_kbps: None,
+            level: None,
         }),
         container: None,
         subtitles: Vec::new(),
+        fast_start: true,
         audio: None,
     }
 }
@@ -748,6 +761,7 @@ fn every_audio_codec_round_trips_a_tone() {
             video: None,
             container: None,
             subtitles: Vec::new(),
+            fast_start: true,
             audio: Some(AudioSettings {
                 codec,
                 bitrate_kbps: 160,

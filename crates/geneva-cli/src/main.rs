@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod media;
+mod targets;
 mod verbs;
 
 use std::path::{Path, PathBuf};
@@ -62,6 +63,8 @@ enum Command {
     Audio(AudioArgs),
     /// Attach subtitle files as streams, or extract a subtitle stream.
     Subtitles(SubtitlesArgs),
+    /// List the destinations `--for` knows and what each one implies.
+    Targets,
 }
 
 #[derive(Args)]
@@ -122,6 +125,16 @@ struct RenderArgs {
     /// Encoder preset, overriding the timeline.
     #[arg(long)]
     preset: Option<String>,
+    /// Where the file is going (see `geneva targets`); sets the encode
+    /// block for it without changing the timeline's size.
+    #[arg(long = "for", value_name = "TARGET")]
+    for_: Option<String>,
+    /// Quality tier for --for: best, good (default) or eco.
+    #[arg(long, value_enum, requires = "for_")]
+    quality: Option<targets::Quality>,
+    /// Size budget for --for, such as 25MB.
+    #[arg(long, value_name = "SIZE", requires = "for_")]
+    budget: Option<String>,
     /// Write no audio track.
     #[arg(long)]
     no_audio: bool,
@@ -422,7 +435,29 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
         }
         Command::Render(args) => {
-            let loaded = load_timeline(&args.timeline, true)?;
+            let mut loaded = load_timeline(&args.timeline, true)?;
+            let mut size_limit = None;
+            if let Some(name) = &args.for_ {
+                let text = std::fs::read_to_string(&args.timeline.timeline)?;
+                if let Ok(mut tl) = serde_json::from_str::<geneva_timeline::Timeline>(&text) {
+                    let (extra, limit) = apply_target(
+                        &mut tl,
+                        &loaded,
+                        name,
+                        args.quality,
+                        args.budget.as_deref(),
+                        args.crf,
+                        None,
+                        false,
+                        &args.output,
+                        !args.no_audio,
+                    )?;
+                    size_limit = limit;
+                    let text = serde_json::to_string_pretty(&tl)?;
+                    loaded = load_text(&text, &args.timeline.root(), true);
+                    loaded.diagnostics.extend(extra);
+                }
+            }
             let overrides = media::RenderOverrides {
                 crf: args.crf,
                 preset: args.preset.clone(),
@@ -435,6 +470,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 &args.output,
                 &overrides,
                 cli.format,
+                size_limit.as_ref(),
             )
         }
         Command::Convert(args) => {
@@ -508,6 +544,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
             };
             let compiled = verbs::audio(&args.input, &op, &args.encode)?;
             run_verb(&compiled, &args.output, &args.encode, cli.format)
+        }
+        Command::Targets => {
+            if cli.format == Format::Json {
+                println!("{}", serde_json::to_string_pretty(&targets::table())?);
+            } else {
+                targets::print_table();
+            }
+            Ok(ExitCode::SUCCESS)
         }
         Command::Subtitles(args) => {
             if args.extract {
@@ -587,11 +631,35 @@ fn run_verb(
     encode: &verbs::EncodeArgs,
     format: Format,
 ) -> Result<ExitCode> {
-    let text = serde_json::to_string_pretty(&compiled.timeline)?;
+    let mut timeline = compiled.timeline.clone();
+    let mut extra = compiled.diagnostics.clone();
+    let mut size_limit = None;
+    if let Some(name) = &encode.for_ {
+        // A first resolution gives the facts the target needs (the size
+        // and length the verb arrived at); the target then rewrites the
+        // output block and the timeline is resolved again.
+        let text = serde_json::to_string_pretty(&timeline)?;
+        let first = load_text(&text, &compiled.root, true);
+        let (notes, limit) = apply_target(
+            &mut timeline,
+            &first,
+            name,
+            encode.quality,
+            encode.budget.as_deref(),
+            encode.crf,
+            encode.codec.map(Into::into),
+            true,
+            output,
+            !encode.no_audio,
+        )?;
+        extra.extend(notes);
+        size_limit = limit;
+    }
+    let text = serde_json::to_string_pretty(&timeline)?;
     if encode.show_timeline {
         println!("{text}");
         if format == Format::Human {
-            for d in &compiled.diagnostics {
+            for d in &extra {
                 eprint!("{d}");
             }
             eprintln!("asset paths are relative to {}", compiled.root.display());
@@ -599,16 +667,81 @@ fn run_verb(
         return Ok(ExitCode::SUCCESS);
     }
     let mut loaded = load_text(&text, &compiled.root, true);
-    loaded
-        .diagnostics
-        .extend(compiled.diagnostics.iter().cloned());
+    loaded.diagnostics.extend(extra);
     let overrides = media::RenderOverrides {
         crf: encode.crf,
         preset: encode.preset.clone(),
         no_audio: encode.no_audio,
         exact: encode.exact,
     };
-    render_to(&loaded, &compiled.root, output, &overrides, format)
+    render_to(
+        &loaded,
+        &compiled.root,
+        output,
+        &overrides,
+        format,
+        size_limit.as_ref(),
+    )
+}
+
+/// A target's size limit in bytes, with the target's name for the report.
+type SizeLimit = Option<(String, u64)>;
+
+/// Applies a `--for` target to a timeline: the facts come from `resolved`
+/// (a first resolution of the same document). Returns the target's
+/// diagnostics and the size limit to check the written file against.
+#[allow(clippy::too_many_arguments)]
+fn apply_target(
+    timeline: &mut geneva_timeline::Timeline,
+    resolved: &Loaded,
+    name: &str,
+    quality: Option<targets::Quality>,
+    budget: Option<&str>,
+    crf: Option<u8>,
+    codec: Option<geneva_timeline::schema::VideoCodec>,
+    resize: bool,
+    output: &Path,
+    audio: bool,
+) -> Result<(Vec<Diagnostic>, SizeLimit)> {
+    let target = targets::find(name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unknown target {name:?}; the targets are {} (see `geneva targets`)",
+            targets::names()
+        )
+    })?;
+    let budget = budget
+        .map(targets::parse_budget)
+        .transpose()
+        .map_err(|e| anyhow::anyhow!("--budget: {e}"))?;
+    let Some(comp) = &resolved.composition else {
+        // The document does not resolve; its own errors are reported by
+        // the caller, and the target has nothing to decide from.
+        return Ok((Vec::new(), None));
+    };
+    let facts = targets::Facts {
+        width: comp.width,
+        height: comp.height,
+        fps: comp.fps,
+        duration: Some(comp.duration),
+        audio,
+    };
+    let extension = output.extension().and_then(|e| e.to_str());
+    let opts = targets::Options {
+        target,
+        quality,
+        budget,
+        crf,
+        codec,
+        resize,
+        extension,
+    };
+    let notes = targets::apply(timeline, &facts, &opts);
+    let limit = match (budget, target.max_bytes) {
+        (Some(b), Some(m)) => Some(b.min(m)),
+        (b, m) => b.or(m),
+    }
+    .map(|bytes| (target.name.to_owned(), bytes));
+    Ok((notes, limit))
 }
 
 /// Renders a loaded timeline to `output` and reports the outcome.
@@ -618,6 +751,7 @@ fn render_to(
     output: &Path,
     overrides: &media::RenderOverrides,
     format: Format,
+    size_limit: Option<&(String, u64)>,
 ) -> Result<ExitCode> {
     let Some(comp) = &loaded.composition else {
         report(&loaded.diagnostics, format, None)?;
@@ -628,6 +762,23 @@ fn render_to(
         Ok(stats) => {
             for note in &stats.notes {
                 diagnostics.push(Diagnostic::note("N600", "", note.clone()));
+            }
+            if let Some((target, max)) = size_limit {
+                let written = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
+                if written > *max {
+                    diagnostics.push(
+                        Diagnostic::warning(
+                            "W412",
+                            "",
+                            format!(
+                                "the output is {}; {target} allows {}",
+                                targets::human_size(written),
+                                targets::human_size(*max)
+                            ),
+                        )
+                        .with_help("a lower --quality, a smaller --budget or a shorter video brings it down"),
+                    );
+                }
             }
             let result = serde_json::json!({
                 "ok": true,

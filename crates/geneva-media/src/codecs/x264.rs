@@ -289,6 +289,12 @@ pub struct X264Settings<'a> {
     /// Whether parameter sets go into the container header (and not into
     /// the stream) as MP4, MOV and Matroska expect.
     pub global_header: bool,
+    /// Seconds between keyframes; x264's own choice when `None`.
+    pub keyframe_interval: Option<f64>,
+    /// Bitrate ceiling in kb/s (VBV), constant quality below it.
+    pub max_bitrate_kbps: Option<u32>,
+    /// Level such as "4.1".
+    pub level: Option<String>,
 }
 
 /// An open x264 encoder taking 8-bit 4:2:0 pictures.
@@ -364,7 +370,23 @@ impl X264Encoder {
             ("fullrange", full_range),
             ("annexb", "1"),
         ];
-        for (name, value) in options {
+        let mut extra: Vec<(&str, String)> = Vec::new();
+        if let Some(secs) = settings.keyframe_interval {
+            let frames = (secs * f64::from(settings.fps.numerator())
+                / f64::from(settings.fps.denominator()))
+            .round()
+            .max(1.0);
+            extra.push(("keyint", format!("{frames}")));
+        }
+        if let Some(kbps) = settings.max_bitrate_kbps {
+            extra.push(("vbv-maxrate", kbps.to_string()));
+            extra.push(("vbv-bufsize", (kbps * 2).to_string()));
+        }
+        if let Some(level) = &settings.level {
+            extra.push(("level", level.clone()));
+        }
+        let extra: Vec<(&str, &str)> = extra.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        for (name, value) in options.into_iter().chain(extra) {
             let (n, v) = (cstr(name), cstr(value));
             // SAFETY: as above.
             let rc = unsafe { (lib.param_parse)(p, n.as_ptr(), v.as_ptr()) };

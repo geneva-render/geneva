@@ -116,6 +116,10 @@ pub struct Encode {
     /// Audio encoder settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<AudioEncode>,
+    /// Whether MP4, MOV and M4A files carry their index at the front, so
+    /// playback can start before the download ends. Defaults to true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast_start: Option<bool>,
 }
 
 /// Output container format.
@@ -183,6 +187,18 @@ pub struct VideoEncode {
     /// and "dnxhr-hq" for dnxhd.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<VideoProfile>,
+    /// Seconds between keyframes. Defaults to the encoder's own choice;
+    /// 2 is the usual value for anything played over a network.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keyframe_interval: Option<f64>,
+    /// Bitrate ceiling in kb/s. Quality stays constant until the ceiling
+    /// bites, as a player's buffer or a platform's limit requires.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bitrate_kbps: Option<u32>,
+    /// H.264 or H.265 level, for example "4.1", which tells old decoders
+    /// what the stream needs. Defaults to what the encoder picks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<String>,
 }
 
 /// Video codec.

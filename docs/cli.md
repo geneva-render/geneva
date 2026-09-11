@@ -52,6 +52,7 @@ extension unless the timeline sets `output.encode.container`.
 | `--preset NAME` | Encoder speed preset, `ultrafast` to `veryslow`. |
 | `--no-audio` | Write no audio track. |
 | `--exact` | Always decode and re-encode, even when the streams could be copied. |
+| `--for TARGET`, `--quality`, `--budget` | Encode for a destination; see [targets](#targets). On `render` the timeline's size is kept; only the encode block is set. |
 
 When the composition uses its sources as they are, the coded streams are
 copied instead of re-encoded and the report says so
@@ -86,6 +87,9 @@ otherwise. The printed timeline (`--show-timeline`) shows the choice.
 | Option | Effect |
 | --- | --- |
 | `--crf N`, `--preset NAME` | As for `render`. Setting either forces a re-encode. |
+| `--for TARGET` | Encode for a destination: a size ceiling (never upscaled), codec and level, quality, bitrate cap, keyframes, fast start and audio from one table; see [targets](#targets). |
+| `--quality best\|good\|eco` | Quality tier for `--for`; `good` by default. |
+| `--budget SIZE` | With `--for`: cap the bitrate so that the file fits `SIZE` (for example `25MB`), and warn when it still does not. |
 | `--codec h264\|h265\|vp9\|av1\|prores\|dnxhd\|png\|mjpeg` | Video codec. Defaults to the container's usual one. |
 | `--profile NAME` | Codec profile: `proxy`, `lt`, `standard`, `hq`, `4444`, `4444-xq` for ProRes; `dnxhr-lb`, `dnxhr-sq`, `dnxhr-hq`, `dnxhr-hqx`, `dnxhr-444` for DNxHR. Implies the codec. |
 | `--no-audio` | Write no audio track. |
@@ -189,6 +193,71 @@ geneva subtitles talk.mp4 -o talk-subbed.mkv --add en.srt --add fr.srt --languag
 geneva subtitles talk.mp4 -o talk-burned.mp4 --burn en.srt
 geneva subtitles talk.mp4 -o talk-burned.mp4 --burn en.srt --position top --style '{"size": 32, "color": "#ffdd00"}'
 geneva subtitles talk-subbed.mkv -o fr.vtt --extract --track 1
+```
+
+## Targets
+
+`--for TARGET` answers "what can this file be" from where it is going,
+the way a hosting service decides a rendition, but for one file and with
+every choice printed. The table is data (`geneva targets` prints it, with
+the source and date of each platform's numbers; `--format json` gives it
+to programs), and the choices go into the explicit encode block, so
+`--show-timeline` shows exactly what was picked and a hand-written
+timeline can say the same without the flag. What a particular viewer
+gets, a rendition chosen at play time from a ladder, is not a file's
+property and stays with the hosted product.
+
+| Target | Ceiling | About |
+| --- | --- | --- |
+| `phone` | 1920×1080 | Playback on a phone, fullscreen (covers current screens at 3× pixel density). |
+| `tablet` | 2560×1600 | Playback on a tablet. |
+| `desktop` | 2560×1440 | Playback on a laptop or desktop screen. |
+| `tv` | 3840×2160 | Playback on a television. |
+| `web` | 1920×1080 | A page or player on the open web. |
+| `youtube` | 3840×2160 | Upload to YouTube: high quality, keyframes every half second, AAC 384 kb/s, as its upload guide asks. |
+| `instagram` | 1440×2560, 9:16 | Instagram Reels. |
+| `tiktok` | 1080×1920, 9:16 | TikTok. |
+| `x` | 1920×1200 | A post on X: 2:20 and 512 MB limits. |
+| `linkedin` | 4096×2304 | A native LinkedIn post: 10 minutes and 5 GB limits. |
+| `email` | 1280×720 | An attachment: a 25 MB budget. |
+
+The rules, in order:
+
+1. Never upscale. The ceiling only ever shrinks a picture, to even
+   dimensions.
+2. Keep the aspect, unless the target is 9:16: a landscape source is then
+   fitted onto a portrait canvas of its own width (black above and below);
+   `--fit cover` on the clip crops instead, in a timeline.
+3. H.264 High everywhere, with the level the size and frame rate need
+   (`3.1` for 720p, `4.0` or `4.2` for 1080p, `5.1` or `5.2` for 4K), so
+   old decoders know what to expect. `--codec` overrides.
+4. Quality by tier: CRF 23 at `good`, 20 at `best`, 26 at `eco` for most
+   targets (two lower at 4K; YouTube's tiers are 18/20/23 because it
+   re-encodes; email's are 23/26/28). `--crf` overrides.
+5. A bitrate cap where the target has one, raised by half above 30 fps,
+   and lowered to fit a size limit or `--budget` from the length: quality
+   stays constant until the cap bites.
+6. Keyframes every 2 s and fast start, so the file plays over a network.
+   Frame rate capped at 60.
+7. Limits an encode cannot meet are warnings, never silent changes: a
+   video longer than the platform allows (`W411`), a file still larger
+   than the limit after encoding (`W412`), an output that is not an MP4
+   (`W413`), a budget too small for the length (`W414`).
+
+The report carries one note (`N410`) with every choice and its reason:
+
+```
+note[N410]: target phone: 3840×2160 scaled to 1920×1080 (ceiling 1920×1080);
+  CRF 23 (good); H.264 High level 4.0; capped at 10000 kb/s;
+  keyframes every 2 s; fast start; AAC 128 kb/s 48 kHz stereo
+```
+
+```sh
+geneva convert master.mov -o phone.mp4 --for phone
+geneva convert master.mov -o reel.mp4 --for instagram --quality best
+geneva trim master.mov -o clip.mp4 --from 1m --duration 2m --for x
+geneva convert talk.mp4 -o talk-email.mp4 --for email --budget 20MB
+geneva targets --format json
 ```
 
 ## Containers and codecs

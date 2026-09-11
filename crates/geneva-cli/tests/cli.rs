@@ -691,6 +691,105 @@ fn subtitles_burn_compiles_cues_to_text_clips_and_checks_the_frame() {
 }
 
 #[test]
+fn targets_pick_size_codec_quality_and_caps_from_the_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let clip = media_dir().join("clip.mp4");
+    let out = dir.path().join("phone.mp4");
+
+    // A device class: the small source is kept, the encode block is
+    // filled in and explained.
+    let shown = run_json(
+        &["convert", "--for", "phone", "--show-timeline", "-o"],
+        &[&out, &clip],
+    );
+    assert_eq!(shown["output"]["width"], 192);
+    let enc = &shown["output"]["encode"];
+    assert_eq!(enc["video"]["codec"], "h264");
+    assert_eq!(enc["video"]["crf"], 23);
+    assert_eq!(enc["video"]["keyframe_interval"], 2.0);
+    assert_eq!(enc["video"]["level"], "3.1");
+    assert_eq!(enc["video"]["max_bitrate_kbps"], 1500);
+    assert_eq!(enc["audio"]["bitrate_kbps"], 128);
+    assert_eq!(enc["fast_start"], true);
+
+    // A portrait platform: the landscape source sits on a 9:16 canvas of
+    // its own width; the eco tier lowers the quality; explicit CRF wins.
+    let shown = run_json(
+        &[
+            "convert",
+            "--for",
+            "instagram",
+            "--quality",
+            "eco",
+            "--show-timeline",
+            "-o",
+        ],
+        &[&out, &clip],
+    );
+    assert_eq!(shown["output"]["width"], 192);
+    assert_eq!(shown["output"]["height"], 342);
+    assert_eq!(shown["layers"][0]["clips"][0]["fit"], "contain");
+    assert_eq!(shown["output"]["encode"]["video"]["crf"], 26);
+    let shown = run_json(
+        &[
+            "convert",
+            "--for",
+            "instagram",
+            "--crf",
+            "19",
+            "--show-timeline",
+            "-o",
+        ],
+        &[&out, &clip],
+    );
+    assert_eq!(shown["output"]["encode"]["video"]["crf"], 19);
+
+    // A budget caps the bitrate from the length, and the render reports
+    // the choices and checks the written size.
+    let doc = run_json(
+        &[
+            "convert",
+            "--for",
+            "email",
+            "--budget",
+            "200KB",
+            "--preset",
+            "ultrafast",
+            "-o",
+        ],
+        &[&out, &clip],
+    );
+    assert_eq!(doc["ok"], true);
+    let notes: Vec<String> = doc["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["code"] == "N410")
+        .map(|d| d["message"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(notes.len(), 1, "{doc}");
+    assert!(notes[0].contains("fits 200 KB"), "{}", notes[0]);
+    assert!(out.exists());
+
+    // Unknown targets and the table.
+    let mut cmd = geneva();
+    cmd.args(["convert", "--for", "nowhere", "-o"])
+        .arg(&out)
+        .arg(&clip);
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("geneva targets"));
+    let table = run_json(&["targets"], &[]);
+    assert!(
+        table
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "youtube")
+    );
+}
+
+#[test]
 fn mxf_defaults_to_dnxhr_and_pcm() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("delivery.mxf");

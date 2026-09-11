@@ -53,6 +53,7 @@ geneva convert talk.mp4 -o talk.mov --codec prores --profile hq      # 10-bit 4:
 geneva convert talk.mp4 -o frames/%04d.png                           # image sequence
 geneva subtitles talk.mp4 -o talk-subbed.mkv --add en.srt --language en
 geneva subtitles talk.mp4 -o talk-burned.mp4 --burn en.srt
+geneva convert master.mov -o reel.mp4 --for instagram     # size, codec, quality, caps from a table
 ```
 
 Trims and joins that leave the picture untouched copy the source streams

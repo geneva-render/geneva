@@ -83,6 +83,11 @@ result is not what was intended. Notes are informational.
 | W403 | A burned-in subtitle cue extends off-screen. The message gives the box size and by how much it leaves the frame; the path names the clip. |
 | N404 | (note) A burned-in subtitle cue lies outside the title-safe area (`--safe`, 5% in from each edge by default). |
 | N405 | (note) A burned-in subtitle cue was shrunk to fit (`--fit`); the message gives the sizes. |
+| N410 | (note) What `--for TARGET` chose and why: size, codec and level, quality, caps, keyframes, audio. |
+| W411 | The video is longer than the `--for` target allows. Geneva never shortens a video on its own. |
+| W412 | The written file is larger than the `--for` target or `--budget` allows. |
+| W413 | The `--for` target expects an MP4 file and the output has another extension. |
+| W414 | The `--budget` (or the target's size limit) leaves under 200 kb/s for the picture at this length; the budget cannot be met. |
 
 ## Rendering (E500–E599)
 

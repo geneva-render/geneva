@@ -378,6 +378,13 @@
             }
           ],
           "description": "Audio encoder settings."
+        },
+        "fast_start": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Whether MP4, MOV and M4A files carry their index at the front, so\nplayback can start before the download ends. Defaults to true."
         }
       },
       "description": "Encoder settings for the rendered file."
@@ -495,6 +502,30 @@
             }
           ],
           "description": "Codec profile, for prores and dnxhd. Defaults to \"hq\" for prores\nand \"dnxhr-hq\" for dnxhd."
+        },
+        "keyframe_interval": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Seconds between keyframes. Defaults to the encoder's own choice;\n2 is the usual value for anything played over a network."
+        },
+        "max_bitrate_kbps": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Bitrate ceiling in kb/s. Quality stays constant until the ceiling\nbites, as a player's buffer or a platform's limit requires."
+        },
+        "level": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "H.264 or H.265 level, for example \"4.1\", which tells old decoders\nwhat the stream needs. Defaults to what the encoder picks."
         }
       },
       "description": "Video encoder settings."

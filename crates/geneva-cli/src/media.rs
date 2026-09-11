@@ -291,6 +291,9 @@ mod imp {
                     .unwrap_or(geneva_timeline::schema::HardwarePolicy::Auto),
                 color: comp.color,
                 profile: video.and_then(|v| v.profile),
+                keyframe_interval: video.and_then(|v| v.keyframe_interval),
+                max_bitrate_kbps: video.and_then(|v| v.max_bitrate_kbps),
+                level: video.and_then(|v| v.level.clone()),
             })
         };
         if video_settings.is_none() && audio_settings.is_none() {
@@ -326,6 +329,11 @@ mod imp {
             container: Some(container),
             audio: audio_settings,
             subtitles,
+            fast_start: comp
+                .encode
+                .as_ref()
+                .and_then(|e| e.fast_start)
+                .unwrap_or(true),
         };
         let has_audio = settings.audio.is_some();
         let media_err = |e: geneva_media::MediaError| RenderError::Asset {
@@ -349,8 +357,13 @@ mod imp {
                 }
             }
             if let Some(plan) = plan {
-                let report = geneva_media::stream_copy(&plan, output, &settings.subtitles)
-                    .map_err(media_err)?;
+                let report = geneva_media::stream_copy(
+                    &plan,
+                    output,
+                    &settings.subtitles,
+                    settings.fast_start,
+                )
+                .map_err(media_err)?;
                 let mut notes = vec![plan.reason.clone()];
                 notes.extend(report.notes());
                 return Ok(RenderStats {

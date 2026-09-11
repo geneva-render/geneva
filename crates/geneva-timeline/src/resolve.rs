@@ -533,6 +533,44 @@ impl Resolver<'_> {
             );
         }
         if let Some(video) = out.encode.as_ref().and_then(|e| e.video.as_ref()) {
+            let vpath = out_path.key("encode").key("video");
+            if video
+                .keyframe_interval
+                .is_some_and(|k| k <= 0.0 || !k.is_finite())
+            {
+                self.push(
+                    Diagnostic::error(
+                        "E402",
+                        vpath.key("keyframe_interval"),
+                        "keyframe_interval must be greater than 0",
+                    )
+                    .with_value(json!(video.keyframe_interval)),
+                );
+            }
+            if video.max_bitrate_kbps == Some(0) {
+                self.push(Diagnostic::error(
+                    "E402",
+                    vpath.key("max_bitrate_kbps"),
+                    "max_bitrate_kbps must be greater than 0",
+                ));
+            }
+            if let Some(level) = &video.level {
+                let ok = level.len() <= 4
+                    && level.chars().next().is_some_and(|c| c.is_ascii_digit())
+                    && level.chars().all(|c| c.is_ascii_digit() || c == '.');
+                if !ok {
+                    self.push(
+                        Diagnostic::error(
+                            "E402",
+                            vpath.key("level"),
+                            format!("{level:?} is not a level such as \"4.1\""),
+                        )
+                        .with_value(json!(level)),
+                    );
+                }
+            }
+        }
+        if let Some(video) = out.encode.as_ref().and_then(|e| e.video.as_ref()) {
             if let Some(profile) = video.profile {
                 let wanted = profile.codec();
                 match video.codec {

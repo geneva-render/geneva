@@ -28,6 +28,9 @@ pub struct EncodeSettings {
     pub audio: Option<AudioSettings>,
     /// Subtitle tracks written as text streams.
     pub subtitles: Vec<SubtitleSettings>,
+    /// Put the index of MP4, MOV and M4A files at the front (a second
+    /// pass over the file when it is complete).
+    pub fast_start: bool,
 }
 
 /// Video track settings.
@@ -51,6 +54,20 @@ pub struct VideoSettings {
     pub color: ResolvedTags,
     /// Codec profile, for the codecs that have them.
     pub profile: Option<VideoProfile>,
+    /// Seconds between keyframes; the encoder's own choice when `None`.
+    pub keyframe_interval: Option<f64>,
+    /// Bitrate ceiling in kb/s; constant quality below it.
+    pub max_bitrate_kbps: Option<u32>,
+    /// H.264/H.265 level such as "4.1", for the encoders that take one.
+    pub level: Option<String>,
+}
+
+/// A level string such as "4.1" as the integer code encoders use (41).
+fn level_code(level: &str) -> Option<i64> {
+    let mut parts = level.split('.');
+    let major: i64 = parts.next()?.trim().parse().ok()?;
+    let minor: i64 = parts.next().map_or(Some(0), |m| m.trim().parse().ok())?;
+    Some(major * 10 + minor)
 }
 
 /// Audio track settings.
@@ -223,6 +240,29 @@ pub(super) fn format_of(pixel: Pixel) -> Option<PlaneFormat> {
         Pixel::RGBA => Some(PlaneFormat::Rgba8),
         _ => None,
     }
+}
+
+/// Writes the container header; MP4-family files get their index moved
+/// to the front when the file is finished if `fast_start` is set.
+pub(super) fn write_header(
+    octx: &mut ffmpeg_next::format::context::Output,
+    container: Option<Container>,
+    fast_start: bool,
+    path: &Path,
+) -> Result<(), MediaError> {
+    let mp4_family = matches!(
+        container,
+        Some(Container::Mp4 | Container::Mov | Container::M4a)
+    );
+    if fast_start && mp4_family {
+        let mut opts = Dictionary::new();
+        opts.set("movflags", "+faststart");
+        octx.write_header_with(opts)
+            .map_err(|e| open_error(path, e))?;
+    } else {
+        octx.write_header().map_err(|e| open_error(path, e))?;
+    }
+    Ok(())
 }
 
 /// Hardware encoder implementations, most capable first.
@@ -410,6 +450,20 @@ fn open_video_encoder(
         }
         _ => {}
     }
+    if let Some(secs) = settings.keyframe_interval {
+        let frames = (secs * f64::from(fps.numerator()) / f64::from(fps.denominator())).round();
+        venc.set_gop(frames.max(1.0) as u32);
+    }
+    if let Some(kbps) = settings.max_bitrate_kbps {
+        let bps = u64::from(kbps) * 1000;
+        opts.set("maxrate", &bps.to_string());
+        opts.set("bufsize", &(bps * 2).to_string());
+    }
+    if let Some(code) = settings.level.as_deref().and_then(level_code) {
+        if name.ends_with("_videotoolbox") {
+            opts.set("level", &code.to_string());
+        }
+    }
     venc.open_with(opts)
         .map_err(|e| codec_error(format!("opening {name} encoder"), e))
 }
@@ -462,6 +516,9 @@ fn open_video_track(
                 preset: settings.preset.as_deref().unwrap_or("medium"),
                 color: settings.color,
                 global_header,
+                keyframe_interval: settings.keyframe_interval,
+                max_bitrate_kbps: settings.max_bitrate_kbps,
+                level: settings.level.clone(),
             };
             match X264Encoder::open(&x264) {
                 Ok(enc) => {
@@ -784,7 +841,7 @@ impl Encoder {
 
         let subtitles =
             SubtitleWriter::add_streams(&mut octx, container, &settings.subtitles, path)?;
-        octx.write_header().map_err(|e| open_error(path, e))?;
+        write_header(&mut octx, container, settings.fast_start, path)?;
         // The muxer may have chosen another time base for the stream.
         let mut audio = audio;
         if let Some(a) = audio.as_mut() {

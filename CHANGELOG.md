@@ -5,6 +5,28 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## Unreleased
+
+### Added
+
+- `--for TARGET` on every verb and on `render`: encode for a destination
+  (phone, tablet, desktop, tv, web, youtube, instagram, tiktok, x,
+  linkedin, email). From one table and the source's facts it picks a
+  size ceiling (never upscaling; a 9:16 canvas for Reels and TikTok),
+  H.264 with the level the size needs, a quality tier (`--quality best`,
+  `good`, `eco`), a bitrate cap, keyframes every 2 s, fast start and the
+  audio bitrate, writes them into the explicit encode block, and reports
+  every choice (N410). Platform limits become warnings (W411 to W414);
+  `--budget SIZE` caps the bitrate to a file size. `geneva targets`
+  prints the table with the source and date of each platform's numbers.
+- Encode block fields `keyframe_interval`, `max_bitrate_kbps`, `level`
+  and `fast_start`, wired through every encoder.
+
+### Changes
+
+- MP4, MOV and M4A files carry their index at the front by default
+  (`encode.fast_start`), for copied and encoded outputs alike.
+
 ## 0.1.9
 
 ### Added
