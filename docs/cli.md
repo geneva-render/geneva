@@ -87,8 +87,10 @@ overlap, which can be heard as a soft click on loud material.
 
 It applies when the source is H.264 4:2:0 shown as it is at the output
 size and rate, the output is MP4, MOV or Matroska with H.264, no
-quality setting (`--crf`, `--preset`, `--for`) asks for a re-encode, and
-the system's x264 is installed (see the README). The encoded runs use
+quality setting (`--crf`, `--preset`, `--for`) asks for a re-encode,
+at least a fifth of the frames can be copied (below that a plain encode
+is faster, since the runs go at a higher quality), and the system's
+x264 is installed (see the README). The encoded runs use
 CRF 18 so that they sit next to the source's own pictures without a
 visible step, and their parameter sets go into the file next to the
 source's, which every H.264 decoder handles. How much is saved depends

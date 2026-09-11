@@ -21,8 +21,8 @@ pub use decode::{AudioReader, VideoReader};
 pub use direct::DirectSource;
 pub use encode::{
     AudioEncoder, AudioSettings, EncodeSettings, Encoder, StitchSettings, VideoSettings,
-    container_accepts_audio, container_accepts_video, container_for, default_codecs,
-    default_image_codec, output_tags_for, plane_format_for,
+    audio_sample_rate_for, container_accepts_audio, container_accepts_video, container_for,
+    default_codecs, default_image_codec, output_tags_for, plane_format_for,
 };
 /// An encoded packet on its way to the muxer.
 pub use ffmpeg_next::Packet;

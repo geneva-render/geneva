@@ -30,6 +30,10 @@ use crate::MediaError;
 /// Shortest stretch worth copying, in frames: below this the parameter
 /// set switches cost more than the encode they save.
 const MIN_COPY_FRAMES: usize = 2;
+/// The frames copied must be at least this fraction of all frames for
+/// the path to pay: its encoded runs go at a higher quality than a plain
+/// encode, so with little to copy the plain encode is faster.
+const MIN_COPY_SHARE: u64 = 5;
 
 /// One coded picture of a source, in decode order.
 #[derive(Debug, Clone)]
@@ -355,7 +359,7 @@ pub fn plan_smart_cut(
     let Some((sets, extradata)) = sets else {
         return Ok(None);
     };
-    if copied == 0 {
+    if copied * MIN_COPY_SHARE < total {
         return Ok(None);
     }
     let Some(sps_id) = h264::free_id(&sets) else {

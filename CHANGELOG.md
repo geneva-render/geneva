@@ -9,6 +9,13 @@ the format version it was written for.
 
 ### Fixes
 
+- Keeping the source's audio sample rate (0.1.11) broke outputs whose
+  codec or container cannot take it: Opus (48 kHz and its own rates
+  only) and MXF (48 kHz only) failed on a 44.1 kHz source. The rate
+  now falls back to 48 kHz where the codec or container needs it.
+- A smart cut is taken only when at least a fifth of the frames can be
+  copied; below that (subtitles over most of a clip) the plain encode
+  was faster.
 - On VideoToolbox, `--for` wrote files about twice the size of a plain
   encode: a data rate limit on top of quality mode changes how the
   hardware encoder works. The ceiling is no longer passed to it in

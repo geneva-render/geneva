@@ -272,11 +272,16 @@ mod imp {
         }
         let video = comp.encode.as_ref().and_then(|e| e.video.as_ref());
         let audio = comp.encode.as_ref().and_then(|e| e.audio.as_ref());
-        let sample_rate = comp
-            .audio_output
-            .as_ref()
-            .and_then(|a| a.sample_rate)
-            .unwrap_or(48000);
+        let audio_codec = audio.and_then(|a| a.codec).unwrap_or(default_audio);
+        // The source's rate when the codec and container take it.
+        let sample_rate = geneva_media::audio_sample_rate_for(
+            audio_codec,
+            Some(container),
+            comp.audio_output
+                .as_ref()
+                .and_then(|a| a.sample_rate)
+                .unwrap_or(48000),
+        );
         let channels = comp
             .audio_output
             .as_ref()
@@ -287,7 +292,7 @@ mod imp {
             None
         } else {
             Some(AudioSettings {
-                codec: audio.and_then(|a| a.codec).unwrap_or(default_audio),
+                codec: audio_codec,
                 bitrate_kbps: audio.and_then(|a| a.bitrate_kbps).unwrap_or(160),
                 sample_rate,
                 channels,

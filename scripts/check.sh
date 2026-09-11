@@ -156,7 +156,7 @@ if [ "$quick" = 0 ]; then
   run "5s to ProRes HQ (mov)" "$work/short.mov" "$geneva" trim "$input" -o "$work/short.mov" --from 2s --duration 5s --codec prores --profile hq
   ff -ss 2 -i "$input" -t 5 -c:v prores_ks -profile:v 3 -c:a pcm_s16le "$work/ff-short.mov"
   run "5s to DNxHR HQ (mxf)" "$work/short.mxf" "$geneva" trim "$input" -o "$work/short.mxf" --from 2s --duration 5s --profile dnxhr-hq
-  ff -ss 2 -i "$input" -t 5 -c:v dnxhd -profile:v dnxhr_hq -c:a pcm_s24le "$work/ff-short.mxf"
+  ff -ss 2 -i "$input" -t 5 -c:v dnxhd -profile:v dnxhr_hq -c:a pcm_s24le -ar 48000 "$work/ff-short.mxf"
   mkdir -p "$work/frames"
   run "1s to PNG sequence" "$work/frames/%04d.png" "$geneva" trim "$input" -o "$work/frames/%04d.png" --duration 1s
   ff -i "$input" -t 1 "$work/frames/ff-%04d.png"

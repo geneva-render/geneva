@@ -206,6 +206,34 @@ pub fn container_accepts_audio(container: Container, codec: AudioCodec) -> bool 
     }
 }
 
+/// The sample rate to write for `wanted`: `wanted` itself when the codec
+/// and the container take it, otherwise 48 kHz. Opus takes only its own
+/// rates, AC-3 and MP3 a fixed set, AAC the standard ones, and MXF holds
+/// 48 kHz audio only.
+pub fn audio_sample_rate_for(codec: AudioCodec, container: Option<Container>, wanted: u32) -> u32 {
+    let ok = match codec {
+        AudioCodec::Opus => [8000, 12000, 16000, 24000, 48000].contains(&wanted),
+        AudioCodec::Ac3 => [32000, 44100, 48000].contains(&wanted),
+        AudioCodec::Mp3 => {
+            [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000].contains(&wanted)
+        }
+        AudioCodec::Aac => [
+            8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 64000, 88200, 96000,
+        ]
+        .contains(&wanted),
+        AudioCodec::Pcm
+        | AudioCodec::Pcm24
+        | AudioCodec::Flac
+        | AudioCodec::Alac
+        | AudioCodec::Vorbis => (8000..=192_000).contains(&wanted),
+    };
+    if ok && container != Some(Container::Mxf) {
+        wanted
+    } else {
+        48000
+    }
+}
+
 /// The sample layout a codec (and profile) takes.
 pub fn plane_format_for(codec: VideoCodec, profile: Option<VideoProfile>) -> PlaneFormat {
     match codec {
@@ -1487,5 +1515,38 @@ impl Encoder {
     /// Number of frames pushed so far.
     pub fn frames_written(&self) -> u64 {
         self.frame_index as u64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sample_rates_fall_back_where_the_codec_or_container_needs_it() {
+        assert_eq!(
+            audio_sample_rate_for(AudioCodec::Aac, Some(Container::Mp4), 44100),
+            44100
+        );
+        assert_eq!(
+            audio_sample_rate_for(AudioCodec::Opus, Some(Container::Webm), 44100),
+            48000
+        );
+        assert_eq!(
+            audio_sample_rate_for(AudioCodec::Opus, Some(Container::Webm), 24000),
+            24000
+        );
+        assert_eq!(
+            audio_sample_rate_for(AudioCodec::Pcm24, Some(Container::Mxf), 44100),
+            48000
+        );
+        assert_eq!(
+            audio_sample_rate_for(AudioCodec::Pcm, Some(Container::Wav), 22050),
+            22050
+        );
+        assert_eq!(
+            audio_sample_rate_for(AudioCodec::Ac3, Some(Container::Mp4), 22050),
+            48000
+        );
     }
 }
