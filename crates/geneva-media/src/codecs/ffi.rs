@@ -63,3 +63,15 @@ pub fn use_all_threads(ctx: &mut ffmpeg_next::codec::context::Context) {
         raw.thread_count = 0;
     }
 }
+
+/// Whether a pixel format holds RGB samples (as opposed to YCbCr or gray).
+#[allow(unsafe_code)]
+pub fn is_rgb(pixel: ffmpeg_next::util::format::Pixel) -> bool {
+    let Some(descriptor) = pixel.descriptor() else {
+        return false;
+    };
+    // SAFETY: the descriptor points at a static table entry owned by the
+    // library; `flags` is a plain integer field.
+    let flags = unsafe { (*descriptor.as_ptr()).flags };
+    flags & (1u64 << 5) != 0 // AV_PIX_FMT_FLAG_RGB
+}

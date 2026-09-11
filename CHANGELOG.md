@@ -5,6 +5,20 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## 0.1.3
+
+### Performance
+
+- A resize, or a change of codec that needs another sample layout (ProRes
+  and DNxHR take 10-bit 4:2:2), no longer passes through the compositor
+  when the picture is otherwise untouched: frames are scaled and repacked
+  straight from the decoder to the encoder in their coded encoding. On a
+  four-core machine a 720p to 360p resize went from 3.4 s to 0.8 s for 10 s
+  of video (ffmpeg: 0.8 s) and ProRes HQ from 7.1 s to 4.1 s (ffmpeg: about
+  the same).
+- Decoders use every core as well; the decoder context had the same
+  threading gap as the encoders.
+
 ## 0.1.2
 
 ### Fixes

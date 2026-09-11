@@ -32,7 +32,8 @@ Every command that touches a timeline returns:
 
 `render` and the verbs add `output`, `mode`, `frames`, `duration` and
 `seconds`. `mode` is `"copy"` (source streams copied, no decoding),
-`"direct"` (decoded frames handed straight to the encoder) or `"render"`
+`"direct"` (decoded frames handed straight to the encoder, scaled or
+repacked when needed) or `"render"`
 (frames composited by the renderer). `frame` adds `output`, `time`,
 `frame`, `width`, `height`. `probe` returns the media description directly.
 

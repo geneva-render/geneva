@@ -110,11 +110,20 @@ its one track under the same rule.
 When the same analysis finds the picture untouched but the streams cannot
 be copied (a different codec was asked for, a quality setting was given,
 or `--exact`), the decoded frames are handed to the encoder as they come
-out of the decoder, provided they are already 8-bit 4:2:0 and carry the
-output's color tags. No pixel would have changed on the way through the
-renderer, so skipping it changes nothing but the time taken. Frame
-selection follows the same rule as the renderer (the last decoded frame
-at or before each output time), and the report names this mode `direct`.
+out of the decoder, provided they carry the output's color tags. Frames
+already in the encoder's sample layout at the output size are copied as
+they are; frames that differ only in size (a resize that fills the whole
+frame) or in layout (8-bit 4:2:0 into the 10-bit 4:2:2 that ProRes and
+DNxHR take) are scaled and repacked by libswscale in their coded YCbCr
+encoding, bicubic, the way a plain transcode does it. This is the one
+place Geneva resamples outside linear light: with a single picture and
+nothing composited over it there is no blending to get wrong, and the
+difference from the reference renderer is the difference between
+gamma-space and linear-light filtering at hard edges, which the tests
+bound. RGB sources and RGB outputs (image sequences) still go through the
+compositor, which owns matrix and transfer conversions. Frame selection
+follows the same rule as the renderer (the last decoded frame at or
+before each output time), and the report names this mode `direct`.
 
 ## Verbs
 

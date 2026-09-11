@@ -616,3 +616,90 @@ fn subtitle_tracks_are_written_as_streams_and_read_back() {
         assert_eq!(back, expected, "{name}");
     }
 }
+
+#[test]
+fn scaled_and_repacked_direct_frames_match_the_reference_renderer() {
+    use geneva_media::convert::{PlaneFormat, frame_to_planes};
+    use geneva_media::{DirectSource, MediaAssets};
+    use geneva_render::{CpuRenderer, Renderer};
+
+    let root = clip().parent().unwrap().to_path_buf();
+    let doc = |width: u32, height: u32| {
+        format!(
+            r#"{{
+              "geneva": "0.1",
+              "output": {{ "width": {width}, "height": {height}, "fps": 25 }},
+              "assets": {{ "clip": {{ "src": "clip.mp4" }} }},
+              "layers": [ {{ "clips": [ {{
+                "source": {{ "kind": "video", "asset": "clip", "in": "0.5s", "out": "1.5s" }}
+              }} ] }} ]
+            }}"#
+        )
+    };
+    // A downscale and a 10-bit 4:2:2 repack at the source size: both
+    // qualify, and both must agree with the linear-light reference within
+    // the difference between gamma-space and linear-light resampling.
+    let cases = [
+        (96, 54, PlaneFormat::Yuv420p8, 1u32),
+        (192, 108, PlaneFormat::Yuv422p10, 4),
+        (96, 54, PlaneFormat::Yuv422p10, 4),
+    ];
+    for (width, height, format, unit) in cases {
+        let comp = load(&doc(width, height)).composition.unwrap();
+        let mut direct = DirectSource::open(&comp, &root, format, comp.color)
+            .unwrap()
+            .expect("a fitted clip qualifies");
+        assert!(direct.reason().contains("scaled and repacked"));
+        let mut renderer = CpuRenderer::new(MediaAssets::new(root.clone()));
+        for n in [0u64, 12] {
+            let t = comp.frame_time(n);
+            let fast = direct.frame(t).unwrap();
+            let slow = frame_to_planes(
+                &renderer.render_frame(&comp, t).unwrap(),
+                comp.color,
+                format,
+            );
+            assert_eq!(fast.planes[0].width, width as usize);
+            assert_eq!(fast.planes[0].height, height as usize);
+            let luma = |planes: &geneva_media::convert::Planes| -> Vec<f64> {
+                let p = &planes.planes[0];
+                if unit == 1 {
+                    p.data.iter().map(|v| f64::from(*v)).collect()
+                } else {
+                    p.data
+                        .chunks_exact(2)
+                        .map(|b| f64::from(u16::from_le_bytes([b[0], b[1]])))
+                        .collect()
+                }
+            };
+            let (fast, slow) = (luma(&fast), luma(&slow));
+            assert_eq!(fast.len(), slow.len());
+            let n_px = fast.len() as f64;
+            let (mut abs, mut signed) = (0.0f64, 0.0f64);
+            for (a, b) in fast.iter().zip(slow.iter()) {
+                abs += (a - b).abs();
+                signed += a - b;
+            }
+            let (abs, signed) = (
+                abs / n_px / f64::from(unit),
+                signed / n_px / f64::from(unit),
+            );
+            assert!(
+                abs < 5.0,
+                "{width}x{height} {format:?} frame {n}: mean luma difference {abs}"
+            );
+            assert!(
+                signed.abs() < 1.5,
+                "{width}x{height} {format:?} frame {n}: luma bias {signed}"
+            );
+        }
+    }
+
+    // A picture that does not fill the frame is composited.
+    let comp = load(&doc(96, 96)).composition.unwrap();
+    assert!(
+        DirectSource::open(&comp, &root, PlaneFormat::Yuv420p8, comp.color)
+            .unwrap()
+            .is_none()
+    );
+}

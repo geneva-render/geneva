@@ -13,7 +13,7 @@ use geneva_render::Image;
 use geneva_timeline::Ratio;
 
 use super::probe::{ratio, ts_to_secs};
-use super::{codec_error, init, open_error, tags};
+use super::{codec_error, ffi, init, open_error, tags};
 use crate::MediaError;
 use crate::convert::{Planes16, rgba8_into, ycbcr16_into};
 
@@ -52,7 +52,7 @@ impl StreamDecoder {
         let start_time = stream.start_time().max(0);
         let mut ctx = codec::context::Context::from_parameters(stream.parameters())
             .map_err(|e| codec_error(format!("{}: decoder setup", path.display()), e))?;
-        ctx.set_threading(codec::threading::Config::count(0));
+        ffi::use_all_threads(&mut ctx);
         Ok((
             Self {
                 path: path.to_owned(),

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use ffmpeg_next::codec;
 use ffmpeg_next::media::Type;
 use ffmpeg_next::{Packet, Rational};
-use geneva_timeline::schema::{Container, VideoCodec};
+use geneva_timeline::schema::{Container, Fit, VideoCodec};
 use geneva_timeline::{Composition, Ratio, ResolvedSource};
 
 use super::ffi;
@@ -187,7 +187,8 @@ pub fn plan_stream_copy(
 
 /// A video clip shown exactly as decoded: natural size at the frame
 /// center, full opacity, no rotation or transition, normal blending, in a
-/// composition whose output size and rate match the source's.
+/// composition whose output size and rate match the source's. When scaling
+/// is allowed the clip may instead be fitted to the whole frame.
 pub(super) struct UntouchedClip {
     pub path: PathBuf,
     pub asset: String,
@@ -195,6 +196,9 @@ pub(super) struct UntouchedClip {
     pub end: Ratio,
     pub in_: Ratio,
     pub audio: bool,
+    /// Source picture size.
+    pub width: u32,
+    pub height: u32,
 }
 
 /// The composition's single video layer as a contiguous list of untouched
@@ -203,6 +207,24 @@ pub(super) struct UntouchedClip {
 pub(super) fn untouched_video_clips(
     comp: &Composition,
     root: &Path,
+) -> Result<Option<Vec<UntouchedClip>>, MediaError> {
+    video_layer_clips(comp, root, false)
+}
+
+/// Like [`untouched_video_clips`], but also accepts clips that are only
+/// scaled: fitted so that the picture fills the whole output frame (to
+/// within a pixel), with nothing else changed.
+pub(super) fn filling_video_clips(
+    comp: &Composition,
+    root: &Path,
+) -> Result<Option<Vec<UntouchedClip>>, MediaError> {
+    video_layer_clips(comp, root, true)
+}
+
+fn video_layer_clips(
+    comp: &Composition,
+    root: &Path,
+    allow_scale: bool,
 ) -> Result<Option<Vec<UntouchedClip>>, MediaError> {
     if comp.layers.len() > 1 {
         return Ok(None);
@@ -213,7 +235,9 @@ pub(super) fn untouched_video_clips(
     let mut clips = Vec::new();
     let mut own_audio: Option<bool> = None;
     let mut expected_end = Ratio::ZERO;
-    let center = [f64::from(comp.width) / 2.0, f64::from(comp.height) / 2.0];
+    let out_w = f64::from(comp.width);
+    let out_h = f64::from(comp.height);
+    let center = [out_w / 2.0, out_h / 2.0];
     for clip in &layer.clips {
         let ResolvedSource::Video { asset, in_, audio } = &clip.source else {
             return Ok(None);
@@ -236,11 +260,7 @@ pub(super) fn untouched_video_clips(
         if !clip.position.is_constant() || clip.position.sample(0.0) != center {
             return Ok(None);
         }
-        if clip
-            .anchor
-            .to_px(f64::from(comp.width), f64::from(comp.height))
-            != center
-        {
+        if clip.anchor.to_px(out_w, out_h) != center {
             return Ok(None);
         }
         match own_audio {
@@ -253,7 +273,12 @@ pub(super) fn untouched_video_clips(
         };
         let path = root.join(&asset_info.src);
         let shape = StreamShape::read(&path)?;
-        if shape.width != comp.width || shape.height != comp.height || shape.fps != comp.fps {
+        if shape.fps != comp.fps {
+            return Ok(None);
+        }
+        let same_size = shape.width == comp.width && shape.height == comp.height;
+        let fills = allow_scale && fills_frame(clip.fit, shape.width, shape.height, comp);
+        if !(same_size || fills) {
             return Ok(None);
         }
         clips.push(UntouchedClip {
@@ -263,6 +288,8 @@ pub(super) fn untouched_video_clips(
             end: clip.end,
             in_: *in_,
             audio: *audio,
+            width: shape.width,
+            height: shape.height,
         });
         expected_end = clip.end;
     }
@@ -270,6 +297,27 @@ pub(super) fn untouched_video_clips(
         return Ok(None);
     }
     Ok(Some(clips))
+}
+
+/// Whether a `w`×`h` picture fitted into the output covers the whole frame
+/// to within a pixel on each axis (the renderer would leave at most a
+/// sub-pixel edge).
+fn fills_frame(fit: Fit, w: u32, h: u32, comp: &Composition) -> bool {
+    let (w, h) = (f64::from(w), f64::from(h));
+    let (out_w, out_h) = (f64::from(comp.width), f64::from(comp.height));
+    let scale = match fit {
+        Fit::None => [1.0, 1.0],
+        Fit::Contain => {
+            let s = (out_w / w).min(out_h / h);
+            [s, s]
+        }
+        Fit::Cover => {
+            let s = (out_w / w).max(out_h / h);
+            [s, s]
+        }
+        Fit::Fill => [out_w / w, out_h / h],
+    };
+    (w * scale[0] - out_w).abs() < 1.0 && (h * scale[1] - out_h).abs() < 1.0
 }
 
 /// Audio codecs each container can hold without re-encoding.

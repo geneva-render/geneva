@@ -58,9 +58,11 @@ copied instead of re-encoded and the report says so
 ([stream copy](architecture.md#stream-copy)). Cuts then move to the
 nearest earlier keyframe, which the report also lists; `--exact` makes cuts
 frame-accurate at the cost of a re-encode. When the picture is untouched
-but a re-encode is still needed (another codec, a quality setting,
-`--exact`), decoded frames go straight to the encoder without passing
-through the compositor; the report calls this mode `direct`.
+or only scaled to fill the frame but a re-encode is still needed (another
+codec, a size, a quality setting, `--exact`), decoded frames go straight
+to the encoder, scaled and repacked on the way when the size or the
+sample layout differs, without passing through the compositor; the report
+calls this mode `direct`.
 
 ### `geneva probe <file>`
 

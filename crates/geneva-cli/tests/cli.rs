@@ -312,14 +312,14 @@ fn trim_prints_its_timeline_and_copies_the_streams() {
 }
 
 #[test]
-fn resize_keeps_the_aspect_ratio_and_reencodes() {
+fn resize_keeps_the_aspect_ratio_and_scales_directly() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("small.mp4");
     let doc = run_json(
         &["resize", "--width", "96", "--preset", "ultrafast", "-o"],
         &[&out, &media_dir().join("clip.mp4")],
     );
-    assert_eq!(doc["mode"], "render");
+    assert_eq!(doc["mode"], "direct");
     let info = run_json(&["probe"], &[&out]);
     assert_eq!(info["video"]["width"], 96);
     assert_eq!(info["video"]["height"], 54);
@@ -450,17 +450,29 @@ fn convert_hands_decoded_frames_straight_to_the_encoder() {
         .map(|d| d["message"].as_str().unwrap())
         .collect();
     assert!(
-        notes.iter().any(|n| n.contains("straight to the encoder")),
+        notes
+            .iter()
+            .any(|n| n.contains("handed to the encoder as decoded")),
         "{notes:?}"
     );
     let info = run_json(&["probe"], &[&out]);
     assert_eq!(info["video"]["codec"], "vp9");
 
+    // A picture that changes size is scaled on the same path, not composited.
     let resized = run_json(
         &["resize", "--width", "96", "--preset", "ultrafast", "-o"],
         &[&dir.path().join("small.mp4"), &clip],
     );
-    assert_eq!(resized["mode"], "render");
+    assert_eq!(resized["mode"], "direct");
+    let overlaid = run_json(
+        &["overlay", "--at", "center", "--preset", "ultrafast", "-o"],
+        &[
+            &dir.path().join("over.mp4"),
+            &clip,
+            &media_dir().join("clip.mp4"),
+        ],
+    );
+    assert_eq!(overlaid["mode"], "render");
 }
 
 #[test]
@@ -533,7 +545,7 @@ fn mxf_defaults_to_dnxhr_and_pcm() {
         &["resize", "--width", "256", "-o"],
         &[&out, &media_dir().join("clip.mp4")],
     );
-    assert_eq!(doc["mode"], "render");
+    assert_eq!(doc["mode"], "direct");
     let info = run_json(&["probe"], &[&out]);
     assert_eq!(info["container"], "mxf");
     assert_eq!(info["video"]["codec"], "dnxhd");
