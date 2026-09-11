@@ -199,6 +199,10 @@ pub(super) struct UntouchedClip {
     /// Source picture size.
     pub width: u32,
     pub height: u32,
+    /// Where the picture sits in the frame when it does not fill it, as
+    /// `[x, y, width, height]` in even pixels, the rest being the
+    /// composition's background; `None` when it covers the frame.
+    pub rect: Option<[u32; 4]>,
 }
 
 /// The composition's single video layer as a contiguous list of untouched
@@ -297,7 +301,12 @@ fn video_layer_clips(
         }
         let same_size = shape.width == comp.width && shape.height == comp.height;
         let fills = allow_scale && fills_frame(clip.fit, shape.width, shape.height, comp);
-        if !(same_size || fills) {
+        let rect = if same_size || fills || !allow_scale || comp.background.a < 1.0 {
+            None
+        } else {
+            fitted_rect(clip.fit, shape.width, shape.height, comp)
+        };
+        if !(same_size || fills || rect.is_some()) {
             return Ok(None);
         }
         clips.push(UntouchedClip {
@@ -309,6 +318,7 @@ fn video_layer_clips(
             audio: *audio,
             width: shape.width,
             height: shape.height,
+            rect,
         });
         expected_end = clip.end;
     }
@@ -348,6 +358,30 @@ fn fills_frame(fit: Fit, w: u32, h: u32, comp: &Composition) -> bool {
         Fit::Fill => [out_w / w, out_h / h],
     };
     (w * scale[0] - out_w).abs() <= 2.0 && (h * scale[1] - out_h).abs() <= 2.0
+}
+
+/// Where a `w`×`h` picture that does not cover the frame sits in it: a
+/// `contain` fit scaled to touch two edges, or an unfitted picture at its
+/// own size, centered, with the position and size rounded to even pixels
+/// so that subsampled chroma lines up. `None` for a fit that crops or
+/// stretches, or a picture that overflows the frame.
+fn fitted_rect(fit: Fit, w: u32, h: u32, comp: &Composition) -> Option<[u32; 4]> {
+    let (out_w, out_h) = (f64::from(comp.width), f64::from(comp.height));
+    let (fw, fh) = (f64::from(w), f64::from(h));
+    let scale = match fit {
+        Fit::Contain => (out_w / fw).min(out_h / fh),
+        Fit::None if fw <= out_w && fh <= out_h => 1.0,
+        Fit::None | Fit::Cover | Fit::Fill => return None,
+    };
+    let even = |v: f64| ((v / 2.0).round() * 2.0) as u32;
+    let rw = even(fw * scale).min(comp.width);
+    let rh = even(fh * scale).min(comp.height);
+    if rw < 2 || rh < 2 {
+        return None;
+    }
+    let x = even((out_w - f64::from(rw)) / 2.0);
+    let y = even((out_h - f64::from(rh)) / 2.0);
+    Some([x, y, rw, rh])
 }
 
 /// Audio codecs each container can hold without re-encoding.

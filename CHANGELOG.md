@@ -5,6 +5,24 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## Unreleased
+
+### Changes
+
+- A picture fitted onto a larger frame of one color, as a landscape
+  video on the portrait canvas `--for instagram` or `--for tiktok`
+  builds, takes the direct path: the frame is cleared to the background
+  once and each decoded picture is scaled to its place, on several
+  threads, instead of every frame passing through the compositor. A 5 s
+  720p clip onto a 1080×1920 canvas takes 1.2 s where it took 5.7 s
+  (ffmpeg: 1.4 s).
+- Releases carry the tag's section of this changelog as their notes; a
+  `release-notes` workflow sets them on an existing release.
+- `check.sh` also exercises burned-in subtitles with `--fit`, CSS
+  shorthands in a text source, `geneva targets`, `--for tiktok` and
+  `--for email --budget`, and compares the burn-in and the portrait
+  canvas with ffmpeg.
+
 ## 0.1.10
 
 ### Added

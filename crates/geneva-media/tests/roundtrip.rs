@@ -625,6 +625,65 @@ fn direct_frames_match_the_reference_renderer() {
         assert!(signed.abs() < 0.5, "frame {n}: RGB bias {signed}");
     }
 
+    // A picture fitted onto a larger frame of one color (a landscape
+    // video on a portrait canvas) is scaled to its place on the direct
+    // path too, and the bars come out in the background color.
+    let portrait = r##"{
+      "geneva": "0.1",
+      "output": { "width": 108, "height": 192, "fps": 25, "background": "#336699" },
+      "assets": { "clip": { "src": "clip.mp4" } },
+      "layers": [ { "clips": [ {
+        "source": { "kind": "video", "asset": "clip", "in": "0.5s", "out": "1.5s" }
+      } ] } ]
+    }"##;
+    let comp = load(portrait).composition.unwrap();
+    let mut direct = DirectSource::open(&comp, &root, PlaneFormat::Yuv420p8, comp.color)
+        .unwrap()
+        .expect("a fitted picture on an opaque background qualifies");
+    assert!(
+        direct.reason().contains("onto the background"),
+        "{}",
+        direct.reason()
+    );
+    for n in [0u64, 24] {
+        let t = comp.frame_time(n);
+        let fast = direct.frame(t).unwrap();
+        let slow = frame_to_planes(
+            &renderer.render_frame(&comp, t).unwrap(),
+            comp.color,
+            PlaneFormat::Yuv420p8,
+        );
+        assert_eq!((fast.width, fast.height), (108, 192));
+        for (i, (a, b)) in fast.planes.iter().zip(&slow.planes).enumerate() {
+            assert_eq!(a.data.len(), b.data.len(), "plane {i}");
+            let n_px = a.data.len() as f64;
+            let abs: f64 = a
+                .data
+                .iter()
+                .zip(&b.data)
+                .map(|(x, y)| (f64::from(*x) - f64::from(*y)).abs())
+                .sum::<f64>()
+                / n_px;
+            assert!(abs < 4.0, "frame {n}, plane {i}: mean difference {abs}");
+        }
+        // The top rows are bars: the background, not the picture.
+        let top = &fast.planes[0].data[..fast.planes[0].stride];
+        let reference = slow.planes[0].data[0];
+        assert!(
+            top.iter().all(|v| v.abs_diff(reference) <= 1),
+            "frame {n}: bars are not the background"
+        );
+    }
+    // A translucent background needs the compositor.
+    let comp = load(&portrait.replace("#336699", "#33669980"))
+        .composition
+        .unwrap();
+    assert!(
+        DirectSource::open(&comp, &root, PlaneFormat::Yuv420p8, comp.color)
+            .unwrap()
+            .is_none()
+    );
+
     // Anything that changes the picture disqualifies the direct path.
     let comp = load(&doc(r#", "opacity": 0.5"#)).composition.unwrap();
     assert!(
@@ -908,11 +967,23 @@ fn scaled_and_repacked_direct_frames_match_the_reference_renderer() {
         }
     }
 
-    // A picture that does not fill the frame is composited.
+    // A picture that does not fill the frame is scaled to its place on
+    // the background (opaque black by default).
     let comp = load(&doc(96, 96)).composition.unwrap();
+    let mut direct = DirectSource::open(&comp, &root, PlaneFormat::Yuv420p8, comp.color)
+        .unwrap()
+        .expect("a fitted picture qualifies");
+    let planes = direct.frame(comp.frame_time(0)).unwrap();
+    assert_eq!((planes.width, planes.height), (96, 96));
+    let luma = &planes.planes[0];
     assert!(
-        DirectSource::open(&comp, &root, PlaneFormat::Yuv420p8, comp.color)
-            .unwrap()
-            .is_none()
+        luma.data[..luma.stride].iter().all(|v| *v <= 16),
+        "top bar is black"
+    );
+    assert!(
+        luma.data[48 * luma.stride..][..luma.stride]
+            .iter()
+            .any(|v| *v > 16),
+        "middle shows the picture"
     );
 }

@@ -106,11 +106,20 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
+      # The release notes are the tag's section of CHANGELOG.md.
+      - name: Release notes
+        run: |
+          version=${RELEASE_TAG#v}
+          awk -v v="$version" '/^## /{on = ($2 == v)} on && !/^## /' CHANGELOG.md | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > notes.md
+          [ -s notes.md ] || echo "No changelog entry for $RELEASE_TAG." > notes.md
+          cat notes.md
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           target_commitish: ${{ github.sha }}
+          body_path: notes.md
           files: geneva-*.tar.gz

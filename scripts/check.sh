@@ -33,6 +33,8 @@ fi
 # flag, and an unsigned one is then refused outright; clear it first.
 if command -v xattr >/dev/null 2>&1; then xattr -d com.apple.quarantine "$geneva" 2>/dev/null || true; fi
 ffmpeg=$(command -v ffmpeg || true)
+# H.264 at settings comparable to geneva's default on this platform.
+if [ "$(uname -s)" = Darwin ]; then ffh264=(-c:v h264_videotoolbox -q:v 55); else ffh264=(-c:v libx264 -preset medium -crf 23); fi
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/geneva-check.XXXXXX")
 if [ "$keep" = 0 ]; then trap 'rm -rf "$work"' EXIT; fi
@@ -105,7 +107,12 @@ cat > "$work/logo.json" <<'JSON'
   "layers": [ { "clips": [ { "source": { "kind": "shape", "shape": "rect", "width": 320, "height": 120, "fill": "#ffffffc0", "radius": 24 } } ] },
               { "clips": [ { "source": { "kind": "text", "text": "LOGO", "size": 64, "color": "#1d2230" } } ] } ] }
 JSON
-printf '1\n00:00:00,500 --> 00:00:02,500\nFirst subtitle\n\n2\n00:00:03,000 --> 00:00:05,000\nSecond <i>subtitle</i>\n' > "$work/en.srt"
+printf '1\n00:00:00,500 --> 00:00:02,500\nFirst subtitle\n\n2\n00:00:03,000 --> 00:00:04,500\nSecond <i>subtitle</i>\n\n3\n00:00:04,500 --> 00:00:05,000\nA third cue long enough that it has to fold onto more than one line, and then some, to see what the fitting does with it\n' > "$work/en.srt"
+cat > "$work/styled.json" <<'JSON'
+{ "geneva": "0.1", "output": { "width": 1280, "height": 720, "fps": 30, "duration": "3s", "background": "#1d2230" },
+  "layers": [ { "clips": [ { "source": { "kind": "text", "text": "CSS shorthands", "font": "italic 600 72px/1.2 sans-serif", "color": "#ffdd00",
+      "shadow": "0 4px 12px #000c", "outline": "3px #101820", "background": "#ffffff20", "padding": "16px", "radius": 12 } } ] } ] }
+JSON
 
 run "render timeline (720p, shapes+text)" "$work/rendered.mp4" "$geneva" render "$work/shapes.json" -o "$work/rendered.mp4"; noff
 if [ -z "$input" ]; then input=$work/rendered.mp4; echo "no input given; using the rendered clip"; fi
@@ -116,11 +123,9 @@ run "probe" - "$geneva" probe "$input"; noff
 run "trim, copied (2s..7s)" "$work/trim-copy.mp4" "$geneva" trim "$input" -o "$work/trim-copy.mp4" --from 2s --duration 5s
 ff -ss 2 -i "$input" -t 5 -c copy "$work/ff-trim-copy.mp4"
 run "trim, exact (re-encode H.264)" "$work/trim-exact.mp4" "$geneva" trim "$input" -o "$work/trim-exact.mp4" --from 2s --duration 5s --exact
-if [ "$(uname -s)" = Darwin ]; then ff -ss 2 -i "$input" -t 5 -c:v h264_videotoolbox -q:v 55 -c:a aac "$work/ff-trim-exact.mp4"
-else ff -ss 2 -i "$input" -t 5 -c:v libx264 -preset medium -crf 23 -c:a aac "$work/ff-trim-exact.mp4"; fi
+ff -ss 2 -i "$input" -t 5 "${ffh264[@]}" -c:a aac "$work/ff-trim-exact.mp4"
 run "resize to 360p" "$work/small.mp4" "$geneva" resize "$input" -o "$work/small.mp4" --height 360
-if [ "$(uname -s)" = Darwin ]; then ff -i "$input" -vf scale=-2:360 -c:v h264_videotoolbox -q:v 55 -c:a aac "$work/ff-small.mp4"
-else ff -i "$input" -vf scale=-2:360 -c:v libx264 -preset medium -crf 23 -c:a aac "$work/ff-small.mp4"; fi
+ff -i "$input" -vf scale=-2:360 "${ffh264[@]}" -c:a aac "$work/ff-small.mp4"
 run "audio extract, copied (m4a)" "$work/sound.m4a" "$geneva" audio "$input" -o "$work/sound.m4a" --extract
 ff -i "$input" -vn -c:a copy "$work/ff-sound.m4a"
 run "audio extract to WAV" "$work/sound.wav" "$geneva" audio "$input" -o "$work/sound.wav" --extract
@@ -130,6 +135,13 @@ run "concat with crossfade (rendered)" "$work/faded.mp4" "$geneva" concat "$work
 run "overlay a PNG" "$work/branded.mp4" "$geneva" overlay "$work/trim-exact.mp4" "$work/logo.png" -o "$work/branded.mp4" --at bottom-right --scale 0.5 --opacity 0.9; noff
 run "subtitles attach (mkv)" "$work/subbed.mkv" "$geneva" subtitles "$work/trim-copy.mp4" -o "$work/subbed.mkv" --add "$work/en.srt" --language en; noff
 run "subtitles extract (vtt)" "$work/back.vtt" "$geneva" subtitles "$work/subbed.mkv" -o "$work/back.vtt" --extract; noff
+run "subtitles burn-in, --fit (5s)" "$work/burned.mp4" "$geneva" subtitles "$work/trim-exact.mp4" -o "$work/burned.mp4" --burn "$work/en.srt" --fit
+if [ -n "$ffmpeg" ] && "$ffmpeg" -hide_banner -filters 2>/dev/null | grep -q ' subtitles '; then ff -i "$work/trim-exact.mp4" -vf "subtitles=$work/en.srt" "${ffh264[@]}" -c:a copy "$work/ff-burned.mp4"; else noff; fi
+run "text with CSS shorthands (3s)" "$work/styled.mp4" "$geneva" render "$work/styled.json" -o "$work/styled.mp4"; noff
+run "targets table" - "$geneva" targets; noff
+run "trim for tiktok (--for, 9:16 canvas)" "$work/tiktok.mp4" "$geneva" trim "$input" -o "$work/tiktok.mp4" --from 2s --duration 5s --for tiktok
+ff -ss 2 -i "$input" -t 5 -vf "scale='min(1080,iw)':-2,pad=iw:iw*16/9:0:(oh-ih)/2" "${ffh264[@]}" -g 60 -movflags +faststart -c:a aac -b:a 128k "$work/ff-tiktok.mp4"
+run "trim for email, --budget 2MB" "$work/email.mp4" "$geneva" trim "$input" -o "$work/email.mp4" --from 2s --duration 5s --for email --budget 2MB; noff
 if [ "$quick" = 0 ]; then
   run "5s to VP9/Opus (webm)" "$work/short.webm" "$geneva" trim "$input" -o "$work/short.webm" --from 2s --duration 5s
   ff -ss 2 -i "$input" -t 5 -c:v libvpx-vp9 -crf 31 -b:v 0 -row-mt 1 -c:a libopus "$work/ff-short.webm"

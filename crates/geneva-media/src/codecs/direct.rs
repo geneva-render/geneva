@@ -4,6 +4,7 @@ use ffmpeg_next::software::scaling;
 use ffmpeg_next::util::format::Pixel;
 use ffmpeg_next::util::frame;
 use geneva_color::{Matrix, Range, ResolvedTags, Transfer};
+use geneva_render::Frame;
 use geneva_timeline::{Composition, Ratio};
 use rayon::prelude::*;
 
@@ -12,7 +13,7 @@ use super::decode::VideoReader;
 use super::encode::{format_of, pixel_of};
 use super::{codec_error, ffi, init};
 use crate::MediaError;
-use crate::convert::{PlaneFormat, Planes};
+use crate::convert::{PlaneFormat, Planes, frame_to_planes};
 
 /// Decoded frames of a composition that shows its video sources as they
 /// are, or merely scaled to the output size, delivered in the encoder's
@@ -23,7 +24,9 @@ use crate::convert::{PlaneFormat, Planes};
 /// the output. Frames already in the encoder's layout at the output size
 /// are copied; otherwise they are scaled and repacked between YCbCr
 /// layouts in their coded encoding, which is what a plain transcode does
-/// and what a resize or a change of codec needs.
+/// and what a resize or a change of codec needs. A picture fitted onto a
+/// larger frame of one opaque color (a landscape video on a portrait
+/// canvas) is scaled to its place and laid onto that color.
 ///
 /// An RGB output (PNG) is also served here from 8-bit YCbCr sources: the
 /// scaler applies the source's matrix and range, and a per-channel table
@@ -40,18 +43,26 @@ pub struct DirectSource {
     /// Whether the composition has layers above the video, which the
     /// caller composites onto the frames that show them.
     with_overlays: bool,
+    /// The frame in the output layout cleared to the background, for
+    /// clips that do not cover it; `None` when every clip does.
+    bars: Option<Planes>,
 }
 
 struct DirectClip {
     start: Ratio,
     end: Ratio,
     in_: Ratio,
+    /// Where the picture sits when it does not cover the frame.
+    rect: Option<[u32; 4]>,
     reader: VideoReader,
+    converter: Converter,
+}
+
+/// The conversion of one clip's decoded frames to the output layout.
+struct Converter {
     /// Converter from the decoder's frames to the output layout and size,
     /// built from the first frame; `None` while frames can be copied.
-    scaler: Option<scaling::Context>,
-    /// The converter to RGB, which runs on several threads.
-    rgb_scaler: Option<ffi::ThreadedScaler>,
+    scaler: Option<ffi::ThreadedScaler>,
     /// Input layout the scaler was built for.
     scaler_input: Option<(Pixel, u32, u32)>,
     scratch: frame::Video,
@@ -155,7 +166,7 @@ impl DirectSource {
             };
             let same_layout = format_of(pixel) == Some(format);
             let same_size = clip.width == comp.width && clip.height == comp.height;
-            if !(same_layout && same_size) {
+            if !(same_layout && same_size) || clip.rect.is_some() {
                 // Only YCbCr sources are scaled here; RGB ones would need
                 // a matrix conversion, which is the compositor's job.
                 if ffi::is_rgb(pixel) {
@@ -167,16 +178,25 @@ impl DirectSource {
                 start: clip.start,
                 end: clip.end,
                 in_: clip.in_,
+                rect: clip.rect,
                 reader,
-                scaler: None,
-                rgb_scaler: None,
-                scaler_input: None,
-                scratch: frame::Video::empty(),
-                matrix: source.matrix,
-                range: source.range,
-                transfer_lut,
+                converter: Converter {
+                    scaler: None,
+                    scaler_input: None,
+                    scratch: frame::Video::empty(),
+                    matrix: source.matrix,
+                    range: source.range,
+                    transfer_lut,
+                },
             });
         }
+        let bars = clips.iter().any(|c| c.rect.is_some()).then(|| {
+            frame_to_planes(
+                &Frame::new(comp.width, comp.height, comp.background),
+                tags,
+                format,
+            )
+        });
         Ok(Some(Self {
             clips,
             format,
@@ -185,6 +205,7 @@ impl DirectSource {
             scaled,
             to_rgb,
             with_overlays,
+            bars,
         }))
     }
 
@@ -192,6 +213,8 @@ impl DirectSource {
     pub fn reason(&self) -> String {
         let what = if self.to_rgb {
             "converted to RGB straight from the decoder"
+        } else if self.bars.is_some() {
+            "scaled straight from the decoder onto the background of the frame"
         } else if self.scaled {
             "scaled and repacked straight from the decoder to the encoder"
         } else {
@@ -223,67 +246,80 @@ impl DirectSource {
                 reason: format!("no clip covers {t}s"),
             })?;
         let raw = clip.reader.raw_frame_at(clip.in_ + (t - clip.start))?;
-        let needs_scaler = raw.width() != self.width
-            || raw.height() != self.height
+        // The picture's size: the frame's, or its place on the background.
+        let (width, height) = clip
+            .rect
+            .map_or((self.width, self.height), |r| (r[2], r[3]));
+        let needs_scaler = raw.width() != width
+            || raw.height() != height
             || format_of(raw.format()) != Some(self.format);
-        if !needs_scaler {
-            return Ok(copy_planes(raw, self.format));
+        let planes = if needs_scaler {
+            clip.converter
+                .scale(raw, self.format, self.to_rgb, width, height)?
+        } else {
+            copy_planes(raw, self.format)
+        };
+        match (clip.rect, &self.bars) {
+            (Some(rect), Some(bars)) => {
+                let mut out = bars.clone();
+                blit_planes(&mut out, &planes, rect[0], rect[1]);
+                Ok(out)
+            }
+            _ => Ok(planes),
         }
-        let dst = pixel_of(self.format);
+    }
+}
+
+impl Converter {
+    /// Scales `raw` to `width`×`height` in `format`, building the scaler
+    /// on the first frame and whenever the decoder's layout changes.
+    fn scale(
+        &mut self,
+        raw: &frame::Video,
+        format: PlaneFormat,
+        to_rgb: bool,
+        width: u32,
+        height: u32,
+    ) -> Result<Planes, MediaError> {
+        let clip = self;
+        let dst = pixel_of(format);
         let input = (raw.format(), raw.width(), raw.height());
         if clip.scaler_input != Some(input) {
-            let flags = scaling::Flags::BICUBIC | scaling::Flags::ACCURATE_RND;
-            if self.to_rgb {
+            let mut flags = scaling::Flags::BICUBIC | scaling::Flags::ACCURATE_RND;
+            if to_rgb {
                 // Full chroma interpolation: without it the library takes a
                 // reduced-precision path to RGB with chroma repeated. That
                 // path is the generic one, which can run on several threads.
-                let flags = flags | scaling::Flags::FULL_CHR_H_INT | scaling::Flags::FULL_CHR_H_INP;
-                let threads = std::thread::available_parallelism().map_or(1, usize::from);
-                let mut scaler = ffi::ThreadedScaler::new(
-                    raw.format(),
-                    (raw.width(), raw.height()),
-                    dst,
-                    (self.width, self.height),
-                    flags,
-                    threads,
-                )
-                .map_err(|e| codec_error("scaling", e))?;
-                scaler.set_input_colorspace(clip.matrix, clip.range);
-                clip.rgb_scaler = Some(scaler);
-            } else {
-                clip.scaler = Some(
-                    scaling::Context::get(
-                        raw.format(),
-                        raw.width(),
-                        raw.height(),
-                        dst,
-                        self.width,
-                        self.height,
-                        flags,
-                    )
-                    .map_err(|e| codec_error("scaling", e))?,
-                );
+                flags |= scaling::Flags::FULL_CHR_H_INT | scaling::Flags::FULL_CHR_H_INP;
             }
+            let threads = std::thread::available_parallelism().map_or(1, usize::from);
+            let mut scaler = ffi::ThreadedScaler::new(
+                raw.format(),
+                (raw.width(), raw.height()),
+                dst,
+                (width, height),
+                flags,
+                threads,
+            )
+            .map_err(|e| codec_error("scaling", e))?;
+            if to_rgb {
+                scaler.set_input_colorspace(clip.matrix, clip.range);
+            }
+            clip.scaler = Some(scaler);
             clip.scaler_input = Some(input);
         }
-        if clip.scratch.width() != self.width
-            || clip.scratch.height() != self.height
+        if clip.scratch.width() != width
+            || clip.scratch.height() != height
             || clip.scratch.format() != dst
         {
-            clip.scratch = frame::Video::new(dst, self.width, self.height);
+            clip.scratch = frame::Video::new(dst, width, height);
         }
-        if let Some(scaler) = clip.rgb_scaler.as_mut() {
-            scaler
-                .run(raw, &mut clip.scratch)
-                .map_err(|e| codec_error("scaling", e))?;
-        } else {
-            clip.scaler
-                .as_mut()
-                .expect("scaler was just built")
-                .run(raw, &mut clip.scratch)
-                .map_err(|e| codec_error("scaling", e))?;
-        }
-        let mut planes = copy_planes(&clip.scratch, self.format);
+        clip.scaler
+            .as_mut()
+            .expect("scaler was just built")
+            .run(raw, &mut clip.scratch)
+            .map_err(|e| codec_error("scaling", e))?;
+        let mut planes = copy_planes(&clip.scratch, format);
         if let Some(lut) = &clip.transfer_lut {
             let plane = &mut planes.planes[0];
             let stride = plane.stride;
@@ -296,6 +332,28 @@ impl DirectSource {
             });
         }
         Ok(planes)
+    }
+}
+
+/// Lays `src` onto `dst` with its top-left corner at (`x`, `y`), both in
+/// the same layout; the corner must be even where chroma is subsampled.
+fn blit_planes(dst: &mut Planes, src: &Planes, x: u32, y: u32) {
+    debug_assert_eq!(dst.format, src.format);
+    let (dx, dy) = dst.format.chroma_divisors();
+    for (i, (d, s)) in dst.planes.iter_mut().zip(&src.planes).enumerate() {
+        let (px, py) = if i == 0 {
+            (x as usize, y as usize)
+        } else {
+            (x as usize / dx, y as usize / dy)
+        };
+        let sample_bytes = s.stride / s.width;
+        let x_bytes = px * sample_bytes;
+        for row in 0..s.height.min(d.height.saturating_sub(py)) {
+            let width = (s.stride).min(d.stride.saturating_sub(x_bytes));
+            let from = &s.data[row * s.stride..row * s.stride + width];
+            let at = (py + row) * d.stride + x_bytes;
+            d.data[at..at + width].copy_from_slice(from);
+        }
     }
 }
 

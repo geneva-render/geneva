@@ -1,0 +1,24 @@
+name: release-notes
+# Sets (or resets) the notes of an existing release to the tag's section
+# of CHANGELOG.md, for releases published before notes were automatic.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, for example v0.1.9
+        required: true
+jobs:
+  notes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          version=${RELEASE_TAG#v}
+          awk -v v="$version" '/^## /{on = ($2 == v)} on && !/^## /' CHANGELOG.md | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > notes.md
+          [ -s notes.md ] || { echo "no changelog entry for $RELEASE_TAG" >&2; exit 1; }
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md

@@ -115,7 +115,12 @@ already in the encoder's sample layout at the output size are copied as
 they are; frames that differ only in size (a resize that fills the whole
 frame, to within the two pixels that rounding to an even size can leave) or in layout (8-bit 4:2:0 into the 10-bit 4:2:2 that ProRes and
 DNxHR take) are scaled and repacked by libswscale in their coded YCbCr
-encoding, bicubic, the way a plain transcode does it. This is the one
+encoding, bicubic and on several threads, the way a plain transcode does
+it. A picture that does not cover the frame (a `contain` fit with bars,
+as a landscape video on a portrait canvas) is served the same way when
+the background is one opaque color: the frame is cleared to that color
+in the encoder's layout once, and each picture is scaled to its place,
+rounded to even pixels so that subsampled chroma lines up. This is the one
 place Geneva resamples outside linear light: with a single picture and
 nothing composited over it there is no blending to get wrong, and the
 difference from the reference renderer is the difference between
