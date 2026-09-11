@@ -7,7 +7,7 @@ use geneva_color::{Matrix, Range, ResolvedTags, Transfer};
 use geneva_timeline::{Composition, Ratio};
 use rayon::prelude::*;
 
-use super::copy::filling_video_clips;
+use super::copy::{base_video_clips, filling_video_clips};
 use super::decode::VideoReader;
 use super::encode::{format_of, pixel_of};
 use super::{codec_error, ffi, init};
@@ -37,6 +37,9 @@ pub struct DirectSource {
     scaled: bool,
     /// Whether frames are converted to RGB.
     to_rgb: bool,
+    /// Whether the composition has layers above the video, which the
+    /// caller composites onto the frames that show them.
+    with_overlays: bool,
 }
 
 struct DirectClip {
@@ -81,8 +84,40 @@ impl DirectSource {
         format: PlaneFormat,
         tags: ResolvedTags,
     ) -> Result<Option<Self>, MediaError> {
+        Self::open_with(comp, root, format, tags, false)
+    }
+
+    /// Opens the sources of a composition whose first layer qualifies and
+    /// whose further layers hold overlays that composite normally. The
+    /// frames come out without the overlays; the caller draws those
+    /// (`CpuRenderer::render_overlays`) and lays them over the planes
+    /// (`convert::blend_overlay`) for the frames that show them.
+    pub fn open_base(
+        comp: &Composition,
+        root: &Path,
+        format: PlaneFormat,
+        tags: ResolvedTags,
+    ) -> Result<Option<Self>, MediaError> {
+        if comp.layers.len() < 2 {
+            return Ok(None);
+        }
+        Self::open_with(comp, root, format, tags, true)
+    }
+
+    fn open_with(
+        comp: &Composition,
+        root: &Path,
+        format: PlaneFormat,
+        tags: ResolvedTags,
+        with_overlays: bool,
+    ) -> Result<Option<Self>, MediaError> {
         init();
-        let Some(filling) = filling_video_clips(comp, root)? else {
+        let clips = if with_overlays {
+            base_video_clips(comp, root)?
+        } else {
+            filling_video_clips(comp, root)?
+        };
+        let Some(filling) = clips else {
             return Ok(None);
         };
         if filling.is_empty() {
@@ -149,6 +184,7 @@ impl DirectSource {
             height: comp.height,
             scaled,
             to_rgb,
+            with_overlays,
         }))
     }
 
@@ -161,11 +197,16 @@ impl DirectSource {
         } else {
             "handed to the encoder as decoded"
         };
+        let overlays = if self.with_overlays {
+            ", with the layers above drawn onto the frames that show them"
+        } else {
+            ""
+        };
         if self.clips.len() == 1 {
-            format!("the video is used as it is, so frames are {what}")
+            format!("the video is used as it is, so frames are {what}{overlays}")
         } else {
             format!(
-                "all {} sources are used as they are, so frames are {what}",
+                "all {} sources are used as they are, so frames are {what}{overlays}",
                 self.clips.len()
             )
         }

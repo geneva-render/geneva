@@ -208,7 +208,7 @@ pub(super) fn untouched_video_clips(
     comp: &Composition,
     root: &Path,
 ) -> Result<Option<Vec<UntouchedClip>>, MediaError> {
-    video_layer_clips(comp, root, false)
+    video_layer_clips(comp, root, false, false)
 }
 
 /// Like [`untouched_video_clips`], but also accepts clips that are only
@@ -218,16 +218,35 @@ pub(super) fn filling_video_clips(
     comp: &Composition,
     root: &Path,
 ) -> Result<Option<Vec<UntouchedClip>>, MediaError> {
-    video_layer_clips(comp, root, true)
+    video_layer_clips(comp, root, true, false)
+}
+
+/// Like [`filling_video_clips`], for a composition whose further layers
+/// hold overlays that composite normally: the first layer's clips are
+/// returned and the layers above are left to the caller.
+pub(super) fn base_video_clips(
+    comp: &Composition,
+    root: &Path,
+) -> Result<Option<Vec<UntouchedClip>>, MediaError> {
+    video_layer_clips(comp, root, true, true)
 }
 
 fn video_layer_clips(
     comp: &Composition,
     root: &Path,
     allow_scale: bool,
+    allow_overlays: bool,
 ) -> Result<Option<Vec<UntouchedClip>>, MediaError> {
     if comp.layers.len() > 1 {
-        return Ok(None);
+        let plain = comp
+            .layers
+            .iter()
+            .skip(1)
+            .flat_map(|l| l.clips.iter())
+            .all(|c| c.blend == geneva_timeline::schema::BlendMode::Normal);
+        if !allow_overlays || !plain {
+            return Ok(None);
+        }
     }
     let Some(layer) = comp.layers.first() else {
         return Ok(Some(Vec::new()));

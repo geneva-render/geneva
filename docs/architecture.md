@@ -125,7 +125,17 @@ served the same way: the scaler applies the source's matrix and range and
 a per-channel table re-encodes its transfer curve as the output's, which
 is what the compositor computes for such a frame. RGB sources and
 conversions between YCbCr encodings still go through the compositor,
-which owns matrix and primaries conversions. Frame selection
+which owns matrix and primaries conversions.
+
+Layers above such a video do not take the picture off this path either.
+When every clip above the first layer composites normally, the renderer
+draws only those clips, onto a transparent frame the size of their
+bounding box, and the result is laid over the decoded planes in the
+encoder's own layout: each covered pixel is converted to linear light,
+composited, and converted back; pixels the overlays do not touch stay
+byte-identical, so there is no seam between frames with and without a
+caption, and a burned-in subtitle costs only its own box. Text that does
+not change with time is laid out once per clip. Frame selection
 follows the same rule as the renderer (the last decoded frame at or
 before each output time), and the report names this mode `direct`.
 

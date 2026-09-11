@@ -1,4 +1,6 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 use geneva_color::{Color, LinearRgba};
 use geneva_timeline::schema::{BlendMode, Fit, ShapeKind};
@@ -21,6 +23,9 @@ const SUBSAMPLES: [(f64, f64); 4] = [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (
 pub struct CpuRenderer<A: AssetSource> {
     assets: A,
     text: TextEngine,
+    /// Rendered text images that do not change with time, by a hash of
+    /// the clip and its text, so a caption is laid out once per clip.
+    text_cache: HashMap<u64, Image>,
 }
 
 impl<A: AssetSource> std::fmt::Debug for CpuRenderer<A> {
@@ -35,6 +40,7 @@ impl CpuRenderer<FileAssets> {
         Self {
             assets: FileAssets::new(root),
             text: TextEngine::new(),
+            text_cache: HashMap::new(),
         }
     }
 }
@@ -45,6 +51,7 @@ impl<A: AssetSource> CpuRenderer<A> {
         Self {
             assets,
             text: TextEngine::new(),
+            text_cache: HashMap::new(),
         }
     }
 }
@@ -99,6 +106,163 @@ impl<A: AssetSource> CpuRenderer<A> {
         Ok(())
     }
 
+    /// What a clip paints at time `t` (`local` is the clip-relative time),
+    /// or `None` when it paints nothing.
+    fn paint_for(
+        &mut self,
+        comp: &Composition,
+        clip: &ResolvedClip,
+        t: Ratio,
+        local: f64,
+    ) -> Result<Option<Paint<'_>>, RenderError> {
+        let paint = match &clip.source {
+            ResolvedSource::Solid { color } => Paint::Solid {
+                color: color.sample(local),
+                width: f64::from(comp.width),
+                height: f64::from(comp.height),
+            },
+            ResolvedSource::Shape {
+                kind,
+                width,
+                height,
+                fill,
+                stroke,
+                radius,
+            } => Paint::Shape {
+                kind: *kind,
+                width: *width,
+                height: *height,
+                fill: fill.sample(local),
+                stroke: *stroke,
+                radius: *radius,
+            },
+            ResolvedSource::Image { asset } => {
+                Paint::Image(Cow::Borrowed(self.assets.image(comp, asset)?))
+            }
+            ResolvedSource::Composition(nested) => {
+                let inner = self.render_layers(
+                    comp,
+                    &nested.layers,
+                    nested.width,
+                    nested.height,
+                    nested.background,
+                    t - clip.start,
+                )?;
+                Paint::Image(Cow::Owned(Image::from_frame(&inner)))
+            }
+            ResolvedSource::Video { asset, in_, .. } => {
+                let source_time = *in_ + (t - clip.start);
+                Paint::Image(Cow::Borrowed(self.assets.video_frame(
+                    comp,
+                    asset,
+                    source_time,
+                )?))
+            }
+            ResolvedSource::Text(text) => {
+                self.load_fonts(comp, text)?;
+                if text.words.is_empty() {
+                    // Static text: laid out once per clip.
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    clip.path.hash(&mut hasher);
+                    text.text.hash(&mut hasher);
+                    text.max_width.to_bits().hash(&mut hasher);
+                    format!("{:?}", text.spec).hash(&mut hasher);
+                    let key = hasher.finish();
+                    let engine = &mut self.text;
+                    let image = self
+                        .text_cache
+                        .entry(key)
+                        .or_insert_with(|| engine.render(text, local));
+                    Paint::Image(Cow::Borrowed(image))
+                } else {
+                    Paint::Image(Cow::Owned(self.text.render(text, local)))
+                }
+            }
+        };
+        Ok(Some(paint))
+    }
+
+    /// Whether every clip above the first layer composites normally, so
+    /// that the layers above can be drawn on their own and laid over the
+    /// first layer's picture afterwards with the same result.
+    pub fn overlays_are_plain(comp: &Composition) -> bool {
+        comp.layers
+            .iter()
+            .skip(1)
+            .flat_map(|l| l.clips.iter())
+            .all(|c| c.blend == BlendMode::Normal)
+    }
+
+    /// Draws the clips above the first layer that are visible at `t` onto
+    /// a transparent frame covering just their bounding box, and returns
+    /// it with the box `[x0, y0, x1, y1]` in output pixels; `None` when
+    /// nothing is shown above the first layer. Laying the result over the
+    /// first layer's picture gives the composited frame when
+    /// [`overlays_are_plain`](Self::overlays_are_plain) holds.
+    pub fn render_overlays(
+        &mut self,
+        comp: &Composition,
+        t: Ratio,
+    ) -> Result<Option<(Frame, [u32; 4])>, RenderError> {
+        let Some(layers) = comp.layers.get(1..) else {
+            return Ok(None);
+        };
+        let mut items: Vec<(Paint<'static>, Placement, f32, BlendMode)> = Vec::new();
+        let mut bounds: Option<[u32; 4]> = None;
+        for layer in layers {
+            for clip in layer.clips.iter().filter(|c| c.start <= t && t < c.end) {
+                let local = (t - clip.start).to_f64();
+                let mut opacity = clip.opacity.sample(local).clamp(0.0, 1.0);
+                if let Some((_, fade)) = clip.transition_in {
+                    if fade > Ratio::ZERO && t < clip.start + fade {
+                        opacity *= ((t - clip.start) / fade).to_f64();
+                    }
+                }
+                if opacity <= 0.0 {
+                    continue;
+                }
+                let Some(paint) = self.paint_for(comp, clip, t, local)? else {
+                    continue;
+                };
+                let paint = paint.into_owned();
+                let Some(place) =
+                    Placement::new(comp.width, comp.height, clip, local, paint.size())
+                else {
+                    continue;
+                };
+                let b = place.bounds;
+                if b[0] >= b[2] || b[1] >= b[3] {
+                    continue;
+                }
+                bounds = Some(match bounds {
+                    None => b,
+                    Some(u) => [
+                        u[0].min(b[0]),
+                        u[1].min(b[1]),
+                        u[2].max(b[2]),
+                        u[3].max(b[3]),
+                    ],
+                });
+                items.push((paint, place, opacity as f32, clip.blend));
+            }
+        }
+        let Some(rect) = bounds else {
+            return Ok(None);
+        };
+        let mut frame = Frame::new(rect[2] - rect[0], rect[3] - rect[1], Color::TRANSPARENT);
+        for (paint, place, opacity, blend) in &items {
+            draw(
+                &mut frame,
+                [rect[0], rect[1]],
+                paint,
+                place,
+                *opacity,
+                *blend,
+            );
+        }
+        Ok(Some((frame, rect)))
+    }
+
     /// Renders a set of layers into a fresh frame at time `t`, which is
     /// relative to the layers' own origin (the output, or the clip that
     /// shows a nested composition).
@@ -142,58 +306,20 @@ impl<A: AssetSource> CpuRenderer<A> {
             if opacity <= 0.0 {
                 continue;
             }
-            let paint = match &clip.source {
-                ResolvedSource::Solid { color } => Paint::Solid {
-                    color: color.sample(local),
-                    width: f64::from(comp.width),
-                    height: f64::from(comp.height),
-                },
-                ResolvedSource::Shape {
-                    kind,
-                    width,
-                    height,
-                    fill,
-                    stroke,
-                    radius,
-                } => Paint::Shape {
-                    kind: *kind,
-                    width: *width,
-                    height: *height,
-                    fill: fill.sample(local),
-                    stroke: *stroke,
-                    radius: *radius,
-                },
-                ResolvedSource::Image { asset } => {
-                    Paint::Image(Cow::Borrowed(self.assets.image(comp, asset)?))
-                }
-                ResolvedSource::Composition(nested) => {
-                    let inner = self.render_layers(
-                        comp,
-                        &nested.layers,
-                        nested.width,
-                        nested.height,
-                        nested.background,
-                        t - clip.start,
-                    )?;
-                    Paint::Image(Cow::Owned(Image::from_frame(&inner)))
-                }
-                ResolvedSource::Video { asset, in_, .. } => {
-                    let source_time = *in_ + (t - clip.start);
-                    Paint::Image(Cow::Borrowed(self.assets.video_frame(
-                        comp,
-                        asset,
-                        source_time,
-                    )?))
-                }
-                ResolvedSource::Text(text) => {
-                    self.load_fonts(comp, text)?;
-                    Paint::Image(Cow::Owned(self.text.render(text, local)))
-                }
+            let Some(paint) = self.paint_for(comp, clip, t, local)? else {
+                continue;
             };
             let Some(placement) = Placement::new(width, height, clip, local, paint.size()) else {
                 continue;
             };
-            draw(frame, &paint, &placement, opacity as f32, clip.blend);
+            draw(
+                frame,
+                [0, 0],
+                &paint,
+                &placement,
+                opacity as f32,
+                clip.blend,
+            );
         }
         Ok(())
     }
@@ -219,6 +345,37 @@ enum Paint<'a> {
 }
 
 impl Paint<'_> {
+    /// The same paint with any borrowed image copied.
+    fn into_owned(self) -> Paint<'static> {
+        match self {
+            Self::Solid {
+                color,
+                width,
+                height,
+            } => Paint::Solid {
+                color,
+                width,
+                height,
+            },
+            Self::Shape {
+                kind,
+                width,
+                height,
+                fill,
+                stroke,
+                radius,
+            } => Paint::Shape {
+                kind,
+                width,
+                height,
+                fill,
+                stroke,
+                radius,
+            },
+            Self::Image(img) => Paint::Image(Cow::Owned(img.into_owned())),
+        }
+    }
+
     fn size(&self) -> (f64, f64) {
         match self {
             Self::Solid { width, height, .. } | Self::Shape { width, height, .. } => {
@@ -393,13 +550,27 @@ impl Placement {
     }
 }
 
-fn draw(frame: &mut Frame, paint: &Paint, place: &Placement, opacity: f32, blend: BlendMode) {
-    let [x0, y0, x1, y1] = place.bounds;
+/// Draws `paint` into `frame`, whose top-left corner sits at `origin` in
+/// output coordinates (the placement's bounds are in output coordinates
+/// too, so a frame covering part of the output receives its part).
+fn draw(
+    frame: &mut Frame,
+    origin: [u32; 2],
+    paint: &Paint,
+    place: &Placement,
+    opacity: f32,
+    blend: BlendMode,
+) {
+    let [ox, oy] = origin;
+    let x0 = place.bounds[0].max(ox);
+    let y0 = place.bounds[1].max(oy);
+    let x1 = place.bounds[2].min(ox + frame.width());
+    let y1 = place.bounds[3].min(oy + frame.height());
     if x0 >= x1 || y0 >= y1 {
         return;
     }
     let width = frame.width() as usize;
-    let rows = &mut frame.pixels_mut()[y0 as usize * width..y1 as usize * width];
+    let rows = &mut frame.pixels_mut()[(y0 - oy) as usize * width..(y1 - oy) as usize * width];
     // A pixel-aligned image maps texels one-to-one onto output pixels at
     // an integer offset, so it is read directly instead of sampled.
     let aligned = match paint {
@@ -413,27 +584,28 @@ fn draw(frame: &mut Frame, paint: &Paint, place: &Placement, opacity: f32, blend
     // Rows are independent, so they are drawn in parallel.
     rows.par_chunks_mut(width).enumerate().for_each(|(i, row)| {
         let y = y0 + i as u32;
-        if let Some((img, ox, oy)) = aligned {
-            let v = i64::from(y) - oy;
+        if let Some((img, ox_img, oy_img)) = aligned {
+            let v = i64::from(y) - oy_img;
             if v < 0 || v >= i64::from(img.height) {
                 return;
             }
             let src_row = &img.pixels[v as usize * img.width as usize..][..img.width as usize];
-            let first = i64::from(x0).max(ox);
-            let last = i64::from(x1).min(ox + i64::from(img.width));
+            let first = i64::from(x0).max(ox_img);
+            let last = i64::from(x1).min(ox_img + i64::from(img.width));
             let plain = opacity >= 1.0 && blend == BlendMode::Normal;
             for x in first..last {
-                let src = src_row[(x - ox) as usize];
+                let src = src_row[(x - ox_img) as usize];
                 if src.a <= 0.0 {
                     continue;
                 }
+                let i = (x - i64::from(ox)) as usize;
                 if plain && src.a >= 1.0 {
-                    row[x as usize] = src;
+                    row[i] = src;
                     continue;
                 }
                 let src = src.scaled(opacity);
-                let dst = row[x as usize];
-                row[x as usize] = composite(src, dst, blend);
+                let dst = row[i];
+                row[i] = composite(src, dst, blend);
             }
             return;
         }
@@ -457,8 +629,9 @@ fn draw(frame: &mut Frame, paint: &Paint, place: &Placement, opacity: f32, blend
                 continue;
             }
             let src = src.scaled(opacity);
-            let dst = row[x as usize];
-            row[x as usize] = composite(src, dst, blend);
+            let i = (x - ox) as usize;
+            let dst = row[i];
+            row[i] = composite(src, dst, blend);
         }
     });
 }

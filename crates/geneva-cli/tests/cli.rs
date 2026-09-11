@@ -384,7 +384,8 @@ fn overlay_places_an_image_for_the_length_of_the_video() {
         &["overlay", "--scale", "0.1", "--preset", "ultrafast", "-o"],
         &[&out, &media_dir().join("clip.mp4"), &logo],
     );
-    assert_eq!(doc["mode"], "render");
+    // The video goes straight to the encoder; only the logo is drawn.
+    assert_eq!(doc["mode"], "direct");
     assert_eq!(doc["frames"], 50);
 }
 
@@ -472,7 +473,7 @@ fn convert_hands_decoded_frames_straight_to_the_encoder() {
             &media_dir().join("clip.mp4"),
         ],
     );
-    assert_eq!(overlaid["mode"], "render");
+    assert_eq!(overlaid["mode"], "direct");
 }
 
 #[test]
@@ -584,7 +585,8 @@ fn subtitles_burn_compiles_cues_to_text_clips_and_checks_the_frame() {
         &[&out, &clip],
     );
     assert_eq!(doc["ok"], true);
-    assert_eq!(doc["mode"], "render");
+    // The video itself skips the compositor; only the cues are drawn.
+    assert_eq!(doc["mode"], "direct");
     let codes: Vec<&str> = doc["diagnostics"]
         .as_array()
         .unwrap()

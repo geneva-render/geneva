@@ -18,6 +18,14 @@ the format version it was written for.
 
 ### Fixes
 
+- Overlays on an untouched video (burned-in subtitles, a logo, a lower
+  third) no longer send every frame through the compositor. The decoded
+  frames go straight to the encoder; only the overlays are drawn, onto
+  a transparent frame the size of their box, and laid over the decoded
+  planes where they have coverage. Pixels outside stay byte-identical.
+  Text that does not change with time is laid out once per clip. Burning
+  three short cues into 70 s of SD video on four cores: 17.3 s to 8.3 s,
+  against ffmpeg's 7.7 s with the same x264 settings.
 - Image sequences (PNG) from an 8-bit YCbCr source take the direct path:
   the scaler applies the source's matrix and a table re-encodes its
   transfer curve, instead of the compositor's floating-point conversion.

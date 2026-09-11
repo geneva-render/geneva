@@ -418,6 +418,140 @@ pub fn frame_to_planes(frame: &Frame, tags: ResolvedTags, format: PlaneFormat) -
     out
 }
 
+/// Lays `overlay` (premultiplied linear RGBA drawn over transparency,
+/// covering `rect` = `[x0, y0, x1, y1]` of the picture) onto packed
+/// planes in place, through the same conversions as [`frame_to_planes`].
+/// Only pixels the overlay covers change; for subsampled chroma, the
+/// blocks they belong to are recomputed from every pixel in the block.
+pub fn blend_overlay(planes: &mut Planes, overlay: &Frame, rect: [u32; 4], tags: ResolvedTags) {
+    let [x0, y0, x1, y1] = rect;
+    let x1 = x1.min(planes.width).min(x0 + overlay.width());
+    let y1 = y1.min(planes.height).min(y0 + overlay.height());
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let ow = overlay.width() as usize;
+    let src_at = |x: u32, y: u32| -> LinearRgba {
+        if x < x0 || x >= x1 || y < y0 || y >= y1 {
+            return LinearRgba::TRANSPARENT;
+        }
+        overlay.pixels()[(y - y0) as usize * ow + (x - x0) as usize]
+    };
+    let w = planes.width as usize;
+    let format = planes.format;
+    if format.is_rgb() {
+        let plane = &mut planes.planes[0];
+        let stride = plane.stride;
+        let rows = &mut plane.data[y0 as usize * stride..y1 as usize * stride];
+        rows.par_chunks_mut(stride)
+            .enumerate()
+            .for_each(|(i, row)| {
+                let y = y0 + i as u32;
+                for x in x0..x1 {
+                    let src = src_at(x, y);
+                    if src.a <= 0.0 {
+                        continue;
+                    }
+                    let px = &mut row[x as usize * 4..x as usize * 4 + 4];
+                    let base =
+                        geneva_color::Color::from_rgba8(px[0], px[1], px[2], 255).to_linear();
+                    let out = src.over(base).to_srgb8();
+                    px.copy_from_slice(&out);
+                }
+            });
+        return;
+    }
+
+    let to_linear = to_linear_lut(tags.transfer);
+    let from_linear = from_linear_lut(tags.transfer);
+    let bits = format.bits();
+    let max = f64::from((1u32 << bits) - 1);
+    let wide = format.bytes_per_sample() == 2;
+    let (dx, dy) = format.chroma_divisors();
+    let load = |data: &[u8], i: usize| -> f64 {
+        if wide {
+            f64::from(u16::from_le_bytes([data[i * 2], data[i * 2 + 1]]))
+        } else {
+            f64::from(data[i])
+        }
+    };
+    let (bx0, bx1) = (x0 as usize / dx, (x1 as usize).div_ceil(dx));
+    let (by0, by1) = (y0 as usize / dy, (y1 as usize).div_ceil(dy));
+    let height = planes.height as usize;
+    let [y_plane, cb_plane, cr_plane] = &mut planes.planes[..] else {
+        unreachable!("Y'CbCr layouts have three planes");
+    };
+    let y_stride = y_plane.stride;
+    let y_rows = &mut y_plane.data[by0 * dy * y_stride..(by1 * dy).min(height) * y_stride];
+    let cb_rows = &mut cb_plane.data[by0 * cb_plane.stride..by1 * cb_plane.stride];
+    let cr_rows = &mut cr_plane.data[by0 * cr_plane.stride..by1 * cr_plane.stride];
+    let (cb_stride, cr_stride) = (cb_plane.stride, cr_plane.stride);
+    y_rows
+        .par_chunks_mut(y_stride * dy)
+        .zip(cb_rows.par_chunks_mut(cb_stride))
+        .zip(cr_rows.par_chunks_mut(cr_stride))
+        .enumerate()
+        .for_each(|(bi, ((y_block_rows, cb_row), cr_row))| {
+            let by = by0 + bi;
+            let rows = y_block_rows.len() / y_stride;
+            for bx in bx0..bx1 {
+                let xs: Vec<usize> = (bx * dx..bx * dx + dx).filter(|&x| x < w).collect();
+                let covered = (0..rows).any(|r| {
+                    xs.iter()
+                        .any(|&x| src_at(x as u32, (by * dy + r) as u32).a > 0.0)
+                });
+                if !covered {
+                    continue;
+                }
+                let cb = load(cb_row, bx);
+                let cr = load(cr_row, bx);
+                let (mut sum_b, mut sum_r, mut count) = (0.0f64, 0.0f64, 0.0f64);
+                for r in 0..rows {
+                    for &x in &xs {
+                        let yi = r * y_stride / format.bytes_per_sample() + x;
+                        let y_code = load(y_block_rows, yi);
+                        let [yn, cbn, crn] =
+                            matrix::decode_ycbcr(tags.range, bits, [y_code, cb, cr]);
+                        let rgb = matrix::ycbcr_to_rgb(tags.matrix, [yn, cbn, crn]);
+                        let base = LinearRgba {
+                            r: to_linear[lut_index(rgb[0].clamp(0.0, 1.0) as f32)],
+                            g: to_linear[lut_index(rgb[1].clamp(0.0, 1.0) as f32)],
+                            b: to_linear[lut_index(rgb[2].clamp(0.0, 1.0) as f32)],
+                            a: 1.0,
+                        };
+                        let src = src_at(x as u32, (by * dy + r) as u32);
+                        let out = if src.a > 0.0 { src.over(base) } else { base };
+                        let enc = [
+                            f64::from(from_linear[lut_index(out.r)]),
+                            f64::from(from_linear[lut_index(out.g)]),
+                            f64::from(from_linear[lut_index(out.b)]),
+                        ];
+                        let ycc = matrix::rgb_to_ycbcr(tags.matrix, enc);
+                        let [yc, cbc, crc] = matrix::encode_ycbcr(tags.range, bits, ycc);
+                        if src.a > 0.0 {
+                            store(y_block_rows, yi, (yc + 0.5).clamp(0.0, max) as u16, wide);
+                        }
+                        sum_b += cbc;
+                        sum_r += crc;
+                        count += 1.0;
+                    }
+                }
+                store(
+                    cb_row,
+                    bx,
+                    (sum_b / count + 0.5).clamp(0.0, max) as u16,
+                    wide,
+                );
+                store(
+                    cr_row,
+                    bx,
+                    (sum_r / count + 0.5).clamp(0.0, max) as u16,
+                    wide,
+                );
+            }
+        });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

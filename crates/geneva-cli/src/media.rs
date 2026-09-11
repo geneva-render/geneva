@@ -373,8 +373,26 @@ mod imp {
             }
             None => None,
         };
+        // With overlays above an untouched video, the decoded frames still
+        // skip the compositor: only the overlays are drawn, and laid onto
+        // the frames that show them.
+        let mut base = match (&direct, &settings.video) {
+            (None, Some(v))
+                if geneva_render::CpuRenderer::<MediaAssets>::overlays_are_plain(comp) =>
+            {
+                let format = geneva_media::plane_format_for(v.codec, v.profile);
+                let tags = geneva_media::output_tags_for(v.codec, v.color);
+                geneva_media::DirectSource::open_base(comp, root, format, tags)
+                    .map_err(media_err)?
+            }
+            _ => None,
+        };
+        let output_tags = settings
+            .video
+            .as_ref()
+            .map(|v| geneva_media::output_tags_for(v.codec, v.color));
         let mut notes = Vec::new();
-        if let Some(d) = &direct {
+        if let Some(d) = direct.as_ref().or(base.as_ref()) {
             notes.push(d.reason());
         }
         let encoder = Encoder::new(output, settings).map_err(media_err)?;
@@ -400,6 +418,7 @@ mod imp {
             None
         };
         let mut render_error = None;
+        let mut composited = 0u64;
         let (joined, audio_joined) = std::thread::scope(|scope| {
             let worker = scope.spawn(move || -> Result<Encoder, geneva_media::MediaError> {
                 let mut encoder = encoder;
@@ -440,6 +459,27 @@ mod imp {
                             break;
                         }
                     }
+                } else if let Some(b) = base.as_mut() {
+                    let mut planes = match b.frame(t) {
+                        Ok(planes) => planes,
+                        Err(e) => {
+                            render_error = Some(media_err(e));
+                            break;
+                        }
+                    };
+                    match renderer.render_overlays(comp, t) {
+                        Ok(Some((overlay, rect))) => {
+                            let tags = output_tags.expect("video output has tags");
+                            geneva_media::convert::blend_overlay(&mut planes, &overlay, rect, tags);
+                            composited += 1;
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            render_error = Some(e);
+                            break;
+                        }
+                    }
+                    planes
                 } else {
                     if let Err(e) = renderer.render_into(comp, t, &mut frame) {
                         render_error = Some(e);
@@ -476,11 +516,16 @@ mod imp {
         if progress && total > 0 {
             eprintln!();
         }
+        if base.is_some() {
+            notes.push(format!(
+                "overlays were drawn onto {composited} of {total} frames; the others went from the decoder to the encoder untouched"
+            ));
+        }
         encoder.finish().map_err(media_err)?;
         Ok(RenderStats {
             frames: total,
             duration: comp.duration,
-            mode: if direct.is_some() {
+            mode: if direct.is_some() || base.is_some() {
                 RenderMode::Direct
             } else {
                 RenderMode::Render

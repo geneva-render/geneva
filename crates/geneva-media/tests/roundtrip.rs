@@ -349,6 +349,88 @@ fn stream_copy_tolerates_a_printed_duration() {
 }
 
 #[test]
+fn overlays_laid_onto_direct_frames_match_the_compositor() {
+    use geneva_media::convert::{PlaneFormat, blend_overlay, frame_to_planes};
+    use geneva_media::{DirectSource, MediaAssets};
+    use geneva_render::{CpuRenderer, Renderer};
+
+    let root = clip().parent().unwrap().to_path_buf();
+    let text = r#"{
+      "geneva": "0.1",
+      "output": { "width": 192, "height": 108, "fps": 25, "duration": "2s" },
+      "assets": { "clip": { "src": "clip.mp4" } },
+      "layers": [
+        { "clips": [ { "source": { "kind": "video", "asset": "clip" } } ] },
+        { "clips": [ { "source": { "kind": "text", "text": "Hi there", "size": 20, "color": "yellow", "outline": { "color": "black", "width": 2 } },
+                      "start": "0.5s", "duration": "1s",
+                      "transform": { "position": { "x": "50%", "y": "90%" }, "anchor": { "x": "50%", "y": "100%" } } } ] }
+      ]
+    }"#;
+    let comp = load(text).composition.unwrap();
+    assert!(CpuRenderer::<MediaAssets>::overlays_are_plain(&comp));
+    assert!(
+        DirectSource::open(&comp, &root, PlaneFormat::Yuv420p8, comp.color)
+            .unwrap()
+            .is_none(),
+        "a second layer is not a plain transcode"
+    );
+    let mut base = DirectSource::open_base(&comp, &root, PlaneFormat::Yuv420p8, comp.color)
+        .unwrap()
+        .expect("the video with overlays qualifies");
+    let mut renderer = CpuRenderer::new(MediaAssets::new(root.clone()));
+
+    // Before the caption: nothing to draw, frames are the decoder's.
+    let t = comp.frame_time(2);
+    assert!(renderer.render_overlays(&comp, t).unwrap().is_none());
+
+    // During the caption: only its box changes, and the result agrees
+    // with the full compositor there.
+    let t = comp.frame_time(20);
+    let mut planes = base.frame(t).unwrap();
+    let before = planes.clone();
+    let (overlay, rect) = renderer
+        .render_overlays(&comp, t)
+        .unwrap()
+        .expect("caption shown");
+    assert!(rect[1] > 50 && rect[3] <= 108, "{rect:?}");
+    blend_overlay(&mut planes, &overlay, rect, comp.color);
+    let slow = frame_to_planes(
+        &renderer.render_frame(&comp, t).unwrap(),
+        comp.color,
+        PlaneFormat::Yuv420p8,
+    );
+    let (fast, was, full) = (
+        &planes.planes[0].data,
+        &before.planes[0].data,
+        &slow.planes[0].data,
+    );
+    let (mut inside, mut n_inside, mut changed_outside) = (0.0f64, 0.0f64, 0usize);
+    for y in 0..108usize {
+        for x in 0..192usize {
+            let i = y * 192 + x;
+            let in_rect = x >= rect[0] as usize
+                && x < rect[2] as usize
+                && y >= rect[1] as usize
+                && y < rect[3] as usize;
+            if in_rect {
+                inside += (f64::from(fast[i]) - f64::from(full[i])).abs();
+                n_inside += 1.0;
+            } else if fast[i] != was[i] {
+                changed_outside += 1;
+            }
+        }
+    }
+    assert_eq!(changed_outside, 0, "pixels outside the overlay box changed");
+    assert!(
+        inside / n_inside < 4.0,
+        "mean luma difference in the box: {}",
+        inside / n_inside
+    );
+    // The caption did land: something in the box differs from the plain frame.
+    assert!(fast != was);
+}
+
+#[test]
 fn stream_copy_is_refused_when_anything_would_change_the_picture() {
     use geneva_media::plan_stream_copy;
     use geneva_timeline::schema::Container;
