@@ -12,9 +12,10 @@ use clap::{Args, ValueEnum};
 use geneva_color::{ColorTags, ResolvedTags};
 use geneva_timeline::schema::{
     Asset, AudioClip, AudioTrack, Clip, Encode, Fit, Layer, Output, Source, SubtitleTrack,
-    Timeline, Transform, Transition, TransitionKind, VideoCodec, VideoEncode, VideoProfile,
+    TextSource, Timeline, Transform, Transition, TransitionKind, VideoCodec, VideoEncode,
+    VideoProfile,
 };
-use geneva_timeline::{Animated, Fps, Length, Point, Ratio, Scale, Time};
+use geneva_timeline::{Animated, Diagnostic, Fps, Length, Point, Ratio, Scale, Time};
 
 use crate::media;
 
@@ -194,6 +195,9 @@ impl From<FitArg> for Fit {
 pub struct Compiled {
     pub timeline: Timeline,
     pub root: PathBuf,
+    /// Findings from compiling the verb (for example subtitle cues that
+    /// leave the frame), reported with the timeline's own diagnostics.
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 /// Rounds a dimension to the nearest even number, as most codecs need.
@@ -372,7 +376,11 @@ pub fn convert(
             if resized { Some(fit.into()) } else { None },
         )],
     });
-    Ok(Compiled { timeline: tl, root })
+    Ok(Compiled {
+        timeline: tl,
+        root,
+        diagnostics: Vec::new(),
+    })
 }
 
 /// `trim`: one input, a range.
@@ -417,7 +425,11 @@ pub fn trim(
             None,
         )],
     });
-    Ok(Compiled { timeline: tl, root })
+    Ok(Compiled {
+        timeline: tl,
+        root,
+        diagnostics: Vec::new(),
+    })
 }
 
 /// `concat`: inputs back to back, optionally cross-faded.
@@ -472,7 +484,11 @@ pub fn concat(inputs: &[PathBuf], crossfade: Option<Time>, args: &EncodeArgs) ->
         enabled: true,
         clips,
     });
-    Ok(Compiled { timeline: tl, root })
+    Ok(Compiled {
+        timeline: tl,
+        root,
+        diagnostics: Vec::new(),
+    })
 }
 
 /// Named positions for overlays.
@@ -645,7 +661,11 @@ pub fn overlay(
             blend: None,
         }],
     });
-    Ok(Compiled { timeline: tl, root })
+    Ok(Compiled {
+        timeline: tl,
+        root,
+        diagnostics: Vec::new(),
+    })
 }
 
 /// What `audio` does with the input.
@@ -753,7 +773,11 @@ pub fn audio(input: &Path, op: &AudioOp, args: &EncodeArgs) -> Result<Compiled> 
             tl.audio.push(track("audio", Some(*gain)));
         }
     }
-    Ok(Compiled { timeline: tl, root })
+    Ok(Compiled {
+        timeline: tl,
+        root,
+        diagnostics: Vec::new(),
+    })
 }
 
 /// A subtitle file to attach, with its language.
@@ -811,5 +835,311 @@ pub fn add_subtitles(input: &Path, files: &[SubtitleFile], args: &EncodeArgs) ->
             offset: None,
         });
     }
-    Ok(Compiled { timeline: tl, root })
+    Ok(Compiled {
+        timeline: tl,
+        root,
+        diagnostics: Vec::new(),
+    })
+}
+
+/// Where burned-in subtitles sit in the frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum SubtitlePosition {
+    Bottom,
+    Top,
+    Center,
+}
+
+/// Options of `subtitles --burn`.
+#[derive(Debug, Clone)]
+pub struct BurnOptions {
+    /// The subtitle file.
+    pub file: PathBuf,
+    pub position: SubtitlePosition,
+    /// Distance from the top or bottom edge in pixels; 5% of the height
+    /// by default.
+    pub margin: Option<f64>,
+    /// A JSON object with text-source fields merged over the defaults.
+    pub style: Option<String>,
+    /// Title-safe inset as a percentage of each dimension; cues outside
+    /// it get a note. Zero turns the note off.
+    pub safe: f64,
+}
+
+/// The default look of burned-in subtitles for a frame `height` pixels
+/// tall: white, semi-bold, a black outline and a soft shadow, sized so
+/// that two lines take a tenth of the picture.
+fn subtitle_style(height: u32, width: u32) -> serde_json::Value {
+    let size = (f64::from(height) * 0.045).round().max(12.0);
+    serde_json::json!({
+        "text": "",
+        "size": size,
+        "weight": 600,
+        "color": "white",
+        "align": "center",
+        "line_height": 1.15,
+        "max_width": (f64::from(width) * 0.9).round(),
+        "outline": { "color": "black", "width": (size * 0.06).round().max(1.0) },
+        "shadow": { "color": "#000000a0", "x": 0, "y": (size * 0.04).round(), "blur": (size * 0.08).round() }
+    })
+}
+
+/// How many offending cues are listed one by one before a summary line.
+const LISTED: usize = 10;
+
+/// `subtitles --burn`: the input with the cues of a subtitle file drawn
+/// into the picture. Every cue becomes a text clip; cues that overlap in
+/// time go to further layers. Each cue's box is measured with the text
+/// engine and reported when it leaves the frame or the title-safe area.
+pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Result<Compiled> {
+    let src = Input::probe(input)?;
+    if !src.has_video {
+        bail!(
+            "{} has no video stream to burn subtitles into",
+            input.display()
+        );
+    }
+    let text = std::fs::read_to_string(&opts.file)
+        .with_context(|| format!("reading {}", opts.file.display()))?;
+    let cues = geneva_media::subtitles::parse(&text)
+        .with_context(|| format!("parsing {}", opts.file.display()))?;
+    let (root, rel) = common_root(&[input.to_owned()])?;
+    let (w, h) = (even(src.width), even(src.height));
+    let mut tl = base_timeline(w, h, src.fps, encode_block(args));
+    tl.output.color = shared_color(&[&src]);
+    tl.output.duration = src.duration.map(seconds);
+    tl.assets.insert(
+        "in".to_owned(),
+        Asset {
+            src: rel[0].clone(),
+            kind: None,
+            color: None,
+        },
+    );
+    tl.layers.push(Layer {
+        id: None,
+        enabled: true,
+        clips: vec![video_clip("in", None, None, !args.no_audio, None)],
+    });
+
+    // The style: defaults for this frame size, then the caller's fields.
+    let mut style = subtitle_style(h, w);
+    if let Some(json) = &opts.style {
+        let user: serde_json::Value =
+            serde_json::from_str(json).context("--style is not valid JSON")?;
+        let serde_json::Value::Object(fields) = user else {
+            bail!("--style must be a JSON object of text fields, for example {{\"size\": 40}}");
+        };
+        for (k, v) in fields {
+            style[k] = v;
+        }
+    }
+    let template: TextSource = serde_json::from_value(style)
+        .context("--style: not a valid text style (see docs/timeline.md, text sources)")?;
+    let margin = opts.margin.unwrap_or_else(|| (f64::from(h) * 0.05).round());
+    let (anchor, position) = match opts.position {
+        SubtitlePosition::Bottom => (
+            Point {
+                x: Length::Percent(50.0),
+                y: Length::Percent(100.0),
+            },
+            Point {
+                x: Length::Percent(50.0),
+                y: Length::Px(f64::from(h) - margin),
+            },
+        ),
+        SubtitlePosition::Top => (
+            Point {
+                x: Length::Percent(50.0),
+                y: Length::Percent(0.0),
+            },
+            Point {
+                x: Length::Percent(50.0),
+                y: Length::Px(margin),
+            },
+        ),
+        SubtitlePosition::Center => (
+            Point {
+                x: Length::Percent(50.0),
+                y: Length::Percent(50.0),
+            },
+            Point {
+                x: Length::Percent(50.0),
+                y: Length::Percent(50.0),
+            },
+        ),
+    };
+
+    // Measuring each cue the way the renderer lays it out.
+    let mut engine = geneva_render::TextEngine::new();
+    let max_width = template
+        .max_width
+        .map_or(f64::from(w), |m| m.to_px(f64::from(w)));
+    let safe_x = f64::from(w) * opts.safe / 100.0;
+    let safe_y = f64::from(h) * opts.safe / 100.0;
+    // Per layer: when its current cue ends and how tall its box is, so a
+    // cue that overlaps in time stacks beyond the ones still showing.
+    let mut layer_ends: Vec<(Ratio, f64)> = Vec::new();
+    let mut layers: Vec<Vec<Clip>> = Vec::new();
+    let mut diagnostics = Vec::new();
+    let mut offscreen = 0usize;
+    let mut unsafe_cues = 0usize;
+    for (n, cue) in cues.iter().enumerate() {
+        if cue.end <= cue.start {
+            continue;
+        }
+        let mut spec = template.clone();
+        spec.text = Some(geneva_media::subtitles::strip_tags(&cue.text));
+        let resolved = geneva_timeline::ResolvedText {
+            text: spec.text.clone().unwrap_or_default(),
+            words: Vec::new(),
+            max_width,
+            spec: spec.clone(),
+        };
+        let image = engine.render(&resolved, 0.0);
+        let (bw, bh) = (f64::from(image.width), f64::from(image.height));
+        // Layer assignment: the first layer whose last cue has ended. A
+        // cue that lands on a higher layer sits beyond the boxes of the
+        // cues still showing on the layers below, away from the edge.
+        let layer = layer_ends
+            .iter()
+            .position(|(end, _)| *end <= cue.start)
+            .unwrap_or_else(|| {
+                layer_ends.push((Ratio::ZERO, 0.0));
+                layers.push(Vec::new());
+                layer_ends.len() - 1
+            });
+        let stacked: f64 = layer_ends[..layer]
+            .iter()
+            .filter(|(end, _)| *end > cue.start)
+            .map(|(_, height)| height)
+            .sum();
+        layer_ends[layer] = (cue.end, bh);
+        let position = match opts.position {
+            SubtitlePosition::Bottom => Point {
+                x: position.x,
+                y: Length::Px(position.y.to_px(f64::from(h)) - stacked),
+            },
+            SubtitlePosition::Top | SubtitlePosition::Center => Point {
+                x: position.x,
+                y: Length::Px(position.y.to_px(f64::from(h)) + stacked),
+            },
+        };
+        let ax = anchor.x.to_px(bw);
+        let ay = anchor.y.to_px(bh);
+        let px = position.x.to_px(f64::from(w));
+        let py = position.y.to_px(f64::from(h));
+        let (x0, y0) = (px - ax, py - ay);
+        let (x1, y1) = (x0 + bw, y0 + bh);
+        let clip_index = layers[layer].len();
+        let where_ = format!("/layers/{}/clips/{clip_index}", layer + 1);
+        let cue_name = format!("cue {} ({}s to {}s)", n + 1, cue.start, cue.end);
+        let mut over = Vec::new();
+        if x0 < 0.0 {
+            over.push(format!("{:.0} px past the left edge", -x0));
+        }
+        if x1 > f64::from(w) {
+            over.push(format!("{:.0} px past the right edge", x1 - f64::from(w)));
+        }
+        if y0 < 0.0 {
+            over.push(format!("{:.0} px past the top edge", -y0));
+        }
+        if y1 > f64::from(h) {
+            over.push(format!("{:.0} px past the bottom edge", y1 - f64::from(h)));
+        }
+        if !over.is_empty() {
+            offscreen += 1;
+            if offscreen <= LISTED {
+                diagnostics.push(
+                    Diagnostic::warning(
+                        "W403",
+                        where_.clone(),
+                        format!(
+                            "{cue_name} extends off-screen: its {:.0}×{:.0} px box runs {}",
+                            bw,
+                            bh,
+                            over.join(" and ")
+                        ),
+                    )
+                    .with_help("use a smaller size, a larger margin, more line breaks or a narrower max_width in --style"),
+                );
+            }
+        } else if opts.safe > 0.0
+            && (x0 < safe_x
+                || y0 < safe_y
+                || x1 > f64::from(w) - safe_x
+                || y1 > f64::from(h) - safe_y)
+        {
+            unsafe_cues += 1;
+            if unsafe_cues <= LISTED {
+                diagnostics.push(
+                    Diagnostic::note(
+                        "N404",
+                        where_.clone(),
+                        format!(
+                            "{cue_name} lies outside the title-safe area ({}% in from each edge)",
+                            opts.safe
+                        ),
+                    )
+                    .with_help("some screens crop the edges; a larger --margin or a smaller size keeps it safe, or set --safe 0 to stop checking"),
+                );
+            }
+        }
+        layers[layer].push(Clip {
+            id: None,
+            source: Source::Text(Box::new(spec)),
+            start: Some(seconds(cue.start)),
+            duration: Some(seconds(cue.end - cue.start)),
+            transition: None,
+            fit: None,
+            transform: Some(Transform {
+                position: Some(Animated::Constant(position)),
+                anchor: Some(anchor),
+                scale: None,
+                rotation: None,
+            }),
+            opacity: None,
+            blend: None,
+        });
+    }
+    if offscreen > LISTED {
+        diagnostics.push(Diagnostic::warning(
+            "W403",
+            "/layers/1",
+            format!("{} more cues extend off-screen", offscreen - LISTED),
+        ));
+    }
+    if unsafe_cues > LISTED {
+        diagnostics.push(Diagnostic::note(
+            "N404",
+            "/layers/1",
+            format!(
+                "{} more cues lie outside the title-safe area",
+                unsafe_cues - LISTED
+            ),
+        ));
+    }
+    if layers.is_empty() {
+        diagnostics.push(Diagnostic::warning(
+            "W402",
+            "/layers",
+            format!(
+                "{} has no cues; the picture is written unchanged",
+                opts.file.display()
+            ),
+        ));
+    }
+    for clips in layers {
+        tl.layers.push(Layer {
+            id: None,
+            enabled: true,
+            clips,
+        });
+    }
+    Ok(Compiled {
+        timeline: tl,
+        root,
+        diagnostics,
+    })
 }

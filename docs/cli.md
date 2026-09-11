@@ -164,15 +164,25 @@ geneva audio talk.mp4 -o dubbed.mp4 --replace voice.wav
 geneva audio talk.mp4 -o scored.mp4 --mix music.mp3 --gain -12
 ```
 
-### `geneva subtitles <input> -o FILE --add FILE... [--language CODE...] | --extract [--track N]`
+### `geneva subtitles <input> -o FILE --add FILE... [--language CODE...] | --burn FILE [--position P] [--margin PX] [--style JSON] [--safe PERCENT] | --extract [--track N]`
 
 | Operation | Output |
 | --- | --- |
 | `--add FILE` (repeatable) | The input with each subtitle file (`.srt` or `.vtt`) attached as a text stream; `--language` values pair with the files in order. The picture and sound are copied when nothing else changes. |
+| `--burn FILE` | The input with the cues of one subtitle file drawn into the picture (re-encoded). Each cue becomes a text clip; cues that overlap in time go on further layers. `--position` is `bottom` (default), `top` or `center`; `--margin` is the distance from the edge in pixels (5% of the height by default). `--style` is a JSON object of [text source](timeline.md#sources) fields merged over the default look (white, semi-bold, black outline, soft shadow, sized to the frame, wrapped at 90% of the width), for example `'{"size": 40, "background": "#00000080", "padding": 8}'`. Tags such as `<i>` are removed. |
 | `--extract` | The input's subtitle stream number `--track` (0 by default) written as `.srt` or `.vtt`, by the output's extension. Only text subtitles can be extracted. |
+
+Before rendering, every burned-in cue is laid out with the same engine
+that draws it and checked against the frame: a cue whose box leaves the
+picture is a warning (`W403`), one that lies outside the title-safe area
+(`--safe` percent in from each edge, 5 by default, 0 to turn it off) is a
+note (`N404`). Both name the cue and the clip in the timeline, so a style
+can be fixed before the render, or an agent can react to the JSON report.
 
 ```sh
 geneva subtitles talk.mp4 -o talk-subbed.mkv --add en.srt --add fr.srt --language en --language fr
+geneva subtitles talk.mp4 -o talk-burned.mp4 --burn en.srt
+geneva subtitles talk.mp4 -o talk-burned.mp4 --burn en.srt --position top --style '{"size": 32, "color": "#ffdd00"}'
 geneva subtitles talk-subbed.mkv -o fr.vtt --extract --track 1
 ```
 

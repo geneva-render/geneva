@@ -7,6 +7,15 @@ the format version it was written for.
 
 ## Unreleased
 
+### Added
+
+- `geneva subtitles --burn FILE` draws the cues of an SRT or WebVTT file
+  into the picture: `--position` (bottom, top, center), `--margin`, and
+  `--style` as a JSON object of text fields over a default look sized to
+  the frame. Overlapping cues go on further layers. Every cue is laid out
+  before rendering; one that leaves the frame is warning W403, one
+  outside the title-safe area (`--safe`, 5% by default) is note N404.
+
 ### Fixes
 
 - Image sequences (PNG) from an 8-bit YCbCr source take the direct path:

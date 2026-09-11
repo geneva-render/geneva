@@ -285,7 +285,7 @@ struct AudioArgs {
 #[derive(Args)]
 #[command(group = clap::ArgGroup::new("operation")
     .required(true)
-    .args(["extract", "add"]))]
+    .args(["extract", "add", "burn"]))]
 struct SubtitlesArgs {
     /// Input file.
     input: PathBuf,
@@ -305,6 +305,24 @@ struct SubtitlesArgs {
     /// Language code for each --add, in the same order; repeatable.
     #[arg(long, value_name = "CODE", requires = "add")]
     language: Vec<String>,
+    /// Subtitle file (.srt or .vtt) to draw into the picture.
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["add", "extract"])]
+    burn: Option<PathBuf>,
+    /// Where burned-in subtitles sit.
+    #[arg(long, default_value = "bottom", requires = "burn")]
+    position: verbs::SubtitlePosition,
+    /// Distance from the top or bottom edge in pixels (5% of the height
+    /// by default).
+    #[arg(long, value_name = "PX", requires = "burn")]
+    margin: Option<f64>,
+    /// JSON object of text fields merged over the default look, for
+    /// example '{"size": 36, "color": "#ffdd00", "background": "#00000080"}'.
+    #[arg(long, value_name = "JSON", requires = "burn")]
+    style: Option<String>,
+    /// Title-safe inset as a percentage of each dimension; cues outside it
+    /// get a note. 0 turns the note off.
+    #[arg(long, default_value_t = 5.0, value_name = "PERCENT", requires = "burn")]
+    safe: f64,
     #[command(flatten)]
     encode: verbs::EncodeArgs,
 }
@@ -520,6 +538,20 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 }
                 return Ok(ExitCode::SUCCESS);
             }
+            if let Some(file) = &args.burn {
+                let opts = verbs::BurnOptions {
+                    file: file.clone(),
+                    position: args.position,
+                    margin: args.margin,
+                    style: args.style.clone(),
+                    safe: args.safe,
+                };
+                let compiled = verbs::burn_subtitles(&args.input, &opts, &args.encode)?;
+                return run_verb(&compiled, &args.output, &args.encode, cli.format);
+            }
+            if args.add.is_empty() {
+                anyhow::bail!("give --add FILE, --burn FILE or --extract");
+            }
             if args.language.len() > args.add.len() {
                 anyhow::bail!("more --language values than --add files");
             }
@@ -554,11 +586,17 @@ fn run_verb(
     if encode.show_timeline {
         println!("{text}");
         if format == Format::Human {
+            for d in &compiled.diagnostics {
+                eprint!("{d}");
+            }
             eprintln!("asset paths are relative to {}", compiled.root.display());
         }
         return Ok(ExitCode::SUCCESS);
     }
-    let loaded = load_text(&text, &compiled.root, true);
+    let mut loaded = load_text(&text, &compiled.root, true);
+    loaded
+        .diagnostics
+        .extend(compiled.diagnostics.iter().cloned());
     let overrides = media::RenderOverrides {
         crf: encode.crf,
         preset: encode.preset.clone(),

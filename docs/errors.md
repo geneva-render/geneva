@@ -79,6 +79,9 @@ result is not what was intended. Notes are informational.
 | E420 | The output color tags describe HDR, which is not supported. |
 | E421 | `encode.video.profile` names a profile of another codec, or is set without a codec. |
 | W401 | Output width or height is odd; most codecs need even dimensions. |
+| W402 | `subtitles --burn` found no cues in the file; the picture is written unchanged. |
+| W403 | A burned-in subtitle cue extends off-screen. The message gives the box size and by how much it leaves the frame; the path names the clip. |
+| N404 | (note) A burned-in subtitle cue lies outside the title-safe area (`--safe`, 5% in from each edge by default). |
 
 ## Rendering (E500–E599)
 

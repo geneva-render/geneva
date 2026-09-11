@@ -538,6 +538,116 @@ fn subtitles_attach_as_streams_and_extract_again() {
 }
 
 #[test]
+fn subtitles_burn_compiles_cues_to_text_clips_and_checks_the_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let srt = dir.path().join("en.srt");
+    std::fs::write(
+        &srt,
+        "1\n00:00:00,200 --> 00:00:00,900\nHello <i>there</i>\n\n2\n00:00:00,500 --> 00:00:01,200\nOverlap\n\n3\n00:00:01,300 --> 00:00:01,900\nBye\n",
+    )
+    .unwrap();
+    let clip = media_dir().join("clip.mp4");
+    let out = dir.path().join("burned.mp4");
+
+    let shown = run_json(
+        &[
+            "subtitles",
+            "--burn",
+            srt.to_str().unwrap(),
+            "--show-timeline",
+            "-o",
+        ],
+        &[&out, &clip],
+    );
+    // The video, then one layer per set of non-overlapping cues.
+    assert_eq!(shown["layers"].as_array().unwrap().len(), 3);
+    let first = &shown["layers"][1]["clips"][0];
+    assert_eq!(first["source"]["kind"], "text");
+    assert_eq!(first["source"]["text"], "Hello there");
+    assert_eq!(first["start"], "0.2s");
+    assert_eq!(first["duration"], "0.7s");
+    assert_eq!(first["transform"]["anchor"]["y"], "100%");
+    assert_eq!(shown["layers"][1]["clips"][1]["source"]["text"], "Bye");
+    assert_eq!(shown["layers"][2]["clips"][0]["source"]["text"], "Overlap");
+
+    // A huge size cannot fit a 192×108 frame: warned before rendering,
+    // with the clip's path; the render still goes ahead.
+    let doc = run_json(
+        &[
+            "subtitles",
+            "--burn",
+            srt.to_str().unwrap(),
+            "--style",
+            r#"{"size": 80}"#,
+            "-o",
+        ],
+        &[&out, &clip],
+    );
+    assert_eq!(doc["ok"], true);
+    assert_eq!(doc["mode"], "render");
+    let codes: Vec<&str> = doc["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["code"].as_str().unwrap())
+        .collect();
+    assert!(codes.contains(&"W403"), "{codes:?}");
+    let w403 = doc["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["code"] == "W403")
+        .unwrap();
+    assert!(
+        w403["path"]
+            .as_str()
+            .unwrap()
+            .starts_with("/layers/1/clips/")
+    );
+    assert!(out.exists());
+
+    // At the default size the cues fit; a tiny safe area makes them a note.
+    let doc = run_json(
+        &[
+            "subtitles",
+            "--burn",
+            srt.to_str().unwrap(),
+            "--safe",
+            "40",
+            "--show-timeline",
+            "-o",
+        ],
+        &[&out, &clip],
+    );
+    assert!(doc["layers"].is_array());
+    let mut cmd = geneva();
+    cmd.args(["--format", "json", "subtitles", "--burn"])
+        .arg(&srt)
+        .args(["--safe", "40", "-o"])
+        .arg(&out)
+        .arg(&clip);
+    let result = cmd.output().unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(
+        doc["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["code"] == "N404"),
+        "{doc}"
+    );
+    let mut cmd = geneva();
+    cmd.args(["subtitles", "--burn"])
+        .arg(&srt)
+        .args(["--style", "{\"nonsense\": 1}", "-o"])
+        .arg(&out)
+        .arg(&clip);
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("nonsense"));
+}
+
+#[test]
 fn mxf_defaults_to_dnxhr_and_pcm() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("delivery.mxf");

@@ -52,6 +52,7 @@ geneva audio talk.mp4 -o scored.mp4 --mix music.mp3 --gain -12
 geneva convert talk.mp4 -o talk.mov --codec prores --profile hq      # 10-bit 4:2:2
 geneva convert talk.mp4 -o frames/%04d.png                           # image sequence
 geneva subtitles talk.mp4 -o talk-subbed.mkv --add en.srt --language en
+geneva subtitles talk.mp4 -o talk-burned.mp4 --burn en.srt
 ```
 
 Trims and joins that leave the picture untouched copy the source streams
