@@ -424,6 +424,37 @@ fn store(data: &mut [u8], i: usize, value: u16, wide: bool) {
     }
 }
 
+/// Spare frame buffers. A run hands each finished picture back here
+/// and takes the next one from the pool, so it does not allocate, zero
+/// and page in a fresh frame per picture.
+#[derive(Debug, Default)]
+pub struct PlanePool {
+    spare: Vec<Planes>,
+}
+
+impl PlanePool {
+    /// At most this many spare frames are kept.
+    const CAP: usize = 16;
+
+    /// A buffer laid out for `format` at `width`×`height`: a spare one
+    /// when there is one, else newly allocated. Its contents are stale;
+    /// the caller writes every sample.
+    pub fn take(&mut self, format: PlaneFormat, width: u32, height: u32) -> Planes {
+        let fits = |p: &Planes| p.format == format && p.width == width && p.height == height;
+        match self.spare.iter().position(fits) {
+            Some(i) => self.spare.swap_remove(i),
+            None => Planes::new(format, width, height),
+        }
+    }
+
+    /// Returns a buffer for reuse.
+    pub fn give(&mut self, planes: Planes) {
+        if self.spare.len() < Self::CAP {
+            self.spare.push(planes);
+        }
+    }
+}
+
 /// Converts a rendered frame to encoder planes with the output tags.
 ///
 /// Y'CbCr layouts composite alpha over black; chroma is the average of
@@ -431,9 +462,25 @@ fn store(data: &mut [u8], i: usize, value: u16, wide: bool) {
 /// encodes with the sRGB curve. Values are rounded to nearest with no
 /// dithering, so the output is deterministic.
 pub fn frame_to_planes(frame: &Frame, tags: ResolvedTags, format: PlaneFormat) -> Planes {
+    let mut out = Planes::new(format, frame.width(), frame.height());
+    frame_to_planes_into(frame, tags, format, &mut out);
+    out
+}
+
+/// [`frame_to_planes`] into `out`, which is laid out for `format` at the
+/// frame's size; every sample is written.
+pub fn frame_to_planes_into(
+    frame: &Frame,
+    tags: ResolvedTags,
+    format: PlaneFormat,
+    out: &mut Planes,
+) {
+    debug_assert!(
+        out.format == format && out.width == frame.width() && out.height == frame.height(),
+        "planes are laid out for the frame"
+    );
     let width = frame.width();
     let height = frame.height();
-    let mut out = Planes::new(format, width, height);
     let w = width as usize;
     if format.is_rgb() {
         let plane = &mut out.planes[0];
@@ -446,7 +493,7 @@ pub fn frame_to_planes(frame: &Frame, tags: ResolvedTags, format: PlaneFormat) -
                     px.copy_from_slice(&p.to_srgb8());
                 }
             });
-        return out;
+        return;
     }
 
     let lut = from_linear_lut(tags.transfer);
@@ -510,7 +557,7 @@ pub fn frame_to_planes(frame: &Frame, tags: ResolvedTags, format: PlaneFormat) -
                     cr_row[cx] = code8((r00 + r01 + r10 + r11) * 0.25, cs, c_off);
                 }
             });
-        return out;
+        return;
     }
     // Each task handles one chroma row: `dy` picture rows, whose chroma is
     // averaged over `dx × dy` blocks (fewer samples at a right or bottom
@@ -538,7 +585,6 @@ pub fn frame_to_planes(frame: &Frame, tags: ResolvedTags, format: PlaneFormat) -
                 store(cr_row, cx, code(sum_r / count, c_scale, c_off), wide);
             }
         });
-    out
 }
 
 /// Lays `overlay` (premultiplied linear RGBA drawn over transparency,
@@ -809,5 +855,31 @@ mod tests {
             (p.b - p.a).abs() < 1e-6,
             "premultiplied blue should equal alpha"
         );
+    }
+    #[test]
+    fn pool_reuses_a_matching_buffer_and_allocates_otherwise() {
+        let mut pool = PlanePool::default();
+        let mut a = pool.take(PlaneFormat::Yuv420p8, 4, 2);
+        a.planes[0].data[0] = 7;
+        pool.give(a);
+        // The same layout comes back with its stale contents.
+        let b = pool.take(PlaneFormat::Yuv420p8, 4, 2);
+        assert_eq!(b.planes[0].data[0], 7);
+        // A different layout is a fresh, zeroed buffer.
+        let c = pool.take(PlaneFormat::Rgba8, 4, 2);
+        assert_eq!(c.format, PlaneFormat::Rgba8);
+        assert!(c.planes[0].data.iter().all(|&v| v == 0));
+        pool.give(b);
+        pool.give(c);
+        assert_eq!(
+            pool.take(PlaneFormat::Rgba8, 4, 2).format,
+            PlaneFormat::Rgba8
+        );
+        assert_eq!(pool.take(PlaneFormat::Yuv420p8, 4, 2).planes[0].data[0], 7);
+        // Beyond the cap, buffers are dropped.
+        for _ in 0..PlanePool::CAP + 4 {
+            pool.give(Planes::new(PlaneFormat::Yuv420p8, 2, 2));
+        }
+        assert_eq!(pool.spare.len(), PlanePool::CAP);
     }
 }

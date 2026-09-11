@@ -280,3 +280,18 @@ impl Drop for ThreadedScaler {
         unsafe { ffmpeg_next::ffi::sws_freeContext(self.ptr) };
     }
 }
+
+/// Makes `frame`'s storage ours to write: when an encoder still holds a
+/// reference to it, the frame gets fresh storage, otherwise nothing
+/// changes.
+#[allow(unsafe_code)]
+pub fn make_writable(
+    frame: &mut ffmpeg_next::util::frame::Video,
+) -> Result<(), ffmpeg_next::Error> {
+    // SAFETY: `frame` is a valid, allocated frame for as long as the borrow.
+    let rc = unsafe { ffmpeg_next::ffi::av_frame_make_writable(frame.as_mut_ptr()) };
+    if rc < 0 {
+        return Err(ffmpeg_next::Error::from(rc));
+    }
+    Ok(())
+}

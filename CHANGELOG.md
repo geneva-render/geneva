@@ -5,6 +5,19 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## Unreleased
+
+### Changed
+
+- A render reuses its frame buffers: finished pictures go back to the
+  producer to be filled again, instead of a fresh buffer being
+  allocated, zeroed and paged in for every frame, and the picture
+  handed to a bundled encoder is written in place. A 1080p re-encode
+  through the system's x264 takes a third fewer page faults; at a cheap
+  preset, where the encoder does not hide the difference, the run is
+  about 15% faster than before and ahead of ffmpeg on the same file,
+  and at the medium preset it is at parity.
+
 ## 0.2.0 — 2026-09-11
 
 The timeline format reaches 0.2: `crop`, `effects` (a Gaussian blur),

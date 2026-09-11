@@ -13,7 +13,7 @@ use super::decode::VideoReader;
 use super::encode::{format_of, pixel_of};
 use super::{codec_error, ffi, init};
 use crate::MediaError;
-use crate::convert::{PlaneFormat, Planes, frame_to_planes};
+use crate::convert::{PlaneFormat, PlanePool, Planes, frame_to_planes};
 
 /// Decoded frames of a composition that shows its video sources as they
 /// are, or merely scaled to the output size, delivered in the encoder's
@@ -263,6 +263,12 @@ impl DirectSource {
 
     /// The output frame shown at time `t`.
     pub fn frame(&mut self, t: Ratio) -> Result<Planes, MediaError> {
+        self.frame_with(t, &mut PlanePool::default())
+    }
+
+    /// The output frame shown at time `t`, in a buffer from `pool` when
+    /// it has one; the caller gives finished frames back to the pool.
+    pub fn frame_with(&mut self, t: Ratio, pool: &mut PlanePool) -> Result<Planes, MediaError> {
         let clip = self
             .clips
             .iter_mut()
@@ -296,14 +302,18 @@ impl DirectSource {
             || format_of(raw.format()) != Some(self.format);
         let planes = if needs_scaler {
             clip.converter
-                .scale(raw, self.format, self.to_rgb, width, height)?
+                .scale(raw, self.format, self.to_rgb, width, height, pool)?
         } else {
-            copy_planes(raw, self.format)
+            copy_planes(raw, self.format, pool)
         };
         match (clip.place, &self.bars) {
             (Some(Place::Bars(rect) | Place::CropBars { dst: rect, .. }), Some(bars)) => {
-                let mut out = bars.clone();
+                let mut out = pool.take(bars.format, bars.width, bars.height);
+                for (dst, src) in out.planes.iter_mut().zip(&bars.planes) {
+                    dst.data.copy_from_slice(&src.data);
+                }
                 blit_planes(&mut out, &planes, rect[0], rect[1]);
+                pool.give(planes);
                 Ok(out)
             }
             _ => Ok(planes),
@@ -321,6 +331,7 @@ impl Converter {
         to_rgb: bool,
         width: u32,
         height: u32,
+        pool: &mut PlanePool,
     ) -> Result<Planes, MediaError> {
         let clip = self;
         let dst = pixel_of(format);
@@ -360,7 +371,7 @@ impl Converter {
             .expect("scaler was just built")
             .run(raw, &mut clip.scratch)
             .map_err(|e| codec_error("scaling", e))?;
-        let mut planes = copy_planes(&clip.scratch, format);
+        let mut planes = copy_planes(&clip.scratch, format, pool);
         if let Some(lut) = &clip.transfer_lut {
             let plane = &mut planes.planes[0];
             let stride = plane.stride;
@@ -398,9 +409,10 @@ fn blit_planes(dst: &mut Planes, src: &Planes, x: u32, y: u32) {
     }
 }
 
-/// Copies a decoded frame's planes out of their padded rows.
-fn copy_planes(raw: &frame::Video, format: PlaneFormat) -> Planes {
-    let mut out = Planes::new(format, raw.width(), raw.height());
+/// Copies a decoded frame's planes out of their padded rows, into a
+/// buffer from `pool`.
+fn copy_planes(raw: &frame::Video, format: PlaneFormat, pool: &mut PlanePool) -> Planes {
+    let mut out = pool.take(format, raw.width(), raw.height());
     for (i, plane) in out.planes.iter_mut().enumerate() {
         let stride = raw.stride(i);
         let data = raw.data(i);

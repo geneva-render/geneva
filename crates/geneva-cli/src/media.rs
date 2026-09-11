@@ -492,6 +492,11 @@ mod imp {
         // encoded on a third thread and its packets are interleaved by the
         // encoder thread as they arrive.
         let (tx, rx) = std::sync::mpsc::sync_channel::<Msg>(8);
+        // Encoded frames come back here to be filled again, so the run
+        // allocates as many frame buffers as are in flight, not one per
+        // picture.
+        let (spare_tx, spare_rx) = std::sync::mpsc::channel::<geneva_media::convert::Planes>();
+        let mut pool = geneva_media::convert::PlanePool::default();
         let mut encoder = encoder;
         let audio_encoder = if has_audio {
             encoder.take_audio_encoder()
@@ -505,7 +510,10 @@ mod imp {
                 let mut encoder = encoder;
                 for msg in rx {
                     match msg {
-                        Msg::Planes(planes) => encoder.push_planes(&planes)?,
+                        Msg::Planes(planes) => {
+                            encoder.push_planes(&planes)?;
+                            let _ = spare_tx.send(planes);
+                        }
                         Msg::Copied(batch) => {
                             for p in &batch {
                                 encoder.push_copied(&p.data, p.frame, p.keyframe)?;
@@ -567,11 +575,14 @@ mod imp {
             // One output frame, by whichever path applies.
             let mut produce = |n: u64| -> Result<geneva_media::convert::Planes, RenderError> {
                 let t = comp.frame_time(n);
+                while let Ok(spare) = spare_rx.try_recv() {
+                    pool.give(spare);
+                }
                 if let Some(d) = direct.as_mut() {
-                    return d.frame(t).map_err(media_err);
+                    return d.frame_with(t, &mut pool).map_err(media_err);
                 }
                 if let Some(b) = base.as_mut() {
-                    let mut planes = b.frame(t).map_err(media_err)?;
+                    let mut planes = b.frame_with(t, &mut pool).map_err(media_err)?;
                     if let Some((overlay, rect)) = renderer.render_overlays(comp, t)? {
                         let tags = output_tags.expect("video output has tags");
                         geneva_media::convert::blend_overlay(&mut planes, &overlay, rect, tags);
@@ -581,9 +592,9 @@ mod imp {
                 }
                 renderer.render_into(comp, t, &mut frame)?;
                 let (color, format) = video_format.expect("video output has a format");
-                Ok(geneva_media::convert::frame_to_planes(
-                    &frame, color, format,
-                ))
+                let mut planes = pool.take(format, frame.width(), frame.height());
+                geneva_media::convert::frame_to_planes_into(&frame, color, format, &mut planes);
+                Ok(planes)
             };
             let mut done = 0u64;
             let report = |done: u64| {

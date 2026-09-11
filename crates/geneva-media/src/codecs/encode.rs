@@ -661,6 +661,7 @@ fn open_video_track(
     stream.set_rate(fps);
     Ok(VideoTrack {
         backend,
+        scratch: frame::Video::empty(),
         name,
         x264_error,
         stream_index,
@@ -779,6 +780,7 @@ fn open_stitch_track(
             reorder: i64::from(stitch.reorder.max(u32::from(STITCH_BFRAMES))),
             build,
         }),
+        scratch: frame::Video::empty(),
         name: "libx264".to_owned(),
         x264_error: None,
         stream_index,
@@ -913,6 +915,9 @@ enum VideoBackend {
 
 struct VideoTrack {
     backend: VideoBackend,
+    /// The picture handed to a bundled encoder, reused from one frame to
+    /// the next.
+    scratch: frame::Video,
     /// Encoder implementation name, for the notes.
     name: String,
     /// Why the system's x264 was found but not used, if that happened.
@@ -1127,8 +1132,19 @@ impl Encoder {
         self.frame_index += 1;
         match &mut track.backend {
             VideoBackend::Lavc(encoder) => {
-                let mut out =
-                    frame::Video::new(pixel_of(track.format), planes.width, planes.height);
+                let pixel = pixel_of(track.format);
+                let out = &mut track.scratch;
+                if out.format() != pixel
+                    || out.width() != planes.width
+                    || out.height() != planes.height
+                {
+                    *out = frame::Video::new(pixel, planes.width, planes.height);
+                } else {
+                    // The encoder may still hold the last picture; then the
+                    // library gives this one fresh storage, otherwise the
+                    // same storage is written again.
+                    ffi::make_writable(out).map_err(|e| codec_error("encoding video", e))?;
+                }
                 for (i, plane) in planes.planes.iter().enumerate() {
                     let stride = out.stride(i);
                     let row_bytes = plane.width * planes.format.bytes_per_sample();
@@ -1146,7 +1162,7 @@ impl Encoder {
                 out.set_color_transfer_characteristic(transfer);
                 out.set_pts(Some(pts));
                 encoder
-                    .send_frame(&out)
+                    .send_frame(out)
                     .map_err(|e| codec_error("encoding video", e))?;
                 Self::drain(
                     &mut self.octx,
