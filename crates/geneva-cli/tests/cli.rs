@@ -568,3 +568,36 @@ fn a_container_that_rejects_the_source_audio_is_rendered_not_copied() {
     assert_eq!(info["video"]["codec"], "h264");
     assert_eq!(info["audio"]["codec"], "pcm_s24le");
 }
+
+#[test]
+fn verbs_keep_the_source_color_encoding() {
+    let dir = tempfile::tempdir().unwrap();
+    // A BT.601-tagged SD clip, as a camera or an old encoder would write.
+    let sd = dir.path().join("sd.mp4");
+    std::fs::write(
+        dir.path().join("sd.json"),
+        r##"{ "geneva": "0.1",
+            "output": { "width": 320, "height": 240, "fps": 25, "duration": "1s",
+                        "color": { "primaries": "bt601-625", "matrix": "bt601" } },
+            "layers": [ { "clips": [ { "source": { "kind": "solid", "color": "#4080c0" } } ] } ] }"##,
+    )
+    .unwrap();
+    run_json(
+        &["render", "--preset", "ultrafast", "-o"],
+        &[&sd, &dir.path().join("sd.json")],
+    );
+    let info = run_json(&["probe"], &[&sd]);
+    assert_eq!(info["video"]["color"]["matrix"], "bt601");
+
+    // Resizing it keeps the encoding, tags the output with it, and so
+    // stays on the direct path instead of converting to BT.709.
+    let out = dir.path().join("small.mp4");
+    let doc = run_json(
+        &["resize", "--height", "120", "--preset", "ultrafast", "-o"],
+        &[&out, &sd],
+    );
+    assert_eq!(doc["mode"], "direct");
+    let info = run_json(&["probe"], &[&out]);
+    assert_eq!(info["video"]["color"]["matrix"], "bt601");
+    assert_eq!(info["video"]["color"]["primaries"], "bt601-625");
+}

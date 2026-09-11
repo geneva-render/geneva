@@ -93,9 +93,19 @@ fi
 if ! done_marker libvpx; then
   fetch libvpx "https://chromium.googlesource.com/webm/libvpx/+archive/refs/tags/v$LIBVPX_VERSION.tar.gz" 0
   echo "==> building libvpx"
+  # libvpx's configure only recognizes Darwin up to 23 (macOS 14); on a
+  # newer host it silently falls back to a generic build without NEON or
+  # SSE, so the target is spelled out.
+  vpx_target=""
+  if [ "$(uname -s)" = Darwin ]; then
+    case "$(uname -m)" in
+      arm64) vpx_target="--target=arm64-darwin23-gcc" ;;
+      x86_64) vpx_target="--target=x86_64-darwin23-gcc" ;;
+    esac
+  fi
   (cd "$src/libvpx" && ./configure --prefix="$prefix" --disable-shared --enable-static --enable-pic \
       --disable-examples --disable-tools --disable-docs --disable-unit-tests \
-      --enable-vp9-highbitdepth --enable-runtime-cpu-detect >/dev/null \
+      --enable-vp9-highbitdepth --enable-runtime-cpu-detect $vpx_target >/dev/null \
       && make -j"$jobs" >/dev/null && make install >/dev/null)
   cp "$src/libvpx/LICENSE" "$prefix/share/licenses/libvpx.txt"
   cat "$src/libvpx/PATENTS" >> "$prefix/share/licenses/libvpx.txt"

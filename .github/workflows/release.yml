@@ -43,6 +43,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          # ffmpeg-sys-next bundles the static media archives into its rlib
+          # when it is built, so a target cache is only valid for the media
+          # libraries it was built against.
+          key: media-${{ hashFiles('scripts/build-media-libs.sh') }}
       - name: Install build tools (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake meson ninja-build nasm pkg-config clang zlib1g-dev
@@ -58,6 +63,9 @@ jobs:
       - name: Build media libraries
         if: steps.media-libs.outputs.cache-hit != 'true'
         run: scripts/build-media-libs.sh
+      - name: Rebuild the media bindings against fresh libraries
+        if: steps.media-libs.outputs.cache-hit != 'true'
+        run: cargo clean -p ffmpeg-sys-next --release && cargo clean -p ffmpeg-sys-next
       - name: Build
         run: cargo build --release --locked
       - name: Sign (macOS)

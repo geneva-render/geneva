@@ -5,6 +5,26 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## 0.1.5
+
+### Fixes
+
+- macOS archives were built against media libraries from before MXF and
+  PNG support, because the build cache kept the media bindings compiled
+  earlier; DNxHR, MXF and image sequences failed on the Mac with "not
+  known" and "not available" errors. The cache is now keyed to the media
+  libraries and the bindings are rebuilt whenever the libraries are.
+- VP9 on Apple silicon and Intel Macs ran several times slower than
+  ffmpeg: libvpx's configure does not recognize macOS 15 and fell back to
+  a build without NEON or SSE. The target is now spelled out.
+- Verbs keep the source's color encoding (see `docs/cli.md`), so resizing
+  or converting standard-definition material no longer converts it to
+  BT.709 through the compositor; it takes the direct path, tagged as the
+  source was.
+- A resize whose even output size is up to two pixels off the exact fit
+  (854×480 at height 360 is 640.5 wide, written as 642) takes the direct
+  path as well.
+
 ## 0.1.4
 
 ### Fixes

@@ -9,6 +9,7 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
+use geneva_color::{ColorTags, ResolvedTags};
 use geneva_timeline::schema::{
     Asset, AudioClip, AudioTrack, Clip, Encode, Fit, Layer, Output, Source, SubtitleTrack,
     Timeline, Transform, Transition, TransitionKind, VideoCodec, VideoEncode, VideoProfile,
@@ -26,6 +27,8 @@ pub struct Input {
     pub duration: Option<Ratio>,
     pub has_video: bool,
     pub has_audio: bool,
+    /// The video's color encoding, as tagged or as inferred from its size.
+    pub color: Option<ResolvedTags>,
 }
 
 impl Input {
@@ -35,6 +38,10 @@ impl Input {
             Some(v) => (v.width, v.height, v.fps),
             None => (0, 0, Ratio::from_int(30)),
         };
+        let color = info
+            .video
+            .as_ref()
+            .map(|v| geneva_color::infer(v.color, v.width, v.height).0);
         let duration = info
             .video
             .as_ref()
@@ -48,8 +55,28 @@ impl Input {
             duration,
             has_video: info.video.is_some(),
             has_audio: info.audio.is_some(),
+            color,
         })
     }
+}
+
+/// The color encoding to write when every video input shares one: the
+/// picture then keeps its encoding (SD material stays BT.601), the tags
+/// travel into the file, and nothing is converted on the way. HDR sources
+/// fall back to the SDR default, which the renderer maps down to.
+fn shared_color(inputs: &[&Input]) -> Option<ColorTags> {
+    let mut found: Option<ResolvedTags> = None;
+    for input in inputs {
+        let Some(color) = input.color else {
+            continue;
+        };
+        match found {
+            None => found = Some(color),
+            Some(f) if f != color => return None,
+            _ => {}
+        }
+    }
+    found.filter(|c| !c.is_hdr()).map(ColorTags::from)
 }
 
 /// Encoder options shared by every verb.
@@ -324,6 +351,7 @@ pub fn convert(
     let (w, h) = output_size(src.width, src.height, width, height);
     let (root, rel) = common_root(&[input.to_owned()])?;
     let mut tl = base_timeline(w, h, fps.map_or(src.fps, |f| f.0), encode_block(args));
+    tl.output.color = shared_color(&[&src]);
     tl.assets.insert(
         "in".to_owned(),
         Asset {
@@ -369,6 +397,7 @@ pub fn trim(
         src.fps,
         encode_block(args),
     );
+    tl.output.color = shared_color(&[&src]);
     tl.assets.insert(
         "in".to_owned(),
         Asset {
@@ -408,6 +437,7 @@ pub fn concat(inputs: &[PathBuf], crossfade: Option<Time>, args: &EncodeArgs) ->
         first.fps,
         encode_block(args),
     );
+    tl.output.color = shared_color(&probed.iter().collect::<Vec<_>>());
     let mut clips = Vec::new();
     for (i, (src, path)) in probed.iter().zip(rel.iter()).enumerate() {
         let id = format!("in{}", i + 1);
@@ -491,6 +521,7 @@ pub fn overlay(
         src.fps,
         encode_block(args),
     );
+    tl.output.color = shared_color(&[&src]);
     // The overlay is open-ended by default, so the output length comes
     // from the input rather than from the clips.
     tl.output.duration = src.duration.map(seconds);
@@ -644,6 +675,7 @@ pub fn audio(input: &Path, op: &AudioOp, args: &EncodeArgs) -> Result<Compiled> 
         (2, 2)
     };
     let mut tl = base_timeline(w, h, src.fps, encode_block(args));
+    tl.output.color = shared_color(&[&src]);
     tl.assets.insert(
         "in".to_owned(),
         Asset {
@@ -745,6 +777,7 @@ pub fn add_subtitles(input: &Path, files: &[SubtitleFile], args: &EncodeArgs) ->
         (2, 2)
     };
     let mut tl = base_timeline(w, h, src.fps, encode_block(args));
+    tl.output.color = shared_color(&[&src]);
     tl.assets.insert(
         "in".to_owned(),
         Asset {

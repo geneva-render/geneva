@@ -113,7 +113,7 @@ or `--exact`), the decoded frames are handed to the encoder as they come
 out of the decoder, provided they carry the output's color tags. Frames
 already in the encoder's sample layout at the output size are copied as
 they are; frames that differ only in size (a resize that fills the whole
-frame) or in layout (8-bit 4:2:0 into the 10-bit 4:2:2 that ProRes and
+frame, to within the two pixels that rounding to an even size can leave) or in layout (8-bit 4:2:0 into the 10-bit 4:2:2 that ProRes and
 DNxHR take) are scaled and repacked by libswscale in their coded YCbCr
 encoding, bicubic, the way a plain transcode does it. This is the one
 place Geneva resamples outside linear light: with a single picture and

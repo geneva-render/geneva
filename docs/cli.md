@@ -77,6 +77,12 @@ Prints the JSON Schema of the current timeline format version.
 
 All verbs take `-o FILE` for the output and these encoding options:
 
+The verbs write the output in the source's color encoding when every video
+input shares one (as tagged, or as inferred from its size for untagged
+material), so standard-definition sources stay BT.601 and the tags travel
+into the file; `render` defaults to BT.709 unless `output.color` says
+otherwise. The printed timeline (`--show-timeline`) shows the choice.
+
 | Option | Effect |
 | --- | --- |
 | `--crf N`, `--preset NAME` | As for `render`. Setting either forces a re-encode. |

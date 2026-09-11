@@ -213,7 +213,7 @@ pub(super) fn untouched_video_clips(
 
 /// Like [`untouched_video_clips`], but also accepts clips that are only
 /// scaled: fitted so that the picture fills the whole output frame (to
-/// within a pixel), with nothing else changed.
+/// within the rounding of an even output size), with nothing else changed.
 pub(super) fn filling_video_clips(
     comp: &Composition,
     root: &Path,
@@ -300,8 +300,10 @@ fn video_layer_clips(
 }
 
 /// Whether a `w`×`h` picture fitted into the output covers the whole frame
-/// to within a pixel on each axis (the renderer would leave at most a
-/// sub-pixel edge).
+/// to within two pixels on each axis: the slack that rounding an output
+/// size to even numbers leaves (854×480 at height 360 is 640.5 wide,
+/// written as 642), where the renderer would show at most a one-pixel
+/// edge and a scaler stretches by a fraction of a percent instead.
 fn fills_frame(fit: Fit, w: u32, h: u32, comp: &Composition) -> bool {
     let (w, h) = (f64::from(w), f64::from(h));
     let (out_w, out_h) = (f64::from(comp.width), f64::from(comp.height));
@@ -317,7 +319,7 @@ fn fills_frame(fit: Fit, w: u32, h: u32, comp: &Composition) -> bool {
         }
         Fit::Fill => [out_w / w, out_h / h],
     };
-    (w * scale[0] - out_w).abs() < 1.0 && (h * scale[1] - out_h).abs() < 1.0
+    (w * scale[0] - out_w).abs() <= 2.0 && (h * scale[1] - out_h).abs() <= 2.0
 }
 
 /// Audio codecs each container can hold without re-encoding.
