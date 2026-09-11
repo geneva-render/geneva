@@ -120,3 +120,126 @@ pub fn h264_context(
     }
     ctx
 }
+
+/// A scaler that runs on several threads, through the library's
+/// frame-based interface (the binding's own context uses the older,
+/// single-threaded call). Used for conversions the generic path serves,
+/// such as YCbCr to RGB with full chroma interpolation.
+pub struct ThreadedScaler {
+    ptr: *mut ffmpeg_next::ffi::SwsContext,
+}
+
+// SAFETY: the context is used from one thread at a time through `&mut`;
+// its worker threads are owned by the context itself.
+#[allow(unsafe_code)]
+unsafe impl Send for ThreadedScaler {}
+
+impl ThreadedScaler {
+    /// Creates a scaler between the two layouts and sizes.
+    #[allow(unsafe_code)]
+    pub fn new(
+        src: ffmpeg_next::util::format::Pixel,
+        src_size: (u32, u32),
+        dst: ffmpeg_next::util::format::Pixel,
+        dst_size: (u32, u32),
+        flags: ffmpeg_next::software::scaling::Flags,
+        threads: usize,
+    ) -> Result<Self, ffmpeg_next::Error> {
+        use ffmpeg_next::ffi;
+        // SAFETY: the context is freshly allocated and owned here; every
+        // option name is one the library defines for its context, set
+        // before the context is initialized; on failure it is freed.
+        unsafe {
+            let ptr = ffi::sws_alloc_context();
+            if ptr.is_null() {
+                return Err(ffmpeg_next::Error::Unknown);
+            }
+            let opts: [(&[u8], i64); 8] = [
+                (b"srcw\0", i64::from(src_size.0)),
+                (b"srch\0", i64::from(src_size.1)),
+                (
+                    b"src_format\0",
+                    i64::from(ffi::AVPixelFormat::from(src) as i32),
+                ),
+                (b"dstw\0", i64::from(dst_size.0)),
+                (b"dsth\0", i64::from(dst_size.1)),
+                (
+                    b"dst_format\0",
+                    i64::from(ffi::AVPixelFormat::from(dst) as i32),
+                ),
+                (b"sws_flags\0", i64::from(flags.bits())),
+                (b"threads\0", threads.max(1) as i64),
+            ];
+            for (name, value) in opts {
+                let rc = ffi::av_opt_set_int(ptr.cast(), name.as_ptr().cast(), value, 0);
+                if rc < 0 {
+                    ffi::sws_freeContext(ptr);
+                    return Err(ffmpeg_next::Error::from(rc));
+                }
+            }
+            let rc = ffi::sws_init_context(ptr, std::ptr::null_mut(), std::ptr::null_mut());
+            if rc < 0 {
+                ffi::sws_freeContext(ptr);
+                return Err(ffmpeg_next::Error::from(rc));
+            }
+            Ok(Self { ptr })
+        }
+    }
+
+    /// Tells the scaler which matrix and range its YCbCr input uses, for a
+    /// conversion to RGB. Without this the library assumes BT.601 for
+    /// every source. Returns `false` when the matrix has no table (RGB
+    /// sources).
+    #[allow(unsafe_code)]
+    pub fn set_input_colorspace(
+        &mut self,
+        matrix: geneva_color::Matrix,
+        range: geneva_color::Range,
+    ) -> bool {
+        use ffmpeg_next::ffi;
+        let space = match matrix {
+            geneva_color::Matrix::Bt709 => ffi::SWS_CS_ITU709,
+            geneva_color::Matrix::Bt601 => ffi::SWS_CS_ITU601,
+            geneva_color::Matrix::Bt2020Ncl => ffi::SWS_CS_BT2020,
+            geneva_color::Matrix::Identity => return false,
+        };
+        let src_full = i32::from(range == geneva_color::Range::Full);
+        // SAFETY: the context is owned here; the coefficient tables are
+        // static arrays owned by the library; the remaining arguments are
+        // plain integers (neutral brightness, unit contrast and saturation).
+        unsafe {
+            let table = ffi::sws_getCoefficients(space);
+            let output = ffi::sws_getCoefficients(ffi::SWS_CS_DEFAULT);
+            ffi::sws_setColorspaceDetails(self.ptr, table, src_full, output, 1, 0, 1 << 16, 1 << 16)
+                >= 0
+        }
+    }
+
+    /// Converts `src` into `dst`, which must be allocated for the
+    /// destination layout and size.
+    #[allow(unsafe_code)]
+    pub fn run(
+        &mut self,
+        src: &ffmpeg_next::util::frame::Video,
+        dst: &mut ffmpeg_next::util::frame::Video,
+    ) -> Result<(), ffmpeg_next::Error> {
+        // SAFETY: both frames wrap valid `AVFrame`s whose layouts match the
+        // ones the context was created for; the library checks them.
+        let rc =
+            unsafe { ffmpeg_next::ffi::sws_scale_frame(self.ptr, dst.as_mut_ptr(), src.as_ptr()) };
+        if rc < 0 {
+            Err(ffmpeg_next::Error::from(rc))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Drop for ThreadedScaler {
+    #[allow(unsafe_code)]
+    fn drop(&mut self) {
+        // SAFETY: `ptr` was returned by `sws_alloc_context` and is freed
+        // exactly once.
+        unsafe { ffmpeg_next::ffi::sws_freeContext(self.ptr) };
+    }
+}

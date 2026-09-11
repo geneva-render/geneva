@@ -120,8 +120,12 @@ place Geneva resamples outside linear light: with a single picture and
 nothing composited over it there is no blending to get wrong, and the
 difference from the reference renderer is the difference between
 gamma-space and linear-light filtering at hard edges, which the tests
-bound. RGB sources and RGB outputs (image sequences) still go through the
-compositor, which owns matrix and transfer conversions. Frame selection
+bound. An RGB output (an image sequence) from an 8-bit YCbCr source is
+served the same way: the scaler applies the source's matrix and range and
+a per-channel table re-encodes its transfer curve as the output's, which
+is what the compositor computes for such a frame. RGB sources and
+conversions between YCbCr encodings still go through the compositor,
+which owns matrix and primaries conversions. Frame selection
 follows the same rule as the renderer (the last decoded frame at or
 before each output time), and the report names this mode `direct`.
 

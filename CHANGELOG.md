@@ -5,6 +5,15 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## Unreleased
+
+### Fixes
+
+- Image sequences (PNG) from an 8-bit YCbCr source take the direct path:
+  the scaler applies the source's matrix and a table re-encodes its
+  transfer curve, instead of the compositor's floating-point conversion.
+  One second of 1080p to PNG went from 1.6 s to ffmpeg's speed.
+
 ## 0.1.8
 
 ### Changes

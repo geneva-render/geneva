@@ -503,6 +503,37 @@ fn direct_frames_match_the_reference_renderer() {
         assert!(signed.abs() < 0.5, "frame {n}: luma bias {signed}");
     }
 
+    // An RGB output (PNG) takes the same path: the scaler applies the
+    // source's matrix and a table re-encodes its transfer curve as sRGB.
+    let rgb_tags = geneva_media::output_tags_for(VideoCodec::Png, comp.color);
+    let mut direct = DirectSource::open(&comp, &root, PlaneFormat::Rgba8, rgb_tags)
+        .unwrap()
+        .expect("an RGB output qualifies");
+    for n in [0u64, 7, 24] {
+        let t = comp.frame_time(n);
+        let fast = direct.frame(t).unwrap();
+        let slow = frame_to_planes(
+            &renderer.render_frame(&comp, t).unwrap(),
+            rgb_tags,
+            PlaneFormat::Rgba8,
+        );
+        let (fast, slow) = (&fast.planes[0].data, &slow.planes[0].data);
+        assert_eq!(fast.len(), slow.len());
+        let (mut abs, mut signed, mut count) = (0.0f64, 0.0f64, 0.0f64);
+        for (a, b) in fast.chunks_exact(4).zip(slow.chunks_exact(4)) {
+            assert_eq!(a[3], 255, "frame {n}: opaque");
+            for c in 0..3 {
+                let d = f64::from(a[c]) - f64::from(b[c]);
+                abs += d.abs();
+                signed += d;
+                count += 1.0;
+            }
+        }
+        let (abs, signed) = (abs / count, signed / count);
+        assert!(abs < 4.0, "frame {n}: mean RGB difference {abs}");
+        assert!(signed.abs() < 0.5, "frame {n}: RGB bias {signed}");
+    }
+
     // Anything that changes the picture disqualifies the direct path.
     let comp = load(&doc(r#", "opacity": 0.5"#)).composition.unwrap();
     assert!(
