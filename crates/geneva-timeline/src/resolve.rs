@@ -18,8 +18,8 @@ use crate::length::{Length, Point, Scale};
 use crate::ratio::Ratio;
 use crate::schema::{
     ACCEPTED_VERSIONS, Asset, AssetKind, AudioOutput, AudioTrack, BlendMode, CompositionDef, Crop,
-    Effect, Encode, FORMAT_VERSION, Fit, Layer, ShapeKind, Source, TextSource, Timeline, Transform,
-    TransitionKind,
+    Effect, Encode, FORMAT_VERSION, Fit, Layer, Mask, ShapeKind, Source, TextSource, Timeline,
+    Transform, TransitionKind,
 };
 use crate::time::Time;
 
@@ -129,6 +129,40 @@ pub struct ResolvedClip {
     pub transition_in: Option<(TransitionKind, Ratio)>,
     /// Effects on the placed picture, in order.
     pub effects: Vec<ResolvedEffect>,
+    /// The mask, if any.
+    pub mask: Option<ResolvedMask>,
+}
+
+/// A mask with its values checked; lengths stay as written, since the
+/// clip's box size is only known when the source is.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedMask {
+    /// The shape, when the mask is not an image.
+    pub shape: ShapeKind,
+    /// The shape's box: left, top, width, height in the clip's box.
+    pub rect: [Option<Length>; 4],
+    /// Corner radius of a rectangle, in pixels of the clip's box.
+    pub radius: f64,
+    /// Soft edge width in pixels of the clip's box.
+    pub feather: f64,
+    /// The luma image asset, when the mask is an image.
+    pub asset: Option<String>,
+    /// Whether the coverage is inverted.
+    pub invert: bool,
+}
+
+impl ResolvedMask {
+    /// The shape's box `[x, y, width, height]` in pixels of a `w`×`h`
+    /// clip box.
+    pub fn rect_px(&self, w: f64, h: f64) -> [f64; 4] {
+        let [x, y, width, height] = self.rect;
+        [
+            x.map_or(0.0, |v| v.to_px(w)),
+            y.map_or(0.0, |v| v.to_px(h)),
+            width.map_or(w, |v| v.to_px(w)),
+            height.map_or(h, |v| v.to_px(h)),
+        ]
+    }
 }
 
 /// An effect with its parameters sampleable over clip-local time.
@@ -975,6 +1009,10 @@ impl Resolver<'_> {
             if let Some(crop) = &clip.crop {
                 self.check_crop(crop, &cpath.key("crop"));
             }
+            let mask = clip
+                .mask
+                .as_ref()
+                .map(|m| self.resolve_mask(m, &cpath.key("mask"), assets));
             let effects = clip
                 .effects
                 .iter()
@@ -1010,6 +1048,7 @@ impl Resolver<'_> {
                 opacity,
                 transition_in,
                 effects,
+                mask,
             });
             cursor = end;
         }
@@ -1302,6 +1341,56 @@ impl Resolver<'_> {
                 Some(len) => (in_secs, ClipLength::Fixed(len - in_secs)),
                 None => (in_secs, ClipLength::Open),
             },
+        }
+    }
+
+    fn resolve_mask(
+        &mut self,
+        m: &Mask,
+        path: &Path,
+        assets: &BTreeMap<String, ResolvedAsset>,
+    ) -> ResolvedMask {
+        if let Some(asset) = &m.asset {
+            self.asset_ref(asset, &path.key("asset"), assets, &[AssetKind::Image]);
+        }
+        for (name, v) in [("width", m.width), ("height", m.height)] {
+            let bad = match v {
+                Some(Length::Px(px)) => !(px > 0.0 && px.is_finite()),
+                Some(Length::Percent(p)) => !(p > 0.0 && p.is_finite()),
+                None => false,
+            };
+            if bad {
+                self.push(
+                    Diagnostic::error(
+                        "E402",
+                        path.key(name),
+                        format!("mask {name} must be greater than 0"),
+                    )
+                    .with_value(json!(v.map(|l| l.to_string()))),
+                );
+            }
+        }
+        for (name, v) in [("radius", m.radius), ("feather", m.feather)] {
+            if let Some(v) = v {
+                if !(v >= 0.0 && v.is_finite()) {
+                    self.push(
+                        Diagnostic::error(
+                            "E402",
+                            path.key(name),
+                            format!("mask {name} must be 0 or more"),
+                        )
+                        .with_value(json!(v)),
+                    );
+                }
+            }
+        }
+        ResolvedMask {
+            shape: m.shape.unwrap_or(ShapeKind::Rect),
+            rect: [m.x, m.y, m.width, m.height],
+            radius: m.radius.unwrap_or(0.0).max(0.0),
+            feather: m.feather.unwrap_or(0.0).max(0.0),
+            asset: m.asset.clone(),
+            invert: m.invert.unwrap_or(false),
         }
     }
 

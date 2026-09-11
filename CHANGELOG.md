@@ -32,6 +32,11 @@ the format version it was written for.
   explicit size) is shown whole over a blurred, scaled-up copy of
   itself instead of bars, as the phone editors do. The copy is a first
   layer named `fill` with no audio; `--show-timeline` shows it.
+- `mask` on clips: a rectangle (with corner radius) or ellipse cut from
+  the clip's box, with an optional feathered edge, or the luma of an
+  image asset stretched over the box; `invert` flips it. Masks are in
+  the box's own coordinates, so they follow the clip's fit and
+  transform.
 
 ### Performance
 

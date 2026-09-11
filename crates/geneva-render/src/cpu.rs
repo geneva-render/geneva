@@ -1,11 +1,12 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use geneva_color::{Color, LinearRgba};
 use geneva_timeline::schema::{BlendMode, Fit, ShapeKind};
 use geneva_timeline::{
-    Composition, Ratio, ResolvedClip, ResolvedEffect, ResolvedLayer, ResolvedSource,
+    Composition, Ratio, ResolvedClip, ResolvedEffect, ResolvedLayer, ResolvedMask, ResolvedSource,
 };
 use rayon::prelude::*;
 
@@ -32,6 +33,9 @@ pub struct CpuRenderer<A: AssetSource> {
     /// the next ones so that a frame-sized buffer is not allocated and
     /// faulted in on every frame.
     spare: Vec<Vec<LinearRgba>>,
+    /// Luma mask images by asset id, shared so that a placement can hold
+    /// one while the paint borrows the renderer.
+    masks: HashMap<String, Arc<Image>>,
 }
 
 /// How many spare buffers are kept.
@@ -51,6 +55,7 @@ impl CpuRenderer<FileAssets> {
             text: TextEngine::new(),
             text_cache: HashMap::new(),
             spare: Vec::new(),
+            masks: HashMap::new(),
         }
     }
 }
@@ -63,7 +68,25 @@ impl<A: AssetSource> CpuRenderer<A> {
             text: TextEngine::new(),
             text_cache: HashMap::new(),
             spare: Vec::new(),
+            masks: HashMap::new(),
         }
+    }
+
+    /// The luma image of a clip's mask, if it has one, loaded once.
+    fn mask_image(
+        &mut self,
+        comp: &Composition,
+        clip: &ResolvedClip,
+    ) -> Result<Option<Arc<Image>>, RenderError> {
+        let Some(id) = clip.mask.as_ref().and_then(|m| m.asset.as_deref()) else {
+            return Ok(None);
+        };
+        if let Some(img) = self.masks.get(id) {
+            return Ok(Some(Arc::clone(img)));
+        }
+        let img = Arc::new(self.assets.image(comp, id)?.clone());
+        self.masks.insert(id.to_owned(), Arc::clone(&img));
+        Ok(Some(img))
     }
 
     /// The asset source.
@@ -237,6 +260,7 @@ impl<A: AssetSource> CpuRenderer<A> {
                 if opacity <= 0.0 {
                     continue;
                 }
+                let mask_image = self.mask_image(comp, clip)?;
                 let Some(paint) = self.paint_for(comp, clip, t, local)? else {
                     continue;
                 };
@@ -244,7 +268,8 @@ impl<A: AssetSource> CpuRenderer<A> {
                 let Some(window) = window_of(clip, paint.size()) else {
                     continue;
                 };
-                let Some(place) = Placement::new(comp.width, comp.height, clip, local, window)
+                let Some(place) =
+                    Placement::new(comp.width, comp.height, clip, local, window, mask_image)
                 else {
                     continue;
                 };
@@ -350,13 +375,15 @@ impl<A: AssetSource> CpuRenderer<A> {
             } else {
                 Vec::new()
             };
+            let mask_image = self.mask_image(comp, clip)?;
             let Some(paint) = self.paint_for(comp, clip, t, local)? else {
                 continue;
             };
             let Some(window) = window_of(clip, paint.size()) else {
                 continue;
             };
-            let Some(placement) = Placement::new(width, height, clip, local, window) else {
+            let Some(placement) = Placement::new(width, height, clip, local, window, mask_image)
+            else {
                 continue;
             };
             let scratch = if sigma > 0.0 {
@@ -622,6 +649,65 @@ struct Placement {
     extent: [f64; 4],
     /// True when box pixels map one-to-one onto output pixels.
     pixel_aligned: bool,
+    /// The clip's mask, evaluated in paint coordinates.
+    mask: Option<MaskEval>,
+}
+
+/// A mask ready to evaluate at a point of the paint.
+struct MaskEval {
+    /// The window (the clip's box) in paint coordinates.
+    window: [f64; 4],
+    spec: ResolvedMask,
+    /// The shape's box in paint coordinates: left, top, width, height.
+    rect: [f64; 4],
+    luma: Option<Arc<Image>>,
+}
+
+impl MaskEval {
+    /// Coverage in `[0, 1]` at a point of the paint.
+    fn coverage(&self, u: f64, v: f64) -> f32 {
+        let c = match &self.luma {
+            Some(img) => {
+                let [cx, cy, w, h] = self.window;
+                // Stretched over the box, its edge texels extended past
+                // the edges rather than fading into transparency.
+                let (iw, ih) = (f64::from(img.width), f64::from(img.height));
+                let p = img.sample(
+                    ((u - cx) / w * iw).clamp(0.5, iw - 0.5),
+                    ((v - cy) / h * ih).clamp(0.5, ih - 0.5),
+                );
+                // Premultiplied linear luma: white shows, black or
+                // transparent hides.
+                (0.2126 * p.r + 0.7152 * p.g + 0.0722 * p.b).clamp(0.0, 1.0)
+            }
+            None => {
+                let [mx, my, mw, mh] = self.rect;
+                // Signed distance to the shape, negative inside.
+                let d = match self.spec.shape {
+                    ShapeKind::Rect => {
+                        let r = self.spec.radius.min(mw / 2.0).min(mh / 2.0);
+                        let qx = (u - mx - mw / 2.0).abs() - (mw / 2.0 - r);
+                        let qy = (v - my - mh / 2.0).abs() - (mh / 2.0 - r);
+                        let outside = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
+                        outside + qx.max(qy).min(0.0) - r
+                    }
+                    ShapeKind::Ellipse => {
+                        let nx = (u - mx - mw / 2.0) / (mw / 2.0);
+                        let ny = (v - my - mh / 2.0) / (mh / 2.0);
+                        ((nx * nx + ny * ny).sqrt() - 1.0) * (mw.min(mh) / 2.0)
+                    }
+                };
+                if self.spec.feather > 0.0 {
+                    (0.5 - d / self.spec.feather).clamp(0.0, 1.0) as f32
+                } else if d <= 0.0 {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+        };
+        if self.spec.invert { 1.0 - c } else { c }
+    }
 }
 
 impl Placement {
@@ -631,8 +717,18 @@ impl Placement {
         clip: &ResolvedClip,
         local: f64,
         window: [f64; 4],
+        mask_image: Option<Arc<Image>>,
     ) -> Option<Self> {
         let [cx, cy, w, h] = window;
+        let mask = clip.mask.as_ref().map(|m| {
+            let [mx, my, mw, mh] = m.rect_px(w, h);
+            MaskEval {
+                window,
+                spec: m.clone(),
+                rect: [cx + mx, cy + my, mw, mh],
+                luma: mask_image,
+            }
+        });
         let out_w = f64::from(frame_w);
         let out_h = f64::from(frame_h);
         let fit = match clip.fit {
@@ -692,10 +788,12 @@ impl Placement {
             (cos, sin),
             [x0, y0, x1, y1],
             (frame_w, frame_h),
+            mask,
         )
     }
 
     /// Clamps the extent to the frame and decides pixel alignment.
+    #[allow(clippy::too_many_arguments)]
     fn finish(
         window: [f64; 4],
         anchor: [f64; 2],
@@ -704,6 +802,7 @@ impl Placement {
         (cos, sin): (f64, f64),
         extent: [f64; 4],
         (frame_w, frame_h): (u32, u32),
+        mask: Option<MaskEval>,
     ) -> Option<Self> {
         let out_w = f64::from(frame_w);
         let out_h = f64::from(frame_h);
@@ -735,6 +834,7 @@ impl Placement {
             bounds,
             extent,
             pixel_aligned,
+            mask,
         })
     }
 
@@ -753,6 +853,12 @@ impl Placement {
             (self.extent[2] + offset[0]) * factor,
             (self.extent[3] + offset[1]) * factor,
         ];
+        let mask = self.mask.as_ref().map(|m| MaskEval {
+            window: m.window,
+            spec: m.spec.clone(),
+            rect: m.rect,
+            luma: m.luma.clone(),
+        });
         Self::finish(
             self.window,
             self.anchor,
@@ -761,6 +867,7 @@ impl Placement {
             (self.cos, self.sin),
             extent,
             (frame_w, frame_h),
+            mask,
         )
     }
 
@@ -799,13 +906,17 @@ impl Placement {
     }
 
     /// The paint's color at a point of paint space, transparent outside
-    /// the window.
+    /// the window, through the mask.
     fn sample(&self, paint: &Paint, u: f64, v: f64) -> LinearRgba {
         let [cx, cy, w, h] = self.window;
         if u < cx || v < cy || u >= cx + w || v >= cy + h {
             return LinearRgba::TRANSPARENT;
         }
-        paint.sample(u, v)
+        let p = paint.sample(u, v);
+        match &self.mask {
+            Some(m) => p.scaled(m.coverage(u, v)),
+            None => p,
+        }
     }
 
     /// Maps an output point back into paint coordinates.
@@ -846,7 +957,7 @@ fn draw(
     // A pixel-aligned image maps texels one-to-one onto output pixels at
     // an integer offset, so it is read directly instead of sampled.
     let aligned = match paint {
-        Paint::Image(img) if place.pixel_aligned => Some((
+        Paint::Image(img) if place.pixel_aligned && place.mask.is_none() => Some((
             img.as_ref(),
             (place.position[0] - place.anchor[0]).round() as i64,
             (place.position[1] - place.anchor[1]).round() as i64,
@@ -857,7 +968,9 @@ fn draw(
     // along a row the source coordinates advance by a constant step, and
     // well inside the picture the texels need no bounds checks.
     let spans = match paint {
-        Paint::Image(img) if !place.pixel_aligned && place.axis_aligned() => {
+        Paint::Image(img)
+            if !place.pixel_aligned && place.axis_aligned() && place.mask.is_none() =>
+        {
             Some((img.as_ref(), place.interior(img.width, img.height)))
         }
         _ => None,
@@ -1242,6 +1355,73 @@ mod tests {
         assert!(middle.r > 0.85 && middle.r <= 1.0 + 1e-5, "{middle:?}");
         assert!(corner.r < middle.r * 0.6, "{corner:?} vs {middle:?}");
         assert!(f.pixels().iter().all(|p| p.r <= 1.0 + 1e-5));
+    }
+
+    #[test]
+    fn masks_cut_shapes_from_the_clip_box() {
+        // A 20×10 white rect at (4, 6) with an ellipse mask: the middle
+        // shows, the corners of the box do not.
+        let f = render(
+            &doc(
+                r##""layers":[{"clips":[{"source":{"kind":"shape","shape":"rect","width":20,"height":10,"fill":"white"},
+                "mask":{"shape":"ellipse"},
+                "transform":{"position":{"x":4,"y":6},"anchor":{"x":0,"y":0}}}]}]"##,
+            ),
+            "0s",
+        );
+        assert_eq!(f.get(14, 11).to_srgb8(), [255, 255, 255, 255]);
+        assert_eq!(f.get(4, 6).to_srgb8(), [0, 0, 0, 255]);
+        assert_eq!(f.get(23, 15).to_srgb8(), [0, 0, 0, 255]);
+        // Inverted, the corners show and the middle does not.
+        let f = render(
+            &doc(
+                r##""layers":[{"clips":[{"source":{"kind":"shape","shape":"rect","width":20,"height":10,"fill":"white"},
+                "mask":{"shape":"ellipse","invert":true},
+                "transform":{"position":{"x":4,"y":6},"anchor":{"x":0,"y":0}}}]}]"##,
+            ),
+            "0s",
+        );
+        assert_eq!(f.get(14, 11).to_srgb8(), [0, 0, 0, 255]);
+        assert_eq!(f.get(4, 6).to_srgb8(), [255, 255, 255, 255]);
+        // A rect mask over the left half with a feather: a soft edge
+        // across the middle, percentages of the box.
+        let f = render(
+            &doc(
+                r##""layers":[{"clips":[{"source":{"kind":"shape","shape":"rect","width":20,"height":10,"fill":"white"},
+                "mask":{"width":"50%","feather":4},
+                "transform":{"position":{"x":4,"y":6},"anchor":{"x":0,"y":0}}}]}]"##,
+            ),
+            "0s",
+        );
+        assert_eq!(f.get(6, 11).to_srgb8(), [255, 255, 255, 255]);
+        let edge = f.get(13, 11).r;
+        assert!(edge > 0.2 && edge < 0.8, "{edge}");
+        assert_eq!(f.get(22, 11).to_srgb8(), [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn luma_masks_come_from_an_image_asset() {
+        struct OneImage(Image);
+        impl AssetSource for OneImage {
+            fn image(&mut self, _: &Composition, _: &str) -> Result<&Image, RenderError> {
+                Ok(&self.0)
+            }
+        }
+        // A 2×1 luma image, white then black, over a 20×10 white rect: the
+        // left half shows, the right half is hidden.
+        let luma = Image::from_rgba8(2, 1, &[255, 255, 255, 255, 0, 0, 0, 255]);
+        let loaded = load(&doc(
+            r##""assets":{"m":{"src":"m.png"}},"layers":[{"clips":[{"source":{"kind":"shape","shape":"rect","width":20,"height":10,"fill":"white"},
+            "mask":{"asset":"m"},
+            "transform":{"position":{"x":4,"y":6},"anchor":{"x":0,"y":0}}}]}]"##,
+        ));
+        assert!(loaded.is_ok(), "{:#?}", loaded.diagnostics);
+        let comp = loaded.composition.unwrap();
+        let f = CpuRenderer::new(OneImage(luma))
+            .render_frame(&comp, Ratio::ZERO)
+            .unwrap();
+        assert_eq!(f.get(6, 11).to_srgb8(), [255, 255, 255, 255]);
+        assert_eq!(f.get(22, 11).to_srgb8(), [0, 0, 0, 255]);
     }
 
     #[test]

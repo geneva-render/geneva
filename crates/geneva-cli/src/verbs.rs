@@ -426,6 +426,7 @@ fn video_clip(
         opacity: None,
         blend: None,
         effects: Vec::new(),
+        mask: None,
     }
 }
 
@@ -888,6 +889,7 @@ pub fn overlay(
             },
             blend: None,
             effects: Vec::new(),
+            mask: None,
         }],
     });
     Ok(Compiled {
@@ -1411,6 +1413,7 @@ pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Re
             opacity: None,
             blend: None,
             effects: Vec::new(),
+            mask: None,
         });
     }
     if offscreen > LISTED {

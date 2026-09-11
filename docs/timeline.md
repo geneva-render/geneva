@@ -173,6 +173,7 @@ contain other compositions up to 8 levels deep, and never themselves (E207).
 | `crop` | no | the whole source | A rectangle of the source that becomes the clip's box; see below. |
 | `fit` | no | `contain` for video, `none` otherwise | `none`, `contain`, `cover`, `fill`: how the source box is sized to the frame before the transform. |
 | `effects` | no | `[]` | Effects on the placed picture, in order; see below. |
+| `mask` | no | | A shape cut from the clip's box, or a luma image over it; see below. |
 | `transform` | no | centered | Position, anchor, scale, rotation. |
 | `opacity` | no | `1` | Animatable, 0 to 1. |
 | `blend` | no | `normal` | `normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `difference`, `soft-light`, `add`. Computed in linear light. |
@@ -224,6 +225,34 @@ scaled-up copy of itself:
 ```
 
 `--fill blur` on the verbs builds exactly this.
+
+### `mask`
+
+A mask limits what the clip shows. It is defined in the clip's box (the
+source after the crop, before `fit` and the transform), so it moves,
+scales and rotates with the clip: pixels of the box, or percentages of
+its size.
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `shape` | `rect` | `rect` or `ellipse`, inscribed in the box below. |
+| `x`, `y` | `0` | Top-left corner of the shape's box. |
+| `width`, `height` | the clip's box | Size of the shape's box. |
+| `radius` | `0` | Corner radius of a rectangle, in box pixels. |
+| `feather` | `0` | Width of the soft edge in box pixels; 0 is a hard edge. |
+| `asset` | | Id of an image asset whose luma (times alpha) is the coverage, stretched over the clip's box: white shows, black or transparent hides. The shape fields are ignored. |
+| `invert` | `false` | Show what the mask hides and hide what it shows. |
+
+Rounded corners on a picture-in-picture, for instance:
+
+```json
+{ "source": { "kind": "video", "asset": "cam" }, "fit": "none",
+  "mask": { "radius": 24, "feather": 1 },
+  "transform": { "position": { "x": "85%", "y": "85%" }, "scale": 0.25 } }
+```
+
+A masked clip is always composited; the copy, smart-cut and direct
+paths do not apply.
 
 ### `transform`
 

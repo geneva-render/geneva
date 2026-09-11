@@ -990,6 +990,17 @@
             "$ref": "#/$defs/Effect"
           },
           "description": "Effects applied to the placed picture, in order, before opacity\nand blending."
+        },
+        "mask": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Mask"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A mask limiting what the clip shows: a shape cut from the clip's\nbox, or the luma of an image stretched over it. It moves and\nscales with the clip."
         }
       },
       "required": [
@@ -2138,6 +2149,98 @@
         }
       ],
       "description": "An effect on a clip's picture, selected by \"kind\". Effects act on the\npicture as placed in the output frame, so their sizes are in output\npixels."
+    },
+    "Mask": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "shape": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ShapeKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The shape: \"rect\" (default) or \"ellipse\". Ignored with \"asset\"."
+        },
+        "x": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Left edge of the shape's box. Defaults to 0."
+        },
+        "y": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Top edge of the shape's box. Defaults to 0."
+        },
+        "width": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Width of the shape's box. Defaults to the clip's box."
+        },
+        "height": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Height of the shape's box. Defaults to the clip's box."
+        },
+        "radius": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Corner radius of a rectangle, in pixels of the clip's box."
+        },
+        "feather": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Width of the soft edge in pixels of the clip's box; 0 (the\ndefault) is a hard edge."
+        },
+        "asset": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Id of an image asset whose luma, times its alpha, is the\ncoverage: white shows, black hides. Stretched over the clip's box."
+        },
+        "invert": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Whether to show what the mask hides and hide what it shows."
+        }
+      },
+      "description": "A mask on a clip, in the coordinates of the clip's box (after the\ncrop, before the fit and the transform): pixels of the box, or\npercentages of its size."
     },
     "AudioTrack": {
       "type": "object",

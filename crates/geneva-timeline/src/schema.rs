@@ -464,6 +464,48 @@ pub struct Clip {
     /// and blending.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<Effect>,
+    /// A mask limiting what the clip shows: a shape cut from the clip's
+    /// box, or the luma of an image stretched over it. It moves and
+    /// scales with the clip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask: Option<Mask>,
+}
+
+/// A mask on a clip, in the coordinates of the clip's box (after the
+/// crop, before the fit and the transform): pixels of the box, or
+/// percentages of its size.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Mask {
+    /// The shape: "rect" (default) or "ellipse". Ignored with "asset".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<ShapeKind>,
+    /// Left edge of the shape's box. Defaults to 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<Length>,
+    /// Top edge of the shape's box. Defaults to 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<Length>,
+    /// Width of the shape's box. Defaults to the clip's box.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<Length>,
+    /// Height of the shape's box. Defaults to the clip's box.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<Length>,
+    /// Corner radius of a rectangle, in pixels of the clip's box.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius: Option<f64>,
+    /// Width of the soft edge in pixels of the clip's box; 0 (the
+    /// default) is a hard edge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feather: Option<f64>,
+    /// Id of an image asset whose luma, times its alpha, is the
+    /// coverage: white shows, black hides. Stretched over the clip's box.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset: Option<String>,
+    /// Whether to show what the mask hides and hide what it shows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invert: Option<bool>,
 }
 
 /// An effect on a clip's picture, selected by "kind". Effects act on the

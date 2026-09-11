@@ -290,7 +290,10 @@ fn video_layer_clips(
         if !clip.rotation.is_constant() || clip.rotation.sample(0.0) != 0.0 {
             return Ok(None);
         }
-        if clip.blend != geneva_timeline::schema::BlendMode::Normal || !clip.effects.is_empty() {
+        if clip.blend != geneva_timeline::schema::BlendMode::Normal
+            || !clip.effects.is_empty()
+            || clip.mask.is_some()
+        {
             return Ok(None);
         }
         if !clip.position.is_constant() || clip.position.sample(0.0) != center {
