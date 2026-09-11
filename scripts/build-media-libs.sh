@@ -69,6 +69,8 @@ if ! done_marker vorbis; then
   cp "$src/ogg/COPYING" "$prefix/share/licenses/libogg.txt"
   fetch vorbis "https://downloads.xiph.org/releases/vorbis/libvorbis-$VORBIS_VERSION.tar.gz"
   echo "==> building libvorbis"
+  # The configure script hands Apple's linker a flag it no longer accepts.
+  sed -i.bak 's/-force_cpusubtype_ALL//g' "$src/vorbis/configure"
   (cd "$src/vorbis" && ./configure --prefix="$prefix" --disable-shared --enable-static \
       --disable-docs --disable-examples --disable-oggtest >/dev/null \
       && make -j"$jobs" >/dev/null && make install >/dev/null)
