@@ -453,6 +453,9 @@ pub fn apply(tl: &mut Timeline, facts: &Facts, opts: &Options<'_>) -> Vec<Diagno
         (Some(b), Some(m)) => Some(b.min(m)),
         (b, m) => b.or(m),
     };
+    // A budget's rate is also the average to aim for, for the encoders
+    // that cannot hold constant quality under a ceiling.
+    let mut budget_rate = None;
     if let (Some(bytes), Some(duration)) = (budget, facts.duration) {
         let secs = duration.to_f64();
         if secs > 0.0 {
@@ -477,6 +480,7 @@ pub fn apply(tl: &mut Timeline, facts: &Facts, opts: &Options<'_>) -> Vec<Diagno
                 );
             } else if cap.is_none_or(|c| f64::from(c) > kbps) {
                 cap = Some(kbps as u32);
+                budget_rate = Some(kbps as u32);
                 why.push(format!(
                     "capped at {} kb/s so that {:.0} s fits {}",
                     kbps as u32,
@@ -508,12 +512,14 @@ pub fn apply(tl: &mut Timeline, facts: &Facts, opts: &Options<'_>) -> Vec<Diagno
         profile: None,
         keyframe_interval: None,
         max_bitrate_kbps: None,
+        bitrate_kbps: None,
         level: None,
     });
     video.codec = Some(codec);
     video.crf = Some(crf);
     video.keyframe_interval = Some(t.keyframe_interval);
     video.max_bitrate_kbps = cap;
+    video.bitrate_kbps = budget_rate;
     video.level = level;
     encode.fast_start = Some(true);
     if facts.audio {

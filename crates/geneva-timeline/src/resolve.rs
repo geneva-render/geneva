@@ -554,6 +554,13 @@ impl Resolver<'_> {
                     "max_bitrate_kbps must be greater than 0",
                 ));
             }
+            if video.bitrate_kbps == Some(0) {
+                self.push(Diagnostic::error(
+                    "E402",
+                    vpath.key("bitrate_kbps"),
+                    "bitrate_kbps must be greater than 0",
+                ));
+            }
             if let Some(level) = &video.level {
                 let ok = level.len() <= 4
                     && level.chars().next().is_some_and(|c| c.is_ascii_digit())

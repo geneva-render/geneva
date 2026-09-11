@@ -61,6 +61,9 @@ pub struct VideoSettings {
     pub keyframe_interval: Option<f64>,
     /// Bitrate ceiling in kb/s; constant quality below it.
     pub max_bitrate_kbps: Option<u32>,
+    /// Average bitrate in kb/s: bitrate mode for the encoders that cannot
+    /// hold constant quality under a ceiling (hardware); x264 ignores it.
+    pub bitrate_kbps: Option<u32>,
     /// Write the track by stitching copied H.264 packets and encoded
     /// runs (smart cut); see [`StitchSettings`].
     pub stitch: Option<StitchSettings>,
@@ -463,23 +466,37 @@ fn open_video_encoder(
             opts.set("preset", "p4");
         }
         n if n.ends_with("_videotoolbox") => {
-            // Constant quality is 1..=100 with 100 best; invert the 0..=51
-            // scale. The encoder reads it from the context's global
-            // quality with the qscale flag set, the way `ffmpeg -q:v`
-            // stores it (in lambda units, FF_QP2LAMBDA = 118).
-            let q = 1.0 - f64::from(quality) / 51.0;
-            let q = ((q * 100.0).round() as i64).clamp(1, 100);
-            opts.set("global_quality", &(q * 118).to_string());
-            opts.set("flags", "+qscale");
+            if let Some(kbps) = settings.bitrate_kbps {
+                // Bitrate mode: the only way VideoToolbox holds a size.
+                venc.set_bit_rate(kbps as usize * 1000);
+            } else {
+                // Constant quality is 1..=100 with 100 best; invert the
+                // 0..=51 scale. The encoder reads it from the context's
+                // global quality with the qscale flag set, the way
+                // `ffmpeg -q:v` stores it (in lambda units, FF_QP2LAMBDA =
+                // 118).
+                let q = 1.0 - f64::from(quality) / 51.0;
+                let q = ((q * 100.0).round() as i64).clamp(1, 100);
+                opts.set("global_quality", &(q * 118).to_string());
+                opts.set("flags", "+qscale");
+            }
             opts.set("realtime", "0");
         }
-        _ => {}
+        _ => {
+            if let Some(kbps) = settings.bitrate_kbps {
+                venc.set_bit_rate(kbps as usize * 1000);
+            }
+        }
     }
     if let Some(secs) = settings.keyframe_interval {
         let frames = (secs * f64::from(fps.numerator()) / f64::from(fps.denominator())).round();
         venc.set_gop(frames.max(1.0) as u32);
     }
-    if let Some(kbps) = settings.max_bitrate_kbps {
+    // A ceiling on top of constant quality is a software encoder's trick:
+    // VideoToolbox given a data rate limit in quality mode writes files
+    // twice the size, so it takes the ceiling only in bitrate mode.
+    let ceiling_applies = !name.ends_with("_videotoolbox") || settings.bitrate_kbps.is_some();
+    if let (Some(kbps), true) = (settings.max_bitrate_kbps, ceiling_applies) {
         let bps = u64::from(kbps) * 1000;
         opts.set("maxrate", &bps.to_string());
         opts.set("bufsize", &(bps * 2).to_string());
@@ -1349,6 +1366,16 @@ impl Encoder {
                 "H.264 runs encoded with the system's x264 (build {}) at CRF {}",
                 stitch.build, stitch.x264.crf
             )),
+            VideoBackend::Lavc(_)
+                if track.name.ends_with("_videotoolbox")
+                    && track.settings.max_bitrate_kbps.is_some()
+                    && track.settings.bitrate_kbps.is_none() =>
+            {
+                Some(format!(
+                    "VideoToolbox encodes at constant quality; the {} kb/s ceiling is not applied by hardware encoders (a --budget switches them to bitrate mode)",
+                    track.settings.max_bitrate_kbps.unwrap_or(0)
+                ))
+            }
             VideoBackend::Lavc(_) if track.name == "libopenh264" => Some(match &track.x264_error {
                 Some(e) => format!(
                     "H.264 encoded with the bundled OpenH264; the system's x264 was found but not used: {e}"

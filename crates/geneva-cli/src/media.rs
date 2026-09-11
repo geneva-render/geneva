@@ -313,6 +313,7 @@ mod imp {
                 profile: video.and_then(|v| v.profile),
                 keyframe_interval: video.and_then(|v| v.keyframe_interval),
                 max_bitrate_kbps: video.and_then(|v| v.max_bitrate_kbps),
+                bitrate_kbps: video.and_then(|v| v.bitrate_kbps),
                 level: video.and_then(|v| v.level.clone()),
                 stitch: None,
             })

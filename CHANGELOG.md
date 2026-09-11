@@ -5,6 +5,18 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## Unreleased
+
+### Fixes
+
+- On VideoToolbox, `--for` wrote files about twice the size of a plain
+  encode: a data rate limit on top of quality mode changes how the
+  hardware encoder works. The ceiling is no longer passed to it in
+  quality mode (the report says so), and `--budget` now switches it to
+  bitrate mode at the budget's rate, which holds the size. New encode
+  field `bitrate_kbps`, which x264 ignores in favour of constant
+  quality under the ceiling.
+
 ## 0.1.11
 
 ### Added

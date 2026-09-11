@@ -830,6 +830,22 @@ fn targets_pick_size_codec_quality_and_caps_from_the_table() {
     assert_eq!(notes.len(), 1, "{doc}");
     assert!(notes[0].contains("fits 200 KB"), "{}", notes[0]);
     assert!(out.exists());
+    // The budget's rate also goes into the block as the average to aim
+    // for, which hardware encoders need to hold a size.
+    let shown = run_json(
+        &[
+            "convert",
+            "--for",
+            "email",
+            "--budget",
+            "200KB",
+            "--show-timeline",
+            "-o",
+        ],
+        &[&out, &clip],
+    );
+    let video = &shown["output"]["encode"]["video"];
+    assert_eq!(video["bitrate_kbps"], video["max_bitrate_kbps"], "{video}");
 
     // Unknown targets and the table.
     let mut cmd = geneva();

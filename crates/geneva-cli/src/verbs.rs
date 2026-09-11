@@ -322,6 +322,7 @@ fn encode_block(args: &EncodeArgs) -> Option<Encode> {
             profile,
             keyframe_interval: None,
             max_bitrate_kbps: None,
+            bitrate_kbps: None,
             level: None,
         }),
         audio: None,

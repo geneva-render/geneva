@@ -279,7 +279,11 @@ The rules, in order:
    re-encodes; email's are 23/26/28). `--crf` overrides.
 5. A bitrate cap where the target has one, raised by half above 30 fps,
    and lowered to fit a size limit or `--budget` from the length: quality
-   stays constant until the cap bites.
+   stays constant until the cap bites. That holds for x264; VideoToolbox
+   has no capped-quality mode and, given a data rate limit in quality
+   mode, writes files twice the size, so on it the cap is not applied
+   and the report says so, while `--budget` switches it to bitrate mode
+   at the budget's rate, which does hold the size.
 6. Keyframes every 2 s and fast start, so the file plays over a network.
    Frame rate capped at 60.
 7. Limits an encode cannot meet are warnings, never silent changes: a

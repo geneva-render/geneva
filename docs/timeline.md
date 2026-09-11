@@ -116,7 +116,8 @@ object with a `keyframes` array:
 | `encode.video.preset` | no | per codec | Encoder speed preset name (`ultrafast` to `veryslow`); ignored by encoders without presets. |
 | `encode.video.hardware` | no | `auto` | `auto`, `never`, `require`. |
 | `encode.video.keyframe_interval` | no | the encoder's own | Seconds between keyframes; 2 is usual for anything played over a network. |
-| `encode.video.max_bitrate_kbps` | no | none | Bitrate ceiling in kb/s; quality stays constant until it bites. |
+| `encode.video.max_bitrate_kbps` | no | none | Bitrate ceiling in kb/s; quality stays constant until it bites (x264). VideoToolbox has no such mode and takes the ceiling only together with `bitrate_kbps`. |
+| `encode.video.bitrate_kbps` | no | none | Average bitrate in kb/s to aim for: bitrate mode for hardware encoders, which cannot hold constant quality under a ceiling; x264 ignores it and keeps constant quality under the ceiling. `--budget` sets it. |
 | `encode.video.level` | no | the encoder's own | H.264 or H.265 level such as `"4.1"`, for the decoders that check it. |
 | `encode.fast_start` | no | `true` | Whether MP4, MOV and M4A files carry their index at the front so playback can start before the download ends. |
 | `encode.audio.codec` | no | `aac` (`opus` for webm and ogg, `flac` for flac, `pcm` for wav, `mp3` for mp3, `pcm24` for mxf) | `aac`, `opus`, `mp3`, `vorbis`, `flac`, `alac`, `ac3`, `pcm` (16-bit), `pcm24`. |

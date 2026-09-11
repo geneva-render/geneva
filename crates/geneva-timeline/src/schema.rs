@@ -195,6 +195,11 @@ pub struct VideoEncode {
     /// bites, as a player's buffer or a platform's limit requires.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_bitrate_kbps: Option<u32>,
+    /// Average bitrate in kb/s to aim for. Encoders that hold constant
+    /// quality under a ceiling (x264) ignore it; hardware encoders, which
+    /// cannot, switch to their bitrate mode at this rate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bitrate_kbps: Option<u32>,
     /// H.264 or H.265 level, for example "4.1", which tells old decoders
     /// what the stream needs. Defaults to what the encoder picks.
     #[serde(default, skip_serializing_if = "Option::is_none")]

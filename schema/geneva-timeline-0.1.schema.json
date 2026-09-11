@@ -520,6 +520,15 @@
           "minimum": 0,
           "description": "Bitrate ceiling in kb/s. Quality stays constant until the ceiling\nbites, as a player's buffer or a platform's limit requires."
         },
+        "bitrate_kbps": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Average bitrate in kb/s to aim for. Encoders that hold constant\nquality under a ceiling (x264) ignore it; hardware encoders, which\ncannot, switch to their bitrate mode at this rate."
+        },
         "level": {
           "type": [
             "string",
