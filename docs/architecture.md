@@ -190,7 +190,10 @@ the cut (a negative start the container turns into an edit, so the
 sound begins on the sample); each later segment starts with the packet
 nearest to its cut, so a join is off by at most half a packet and the
 error never accumulates. Anything else (a separate audio track, gain,
-fades, clips of different kinds) mixes and encodes the audio as usual.
+fades, clips of different kinds) mixes and encodes the audio as usual,
+a second at a time: every voice is read forward on its own decoder and
+resampler as the blocks advance, so a long timeline never holds its mix
+whole, and the mix is the same whatever the block size.
 
 ## Verbs
 
@@ -241,5 +244,3 @@ real regressions.
 - **GPU renderer.** A second `Renderer` implementation with the same
   contract, validated against the CPU renderer by the golden harness.
 - **Software H.265 encoding.** Only hardware encoders are available for it.
-- **Streaming audio mixing.** The mixer currently holds the whole mix in
-  memory.

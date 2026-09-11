@@ -539,6 +539,133 @@ impl AudioReader {
     }
 }
 
+impl AudioReader {
+    /// Turns the reader into a stream that reads forward from `from`,
+    /// resampled to `rate`, block by block.
+    pub fn into_stream(mut self, from: Ratio, rate: u32) -> Result<AudioStream, MediaError> {
+        self.inner.seek(from, &mut self.decoder)?;
+        Ok(AudioStream {
+            inner: self.inner,
+            decoder: self.decoder,
+            rate,
+            from,
+            resampler: None,
+            pending: std::collections::VecDeque::new(),
+            skip: 0,
+            started: false,
+            finished: false,
+        })
+    }
+}
+
+/// An audio stream read forward from a start time in blocks of any size,
+/// as interleaved stereo `f32` at one rate. The resampler runs on across
+/// blocks, so their boundaries are seamless; past the end of the file the
+/// blocks are silence.
+pub struct AudioStream {
+    inner: StreamDecoder,
+    decoder: codec::decoder::Audio,
+    rate: u32,
+    from: Ratio,
+    resampler: Option<resampling::Context>,
+    /// Resampled samples not yet handed out.
+    pending: std::collections::VecDeque<f32>,
+    /// Frames still to drop, when the first decoded frame began before
+    /// `from`.
+    skip: usize,
+    started: bool,
+    finished: bool,
+}
+
+impl AudioStream {
+    /// The next `frames` frames.
+    pub fn read(&mut self, frames: usize) -> Result<Vec<f32>, MediaError> {
+        let want = frames * 2;
+        let path = self.inner.path.clone();
+        let mut raw = frame::Audio::empty();
+        while self.pending.len() < want && !self.finished {
+            if !self.inner.next_frame(&mut self.decoder, &mut raw)? {
+                self.finished = true;
+                let mut tail = frame::Audio::empty();
+                if let Some(resampler) = self.resampler.as_mut() {
+                    while resampler.flush(&mut tail).is_ok_and(|d| d.is_some())
+                        || tail.samples() > 0
+                    {
+                        let n = tail.samples();
+                        if n == 0 {
+                            break;
+                        }
+                        Self::append(&mut self.pending, &mut self.skip, &tail);
+                        tail = frame::Audio::empty();
+                    }
+                }
+                break;
+            }
+            if raw.channel_layout().bits() == 0 {
+                raw.set_channel_layout(ChannelLayout::default(i32::from(raw.channels())));
+            }
+            if !self.started {
+                // Where the first frame lands relative to the start: silence
+                // before it, or frames of it to drop.
+                let secs = self.inner.secs(&raw);
+                let offset = ((secs - self.from).to_f64() * f64::from(self.rate)).round() as i64;
+                if offset > 0 {
+                    self.pending
+                        .extend(std::iter::repeat_n(0f32, offset as usize * 2));
+                } else {
+                    self.skip = (-offset) as usize;
+                }
+                self.started = true;
+            }
+            let converter = match self.resampler.as_mut() {
+                Some(r) => r,
+                None => self.resampler.insert(
+                    resampling::Context::get(
+                        raw.format(),
+                        raw.channel_layout(),
+                        raw.rate(),
+                        Sample::F32(sample::Type::Packed),
+                        ChannelLayout::STEREO,
+                        self.rate,
+                    )
+                    .map_err(|e| codec_error(format!("{}: audio resampling", path.display()), e))?,
+                ),
+            };
+            let mut resampled = frame::Audio::empty();
+            converter
+                .run(&raw, &mut resampled)
+                .map_err(|e| codec_error(format!("{}: audio resampling", path.display()), e))?;
+            Self::append(&mut self.pending, &mut self.skip, &resampled);
+        }
+        let n = want.min(self.pending.len());
+        let mut out: Vec<f32> = self.pending.drain(..n).collect();
+        out.resize(want, 0.0);
+        Ok(out)
+    }
+
+    /// Appends a resampled frame's samples, dropping `skip` frames first.
+    fn append(
+        pending: &mut std::collections::VecDeque<f32>,
+        skip: &mut usize,
+        frame: &frame::Audio,
+    ) {
+        let n = frame.samples();
+        if n == 0 {
+            return;
+        }
+        let data = &frame.data(0)[..n * 2 * 4];
+        let mut samples = data
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+        let drop = (*skip).min(n);
+        *skip -= drop;
+        for _ in 0..drop * 2 {
+            samples.next();
+        }
+        pending.extend(samples);
+    }
+}
+
 /// Copies packed stereo f32 samples into `out` at frame position `pos`,
 /// clipping to the buffer, and advances `pos`.
 fn copy_samples(frame: &frame::Audio, pos: &mut i64, out: &mut [f32]) {

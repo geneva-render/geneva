@@ -547,11 +547,12 @@ mod imp {
             let audio_worker = audio_encoder.map(|mut enc| {
                 let tx = tx.clone();
                 scope.spawn(move || -> Result<(), geneva_media::MediaError> {
-                    let samples = geneva_media::mix::mix(comp, root, sample_rate)?;
                     // A second of audio per message keeps the video frames
-                    // flowing between them.
-                    for chunk in samples.chunks(sample_rate as usize * 2) {
-                        let packets = enc.push(chunk)?;
+                    // flowing between them; the mix is made a second at a
+                    // time too, so a long timeline never holds it whole.
+                    let mut mixer = geneva_media::mix::Mixer::new(comp, root, sample_rate);
+                    while let Some(chunk) = mixer.next_block(sample_rate as usize)? {
+                        let packets = enc.push(&chunk)?;
                         if tx.send(Msg::Audio(packets, enc.time())).is_err() {
                             return Ok(());
                         }

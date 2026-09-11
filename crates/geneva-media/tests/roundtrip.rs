@@ -200,6 +200,54 @@ fn encoded_solid_color_survives_the_round_trip() {
 }
 
 #[test]
+fn streamed_blocks_equal_one_whole_read() {
+    // Ten blocks of a tenth of a second, resampled on one running
+    // converter, are the same samples as one read of the second.
+    let whole = AudioReader::open(&clip())
+        .unwrap()
+        .read(Ratio::ZERO, Ratio::from_int(1), 48000)
+        .unwrap();
+    let mut stream = AudioReader::open(&clip())
+        .unwrap()
+        .into_stream(Ratio::ZERO, 48000)
+        .unwrap();
+    let mut streamed = Vec::new();
+    for _ in 0..10 {
+        streamed.extend(stream.read(4800).unwrap());
+    }
+    assert_eq!(streamed.len(), whole.len());
+    let worst = streamed
+        .iter()
+        .zip(&whole)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0f32, f32::max);
+    assert!(worst < 1e-4, "blocks differ from the whole read by {worst}");
+    // The mixer's blocks of any size make the same mix.
+    let root = clip().parent().unwrap().to_path_buf();
+    let text = r#"{
+      "geneva": "0.2",
+      "output": { "width": 64, "height": 64, "fps": 25, "duration": "1.5s" },
+      "assets": { "clip": { "src": "clip.mp4" } },
+      "layers": [ { "clips": [ { "source": { "kind": "video", "asset": "clip" }, "duration": "1.5s" } ] } ],
+      "audio": [ { "clips": [ { "asset": "clip", "start": "0.25s", "duration": "1s", "gain_db": -3, "fade_in": "0.1s" } ] } ]
+    }"#;
+    let comp = load(text).composition.unwrap();
+    let whole = mix::mix(&comp, &root, 48000).unwrap();
+    let mut mixer = mix::Mixer::new(&comp, &root, 48000);
+    let mut small = Vec::new();
+    while let Some(b) = mixer.next_block(1234).unwrap() {
+        small.extend(b);
+    }
+    assert_eq!(small.len(), whole.len());
+    let worst = small
+        .iter()
+        .zip(&whole)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0f32, f32::max);
+    assert!(worst < 1e-4, "block size changes the mix by {worst}");
+}
+
+#[test]
 fn mixing_applies_gain_and_skips_muted_video_audio() {
     let root = clip().parent().unwrap().to_path_buf();
     let text = r#"{

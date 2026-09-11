@@ -17,7 +17,7 @@ use std::path::Path;
 use crate::MediaError;
 
 pub use copy::{CopyPlan, CopyReport, CopySegment, plan_stream_copy, stream_copy};
-pub use decode::{AudioReader, VideoReader};
+pub use decode::{AudioReader, AudioStream, VideoReader};
 pub use direct::DirectSource;
 pub use encode::{
     AudioEncoder, AudioSettings, EncodeSettings, Encoder, StitchSettings, VideoSettings,

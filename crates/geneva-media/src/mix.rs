@@ -11,14 +11,13 @@ use geneva_anim::Track;
 use geneva_timeline::{Composition, Ratio, ResolvedLayer, ResolvedSource};
 
 use crate::MediaError;
-use crate::codecs::AudioReader;
+use crate::codecs::{AudioReader, AudioStream};
 
 /// Gain is sampled once per block of this many frames.
 const GAIN_BLOCK: usize = 64;
 
 /// One thing to mix.
 struct Voice {
-    asset: String,
     src: String,
     in_: Ratio,
     start: Ratio,
@@ -60,7 +59,6 @@ fn walk(
                         .map(|a| a.src.clone())
                         .unwrap_or_default();
                     out.push(Voice {
-                        asset: asset.clone(),
                         src,
                         in_: *in_,
                         start,
@@ -92,7 +90,6 @@ fn voices(comp: &Composition) -> Vec<Voice> {
                 .map(|a| a.src.clone())
                 .unwrap_or_default();
             out.push(Voice {
-                asset: c.asset.clone(),
                 src,
                 in_: c.in_,
                 start: c.start,
@@ -115,71 +112,165 @@ fn voices(comp: &Composition) -> Vec<Voice> {
     out
 }
 
-/// Mixes the whole composition into interleaved stereo `f32` at `rate`.
-///
-/// The result has exactly `round(duration × rate)` frames. Samples are
-/// summed without limiting; the encoder clamps to full scale.
-pub fn mix(comp: &Composition, root: &Path, rate: u32) -> Result<Vec<f32>, MediaError> {
-    let total_frames = (comp.duration.to_f64() * f64::from(rate)).round() as usize;
-    let mut out = vec![0f32; total_frames * 2];
-    let mut readers: std::collections::HashMap<String, AudioReader> =
-        std::collections::HashMap::new();
-    for voice in voices(comp) {
-        let length = voice.end - voice.start;
-        if length <= Ratio::ZERO {
-            continue;
+/// One voice while it is being mixed.
+struct Live {
+    voice: Voice,
+    /// First and one-past-last output frame of the voice.
+    first: usize,
+    last: usize,
+    /// Its stream, opened on first use; `None` again once it is done.
+    stream: Option<AudioStream>,
+    /// True when the file has no audio stream: the voice is silence.
+    silent: bool,
+    opened: bool,
+}
+
+/// Mixes a composition block by block, so that only a block of the output
+/// is ever held: every voice is read forward as the blocks advance. The
+/// mix is a pure function of the composition and the files, like the
+/// video, whatever the block size.
+pub struct Mixer {
+    root: std::path::PathBuf,
+    rate: u32,
+    total_frames: usize,
+    position: usize,
+    voices: Vec<Live>,
+}
+
+impl Mixer {
+    /// Prepares the mix of `comp` at `rate`; files are opened as their
+    /// voices come up.
+    pub fn new(comp: &Composition, root: &Path, rate: u32) -> Self {
+        let total_frames = (comp.duration.to_f64() * f64::from(rate)).round() as usize;
+        let frame_at = |t: Ratio| (t.to_f64() * f64::from(rate)).round().max(0.0) as usize;
+        let voices = voices(comp)
+            .into_iter()
+            .filter(|v| v.end > v.start)
+            .map(|voice| {
+                let first = frame_at(voice.start);
+                let last = (first + frame_at(voice.end - voice.start)).min(total_frames);
+                Live {
+                    voice,
+                    first,
+                    last,
+                    stream: None,
+                    silent: false,
+                    opened: false,
+                }
+            })
+            .collect();
+        Self {
+            root: root.to_path_buf(),
+            rate,
+            total_frames,
+            position: 0,
+            voices,
         }
-        let reader = match readers.entry(voice.asset.clone()) {
-            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-            std::collections::hash_map::Entry::Vacant(e) => {
-                match AudioReader::open(&root.join(&voice.src)) {
-                    Ok(r) => e.insert(r),
-                    // A video without an audio stream simply contributes silence.
-                    Err(MediaError::NoStream { .. }) => continue,
+    }
+
+    /// Frames in the whole mix: `round(duration × rate)`.
+    pub fn total_frames(&self) -> usize {
+        self.total_frames
+    }
+
+    /// The next block of at most `frames` frames, or `None` after the
+    /// last one. Samples are summed without limiting; the encoder clamps
+    /// to full scale.
+    pub fn next_block(&mut self, frames: usize) -> Result<Option<Vec<f32>>, MediaError> {
+        if self.position >= self.total_frames || frames == 0 {
+            return Ok(None);
+        }
+        let b0 = self.position;
+        let b1 = (b0 + frames).min(self.total_frames);
+        let mut out = vec![0f32; (b1 - b0) * 2];
+        let rate = self.rate;
+        for live in &mut self.voices {
+            if live.last <= b0 {
+                live.stream = None;
+                continue;
+            }
+            if live.first >= b1 || live.silent {
+                continue;
+            }
+            let o0 = b0.max(live.first);
+            let o1 = b1.min(live.last);
+            let offset = o0 - live.first;
+            let count = o1 - o0;
+            if !live.opened {
+                live.opened = true;
+                // A sped-up source is read at a proportionally lower rate
+                // and played at the output rate: the pitch follows, as on
+                // a varispeed deck.
+                let read_rate = if live.voice.speed == Ratio::ONE {
+                    rate
+                } else {
+                    (f64::from(rate) / live.voice.speed.to_f64())
+                        .round()
+                        .max(1000.0) as u32
+                };
+                match AudioReader::open(&self.root.join(&live.voice.src)) {
+                    Ok(r) => {
+                        let mut stream = r.into_stream(live.voice.in_, read_rate)?;
+                        // Blocks are sequential, so a voice is first met at
+                        // its start; anything before is passed over.
+                        if offset > 0 {
+                            stream.read(offset)?;
+                        }
+                        live.stream = Some(stream);
+                    }
+                    // A video without an audio stream contributes silence.
+                    Err(MediaError::NoStream { .. }) => {
+                        live.silent = true;
+                        continue;
+                    }
                     Err(err) => return Err(err),
                 }
             }
-        };
-        // A sped-up source: that much more of it, resampled to that
-        // much lower a rate, then played at the output rate (the pitch
-        // follows, as on a varispeed deck).
-        let samples = if voice.speed == Ratio::ONE {
-            reader.read(voice.in_, length, rate)?
-        } else {
-            let read_rate = (f64::from(rate) / voice.speed.to_f64()).round().max(1000.0) as u32;
-            let mut s = reader.read(voice.in_, length * voice.speed, read_rate)?;
-            s.resize(
-                ((length.to_f64() * f64::from(rate)).round() as usize) * 2,
-                0.0,
-            );
-            s
-        };
-        let offset = (voice.start.to_f64() * f64::from(rate)).round() as usize;
-        let frames = samples.len() / 2;
-        let fade_in = voice.fade_in.to_f64();
-        let fade_out = voice.fade_out.to_f64();
-        let len_secs = length.to_f64();
-        let mut block_gain = 1.0f32;
-        for i in 0..frames {
-            if i % GAIN_BLOCK == 0 {
-                let t = i as f64 / f64::from(rate);
-                let db = voice.gain_db.sample(t);
-                let mut g = 10f64.powf(db / 20.0);
-                if fade_in > 0.0 && t < fade_in {
-                    g *= t / fade_in;
+            let Some(stream) = live.stream.as_mut() else {
+                continue;
+            };
+            let samples = stream.read(count)?;
+            let voice = &live.voice;
+            let fade_in = voice.fade_in.to_f64();
+            let fade_out = voice.fade_out.to_f64();
+            let len_secs = (voice.end - voice.start).to_f64();
+            let mut block_gain = 1.0f32;
+            for i in 0..count {
+                let k = offset + i;
+                // Gain is sampled once per block of frames, always at the
+                // block's own start, so the mix does not depend on where
+                // the output blocks fall.
+                if k % GAIN_BLOCK == 0 || i == 0 {
+                    let t = (k - k % GAIN_BLOCK) as f64 / f64::from(rate);
+                    let db = voice.gain_db.sample(t);
+                    let mut g = 10f64.powf(db / 20.0);
+                    if fade_in > 0.0 && t < fade_in {
+                        g *= t / fade_in;
+                    }
+                    if fade_out > 0.0 && t > len_secs - fade_out {
+                        g *= ((len_secs - t) / fade_out).max(0.0);
+                    }
+                    block_gain = g as f32;
                 }
-                if fade_out > 0.0 && t > len_secs - fade_out {
-                    g *= ((len_secs - t) / fade_out).max(0.0);
-                }
-                block_gain = g as f32;
+                let dst = (o0 - b0 + i) * 2;
+                out[dst] += samples[i * 2] * block_gain;
+                out[dst + 1] += samples[i * 2 + 1] * block_gain;
             }
-            let dst = offset + i;
-            if dst >= total_frames {
-                break;
-            }
-            out[dst * 2] += samples[i * 2] * block_gain;
-            out[dst * 2 + 1] += samples[i * 2 + 1] * block_gain;
         }
+        self.position = b1;
+        Ok(Some(out))
+    }
+}
+
+/// Mixes the whole composition into interleaved stereo `f32` at `rate`,
+/// a second at a time through [`Mixer`].
+///
+/// The result has exactly `round(duration × rate)` frames.
+pub fn mix(comp: &Composition, root: &Path, rate: u32) -> Result<Vec<f32>, MediaError> {
+    let mut mixer = Mixer::new(comp, root, rate);
+    let mut out = Vec::with_capacity(mixer.total_frames() * 2);
+    while let Some(block) = mixer.next_block(rate as usize)? {
+        out.extend_from_slice(&block);
     }
     Ok(out)
 }

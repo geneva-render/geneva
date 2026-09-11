@@ -65,6 +65,12 @@ the format version it was written for.
   composited 1080p frame's cost is the memory traffic of the 16-byte
   working pixel (each full-frame pass moves 33 MB) and the encoder.
 
+- The audio mix is streamed: the mixer produces a second at a time,
+  reading every voice forward on its own decoder and resampler, so a
+  composited output of any length holds only a block of audio in
+  memory. The mix is the same whatever the block size (a test checks
+  it), and the same as before.
+
 ### Fixes
 
 - The build without the media feature (checked by CI with clippy)
