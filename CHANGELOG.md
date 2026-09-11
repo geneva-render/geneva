@@ -7,6 +7,21 @@ the format version it was written for.
 
 ## Unreleased
 
+### Added
+
+- Timeline format 0.2. A 0.2 document is a 0.1 document with more
+  optional clip fields, so `"geneva": "0.1"` documents are read as they
+  are; the verbs write 0.2. The schema file is now
+  `schema/geneva-timeline-0.2.schema.json`.
+- `crop` on clips: a rectangle of the source (pixels or percentages of
+  the source's own size) that becomes the clip's box before `fit` and the
+  transform. A video shown as it is with a crop takes the direct path,
+  the region scaled straight from the decoder, with bars when it does
+  not fill the frame.
+- `--crop RECT` on `convert`, `resize` and `trim`: `X,Y,WxH`, or `WxH`
+  for the middle of the picture. The output takes the crop's size unless
+  a size is given.
+
 ### Fixes
 
 - Keeping the source's audio sample rate (0.1.11) broke outputs whose

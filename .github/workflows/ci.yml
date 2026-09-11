@@ -66,7 +66,7 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test --workspace --no-default-features
       - name: Schema is up to date
-        run: cargo run -q -p geneva-cli -- schema | diff - schema/geneva-timeline-0.1.schema.json
+        run: cargo run -q -p geneva-cli -- schema | diff - schema/geneva-timeline-0.2.schema.json
       - name: Upload golden failures
         if: failure()
         uses: actions/upload-artifact@v4

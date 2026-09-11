@@ -1,10 +1,10 @@
-# Timeline format 0.1
+# Timeline format 0.2
 
 A timeline is a JSON document that describes a video composition: the output
 frame, a table of assets, visual layers made of clips, and audio tracks.
 This page is the reference for humans and for programs that generate
 timelines. The machine-readable schema is in
-[`schema/geneva-timeline-0.1.schema.json`](../schema/geneva-timeline-0.1.schema.json)
+[`schema/geneva-timeline-0.2.schema.json`](../schema/geneva-timeline-0.2.schema.json)
 and is printed by `geneva schema`.
 
 Unknown fields are errors everywhere. That is deliberate: a misspelled
@@ -15,7 +15,7 @@ silently ignored.
 
 ```json
 {
-  "geneva": "0.1",
+  "geneva": "0.2",
   "output": { "width": 1280, "height": 720, "fps": 30, "duration": "3s" },
   "layers": [
     { "clips": [ { "source": { "kind": "solid", "color": "#1d2230" } } ] }
@@ -91,7 +91,7 @@ object with a `keyframes` array:
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `geneva` | yes | Format version, `"0.1"`. |
+| `geneva` | yes | Format version, `"0.2"`. A `"0.1"` document is read as it is: 0.2 only adds optional clip fields (`crop`, `effects`, `mask`, `speed`). |
 | `output` | yes | Frame size, rate, duration, background, color, audio and encoding settings. |
 | `assets` | no | Map of asset id to asset. |
 | `compositions` | no | Map of name to reusable composition. |
@@ -170,10 +170,28 @@ contain other compositions up to 8 levels deep, and never themselves (E207).
 | `start` | no | end of the previous clip | Timeline time the clip appears. |
 | `duration` | no | see timing rules | How long it lasts. |
 | `transition` | no | | `{ "kind": "crossfade", "duration": ... }` from the previous clip. |
+| `crop` | no | the whole source | A rectangle of the source that becomes the clip's box; see below. |
 | `fit` | no | `contain` for video, `none` otherwise | `none`, `contain`, `cover`, `fill`: how the source box is sized to the frame before the transform. |
 | `transform` | no | centered | Position, anchor, scale, rotation. |
 | `opacity` | no | `1` | Animatable, 0 to 1. |
 | `blend` | no | `normal` | `normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `difference`, `soft-light`, `add`. Computed in linear light. |
+
+### `crop`
+
+A rectangle of the source that becomes the clip's box: the rest is
+discarded before `fit` and the transform see the picture, so a 1920×1080
+video with `"crop": { "x": 420, "width": 1080 }` is a 1080×1080 clip.
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `x`, `y` | `0` | Top-left corner, in source pixels or percentages of the source's own size. |
+| `width`, `height` | the rest of the source | Size, in the same units. |
+
+Values must lie inside the source as written (E402); a rectangle that
+reaches past the source's actual size is clamped to it, and one that
+leaves nothing paints nothing. The anchor's percentages refer to the
+cropped box. A video shown as it is with a crop still takes the direct
+path: the region is scaled straight from the decoder.
 
 ### `transform`
 

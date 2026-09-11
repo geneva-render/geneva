@@ -213,6 +213,9 @@ pub(super) enum Place {
     /// The region `[x, y, width, height]` of the source is scaled to the
     /// whole frame (a `cover` fit, cropping the edges).
     Crop([u32; 4]),
+    /// The region `src` of the source is scaled to `dst` in the frame,
+    /// the rest being the background (a cropped clip with bars).
+    CropBars { src: [u32; 4], dst: [u32; 4] },
 }
 
 /// The composition's single video layer as a contiguous list of untouched
@@ -309,12 +312,42 @@ fn video_layer_clips(
         if shape.fps != comp.fps {
             return Ok(None);
         }
-        let same_size = shape.width == comp.width && shape.height == comp.height;
-        let fills = allow_scale && fills_frame(clip.fit, shape.width, shape.height, comp);
-        let place = if same_size || fills || !allow_scale {
+        // A crop shows one region of the source, rounded to even pixels
+        // so that subsampled chroma lines up; it is a scaling.
+        let region = match clip.crop {
+            None => None,
+            Some(crop) => {
+                if !allow_scale {
+                    return Ok(None);
+                }
+                let Some([x, y, w, h]) =
+                    crop.to_px(f64::from(shape.width), f64::from(shape.height))
+                else {
+                    return Ok(None);
+                };
+                let even_floor = |v: f64| ((v / 2.0).floor() * 2.0) as u32;
+                let even = |v: f64| ((v / 2.0).round() * 2.0) as u32;
+                let (rx, ry) = (even_floor(x), even_floor(y));
+                let (rw, rh) = (even(w).max(2), even(h).max(2));
+                if rx + rw > shape.width || ry + rh > shape.height {
+                    return Ok(None);
+                }
+                if [rx, ry, rw, rh] == [0, 0, shape.width, shape.height] {
+                    None
+                } else {
+                    Some([rx, ry, rw, rh])
+                }
+            }
+        };
+        let (pic_w, pic_h) = region.map_or((shape.width, shape.height), |r| (r[2], r[3]));
+        let same_size = region.is_none() && pic_w == comp.width && pic_h == comp.height;
+        let fills = allow_scale && fills_frame(clip.fit, pic_w, pic_h, comp);
+        let place = if same_size || !allow_scale {
             None
+        } else if fills {
+            region.map(Place::Crop)
         } else {
-            placement(clip.fit, shape.width, shape.height, comp)
+            placement(clip.fit, region, shape.width, shape.height, comp)
         };
         if !(same_size || fills || place.is_some()) {
             return Ok(None);
@@ -370,14 +403,22 @@ fn fills_frame(fit: Fit, w: u32, h: u32, comp: &Composition) -> bool {
     (w * scale[0] - out_w).abs() <= 2.0 && (h * scale[1] - out_h).abs() <= 2.0
 }
 
-/// How a `w`×`h` picture whose scaling does not cover the frame is placed:
-/// a `contain` fit scaled to touch two edges, or an unfitted picture at
+/// How a picture whose scaling does not cover the frame is placed: the
+/// picture is the `w`×`h` source, or its `region` when cropped. A
+/// `contain` fit scaled to touch two edges, or an unfitted picture at
 /// its own size, sits centered on the background, which must be opaque;
-/// a `cover` fit has the centered region of the source that the frame
+/// a `cover` fit has the centered region of the picture that the frame
 /// shows scaled to the whole frame. Positions and sizes are rounded to
 /// even pixels so that subsampled chroma lines up. `None` for a stretch
 /// or an unfitted picture that overflows the frame.
-fn placement(fit: Fit, w: u32, h: u32, comp: &Composition) -> Option<Place> {
+fn placement(
+    fit: Fit,
+    region: Option<[u32; 4]>,
+    w: u32,
+    h: u32,
+    comp: &Composition,
+) -> Option<Place> {
+    let [rx, ry, w, h] = region.unwrap_or([0, 0, w, h]);
     let (out_w, out_h) = (f64::from(comp.width), f64::from(comp.height));
     let (fw, fh) = (f64::from(w), f64::from(h));
     let even = |v: f64| ((v / 2.0).round() * 2.0) as u32;
@@ -388,8 +429,8 @@ fn placement(fit: Fit, w: u32, h: u32, comp: &Composition) -> Option<Place> {
         if rw < 2 || rh < 2 {
             return None;
         }
-        let x = even((fw - f64::from(rw)) / 2.0);
-        let y = even((fh - f64::from(rh)) / 2.0);
+        let x = rx + even((fw - f64::from(rw)) / 2.0);
+        let y = ry + even((fh - f64::from(rh)) / 2.0);
         return Some(Place::Crop([x, y, rw, rh]));
     }
     if comp.background.a < 1.0 {
@@ -407,7 +448,11 @@ fn placement(fit: Fit, w: u32, h: u32, comp: &Composition) -> Option<Place> {
     }
     let x = even((out_w - f64::from(rw)) / 2.0);
     let y = even((out_h - f64::from(rh)) / 2.0);
-    Some(Place::Bars([x, y, rw, rh]))
+    let dst = [x, y, rw, rh];
+    Some(match region {
+        None => Place::Bars(dst),
+        Some(src) => Place::CropBars { src, dst },
+    })
 }
 
 /// Audio codecs each container can hold without re-encoding.

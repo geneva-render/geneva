@@ -205,7 +205,7 @@ impl DirectSource {
         }
         let bars = clips
             .iter()
-            .any(|c| matches!(c.place, Some(Place::Bars(_))))
+            .any(|c| matches!(c.place, Some(Place::Bars(_) | Place::CropBars { .. })))
             .then(|| {
                 frame_to_planes(
                     &Frame::new(comp.width, comp.height, comp.background),
@@ -215,7 +215,7 @@ impl DirectSource {
             });
         if clips
             .iter()
-            .any(|c| matches!(c.place, Some(Place::Crop(_))))
+            .any(|c| matches!(c.place, Some(Place::Crop(_) | Place::CropBars { .. })))
         {
             how = Conversion::Cropped;
         }
@@ -235,6 +235,8 @@ impl DirectSource {
     pub fn reason(&self) -> String {
         let what = if self.to_rgb {
             "converted to RGB straight from the decoder"
+        } else if self.bars.is_some() && self.how == Conversion::Cropped {
+            "cropped and scaled straight from the decoder onto the background of the frame"
         } else if self.bars.is_some() {
             "scaled straight from the decoder onto the background of the frame"
         } else if self.how == Conversion::Cropped {
@@ -273,7 +275,12 @@ impl DirectSource {
         // A cropped clip shows one region of the decoded frame.
         let view;
         let raw = match clip.place {
-            Some(Place::Crop([x, y, w, h])) => {
+            Some(
+                Place::Crop([x, y, w, h])
+                | Place::CropBars {
+                    src: [x, y, w, h], ..
+                },
+            ) => {
                 view = ffi::cropped(raw, x, y, w, h).map_err(|e| codec_error("cropping", e))?;
                 &view
             }
@@ -281,7 +288,7 @@ impl DirectSource {
         };
         // The picture's size: the frame's, or its place on the background.
         let (width, height) = match clip.place {
-            Some(Place::Bars(r)) => (r[2], r[3]),
+            Some(Place::Bars(r) | Place::CropBars { dst: r, .. }) => (r[2], r[3]),
             _ => (self.width, self.height),
         };
         let needs_scaler = raw.width() != width
@@ -294,7 +301,7 @@ impl DirectSource {
             copy_planes(raw, self.format)
         };
         match (clip.place, &self.bars) {
-            (Some(Place::Bars(rect)), Some(bars)) => {
+            (Some(Place::Bars(rect) | Place::CropBars { dst: rect, .. }), Some(bars)) => {
                 let mut out = bars.clone();
                 blit_planes(&mut out, &planes, rect[0], rect[1]);
                 Ok(out)

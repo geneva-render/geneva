@@ -1,7 +1,7 @@
 use schemars::generate::SchemaSettings;
 use serde_json::{Value, json};
 
-use crate::schema::{FORMAT_VERSION, Timeline};
+use crate::schema::{ACCEPTED_VERSIONS, FORMAT_VERSION, Timeline};
 
 /// Canonical URL of the published schema for the current format version.
 pub fn schema_url() -> String {
@@ -26,7 +26,7 @@ pub fn json_schema() -> Value {
         .and_then(|p| p.get_mut("geneva"))
         .and_then(Value::as_object_mut)
     {
-        geneva.insert("const".to_owned(), json!(FORMAT_VERSION));
+        geneva.insert("enum".to_owned(), json!(ACCEPTED_VERSIONS));
     }
     schema
 }
@@ -38,7 +38,7 @@ mod tests {
     #[test]
     fn schema_pins_the_version() {
         let s = json_schema();
-        assert_eq!(s["properties"]["geneva"]["const"], json!("0.1"));
+        assert_eq!(s["properties"]["geneva"]["enum"], json!(["0.1", "0.2"]));
         assert_eq!(
             s["$schema"],
             json!("https://json-schema.org/draft/2020-12/schema")
@@ -47,7 +47,7 @@ mod tests {
             s["$id"]
                 .as_str()
                 .unwrap()
-                .ends_with("geneva-timeline-0.1.schema.json")
+                .ends_with("geneva-timeline-0.2.schema.json")
         );
     }
 }

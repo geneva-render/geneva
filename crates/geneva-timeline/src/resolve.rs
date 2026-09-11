@@ -17,8 +17,9 @@ use crate::diagnostic::{Diagnostic, Path};
 use crate::length::{Length, Point, Scale};
 use crate::ratio::Ratio;
 use crate::schema::{
-    Asset, AssetKind, AudioOutput, AudioTrack, BlendMode, CompositionDef, Encode, FORMAT_VERSION,
-    Fit, Layer, ShapeKind, Source, TextSource, Timeline, Transform, TransitionKind,
+    ACCEPTED_VERSIONS, Asset, AssetKind, AudioOutput, AudioTrack, BlendMode, CompositionDef, Crop,
+    Encode, FORMAT_VERSION, Fit, Layer, ShapeKind, Source, TextSource, Timeline, Transform,
+    TransitionKind,
 };
 use crate::time::Time;
 
@@ -107,6 +108,9 @@ pub struct ResolvedClip {
     pub end: Ratio,
     /// Content.
     pub source: ResolvedSource,
+    /// The rectangle of the source shown, when not all of it; resolved
+    /// against the source's size by [`Crop::to_px`] once that is known.
+    pub crop: Option<Crop>,
     /// Sizing mode.
     pub fit: Fit,
     /// Blend mode.
@@ -337,7 +341,7 @@ impl Resolver<'_> {
 
     fn run(&mut self) -> Composition {
         let tl = self.tl;
-        if tl.geneva != FORMAT_VERSION {
+        if !ACCEPTED_VERSIONS.contains(&tl.geneva.as_str()) {
             self.push(
                 Diagnostic::error(
                     "E110",
@@ -345,7 +349,14 @@ impl Resolver<'_> {
                     format!("unsupported format version {:?}", tl.geneva),
                 )
                 .with_value(tl.geneva.clone())
-                .with_help(format!("this build reads version \"{FORMAT_VERSION}\"")),
+                .with_help(format!(
+                    "this build writes version \"{FORMAT_VERSION}\" and reads {}",
+                    ACCEPTED_VERSIONS
+                        .iter()
+                        .map(|v| format!("\"{v}\""))
+                        .collect::<Vec<_>>()
+                        .join(" and ")
+                )),
             );
         }
 
@@ -952,6 +963,9 @@ impl Resolver<'_> {
                 Some((0.0, 1.0)),
                 "opacity",
             );
+            if let Some(crop) = &clip.crop {
+                self.check_crop(crop, &cpath.key("crop"));
+            }
 
             clips.push(ResolvedClip {
                 id: clip_id,
@@ -959,6 +973,7 @@ impl Resolver<'_> {
                 start,
                 end,
                 source,
+                crop: clip.crop,
                 fit: clip.fit.unwrap_or(match clip.source {
                     Source::Video { .. } => Fit::Contain,
                     _ => Fit::None,
@@ -1262,6 +1277,48 @@ impl Resolver<'_> {
                 Some(len) => (in_secs, ClipLength::Fixed(len - in_secs)),
                 None => (in_secs, ClipLength::Open),
             },
+        }
+    }
+
+    /// A crop's edges must lie inside the source and its size must be
+    /// positive; what that means in pixels depends on the source, so the
+    /// checks are on the values as written.
+    fn check_crop(&mut self, crop: &Crop, path: &Path) {
+        let edges = [("x", crop.x), ("y", crop.y)];
+        for (name, v) in edges {
+            let bad = match v {
+                Some(Length::Px(px)) => !(px >= 0.0 && px.is_finite()),
+                Some(Length::Percent(p)) => !(0.0..100.0).contains(&p),
+                None => false,
+            };
+            if bad {
+                self.push(
+                    Diagnostic::error(
+                        "E402",
+                        path.key(name),
+                        format!("crop {name} must be inside the source (0 or more, below 100%)"),
+                    )
+                    .with_value(json!(v.map(|l| l.to_string()))),
+                );
+            }
+        }
+        let sizes = [("width", crop.width), ("height", crop.height)];
+        for (name, v) in sizes {
+            let bad = match v {
+                Some(Length::Px(px)) => !(px > 0.0 && px.is_finite()),
+                Some(Length::Percent(p)) => !(p > 0.0 && p <= 100.0),
+                None => false,
+            };
+            if bad {
+                self.push(
+                    Diagnostic::error(
+                        "E402",
+                        path.key(name),
+                        format!("crop {name} must be greater than 0 (and at most 100%)"),
+                    )
+                    .with_value(json!(v.map(|l| l.to_string()))),
+                );
+            }
         }
     }
 

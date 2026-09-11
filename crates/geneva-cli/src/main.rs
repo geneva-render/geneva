@@ -159,6 +159,11 @@ struct ConvertArgs {
     /// Output file. The extension selects the container.
     #[arg(short, long, value_name = "FILE")]
     output: PathBuf,
+    /// Keep one rectangle of the picture: X,Y,WxH, or WxH for the middle
+    /// (pixels or percentages, for example 240,0,1440x1080 or 56%x100%).
+    /// The output takes its size unless --width or --height is given.
+    #[arg(long, value_name = "RECT")]
+    crop: Option<verbs::CropArg>,
     /// Output width in pixels. The height follows when not given.
     #[arg(long)]
     width: Option<u32>,
@@ -183,11 +188,15 @@ struct ResizeArgs {
     /// Output file. The extension selects the container.
     #[arg(short, long, value_name = "FILE")]
     output: PathBuf,
+    /// Keep one rectangle of the picture first: X,Y,WxH, or WxH for the
+    /// middle (pixels or percentages).
+    #[arg(long, value_name = "RECT")]
+    crop: Option<verbs::CropArg>,
     /// Output width in pixels. The height follows when not given.
-    #[arg(long, required_unless_present = "height")]
+    #[arg(long, required_unless_present_any = ["height", "crop"])]
     width: Option<u32>,
     /// Output height in pixels. The width follows when not given.
-    #[arg(long, required_unless_present = "width")]
+    #[arg(long, required_unless_present_any = ["width", "crop"])]
     height: Option<u32>,
     /// How to fit the picture when the shape changes (also the canvas
     /// --for builds): contain by default.
@@ -214,6 +223,10 @@ struct TrimArgs {
     /// Length of the kept range, instead of an end time.
     #[arg(long, value_name = "TIME")]
     duration: Option<String>,
+    /// Keep one rectangle of the picture: X,Y,WxH, or WxH for the middle
+    /// (pixels or percentages). The output takes its size.
+    #[arg(long, value_name = "RECT")]
+    crop: Option<verbs::CropArg>,
     #[command(flatten)]
     encode: verbs::EncodeArgs,
 }
@@ -485,6 +498,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 .transpose()?;
             let compiled = verbs::convert(
                 &args.input,
+                args.crop.as_ref(),
                 args.width,
                 args.height,
                 args.fit,
@@ -496,6 +510,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Resize(args) => {
             let compiled = verbs::convert(
                 &args.input,
+                args.crop.as_ref(),
                 args.width,
                 args.height,
                 args.fit,
@@ -510,6 +525,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 parse_time("--from", args.from.as_deref())?,
                 parse_time("--to", args.to.as_deref())?,
                 parse_time("--duration", args.duration.as_deref())?,
+                args.crop.as_ref(),
                 &args.encode,
             )?;
             run_verb(&compiled, &args.output, &args.encode, cli.format)

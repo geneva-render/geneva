@@ -130,11 +130,18 @@ otherwise. The printed timeline (`--show-timeline`) shows the choice.
 | `--exact` | Cut on the exact frame; a [smart cut](#smart-cut) when the source allows. |
 | `--show-timeline` | Print the timeline the verb built instead of rendering it. Asset paths in it are relative to the directory printed on stderr. |
 
-### `geneva convert <input> -o FILE [--width W] [--height H] [--fit contain|cover|fill] [--fps FPS]`
+### `geneva convert <input> -o FILE [--crop RECT] [--width W] [--height H] [--fit contain|cover|fill] [--fps FPS]`
 
 Re-encodes a video, optionally to another container, codec, size or frame
 rate. Giving one of `--width` and `--height` keeps the aspect ratio.
 Dimensions are rounded to even numbers.
+
+`--crop` keeps one rectangle of the picture: `X,Y,WxH` from the top-left
+corner, or `WxH` alone for the middle; each value is a pixel count or a
+percentage of the source (`240,0,1440x1080`, `56%x100%`). The output
+takes the crop's size unless a size is given, in which case the crop is
+fitted to it like a whole picture would be. The region goes straight
+from the decoder to the encoder, so a crop costs no more than a resize.
 
 `--fit` also decides how the picture meets a canvas that `--for` builds:
 a landscape video on a 9:16 target gets bars by default and is cropped
@@ -145,19 +152,22 @@ geneva convert talk.mov -o talk.mp4
 geneva convert talk.mp4 -o talk.webm --codec vp9 --crf 32
 geneva convert talk.mp4 -o talk-720.mp4 --height 720 --fps 30
 geneva convert talk.mp4 -o reel.mp4 --for tiktok --fit cover
+geneva convert talk.mp4 -o square.mp4 --crop 1080x1080
 ```
 
-### `geneva resize <input> -o FILE --width W | --height H [--fit contain|cover|fill]`
+### `geneva resize <input> -o FILE [--crop RECT] --width W | --height H [--fit contain|cover|fill]`
 
 `convert` with a required size. `contain` (the default) shows the whole
 picture with bars when the shape differs; `cover` fills the frame and
 crops; `fill` stretches.
 
-### `geneva trim <input> -o FILE [--from TIME] [--to TIME | --duration TIME]`
+### `geneva trim <input> -o FILE [--from TIME] [--to TIME | --duration TIME] [--crop RECT]`
 
 Keeps a range of the input. Without `--crf`, `--preset` or `--exact` the
 streams are copied and the cut moves back to the previous keyframe; the
-report gives the time actually used.
+report gives the time actually used. `--crop` (as on `convert`) keeps one
+rectangle of the picture and re-encodes, since a copied stream cannot
+carry a crop.
 
 ```sh
 geneva trim talk.mp4 -o intro.mp4 --to 30s

@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use geneva_color::{ColorTags, ResolvedTags};
 use geneva_timeline::schema::{
-    Asset, AudioClip, AudioTrack, Clip, Encode, Fit, Layer, Output, Source, SubtitleTrack,
+    Asset, AudioClip, AudioTrack, Clip, Crop, Encode, Fit, Layer, Output, Source, SubtitleTrack,
     TextSource, Timeline, Transform, Transition, TransitionKind, VideoCodec, VideoEncode,
     VideoProfile,
 };
@@ -352,10 +352,94 @@ fn video_clip(
         start: None,
         duration: None,
         transition: None,
+        crop: None,
         fit,
         transform: None,
         opacity: None,
         blend: None,
+    }
+}
+
+/// A crop from the command line: `X,Y,WxH`, or `WxH` for a centered
+/// rectangle; each value a pixel count or a percentage of the source.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CropArg {
+    x: Option<Length>,
+    y: Option<Length>,
+    width: Length,
+    height: Length,
+}
+
+fn parse_crop_length(s: &str) -> Result<Length> {
+    let s = s.trim();
+    let (num, percent) = match s.strip_suffix('%') {
+        Some(n) => (n, true),
+        None => (s.strip_suffix("px").unwrap_or(s), false),
+    };
+    let v: f64 = num
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("{s:?} is not a length (a number or a percentage)"))?;
+    Ok(if percent {
+        Length::Percent(v)
+    } else {
+        Length::Px(v)
+    })
+}
+
+impl std::str::FromStr for CropArg {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let parts: Vec<&str> = s.split(',').collect();
+        let (x, y, size) = match parts.as_slice() {
+            [size] => (None, None, *size),
+            [x, y, size] => (Some(*x), Some(*y), *size),
+            _ => bail!("--crop takes X,Y,WxH or WxH, for example 240,0,1440x1080 or 80%x80%"),
+        };
+        let (w, h) = size
+            .split_once('x')
+            .ok_or_else(|| anyhow::anyhow!("--crop size must be WxH, for example 1080x1080"))?;
+        Ok(Self {
+            x: x.map(parse_crop_length).transpose()?,
+            y: y.map(parse_crop_length).transpose()?,
+            width: parse_crop_length(w)?,
+            height: parse_crop_length(h)?,
+        })
+    }
+}
+
+impl CropArg {
+    /// The crop for a `w`×`h` source, centered when no corner was given,
+    /// and its size in whole pixels.
+    fn resolve(&self, w: u32, h: u32) -> Result<(Crop, u32, u32)> {
+        let (fw, fh) = (f64::from(w), f64::from(h));
+        let cw = self.width.to_px(fw).min(fw);
+        let ch = self.height.to_px(fh).min(fh);
+        if cw < 2.0 || ch < 2.0 {
+            bail!("--crop leaves nothing of the {w}×{h} picture");
+        }
+        let x = match self.x {
+            Some(l) => l,
+            None => Length::Px(((fw - cw) / 2.0).floor()),
+        };
+        let y = match self.y {
+            Some(l) => l,
+            None => Length::Px(((fh - ch) / 2.0).floor()),
+        };
+        if x.to_px(fw) + cw > fw + 0.5 || y.to_px(fh) + ch > fh + 0.5 {
+            bail!("--crop reaches outside the {w}×{h} picture");
+        }
+        Ok((
+            Crop {
+                x: Some(x),
+                y: Some(y),
+                width: Some(self.width),
+                height: Some(self.height),
+            },
+            cw.round() as u32,
+            ch.round() as u32,
+        ))
     }
 }
 
@@ -380,9 +464,11 @@ fn base_timeline(width: u32, height: u32, fps: Ratio, encode: Option<Encode>) ->
     }
 }
 
-/// `convert` and `resize`: one input, optionally a new size.
+/// `convert` and `resize`: one input, optionally a crop and a new size.
+/// The output takes the crop's size unless a size is given.
 pub fn convert(
     input: &Path,
+    crop: Option<&CropArg>,
     width: Option<u32>,
     height: Option<u32>,
     fit: Option<FitArg>,
@@ -396,7 +482,14 @@ pub fn convert(
             input.display()
         );
     }
-    let (w, h) = output_size(src.width, src.height, width, height);
+    let (crop, pic_w, pic_h) = match crop {
+        Some(c) => {
+            let (crop, w, h) = c.resolve(src.width, src.height)?;
+            (Some(crop), w, h)
+        }
+        None => (None, src.width, src.height),
+    };
+    let (w, h) = output_size(pic_w, pic_h, width, height);
     let (root, rel) = common_root(&[input.to_owned()])?;
     let mut tl = base_timeline(w, h, fps.map_or(src.fps, |f| f.0), encode_block(args));
     tl.output.color = shared_color(&[&src]);
@@ -409,23 +502,25 @@ pub fn convert(
             color: None,
         },
     );
-    let resized = (w, h) != (src.width, src.height);
+    let resized = (w, h) != (pic_w, pic_h);
+    let mut clip = video_clip(
+        "in",
+        None,
+        None,
+        !args.no_audio,
+        // A fit given without a size still counts: `--for` may build
+        // a differently shaped canvas after this.
+        if resized || crop.is_some() {
+            Some(fit.unwrap_or_default().into())
+        } else {
+            fit.map(Into::into)
+        },
+    );
+    clip.crop = crop;
     tl.layers.push(Layer {
         id: None,
         enabled: true,
-        clips: vec![video_clip(
-            "in",
-            None,
-            None,
-            !args.no_audio,
-            // A fit given without a size still counts: `--for` may build
-            // a differently shaped canvas after this.
-            if resized {
-                Some(fit.unwrap_or_default().into())
-            } else {
-                fit.map(Into::into)
-            },
-        )],
+        clips: vec![clip],
     });
     Ok(Compiled {
         timeline: tl,
@@ -434,28 +529,32 @@ pub fn convert(
     })
 }
 
-/// `trim`: one input, a range.
+/// `trim`: one input, a range, optionally a crop (the output takes its
+/// size).
 pub fn trim(
     input: &Path,
     from: Option<Time>,
     to: Option<Time>,
     duration: Option<Time>,
+    crop: Option<&CropArg>,
     args: &EncodeArgs,
 ) -> Result<Compiled> {
     let src = Input::probe(input)?;
     let (root, rel) = common_root(&[input.to_owned()])?;
+    let (crop, pic_w, pic_h) = match crop {
+        Some(c) => {
+            let (crop, w, h) = c.resolve(src.width, src.height)?;
+            (Some(crop), w, h)
+        }
+        None => (None, src.width, src.height),
+    };
     let from_secs = from.map_or(Ratio::ZERO, |t| t.resolve(src.fps));
     let out = match (to, duration) {
         (Some(t), _) => Some(t),
         (None, Some(d)) => Some(seconds(from_secs + d.resolve(src.fps))),
         (None, None) => None,
     };
-    let mut tl = base_timeline(
-        even(src.width),
-        even(src.height),
-        src.fps,
-        encode_block(args),
-    );
+    let mut tl = base_timeline(even(pic_w), even(pic_h), src.fps, encode_block(args));
     tl.output.color = shared_color(&[&src]);
     tl.output.audio = shared_audio(&[&src]);
     tl.assets.insert(
@@ -466,16 +565,18 @@ pub fn trim(
             color: None,
         },
     );
+    let mut clip = video_clip(
+        "in",
+        from.map(|_| seconds(from_secs)),
+        out,
+        !args.no_audio,
+        crop.map(|_| Fit::Contain),
+    );
+    clip.crop = crop;
     tl.layers.push(Layer {
         id: None,
         enabled: true,
-        clips: vec![video_clip(
-            "in",
-            from.map(|_| seconds(from_secs)),
-            out,
-            !args.no_audio,
-            None,
-        )],
+        clips: vec![clip],
     });
     Ok(Compiled {
         timeline: tl,
@@ -696,6 +797,7 @@ pub fn overlay(
             start,
             duration,
             transition: None,
+            crop: None,
             fit: None,
             transform: Some(Transform {
                 position: Some(Animated::Constant(position)),
@@ -1225,6 +1327,7 @@ pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Re
             start: Some(seconds(cue.start)),
             duration: Some(seconds(cue.end - cue.start)),
             transition: None,
+            crop: None,
             fit: None,
             transform: Some(Transform {
                 position: Some(Animated::Constant(position)),

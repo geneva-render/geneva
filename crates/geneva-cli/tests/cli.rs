@@ -117,7 +117,60 @@ fn schema_prints_json_schema() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"$schema\""))
-        .stdout(predicate::str::contains("geneva-timeline-0.1"));
+        .stdout(predicate::str::contains("geneva-timeline-0.2"));
+}
+
+#[test]
+fn crop_takes_the_region_straight_from_the_decoder() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("cropped.mp4");
+    // The corpus clip is 192×108: keep the middle half of its width.
+    let doc = run_json(
+        &["convert", "--crop", "24,0,96x108", "-o"],
+        &[&out, &media_dir().join("clip.mp4")],
+    );
+    assert_eq!(doc["mode"], "direct");
+    assert!(
+        doc["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["message"]
+                .as_str()
+                .unwrap()
+                .contains("cropped and scaled")),
+        "{doc:#}"
+    );
+    let info = run_json(&["probe"], &[&out]);
+    assert_eq!(info["video"]["width"], 96);
+    assert_eq!(info["video"]["height"], 108);
+    // A size alone crops the middle; the output takes the crop's size.
+    let out = dir.path().join("middle.mp4");
+    let doc = run_json(
+        &[
+            "trim",
+            "--from",
+            "0.5s",
+            "--duration",
+            "1s",
+            "--crop",
+            "96x54",
+            "-o",
+        ],
+        &[&out, &media_dir().join("clip.mp4")],
+    );
+    assert_eq!(doc["mode"], "direct", "{doc:#}");
+    let info = run_json(&["probe"], &[&out]);
+    assert_eq!(info["video"]["width"], 96);
+    assert_eq!(info["video"]["height"], 54);
+    // In a timeline, a crop is a clip field; a 0.1 document without one
+    // still validates.
+    geneva()
+        .args(["validate", "--probe", "--assets"])
+        .arg(media_dir())
+        .arg(media_dir().join("overlay-demo.json"))
+        .assert()
+        .success();
 }
 
 #[test]

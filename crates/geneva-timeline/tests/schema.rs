@@ -34,7 +34,7 @@ fn schema_rejects_what_the_parser_rejects() {
 #[test]
 fn checked_in_schema_is_current() {
     let expected = serde_json::to_string_pretty(&json_schema()).unwrap() + "\n";
-    let path = "../../schema/geneva-timeline-0.1.schema.json";
+    let path = "../../schema/geneva-timeline-0.2.schema.json";
     match std::fs::read_to_string(path) {
         Ok(actual) if actual == expected => {}
         _ => {

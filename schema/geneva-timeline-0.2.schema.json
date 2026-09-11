@@ -4,8 +4,11 @@
   "properties": {
     "geneva": {
       "type": "string",
-      "description": "Format version. Must be \"0.1\".",
-      "const": "0.1"
+      "description": "Format version: \"0.2\", or \"0.1\" for a document written before\ncrop, effects, mask and speed existed (read as it is).",
+      "enum": [
+        "0.1",
+        "0.2"
+      ]
     },
     "output": {
       "$ref": "#/$defs/Output",
@@ -52,7 +55,7 @@
     "output"
   ],
   "title": "Geneva timeline",
-  "description": "Geneva timeline format 0.1: a declarative video composition.",
+  "description": "Geneva timeline format 0.2: a declarative video composition.",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
     "Output": {
@@ -926,6 +929,17 @@
           ],
           "description": "A transition from the previous clip in the layer. The clip starts\nearly by the transition duration and blends over the previous one."
         },
+        "crop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Crop"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A rectangle of the source to show; the rest is discarded before\n\"fit\" and the transform see the picture, so the clip's box is the\nrectangle. Percentages refer to the source's own size."
+        },
         "fit": {
           "anyOf": [
             {
@@ -1709,6 +1723,57 @@
       ],
       "description": "Transition types."
     },
+    "Crop": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Left edge. Defaults to 0."
+        },
+        "y": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Top edge. Defaults to 0."
+        },
+        "width": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Width. Defaults to the rest of the source to the right of \"x\"."
+        },
+        "height": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Height. Defaults to the rest of the source below \"y\"."
+        }
+      },
+      "description": "A rectangle of a source, in source pixels or in percentages of the\nsource's own width and height."
+    },
     "Fit": {
       "oneOf": [
         {
@@ -2222,5 +2287,5 @@
       "description": "A subtitle track: one subtitle file written to the output as a text\nstream, for players to show or hide."
     }
   },
-  "$id": "https://geneva-render.github.io/schema/geneva-timeline-0.1.schema.json"
+  "$id": "https://geneva-render.github.io/schema/geneva-timeline-0.2.schema.json"
 }

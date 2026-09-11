@@ -1,4 +1,4 @@
-//! The timeline document model, version 0.1.
+//! The timeline document model, version 0.2.
 //!
 //! Every type here is the source of truth for both the parser and the
 //! published JSON Schema; doc comments become schema descriptions.
@@ -14,15 +14,21 @@ use crate::color::ColorValue;
 use crate::length::{Length, Point, Scale};
 use crate::time::{Fps, Time};
 
-/// The timeline format version this crate reads and writes.
-pub const FORMAT_VERSION: &str = "0.1";
+/// The timeline format version this crate writes.
+pub const FORMAT_VERSION: &str = "0.2";
+
+/// The format versions this crate reads. A 0.2 document is a 0.1 document
+/// with more optional fields (crop, effects, mask, speed), so both are
+/// accepted as they are.
+pub const ACCEPTED_VERSIONS: &[&str] = &["0.1", "0.2"];
 
 /// A complete composition: output settings, assets and layers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(title = "Geneva timeline")]
 pub struct Timeline {
-    /// Format version. Must be "0.1".
+    /// Format version: "0.2", or "0.1" for a document written before
+    /// crop, effects, mask and speed existed (read as it is).
     pub geneva: String,
     /// Frame size, rate, duration and encoding settings of the output.
     pub output: Output,
@@ -435,6 +441,11 @@ pub struct Clip {
     /// early by the transition duration and blends over the previous one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition: Option<Transition>,
+    /// A rectangle of the source to show; the rest is discarded before
+    /// "fit" and the transform see the picture, so the clip's box is the
+    /// rectangle. Percentages refer to the source's own size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop: Option<Crop>,
     /// How the source is sized to the output frame before the transform.
     /// Defaults to "contain" for video and to "none" (natural size) for
     /// everything else.
@@ -449,6 +460,37 @@ pub struct Clip {
     /// Blend mode against the layers below. Defaults to "normal".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blend: Option<BlendMode>,
+}
+
+/// A rectangle of a source, in source pixels or in percentages of the
+/// source's own width and height.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Crop {
+    /// Left edge. Defaults to 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<Length>,
+    /// Top edge. Defaults to 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<Length>,
+    /// Width. Defaults to the rest of the source to the right of "x".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<Length>,
+    /// Height. Defaults to the rest of the source below "y".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<Length>,
+}
+
+impl Crop {
+    /// The rectangle `[x, y, width, height]` in pixels of a `w`×`h`
+    /// source, clamped to the source; `None` when nothing is left.
+    pub fn to_px(self, w: f64, h: f64) -> Option<[f64; 4]> {
+        let x = self.x.map_or(0.0, |v| v.to_px(w)).clamp(0.0, w);
+        let y = self.y.map_or(0.0, |v| v.to_px(h)).clamp(0.0, h);
+        let width = self.width.map_or(w - x, |v| v.to_px(w)).min(w - x);
+        let height = self.height.map_or(h - y, |v| v.to_px(h)).min(h - y);
+        (width > 0.0 && height > 0.0).then_some([x, y, width, height])
+    }
 }
 
 /// A transition into a clip.

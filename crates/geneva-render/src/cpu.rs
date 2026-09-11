@@ -225,8 +225,10 @@ impl<A: AssetSource> CpuRenderer<A> {
                     continue;
                 };
                 let paint = paint.into_owned();
-                let Some(place) =
-                    Placement::new(comp.width, comp.height, clip, local, paint.size())
+                let Some(window) = window_of(clip, paint.size()) else {
+                    continue;
+                };
+                let Some(place) = Placement::new(comp.width, comp.height, clip, local, window)
                 else {
                     continue;
                 };
@@ -309,7 +311,10 @@ impl<A: AssetSource> CpuRenderer<A> {
             let Some(paint) = self.paint_for(comp, clip, t, local)? else {
                 continue;
             };
-            let Some(placement) = Placement::new(width, height, clip, local, paint.size()) else {
+            let Some(window) = window_of(clip, paint.size()) else {
+                continue;
+            };
+            let Some(placement) = Placement::new(width, height, clip, local, window) else {
                 continue;
             };
             draw(
@@ -436,9 +441,21 @@ impl Paint<'_> {
     }
 }
 
+/// The part of a paint a clip shows, `[x, y, width, height]` in the
+/// paint's own pixels: all of it, or its crop; `None` when the crop
+/// leaves nothing.
+fn window_of(clip: &ResolvedClip, (w, h): (f64, f64)) -> Option<[f64; 4]> {
+    match clip.crop {
+        None => Some([0.0, 0.0, w, h]),
+        Some(crop) => crop.to_px(w, h),
+    }
+}
+
 /// The affine mapping from a clip's box to the output frame, and its inverse.
 struct Placement {
-    /// Anchor in box coordinates.
+    /// The part of the paint shown, in paint coordinates: the clip's box.
+    window: [f64; 4],
+    /// Anchor in paint coordinates.
     anchor: [f64; 2],
     /// Anchor position in output coordinates.
     position: [f64; 2],
@@ -458,8 +475,9 @@ impl Placement {
         frame_h: u32,
         clip: &ResolvedClip,
         local: f64,
-        (w, h): (f64, f64),
+        window: [f64; 4],
     ) -> Option<Self> {
+        let [cx, cy, w, h] = window;
         let out_w = f64::from(frame_w);
         let out_h = f64::from(frame_h);
         let fit = match clip.fit {
@@ -479,7 +497,8 @@ impl Placement {
         if scale[0] == 0.0 || scale[1] == 0.0 || !scale[0].is_finite() || !scale[1].is_finite() {
             return None;
         }
-        let anchor = [clip.anchor.x.to_px(w), clip.anchor.y.to_px(h)];
+        // The anchor is a point of the box, which is the window.
+        let anchor = [cx + clip.anchor.x.to_px(w), cy + clip.anchor.y.to_px(h)];
         let position = clip.position.sample(local);
         let angle = clip.rotation.sample(local).to_radians();
         let (sin, cos) = angle.sin_cos();
@@ -493,10 +512,10 @@ impl Placement {
             ]
         };
         let corners = [
-            forward([0.0, 0.0]),
-            forward([w, 0.0]),
-            forward([0.0, h]),
-            forward([w, h]),
+            forward([cx, cy]),
+            forward([cx + w, cy]),
+            forward([cx, cy + h]),
+            forward([cx + w, cy + h]),
         ];
         let (mut x0, mut y0, mut x1, mut y1) = (
             f64::INFINITY,
@@ -525,8 +544,10 @@ impl Placement {
         let pixel_aligned = rotation_is_identity
             && unit_scale
             && integer_offset(position[0] - anchor[0])
-            && integer_offset(position[1] - anchor[1]);
+            && integer_offset(position[1] - anchor[1])
+            && window.iter().all(|v| integer_offset(*v));
         Some(Self {
+            window,
             anchor,
             position,
             scale,
@@ -537,7 +558,17 @@ impl Placement {
         })
     }
 
-    /// Maps an output point back into box coordinates.
+    /// The paint's color at a point of paint space, transparent outside
+    /// the window.
+    fn sample(&self, paint: &Paint, u: f64, v: f64) -> LinearRgba {
+        let [cx, cy, w, h] = self.window;
+        if u < cx || v < cy || u >= cx + w || v >= cy + h {
+            return LinearRgba::TRANSPARENT;
+        }
+        paint.sample(u, v)
+    }
+
+    /// Maps an output point back into paint coordinates.
     fn inverse(&self, x: f64, y: f64) -> (f64, f64) {
         let dx = x - self.position[0];
         let dy = y - self.position[1];
@@ -581,17 +612,19 @@ fn draw(
         )),
         _ => None,
     };
+    // The texels shown: the window, within the image.
+    let [wx, wy, ww, wh] = place.window.map(|v| v.round() as i64);
     // Rows are independent, so they are drawn in parallel.
     rows.par_chunks_mut(width).enumerate().for_each(|(i, row)| {
         let y = y0 + i as u32;
         if let Some((img, ox_img, oy_img)) = aligned {
             let v = i64::from(y) - oy_img;
-            if v < 0 || v >= i64::from(img.height) {
+            if v < wy.max(0) || v >= (wy + wh).min(i64::from(img.height)) {
                 return;
             }
             let src_row = &img.pixels[v as usize * img.width as usize..][..img.width as usize];
-            let first = i64::from(x0).max(ox_img);
-            let last = i64::from(x1).min(ox_img + i64::from(img.width));
+            let first = i64::from(x0).max(ox_img + wx.max(0));
+            let last = i64::from(x1).min(ox_img + (wx + ww).min(i64::from(img.width)));
             let plain = opacity >= 1.0 && blend == BlendMode::Normal;
             for x in first..last {
                 let src = src_row[(x - ox_img) as usize];
@@ -612,12 +645,12 @@ fn draw(
         for x in x0..x1 {
             let src = if place.pixel_aligned {
                 let (u, v) = place.inverse(f64::from(x) + 0.5, f64::from(y) + 0.5);
-                paint.sample(u, v)
+                place.sample(paint, u, v)
             } else {
                 let mut acc = LinearRgba::TRANSPARENT;
                 for (ox, oy) in SUBSAMPLES {
                     let (u, v) = place.inverse(f64::from(x) + ox, f64::from(y) + oy);
-                    let s = paint.sample(u, v);
+                    let s = place.sample(paint, u, v);
                     acc.r += s.r;
                     acc.g += s.g;
                     acc.b += s.b;
@@ -765,6 +798,33 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn crop_shows_one_part_of_the_source_as_the_clip_box() {
+        // The middle 10×10 of a 20×10 rect, anchored top-left at (4, 6):
+        // the box is the crop, so it spans x in [4, 14).
+        let f = render(
+            &doc(
+                r##""layers":[{"clips":[{"source":{"kind":"shape","shape":"rect","width":20,"height":10,"fill":"red"},
+                "crop":{"x":5,"width":"50%"},
+                "transform":{"position":{"x":4,"y":6},"anchor":{"x":0,"y":0}}}]}]"##,
+            ),
+            "0s",
+        );
+        assert_eq!(f.get(4, 8).to_srgb8(), [255, 0, 0, 255]);
+        assert_eq!(f.get(13, 8).to_srgb8(), [255, 0, 0, 255]);
+        assert_eq!(f.get(14, 8).to_srgb8(), [0, 0, 0, 255]);
+        assert_eq!(f.get(3, 8).to_srgb8(), [0, 0, 0, 255]);
+        // A crop that leaves nothing paints nothing.
+        let f = render(
+            &doc(
+                r##""layers":[{"clips":[{"source":{"kind":"shape","shape":"rect","width":20,"height":10,"fill":"red"},
+                "crop":{"x":"99%","width":"0.5%"}}]}]"##,
+            ),
+            "0s",
+        );
+        assert_eq!(f.get(32, 16).to_srgb8(), [0, 0, 0, 255]);
     }
 
     #[test]
