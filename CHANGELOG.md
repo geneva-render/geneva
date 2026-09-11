@@ -9,7 +9,7 @@ the format version it was written for.
 
 ### Changes
 
-- No more Intel macOS archive. Apple stopped selling Intel Macs in 2023
+- Last release with an Intel macOS archive. Apple stopped selling Intel Macs in 2023
   and macOS 26 is the last release for them; the build was untested and
   gated every release on the slowest runner. Intel Macs build from source.
 
