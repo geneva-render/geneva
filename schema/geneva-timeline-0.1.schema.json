@@ -38,6 +38,13 @@
         "$ref": "#/$defs/AudioTrack"
       },
       "description": "Audio-only tracks, mixed together with the audio of video clips."
+    },
+    "subtitles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SubtitleTrack"
+      },
+      "description": "Subtitle tracks written to the output as text streams."
     }
   },
   "required": [
@@ -399,13 +406,18 @@
         },
         {
           "type": "string",
+          "const": "mxf",
+          "description": "MXF (Material Exchange Format), for broadcast delivery."
+        },
+        {
+          "type": "string",
           "const": "m4a",
           "description": "MPEG-4 audio only (AAC)."
         },
         {
           "type": "string",
           "const": "ogg",
-          "description": "Ogg audio only (Opus)."
+          "description": "Ogg audio only (Opus or Vorbis)."
         },
         {
           "type": "string",
@@ -416,6 +428,16 @@
           "type": "string",
           "const": "wav",
           "description": "WAV audio only, uncompressed."
+        },
+        {
+          "type": "string",
+          "const": "mp3",
+          "description": "MP3 audio only."
+        },
+        {
+          "type": "string",
+          "const": "image-sequence",
+          "description": "One image file per frame. The output path is a pattern such as\n`frames/%04d.png`; the extension picks PNG or JPEG."
         }
       ],
       "description": "Output container format."
@@ -462,6 +484,17 @@
             }
           ],
           "description": "Hardware encoder policy. Defaults to \"auto\"."
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Codec profile, for prores and dnxhd. Defaults to \"hq\" for prores\nand \"dnxhr-hq\" for dnxhd."
         }
       },
       "description": "Video encoder settings."
@@ -487,6 +520,26 @@
           "type": "string",
           "const": "av1",
           "description": "AV1."
+        },
+        {
+          "type": "string",
+          "const": "prores",
+          "description": "Apple ProRes, 10-bit 4:2:2 (4:4:4 for the 4444 profiles)."
+        },
+        {
+          "type": "string",
+          "const": "dnxhd",
+          "description": "Avid DNxHD / DNxHR, 8-bit or 10-bit 4:2:2 by profile."
+        },
+        {
+          "type": "string",
+          "const": "png",
+          "description": "PNG frames, lossless RGBA."
+        },
+        {
+          "type": "string",
+          "const": "mjpeg",
+          "description": "Motion JPEG."
         }
       ],
       "description": "Video codec."
@@ -510,6 +563,66 @@
         }
       ],
       "description": "Whether to use a hardware encoder."
+    },
+    "VideoProfile": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "proxy",
+          "description": "ProRes 422 Proxy."
+        },
+        {
+          "type": "string",
+          "const": "lt",
+          "description": "ProRes 422 LT."
+        },
+        {
+          "type": "string",
+          "const": "standard",
+          "description": "ProRes 422."
+        },
+        {
+          "type": "string",
+          "const": "hq",
+          "description": "ProRes 422 HQ."
+        },
+        {
+          "type": "string",
+          "const": "4444",
+          "description": "ProRes 4444."
+        },
+        {
+          "type": "string",
+          "const": "4444-xq",
+          "description": "ProRes 4444 XQ."
+        },
+        {
+          "type": "string",
+          "const": "dnxhr-lb",
+          "description": "DNxHR LB (low bandwidth, 8-bit 4:2:2)."
+        },
+        {
+          "type": "string",
+          "const": "dnxhr-sq",
+          "description": "DNxHR SQ (standard quality, 8-bit 4:2:2)."
+        },
+        {
+          "type": "string",
+          "const": "dnxhr-hq",
+          "description": "DNxHR HQ (high quality, 8-bit 4:2:2)."
+        },
+        {
+          "type": "string",
+          "const": "dnxhr-hqx",
+          "description": "DNxHR HQX (10-bit 4:2:2)."
+        },
+        {
+          "type": "string",
+          "const": "dnxhr444",
+          "description": "DNxHR 444 (10-bit 4:4:4)."
+        }
+      ],
+      "description": "Profiles of the intermediate codecs."
     },
     "AudioEncode": {
       "type": "object",
@@ -559,6 +672,31 @@
           "type": "string",
           "const": "pcm",
           "description": "16-bit PCM, uncompressed."
+        },
+        {
+          "type": "string",
+          "const": "pcm24",
+          "description": "24-bit PCM, uncompressed."
+        },
+        {
+          "type": "string",
+          "const": "mp3",
+          "description": "MP3."
+        },
+        {
+          "type": "string",
+          "const": "vorbis",
+          "description": "Vorbis."
+        },
+        {
+          "type": "string",
+          "const": "alac",
+          "description": "Apple Lossless."
+        },
+        {
+          "type": "string",
+          "const": "ac3",
+          "description": "Dolby Digital (AC-3)."
         }
       ],
       "description": "Audio codec."
@@ -620,6 +758,11 @@
           "type": "string",
           "const": "font",
           "description": "A font file (TrueType or OpenType)."
+        },
+        {
+          "type": "string",
+          "const": "subtitle",
+          "description": "A subtitle file (SubRip `.srt` or WebVTT `.vtt`)."
         }
       ],
       "description": "The kind of content in an asset."
@@ -1964,6 +2107,57 @@
         "asset"
       ],
       "description": "A clip on an audio track."
+    },
+    "SubtitleTrack": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional identifier used in diagnostics."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Set to false to leave the track out without removing it.",
+          "default": true
+        },
+        "asset": {
+          "type": "string",
+          "description": "The subtitle asset."
+        },
+        "language": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Language as a BCP 47 or ISO 639 code, for example \"en\" or \"pt-BR\"."
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Track title shown by players, for example \"English (CC)\"."
+        },
+        "offset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Shifts every cue by this much on the output timeline. Defaults to\n0; negative values move cues earlier."
+        }
+      },
+      "required": [
+        "asset"
+      ],
+      "description": "A subtitle track: one subtitle file written to the output as a text\nstream, for players to show or hide."
     }
   },
   "$id": "https://geneva-render.github.io/schema/geneva-timeline-0.1.schema.json"

@@ -198,97 +198,224 @@ pub fn rgba8_into(
         });
 }
 
-/// 8-bit 4:2:0 planes ready for an encoder.
+/// Planar sample layouts the encoders take.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaneFormat {
+    /// 8-bit Y'CbCr with chroma halved both ways.
+    Yuv420p8,
+    /// 8-bit Y'CbCr with chroma halved horizontally.
+    Yuv422p8,
+    /// 10-bit Y'CbCr with chroma halved horizontally, little-endian words.
+    Yuv422p10,
+    /// 10-bit Y'CbCr with full chroma, little-endian words.
+    Yuv444p10,
+    /// 8-bit straight-alpha RGBA, one interleaved plane.
+    Rgba8,
+}
+
+impl PlaneFormat {
+    /// Bits per sample.
+    pub fn bits(self) -> u32 {
+        match self {
+            Self::Yuv420p8 | Self::Yuv422p8 | Self::Rgba8 => 8,
+            Self::Yuv422p10 | Self::Yuv444p10 => 10,
+        }
+    }
+
+    /// Bytes per sample in memory.
+    pub fn bytes_per_sample(self) -> usize {
+        if self.bits() > 8 { 2 } else { 1 }
+    }
+
+    /// Chroma subsampling as the horizontal and vertical divisors.
+    pub fn chroma_divisors(self) -> (usize, usize) {
+        match self {
+            Self::Yuv420p8 => (2, 2),
+            Self::Yuv422p8 | Self::Yuv422p10 => (2, 1),
+            Self::Yuv444p10 | Self::Rgba8 => (1, 1),
+        }
+    }
+
+    /// Whether the samples are RGB rather than Y'CbCr.
+    pub fn is_rgb(self) -> bool {
+        matches!(self, Self::Rgba8)
+    }
+
+    /// The layout's name as the media libraries spell it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Yuv420p8 => "yuv420p",
+            Self::Yuv422p8 => "yuv422p",
+            Self::Yuv422p10 => "yuv422p10le",
+            Self::Yuv444p10 => "yuv444p10le",
+            Self::Rgba8 => "rgba",
+        }
+    }
+
+    /// Size in samples of plane `index` for a picture of `width × height`.
+    pub fn plane_size(self, index: usize, width: u32, height: u32) -> (usize, usize) {
+        let (w, h) = (width as usize, height as usize);
+        if self.is_rgb() {
+            return (w * 4, h);
+        }
+        if index == 0 {
+            return (w, h);
+        }
+        let (dx, dy) = self.chroma_divisors();
+        (w.div_ceil(dx), h.div_ceil(dy))
+    }
+
+    /// Number of planes.
+    pub fn plane_count(self) -> usize {
+        if self.is_rgb() { 1 } else { 3 }
+    }
+}
+
+/// One plane of samples, row-major, rows packed without padding.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Yuv420p {
+pub struct Plane {
+    /// Samples, little-endian when wider than a byte.
+    pub data: Vec<u8>,
+    /// Samples per row.
+    pub width: usize,
+    /// Rows.
+    pub height: usize,
+    /// Bytes per row.
+    pub stride: usize,
+}
+
+/// A picture as planes ready for an encoder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Planes {
+    /// Sample layout.
+    pub format: PlaneFormat,
     /// Width in pixels.
     pub width: u32,
     /// Height in pixels.
     pub height: u32,
-    /// Luma, `width × height`.
-    pub y: Vec<u8>,
-    /// Cb, `ceil(width/2) × ceil(height/2)`.
-    pub cb: Vec<u8>,
-    /// Cr, same size as `cb`.
-    pub cr: Vec<u8>,
+    /// The planes in the layout's order.
+    pub planes: Vec<Plane>,
 }
 
-impl Yuv420p {
-    /// Chroma plane width.
-    pub fn chroma_width(&self) -> u32 {
-        self.width.div_ceil(2)
-    }
-
-    /// Chroma plane height.
-    pub fn chroma_height(&self) -> u32 {
-        self.height.div_ceil(2)
+impl Planes {
+    /// Allocates zeroed planes for `format`.
+    pub fn new(format: PlaneFormat, width: u32, height: u32) -> Self {
+        let bytes = format.bytes_per_sample();
+        let planes = (0..format.plane_count())
+            .map(|i| {
+                let (w, h) = format.plane_size(i, width, height);
+                Plane {
+                    data: vec![0; w * h * bytes],
+                    width: w,
+                    height: h,
+                    stride: w * bytes,
+                }
+            })
+            .collect();
+        Self {
+            format,
+            width,
+            height,
+            planes,
+        }
     }
 }
 
-/// Converts a rendered frame to 8-bit 4:2:0 Y'CbCr with the output tags.
+/// Stores a sample at index `i` of a plane as one byte or a little-endian
+/// word.
+#[inline]
+fn store(data: &mut [u8], i: usize, value: u16, wide: bool) {
+    if wide {
+        data[i * 2..i * 2 + 2].copy_from_slice(&value.to_le_bytes());
+    } else {
+        data[i] = value as u8;
+    }
+}
+
+/// Converts a rendered frame to encoder planes with the output tags.
 ///
-/// Alpha is composited over black. Chroma is the average of each 2×2 block
-/// of full-resolution chroma samples. Values are rounded to nearest, with
-/// no dithering, so the output is deterministic.
-pub fn frame_to_yuv420p(frame: &Frame, tags: ResolvedTags) -> Yuv420p {
+/// Y'CbCr layouts composite alpha over black; chroma is the average of
+/// each block of full-resolution chroma samples. RGBA keeps alpha and
+/// encodes with the sRGB curve. Values are rounded to nearest with no
+/// dithering, so the output is deterministic.
+pub fn frame_to_planes(frame: &Frame, tags: ResolvedTags, format: PlaneFormat) -> Planes {
     let width = frame.width();
     let height = frame.height();
+    let mut out = Planes::new(format, width, height);
+    let w = width as usize;
+    if format.is_rgb() {
+        let plane = &mut out.planes[0];
+        plane
+            .data
+            .par_chunks_mut(w * 4)
+            .zip(frame.pixels().par_chunks(w))
+            .for_each(|(row, src)| {
+                for (px, p) in row.chunks_exact_mut(4).zip(src) {
+                    px.copy_from_slice(&p.to_srgb8());
+                }
+            });
+        return out;
+    }
+
     let lut = from_linear_lut(tags.transfer);
     let (kr, kb) = matrix::luma_coefficients(tags.matrix).unwrap_or((0.2126, 0.0722));
     let kg = 1.0 - kr - kb;
+    let bits = format.bits();
+    let shift = bits - 8;
+    let max = ((1u32 << bits) - 1) as f32;
     let (y_scale, y_off, c_scale) = match tags.range {
-        Range::Full => (255.0, 0.0, 255.0),
-        Range::Limited => (219.0, 16.0, 224.0),
+        Range::Full => (max, 0.0, max),
+        Range::Limited => (
+            (219u32 << shift) as f32,
+            (16u32 << shift) as f32,
+            (224u32 << shift) as f32,
+        ),
     };
-    let w = width as usize;
-    let h = height as usize;
-    let cw = width.div_ceil(2) as usize;
-    let ch = height.div_ceil(2) as usize;
-    let mut y_plane = vec![0u8; w * h];
-    let mut cb_plane = vec![0u8; cw * ch];
-    let mut cr_plane = vec![0u8; cw * ch];
-    // Premultiplied over opaque black is just the premultiplied value.
+    let c_off = (1u32 << (bits - 1)) as f32;
+    let wide = format.bytes_per_sample() == 2;
+    let (dx, dy) = format.chroma_divisors();
+    let cw = w.div_ceil(dx);
     let enc = |v: f32| lut[lut_index(v)];
     let to_ycc = |p: &LinearRgba| {
+        // Premultiplied over opaque black is just the premultiplied value.
         let (r, g, b) = (enc(p.r), enc(p.g), enc(p.b));
         let y = kr as f32 * r + kg as f32 * g + kb as f32 * b;
         let cb = (b - y) / (2.0 * (1.0 - kb as f32));
         let cr = (r - y) / (2.0 * (1.0 - kr as f32));
         (y, cb, cr)
     };
-    let code = |v: f32, scale: f32, off: f32| (v * scale + off + 0.5).clamp(0.0, 255.0) as u8;
-    // Each task handles one chroma row: two picture rows, whose chroma is
-    // averaged over 2×2 blocks (or fewer samples at a right or bottom edge).
+    let code = |v: f32, scale: f32, off: f32| (v * scale + off + 0.5).clamp(0.0, max) as u16;
+
+    let [y_plane, cb_plane, cr_plane] = &mut out.planes[..] else {
+        unreachable!("Y'CbCr layouts have three planes");
+    };
+    // Each task handles one chroma row: `dy` picture rows, whose chroma is
+    // averaged over `dx × dy` blocks (fewer samples at a right or bottom
+    // edge).
     frame
         .pixels()
-        .par_chunks(w * 2)
-        .zip(y_plane.par_chunks_mut(w * 2))
-        .zip(cb_plane.par_chunks_mut(cw))
-        .zip(cr_plane.par_chunks_mut(cw))
+        .par_chunks(w * dy)
+        .zip(y_plane.data.par_chunks_mut(y_plane.stride * dy))
+        .zip(cb_plane.data.par_chunks_mut(cb_plane.stride))
+        .zip(cr_plane.data.par_chunks_mut(cr_plane.stride))
         .for_each(|(((src, y_rows), cb_row), cr_row)| {
             let rows = src.len() / w;
             for cx in 0..cw {
                 let (mut sum_b, mut sum_r, mut count) = (0.0f32, 0.0f32, 0.0f32);
-                for dy in 0..rows {
-                    for x in (cx * 2..cx * 2 + 2).filter(|&x| x < w) {
-                        let (y, cb, cr) = to_ycc(&src[dy * w + x]);
-                        y_rows[dy * w + x] = code(y, y_scale, y_off);
+                for row in 0..rows {
+                    for x in (cx * dx..cx * dx + dx).filter(|&x| x < w) {
+                        let (y, cb, cr) = to_ycc(&src[row * w + x]);
+                        store(y_rows, row * w + x, code(y, y_scale, y_off), wide);
                         sum_b += cb;
                         sum_r += cr;
                         count += 1.0;
                     }
                 }
-                cb_row[cx] = code(sum_b / count, c_scale, 128.0);
-                cr_row[cx] = code(sum_r / count, c_scale, 128.0);
+                store(cb_row, cx, code(sum_b / count, c_scale, c_off), wide);
+                store(cr_row, cx, code(sum_r / count, c_scale, c_off), wide);
             }
         });
-    Yuv420p {
-        width,
-        height,
-        y: y_plane,
-        cb: cb_plane,
-        cr: cr_plane,
-    }
+    out
 }
 
 #[cfg(test)]
@@ -299,23 +426,23 @@ mod tests {
     #[test]
     fn white_and_black_hit_the_limited_range_anchors() {
         let white = Frame::new(2, 2, Color::WHITE);
-        let yuv = frame_to_yuv420p(&white, ResolvedTags::SDR_VIDEO);
-        assert_eq!(yuv.y, [235; 4]);
-        assert_eq!(yuv.cb, [128]);
-        assert_eq!(yuv.cr, [128]);
+        let yuv = frame_to_planes(&white, ResolvedTags::SDR_VIDEO, PlaneFormat::Yuv420p8);
+        assert_eq!(yuv.planes[0].data, [235; 4]);
+        assert_eq!(yuv.planes[1].data, [128]);
+        assert_eq!(yuv.planes[2].data, [128]);
         let black = Frame::new(2, 2, Color::BLACK);
-        let yuv = frame_to_yuv420p(&black, ResolvedTags::SDR_VIDEO);
-        assert_eq!(yuv.y, [16; 4]);
+        let yuv = frame_to_planes(&black, ResolvedTags::SDR_VIDEO, PlaneFormat::Yuv420p8);
+        assert_eq!(yuv.planes[0].data, [16; 4]);
     }
 
     #[test]
     fn saturated_red_matches_bt709_reference_codes() {
         let red = Frame::new(2, 2, Color::from_rgba8(255, 0, 0, 255));
-        let yuv = frame_to_yuv420p(&red, ResolvedTags::SDR_VIDEO);
+        let yuv = frame_to_planes(&red, ResolvedTags::SDR_VIDEO, PlaneFormat::Yuv420p8);
         // Y' = 0.2126 * 219 + 16 = 62.6; Cr = 0.5 * 224 + 128 = 240; Cb = -0.1146 * 224 + 128 = 102.3
-        assert_eq!(yuv.y[0], 63);
-        assert_eq!(yuv.cr[0], 240);
-        assert_eq!(yuv.cb[0], 102);
+        assert_eq!(yuv.planes[0].data[0], 63);
+        assert_eq!(yuv.planes[2].data[0], 240);
+        assert_eq!(yuv.planes[1].data[0], 102);
     }
 
     #[test]
@@ -328,12 +455,16 @@ mod tests {
             (128, 128, 128),
         ] {
             let frame = Frame::new(2, 2, Color::from_rgba8(r, g, b, 255));
-            let yuv = frame_to_yuv420p(&frame, ResolvedTags::SDR_VIDEO);
+            let yuv = frame_to_planes(&frame, ResolvedTags::SDR_VIDEO, PlaneFormat::Yuv420p8);
             // Widen to 16-bit 4:4:4 the way swscale does: a plain shift.
             let wide = |v: u8| (u16::from(v) << 8).to_le_bytes();
-            let y: Vec<u8> = yuv.y.iter().flat_map(|&v| wide(v)).collect();
-            let cb: Vec<u8> = std::iter::repeat_n(wide(yuv.cb[0]), 4).flatten().collect();
-            let cr: Vec<u8> = std::iter::repeat_n(wide(yuv.cr[0]), 4).flatten().collect();
+            let y: Vec<u8> = yuv.planes[0].data.iter().flat_map(|&v| wide(v)).collect();
+            let cb: Vec<u8> = std::iter::repeat_n(wide(yuv.planes[1].data[0]), 4)
+                .flatten()
+                .collect();
+            let cr: Vec<u8> = std::iter::repeat_n(wide(yuv.planes[2].data[0]), 4)
+                .flatten()
+                .collect();
             let img = ycbcr16_to_image(
                 &Planes16 {
                     y: &y,
@@ -351,6 +482,21 @@ mod tests {
             }
             assert_eq!(back[3], 255);
         }
+    }
+
+    #[test]
+    fn ten_bit_layouts_scale_the_anchors_and_keep_full_chroma() {
+        let white = Frame::new(3, 1, Color::WHITE);
+        let p = frame_to_planes(&white, ResolvedTags::SDR_VIDEO, PlaneFormat::Yuv422p10);
+        let y = u16::from_le_bytes([p.planes[0].data[0], p.planes[0].data[1]]);
+        assert_eq!(y, 940);
+        assert_eq!(p.planes[1].width, 2);
+        let cb = u16::from_le_bytes([p.planes[1].data[0], p.planes[1].data[1]]);
+        assert_eq!(cb, 512);
+        let p = frame_to_planes(&white, ResolvedTags::SDR_VIDEO, PlaneFormat::Yuv444p10);
+        assert_eq!(p.planes[1].width, 3);
+        let rgba = frame_to_planes(&white, ResolvedTags::SDR_VIDEO, PlaneFormat::Rgba8);
+        assert_eq!(&rgba.planes[0].data[..4], &[255, 255, 255, 255]);
     }
 
     #[test]

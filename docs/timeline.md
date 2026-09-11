@@ -109,12 +109,13 @@ object with a `keyframes` array:
 | `color` | no | BT.709 SDR, limited range | Color tags for the output; see [color.md](color.md). HDR transfers are rejected (E420). |
 | `audio.sample_rate` | no | 48000 | Output sample rate. |
 | `audio.channels` | no | 2 | 1 or 2. |
-| `encode.container` | no | from the output file extension | `mp4`, `mov`, `mkv`, `webm`; audio only: `m4a`, `ogg`, `flac`, `wav`. An audio-only container writes no video. |
-| `encode.video.codec` | no | `h264` (`vp9` for webm) | `h264`, `h265`, `vp9`, `av1`. H.265 needs a hardware encoder. |
+| `encode.container` | no | from the output file extension | `mp4`, `mov`, `mkv`, `webm`, `mxf`; audio only: `m4a`, `ogg`, `flac`, `wav`, `mp3`; `image-sequence` (one PNG or JPEG file per frame, the output path being a pattern such as `frames/%04d.png`). Audio-only containers write no video; image sequences write no audio. |
+| `encode.video.codec` | no | `h264` (`vp9` for webm, `dnxhd` for mxf, `png` for image sequences) | `h264`, `h265`, `vp9`, `av1`, `prores`, `dnxhd`, `png`, `mjpeg`. H.265 needs a hardware encoder. ProRes is 10-bit 4:2:2 (4:4:4 for the 4444 profiles); DNxHR is 8-bit 4:2:2 except HQX (10-bit) and 444, and needs a picture of at least 256×120. See [containers and codecs](cli.md#containers-and-codecs) for what each container holds. |
+| `encode.video.profile` | no | `hq` for prores, `dnxhr-hq` for dnxhd | ProRes: `proxy`, `lt`, `standard`, `hq`, `4444`, `4444-xq`. DNxHR: `dnxhr-lb`, `dnxhr-sq`, `dnxhr-hq`, `dnxhr-hqx`, `dnxhr-444`. The profile must belong to the codec (E421). |
 | `encode.video.crf` | no | per codec | Constant quality; lower is better. |
 | `encode.video.preset` | no | per codec | Encoder speed preset name (`ultrafast` to `veryslow`); ignored by encoders without presets. |
 | `encode.video.hardware` | no | `auto` | `auto`, `never`, `require`. |
-| `encode.audio.codec` | no | `aac` (`opus` for webm and ogg, `flac` for flac, `pcm` for wav) | `aac`, `opus`, `flac`, `pcm`. |
+| `encode.audio.codec` | no | `aac` (`opus` for webm and ogg, `flac` for flac, `pcm` for wav, `mp3` for mp3, `pcm24` for mxf) | `aac`, `opus`, `mp3`, `vorbis`, `flac`, `alac`, `ac3`, `pcm` (16-bit), `pcm24`. |
 | `encode.audio.bitrate_kbps` | no | 160 | Audio bitrate. |
 
 ### `assets`
@@ -125,7 +126,7 @@ clips never contain paths.
 | Field | Required | Description |
 | --- | --- | --- |
 | `src` | yes | Path relative to the asset root (the timeline's directory, or `--assets`). Absolute paths and `..` are rejected (E202). |
-| `kind` | no | `video`, `image`, `audio`, `font`. Inferred from the extension; set it when inference fails (E203). |
+| `kind` | no | `video`, `image`, `audio`, `font`, `subtitle`. Inferred from the extension; set it when inference fails (E203). |
 | `color` | no | Color tag overrides for files that are untagged or mistagged. |
 
 ### `compositions`
@@ -256,6 +257,32 @@ Tracks have `id`, `enabled` and `clips` like layers. Audio clips:
 | `duration` | no | source range | Length. |
 | `gain_db` | no | `0` | Animatable gain in decibels. |
 | `fade_in`, `fade_out` | no | `0` | Fade lengths. |
+
+### `subtitles[]`
+
+Subtitle tracks are written to the output as text streams that players
+can show or hide; they are not drawn into the picture (use a `text` source
+for that). Each track is one subtitle asset, a SubRip `.srt` or WebVTT
+`.vtt` file.
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `id` | no | Name used in diagnostics. |
+| `enabled` | no | `false` leaves the track out. |
+| `asset` | yes | A `subtitle` asset. |
+| `language` | no | Language code, for example `"en"` or `"pt-BR"`; stored as the three-letter code containers use. |
+| `title` | no | Track title shown by players. |
+| `offset` | no | Shifts every cue on the output timeline; negative values move cues earlier and cues that end before zero are dropped. |
+
+MP4 and MOV store the text as 3GPP timed text (`mov_text`), Matroska as
+SubRip, WebM as WebVTT; simple tags such as `<i>` survive in Matroska and
+WebM and are stripped for MP4 and MOV. Other containers cannot hold
+subtitle streams.
+
+```json
+"assets": { "en": { "src": "captions.srt" } },
+"subtitles": [ { "asset": "en", "language": "en", "title": "English" } ]
+```
 
 ## Timing rules
 

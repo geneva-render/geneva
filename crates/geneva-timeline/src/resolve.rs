@@ -47,6 +47,8 @@ pub struct Composition {
     pub layers: Vec<ResolvedLayer>,
     /// Audio tracks.
     pub audio: Vec<ResolvedAudioTrack>,
+    /// Subtitle tracks to write as text streams.
+    pub subtitles: Vec<ResolvedSubtitleTrack>,
 }
 
 impl Composition {
@@ -200,6 +202,21 @@ pub struct ResolvedText {
     pub max_width: f64,
     /// The style block as written.
     pub spec: TextSource,
+}
+
+/// A subtitle track with its timing offset resolved.
+#[derive(Debug, Clone)]
+pub struct ResolvedSubtitleTrack {
+    /// Identifier for diagnostics.
+    pub id: String,
+    /// Asset id of the subtitle file.
+    pub asset: String,
+    /// Language code, if given.
+    pub language: Option<String>,
+    /// Title, if given.
+    pub title: Option<String>,
+    /// Shift applied to every cue, in seconds; may be negative.
+    pub offset: Ratio,
 }
 
 /// An audio track.
@@ -406,6 +423,31 @@ impl Resolver<'_> {
             }
             audio.push(self.resolve_audio_track(track, i, &path, &assets));
         }
+        let mut subtitles = Vec::new();
+        for (i, track) in tl.subtitles.iter().enumerate() {
+            let path = Path::root().key("subtitles").index(i);
+            if !track.enabled {
+                continue;
+            }
+            let id = track
+                .id
+                .clone()
+                .unwrap_or_else(|| format!("subtitle track {i}"));
+            self.asset_ref(
+                &track.asset,
+                &path.key("asset"),
+                &assets,
+                &[AssetKind::Subtitle],
+            );
+            let offset = track.offset.map_or(Ratio::ZERO, |t| t.resolve(self.fps));
+            subtitles.push(ResolvedSubtitleTrack {
+                id,
+                asset: track.asset.clone(),
+                language: track.language.clone(),
+                title: track.title.clone(),
+                offset,
+            });
+        }
 
         let last_end = layers
             .iter()
@@ -490,6 +532,46 @@ impl Resolver<'_> {
                 .with_help("remove output.color.transfer or set it to \"bt709\""),
             );
         }
+        if let Some(video) = out.encode.as_ref().and_then(|e| e.video.as_ref()) {
+            if let Some(profile) = video.profile {
+                let wanted = profile.codec();
+                match video.codec {
+                    Some(codec) if codec != wanted => self.push(
+                        Diagnostic::error(
+                            "E421",
+                            out_path.key("encode").key("video").key("profile"),
+                            format!(
+                                "profile {profile:?} belongs to the {wanted:?} codec, not {codec:?}"
+                            ),
+                        )
+                        .with_help(format!(
+                            "set encode.video.codec to \"{}\" or choose a profile of {codec:?}",
+                            serde_json::to_value(wanted)
+                                .ok()
+                                .and_then(|v| v.as_str().map(str::to_owned))
+                                .unwrap_or_default()
+                        )),
+                    ),
+                    Some(_) => {}
+                    None => self.push(
+                        Diagnostic::error(
+                            "E421",
+                            out_path.key("encode").key("video").key("codec"),
+                            format!(
+                                "a profile is set but no codec; {profile:?} belongs to {wanted:?}"
+                            ),
+                        )
+                        .with_help(format!(
+                            "set encode.video.codec to \"{}\"",
+                            serde_json::to_value(wanted)
+                                .ok()
+                                .and_then(|v| v.as_str().map(str::to_owned))
+                                .unwrap_or_default()
+                        )),
+                    ),
+                }
+            }
+        }
 
         Composition {
             width: out.width,
@@ -503,6 +585,7 @@ impl Resolver<'_> {
             assets,
             layers,
             audio,
+            subtitles,
         }
     }
 
@@ -527,7 +610,7 @@ impl Resolver<'_> {
                                 format!("cannot tell what kind of file {:?} is", asset.src),
                             )
                             .with_help(
-                                "set \"kind\" to \"video\", \"image\", \"audio\" or \"font\"",
+                                "set \"kind\" to \"video\", \"image\", \"audio\", \"font\" or \"subtitle\"",
                             ),
                         );
                     }

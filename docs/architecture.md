@@ -68,6 +68,17 @@ encoder's Y'CbCr happens at the edge.
 `geneva render` keeps the encoder on its own thread with a short queue of
 converted frames, so decoding, compositing and encoding overlap.
 
+Frames leave the renderer in whichever sample layout the codec takes:
+8-bit 4:2:0 for the distribution codecs, 8-bit or 10-bit 4:2:2 and 10-bit
+4:4:4 for the intermediate codecs, RGBA for PNG. The packer quantizes from
+the float working space directly to the target depth, so a 10-bit output
+is not an 8-bit one widened.
+
+Subtitle tracks never touch the picture. Their files are parsed into cues
+and written as text packets on their own streams, interleaved with the
+frames as the output reaches each cue's start time, in whichever text
+codec the container uses.
+
 Assets reach the renderer through the `AssetSource` trait: images, font
 bytes, and video frames by source time. The file implementation resolves
 `assets.<id>.src` under one root directory; the validator has already

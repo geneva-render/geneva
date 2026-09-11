@@ -29,7 +29,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install build tools (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake meson ninja-build nasm pkg-config clang
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake meson ninja-build nasm pkg-config clang zlib1g-dev
       - name: Install build tools (macOS)
         if: runner.os == 'macOS'
         run: brew install cmake meson ninja nasm pkg-config

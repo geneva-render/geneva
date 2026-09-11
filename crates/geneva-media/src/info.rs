@@ -13,6 +13,20 @@ pub struct MediaInfo {
     pub video: Option<VideoInfo>,
     /// The first audio stream.
     pub audio: Option<AudioInfo>,
+    /// Subtitle streams, in container order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subtitles: Vec<SubtitleInfo>,
+}
+
+/// A subtitle stream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SubtitleInfo {
+    /// Index of the stream in the container.
+    pub index: usize,
+    /// Codec name.
+    pub codec: String,
+    /// Language tag, if the file carries one.
+    pub language: Option<String>,
 }
 
 /// A video stream.

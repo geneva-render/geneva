@@ -27,11 +27,12 @@ script, then use cargo as usual:
 
 ```sh
 # Debian/Ubuntu
-sudo apt install build-essential cmake meson ninja-build nasm pkg-config clang git curl
+sudo apt install build-essential cmake meson ninja-build nasm pkg-config clang zlib1g-dev git curl
 # macOS
 brew install cmake meson ninja nasm pkg-config
 
 scripts/build-media-libs.sh        # ~10-20 minutes, once; cached in CI
+                                   # after a rebuild: cargo clean -p ffmpeg-sys-next
 cargo build
 ```
 

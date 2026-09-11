@@ -1,24 +1,27 @@
 use std::path::Path;
 
 use ffmpeg_next::util::frame;
+use geneva_color::ResolvedTags;
 use geneva_timeline::{Composition, Ratio};
 
 use super::copy::untouched_video_clips;
 use super::decode::VideoReader;
+use super::encode::format_of;
 use super::init;
 use crate::MediaError;
-use crate::convert::Yuv420p;
+use crate::convert::{PlaneFormat, Planes};
 
 /// Decoded frames of a composition that shows its video sources exactly
 /// as they are, delivered in the encoder's format without passing through
 /// the compositing pipeline.
 ///
 /// The composition must be one layer of untouched video clips (see the
-/// stream-copy rules) whose streams are 8-bit 4:2:0 and carry the same
-/// color tags as the output, so that no pixel would change on the way
-/// through the renderer.
+/// stream-copy rules) whose streams are already in the encoder's sample
+/// layout and carry the same color tags as the output, so that no pixel
+/// would change on the way through the renderer.
 pub struct DirectSource {
     clips: Vec<DirectClip>,
+    format: PlaneFormat,
 }
 
 struct DirectClip {
@@ -30,7 +33,12 @@ struct DirectClip {
 
 impl DirectSource {
     /// Opens the sources when the composition qualifies; `None` otherwise.
-    pub fn open(comp: &Composition, root: &Path) -> Result<Option<Self>, MediaError> {
+    pub fn open(
+        comp: &Composition,
+        root: &Path,
+        format: PlaneFormat,
+        tags: ResolvedTags,
+    ) -> Result<Option<Self>, MediaError> {
         init();
         let Some(untouched) = untouched_video_clips(comp, root)? else {
             return Ok(None);
@@ -46,7 +54,7 @@ impl DirectSource {
                 .map(|a| a.color)
                 .unwrap_or_default();
             let reader = VideoReader::open(&clip.path, overrides)?;
-            if !reader.is_yuv420p() || reader.tags() != comp.color {
+            if format_of(reader.pixel_format()) != Some(format) || reader.tags() != tags {
                 return Ok(None);
             }
             clips.push(DirectClip {
@@ -56,7 +64,7 @@ impl DirectSource {
                 reader,
             });
         }
-        Ok(Some(Self { clips }))
+        Ok(Some(Self { clips, format }))
     }
 
     /// Why this path was taken, for the render report.
@@ -72,7 +80,7 @@ impl DirectSource {
     }
 
     /// The output frame shown at time `t`.
-    pub fn frame(&mut self, t: Ratio) -> Result<Yuv420p, MediaError> {
+    pub fn frame(&mut self, t: Ratio) -> Result<Planes, MediaError> {
         let clip = self
             .clips
             .iter_mut()
@@ -82,29 +90,21 @@ impl DirectSource {
                 reason: format!("no clip covers {t}s"),
             })?;
         let raw = clip.reader.raw_frame_at(clip.in_ + (t - clip.start))?;
-        Ok(planes_to_yuv420p(raw))
+        Ok(copy_planes(raw, self.format))
     }
 }
 
-/// Copies a decoded 4:2:0 frame's planes out of their padded rows.
-fn planes_to_yuv420p(raw: &frame::Video) -> Yuv420p {
-    let (width, height) = (raw.width(), raw.height());
-    let cw = width.div_ceil(2) as usize;
-    let ch = height.div_ceil(2) as usize;
-    let copy = |plane: usize, w: usize, h: usize| {
-        let stride = raw.stride(plane);
-        let data = raw.data(plane);
-        let mut out = Vec::with_capacity(w * h);
-        for row in 0..h {
-            out.extend_from_slice(&data[row * stride..row * stride + w]);
+/// Copies a decoded frame's planes out of their padded rows.
+fn copy_planes(raw: &frame::Video, format: PlaneFormat) -> Planes {
+    let mut out = Planes::new(format, raw.width(), raw.height());
+    for (i, plane) in out.planes.iter_mut().enumerate() {
+        let stride = raw.stride(i);
+        let data = raw.data(i);
+        let row_bytes = plane.stride;
+        for row in 0..plane.height {
+            plane.data[row * row_bytes..(row + 1) * row_bytes]
+                .copy_from_slice(&data[row * stride..row * stride + row_bytes]);
         }
-        out
-    };
-    Yuv420p {
-        width,
-        height,
-        y: copy(0, width as usize, height as usize),
-        cb: copy(1, cw, ch),
-        cr: copy(2, cw, ch),
     }
+    out
 }

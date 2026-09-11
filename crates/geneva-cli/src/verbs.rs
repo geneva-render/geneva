@@ -10,8 +10,8 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use geneva_timeline::schema::{
-    Asset, AudioClip, AudioTrack, Clip, Encode, Fit, Layer, Output, Source, Timeline, Transform,
-    Transition, TransitionKind, VideoCodec, VideoEncode,
+    Asset, AudioClip, AudioTrack, Clip, Encode, Fit, Layer, Output, Source, SubtitleTrack,
+    Timeline, Transform, Transition, TransitionKind, VideoCodec, VideoEncode, VideoProfile,
 };
 use geneva_timeline::{Animated, Fps, Length, Point, Ratio, Scale, Time};
 
@@ -65,6 +65,9 @@ pub struct EncodeArgs {
     /// Video codec for the output. Defaults to the container's usual codec.
     #[arg(long, value_enum)]
     pub codec: Option<CodecArg>,
+    /// Codec profile, for prores and dnxhd.
+    #[arg(long, value_enum)]
+    pub profile: Option<ProfileArg>,
     /// Write no audio track.
     #[arg(long)]
     pub no_audio: bool,
@@ -82,6 +85,10 @@ pub enum CodecArg {
     H265,
     Vp9,
     Av1,
+    Prores,
+    Dnxhd,
+    Png,
+    Mjpeg,
 }
 
 impl From<CodecArg> for VideoCodec {
@@ -91,6 +98,45 @@ impl From<CodecArg> for VideoCodec {
             CodecArg::H265 => Self::H265,
             CodecArg::Vp9 => Self::Vp9,
             CodecArg::Av1 => Self::Av1,
+            CodecArg::Prores => Self::Prores,
+            CodecArg::Dnxhd => Self::Dnxhd,
+            CodecArg::Png => Self::Png,
+            CodecArg::Mjpeg => Self::Mjpeg,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum ProfileArg {
+    Proxy,
+    Lt,
+    Standard,
+    Hq,
+    #[value(name = "4444")]
+    P4444,
+    #[value(name = "4444-xq")]
+    P4444Xq,
+    DnxhrLb,
+    DnxhrSq,
+    DnxhrHq,
+    DnxhrHqx,
+    Dnxhr444,
+}
+
+impl From<ProfileArg> for VideoProfile {
+    fn from(p: ProfileArg) -> Self {
+        match p {
+            ProfileArg::Proxy => Self::Proxy,
+            ProfileArg::Lt => Self::Lt,
+            ProfileArg::Standard => Self::Standard,
+            ProfileArg::Hq => Self::Hq,
+            ProfileArg::P4444 => Self::P4444,
+            ProfileArg::P4444Xq => Self::P4444Xq,
+            ProfileArg::DnxhrLb => Self::DnxhrLb,
+            ProfileArg::DnxhrSq => Self::DnxhrSq,
+            ProfileArg::DnxhrHq => Self::DnxhrHq,
+            ProfileArg::DnxhrHqx => Self::DnxhrHqx,
+            ProfileArg::Dnxhr444 => Self::Dnxhr444,
         }
     }
 }
@@ -185,16 +231,25 @@ fn common_root(paths: &[PathBuf]) -> Result<(PathBuf, Vec<String>)> {
 }
 
 fn encode_block(args: &EncodeArgs) -> Option<Encode> {
-    if args.crf.is_none() && args.preset.is_none() && args.codec.is_none() {
+    if args.crf.is_none() && args.preset.is_none() && args.codec.is_none() && args.profile.is_none()
+    {
         return None;
     }
+    // A profile names its codec; spelling the codec out keeps the
+    // document valid on its own.
+    let profile: Option<VideoProfile> = args.profile.map(Into::into);
+    let codec = args
+        .codec
+        .map(Into::into)
+        .or_else(|| profile.map(VideoProfile::codec));
     Some(Encode {
         container: None,
         video: Some(VideoEncode {
-            codec: args.codec.map(Into::into),
+            codec,
             crf: args.crf,
             preset: args.preset.clone(),
             hardware: None,
+            profile,
         }),
         audio: None,
     })
@@ -246,6 +301,7 @@ fn base_timeline(width: u32, height: u32, fps: Ratio, encode: Option<Encode>) ->
         compositions: BTreeMap::new(),
         layers: Vec::new(),
         audio: Vec::new(),
+        subtitles: Vec::new(),
     }
 }
 
@@ -663,6 +719,63 @@ pub fn audio(input: &Path, op: &AudioOp, args: &EncodeArgs) -> Result<Compiled> 
             });
             tl.audio.push(track("audio", Some(*gain)));
         }
+    }
+    Ok(Compiled { timeline: tl, root })
+}
+
+/// A subtitle file to attach, with its language.
+#[derive(Debug, Clone)]
+pub struct SubtitleFile {
+    pub path: PathBuf,
+    pub language: Option<String>,
+}
+
+/// `subtitles --add`: the input with subtitle files attached as streams.
+pub fn add_subtitles(input: &Path, files: &[SubtitleFile], args: &EncodeArgs) -> Result<Compiled> {
+    let src = Input::probe(input)?;
+    if !src.has_video && !src.has_audio {
+        bail!("{} has no video or audio stream", input.display());
+    }
+    let mut inputs = vec![input.to_owned()];
+    inputs.extend(files.iter().map(|f| f.path.clone()));
+    let (root, rel) = common_root(&inputs)?;
+    let (w, h) = if src.has_video {
+        (even(src.width), even(src.height))
+    } else {
+        (2, 2)
+    };
+    let mut tl = base_timeline(w, h, src.fps, encode_block(args));
+    tl.assets.insert(
+        "in".to_owned(),
+        Asset {
+            src: rel[0].clone(),
+            kind: None,
+            color: None,
+        },
+    );
+    tl.layers.push(Layer {
+        id: None,
+        enabled: true,
+        clips: vec![video_clip("in", None, None, !args.no_audio, None)],
+    });
+    for (i, (file, path)) in files.iter().zip(&rel[1..]).enumerate() {
+        let id = format!("subs{}", i + 1);
+        tl.assets.insert(
+            id.clone(),
+            Asset {
+                src: path.clone(),
+                kind: None,
+                color: None,
+            },
+        );
+        tl.subtitles.push(SubtitleTrack {
+            id: None,
+            enabled: true,
+            asset: id,
+            language: file.language.clone(),
+            title: None,
+            offset: None,
+        });
     }
     Ok(Compiled { timeline: tl, root })
 }

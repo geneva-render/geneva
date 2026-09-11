@@ -32,3 +32,19 @@ pub fn clear_codec_tag(params: &mut Parameters) {
         (*params.as_mut_ptr()).codec_tag = 0;
     }
 }
+
+/// A codec context describing a subtitle stream of the given codec, for
+/// adding a text stream to an output without an encoder.
+#[allow(unsafe_code)]
+pub fn subtitle_context(id: ffmpeg_next::codec::Id) -> ffmpeg_next::codec::context::Context {
+    let mut ctx = ffmpeg_next::codec::context::Context::new();
+    // SAFETY: `ctx` owns a freshly allocated `AVCodecContext`; `codec_type`
+    // and `codec_id` are plain enum fields the muxer reads when the stream's
+    // parameters are copied from the context.
+    unsafe {
+        let raw = &mut *ctx.as_mut_ptr();
+        raw.codec_type = ffmpeg_next::ffi::AVMediaType::AVMEDIA_TYPE_SUBTITLE;
+        raw.codec_id = id.into();
+    }
+    ctx
+}

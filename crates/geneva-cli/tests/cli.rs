@@ -462,3 +462,81 @@ fn convert_hands_decoded_frames_straight_to_the_encoder() {
     );
     assert_eq!(resized["mode"], "render");
 }
+
+#[test]
+fn image_sequences_write_one_file_per_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let pattern = dir.path().join("frame-%03d.png");
+    let doc = run_json(
+        &["convert", "-o"],
+        &[&pattern, &media_dir().join("clip.mp4")],
+    );
+    assert_eq!(doc["frames"], 50);
+    let files: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(files.len(), 50, "{files:?}");
+    assert!(files.contains(&"frame-001.png".to_owned()));
+    assert!(!files.iter().any(|f| f.contains('%')));
+    let png = std::fs::read(dir.path().join("frame-001.png")).unwrap();
+    assert_eq!(&png[..4], b"\x89PNG");
+
+    geneva()
+        .args(["convert", "-o"])
+        .arg(dir.path().join("single.png"))
+        .arg(media_dir().join("clip.mp4"))
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("%04d"));
+}
+
+#[test]
+fn subtitles_attach_as_streams_and_extract_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let srt = dir.path().join("en.srt");
+    std::fs::write(
+        &srt,
+        "1\n00:00:00,200 --> 00:00:00,900\nHello\n\n2\n00:00:01,000 --> 00:00:01,800\nWorld\n",
+    )
+    .unwrap();
+    let out = dir.path().join("subs.mkv");
+    let doc = run_json(
+        &[
+            "subtitles",
+            "--add",
+            srt.to_str().unwrap(),
+            "--language",
+            "en",
+            "-o",
+        ],
+        &[&out, &media_dir().join("clip.mp4")],
+    );
+    assert_eq!(doc["mode"], "copy");
+    let info = run_json(&["probe"], &[&out]);
+    assert_eq!(info["subtitles"][0]["codec"], "subrip");
+    assert_eq!(info["subtitles"][0]["language"], "eng");
+
+    let vtt = dir.path().join("back.vtt");
+    let doc = run_json(&["subtitles", "--extract", "-o"], &[&vtt, &out]);
+    assert_eq!(doc["cues"], 2);
+    let text = std::fs::read_to_string(&vtt).unwrap();
+    assert!(text.starts_with("WEBVTT"));
+    assert!(text.contains("00:00:01.000 --> 00:00:01.800\nWorld"));
+}
+
+#[test]
+fn mxf_defaults_to_dnxhr_and_pcm() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("delivery.mxf");
+    let doc = run_json(
+        &["resize", "--width", "256", "-o"],
+        &[&out, &media_dir().join("clip.mp4")],
+    );
+    assert_eq!(doc["mode"], "render");
+    let info = run_json(&["probe"], &[&out]);
+    assert_eq!(info["container"], "mxf");
+    assert_eq!(info["video"]["codec"], "dnxhd");
+    assert_eq!(info["video"]["pixel_format"], "yuv422p");
+    assert_eq!(info["audio"]["codec"], "pcm_s24le");
+}

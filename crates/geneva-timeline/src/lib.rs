@@ -40,8 +40,8 @@ pub use parse::parse;
 pub use ratio::Ratio;
 pub use resolve::{
     AssetInfo, Composition, NoAssetInfo, ResolvedAsset, ResolvedAudioClip, ResolvedAudioTrack,
-    ResolvedClip, ResolvedComposition, ResolvedLayer, ResolvedSource, ResolvedText, resolve,
-    resolve_with,
+    ResolvedClip, ResolvedComposition, ResolvedLayer, ResolvedSource, ResolvedSubtitleTrack,
+    ResolvedText, resolve, resolve_with,
 };
 pub use schema::{FORMAT_VERSION, Timeline};
 pub use time::{Fps, Time};

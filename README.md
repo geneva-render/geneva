@@ -18,14 +18,17 @@ breaking changes to the format until the schema reaches 1.0; see
   `--probe` also opens the media files and checks their lengths.
 - `geneva render timeline.json -o out.mp4` — renders the whole timeline:
   video clips, images, solids, shapes, nested compositions and text, with
-  audio tracks mixed; H.264/H.265/VP9/AV1 video and AAC/Opus audio in
-  MP4, MOV, MKV or WebM.
+  audio tracks mixed; H.264, H.265, VP9, AV1, ProRes, DNxHR, PNG and
+  Motion JPEG video, AAC, Opus, MP3, Vorbis, FLAC, ALAC, AC-3 and PCM
+  audio, subtitle streams from SRT or WebVTT files, in MP4, MOV, MKV, WebM,
+  MXF, audio-only files or image sequences.
 - `geneva frame timeline.json --at 1.5s -o frame.png` — renders one frame to
   PNG through the same renderer, for checking and iterating.
 - `geneva probe clip.mp4` — shows streams, size, rate, duration and color
   tags, including which tags had to be assumed.
 - `geneva schema` — prints the JSON Schema for the current timeline version.
-- `geneva trim`, `concat`, `convert`, `resize`, `overlay` and `audio` —
+- `geneva trim`, `concat`, `convert`, `resize`, `overlay`, `audio` and
+  `subtitles` —
   everyday tasks as one-line commands. Each builds a timeline and renders
   it through the same engine; `--show-timeline` prints that timeline so a
   quick job can grow into a full composition.
@@ -46,6 +49,9 @@ geneva resize talk.mp4 -o talk-720.mp4 --height 720
 geneva overlay talk.mp4 logo.png -o branded.mp4 --at bottom-right --scale 0.5
 geneva audio talk.mp4 -o talk.m4a --extract
 geneva audio talk.mp4 -o scored.mp4 --mix music.mp3 --gain -12
+geneva convert talk.mp4 -o talk.mov --codec prores --profile hq      # 10-bit 4:2:2
+geneva convert talk.mp4 -o frames/%04d.png                           # image sequence
+geneva subtitles talk.mp4 -o talk-subbed.mkv --add en.srt --language en
 ```
 
 Trims and joins that leave the picture untouched copy the source streams

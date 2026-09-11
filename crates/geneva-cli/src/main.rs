@@ -60,6 +60,8 @@ enum Command {
     Overlay(OverlayArgs),
     /// Extract, remove, replace or mix a video's audio.
     Audio(AudioArgs),
+    /// Attach subtitle files as streams, or extract a subtitle stream.
+    Subtitles(SubtitlesArgs),
 }
 
 #[derive(Args)]
@@ -280,6 +282,33 @@ struct AudioArgs {
     encode: verbs::EncodeArgs,
 }
 
+#[derive(Args)]
+#[command(group = clap::ArgGroup::new("operation")
+    .required(true)
+    .args(["extract", "add"]))]
+struct SubtitlesArgs {
+    /// Input file.
+    input: PathBuf,
+    /// Output file: a video file for --add, or a .srt or .vtt file for
+    /// --extract.
+    #[arg(short, long, value_name = "FILE")]
+    output: PathBuf,
+    /// Write one subtitle stream of the input to a subtitle file.
+    #[arg(long)]
+    extract: bool,
+    /// Which subtitle stream to extract, counting from 0.
+    #[arg(long, default_value_t = 0, requires = "extract")]
+    track: usize,
+    /// Subtitle file (.srt or .vtt) to attach as a stream; repeatable.
+    #[arg(long, value_name = "FILE")]
+    add: Vec<PathBuf>,
+    /// Language code for each --add, in the same order; repeatable.
+    #[arg(long, value_name = "CODE", requires = "add")]
+    language: Vec<String>,
+    #[command(flatten)]
+    encode: verbs::EncodeArgs,
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli) {
@@ -456,6 +485,54 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 anyhow::bail!("choose one of --extract, --mute, --replace or --mix");
             };
             let compiled = verbs::audio(&args.input, &op, &args.encode)?;
+            run_verb(&compiled, &args.output, &args.encode, cli.format)
+        }
+        Command::Subtitles(args) => {
+            if args.extract {
+                let cues = media::read_subtitles(&args.input, args.track)?;
+                let ext = args
+                    .output
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("");
+                let text = match geneva_media::subtitles::SubtitleFormat::from_extension(ext) {
+                    Some(geneva_media::subtitles::SubtitleFormat::Srt) => {
+                        geneva_media::subtitles::write_srt(&cues)
+                    }
+                    Some(geneva_media::subtitles::SubtitleFormat::WebVtt) => {
+                        geneva_media::subtitles::write_webvtt(&cues)
+                    }
+                    None => anyhow::bail!("the output must end in .srt or .vtt"),
+                };
+                std::fs::write(&args.output, text)
+                    .with_context(|| format!("writing {}", args.output.display()))?;
+                if cli.format == Format::Json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "output": args.output,
+                            "cues": cues.len(),
+                        }))?
+                    );
+                } else {
+                    println!("wrote {} ({} cues)", args.output.display(), cues.len());
+                }
+                return Ok(ExitCode::SUCCESS);
+            }
+            if args.language.len() > args.add.len() {
+                anyhow::bail!("more --language values than --add files");
+            }
+            let files: Vec<verbs::SubtitleFile> = args
+                .add
+                .iter()
+                .enumerate()
+                .map(|(i, p)| verbs::SubtitleFile {
+                    path: p.clone(),
+                    language: args.language.get(i).cloned(),
+                })
+                .collect();
+            let compiled = verbs::add_subtitles(&args.input, &files, &args.encode)?;
             run_verb(&compiled, &args.output, &args.encode, cli.format)
         }
     }

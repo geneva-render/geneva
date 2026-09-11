@@ -18,6 +18,9 @@ SVTAV1_VERSION=2.3.0
 DAV1D_VERSION=1.5.1
 OPUS_VERSION=1.5.2
 NVCODEC_VERSION=12.2.72.0
+OGG_VERSION=1.3.5
+VORBIS_VERSION=1.3.7
+LAME_VERSION=3.100
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 prefix_arg=${1:-$root/target/media-libs}
@@ -55,6 +58,33 @@ if ! done_marker opus; then
       --disable-doc --disable-extra-programs >/dev/null && make -j"$jobs" >/dev/null && make install >/dev/null)
   cp "$src/opus/COPYING" "$prefix/share/licenses/opus.txt"
   mark_done opus
+fi
+
+# --- libogg and libvorbis (BSD-3) -----------------------------------------
+if ! done_marker vorbis; then
+  fetch ogg "https://downloads.xiph.org/releases/ogg/libogg-$OGG_VERSION.tar.gz"
+  echo "==> building libogg"
+  (cd "$src/ogg" && ./configure --prefix="$prefix" --disable-shared --enable-static >/dev/null \
+      && make -j"$jobs" >/dev/null && make install >/dev/null)
+  cp "$src/ogg/COPYING" "$prefix/share/licenses/libogg.txt"
+  fetch vorbis "https://downloads.xiph.org/releases/vorbis/libvorbis-$VORBIS_VERSION.tar.gz"
+  echo "==> building libvorbis"
+  (cd "$src/vorbis" && ./configure --prefix="$prefix" --disable-shared --enable-static \
+      --disable-docs --disable-examples --disable-oggtest >/dev/null \
+      && make -j"$jobs" >/dev/null && make install >/dev/null)
+  cp "$src/vorbis/COPYING" "$prefix/share/licenses/libvorbis.txt"
+  mark_done vorbis
+fi
+
+# --- LAME (LGPL-2.0+), MP3 encoding ---------------------------------------
+if ! done_marker lame; then
+  fetch lame "https://downloads.sourceforge.net/project/lame/lame/$LAME_VERSION/lame-$LAME_VERSION.tar.gz"
+  echo "==> building lame"
+  (cd "$src/lame" && ./configure --prefix="$prefix" --disable-shared --enable-static \
+      --disable-frontend --disable-decoder --enable-nasm >/dev/null \
+      && make -j"$jobs" >/dev/null && make install >/dev/null)
+  cp "$src/lame/COPYING" "$prefix/share/licenses/lame.txt"
+  mark_done lame
 fi
 
 # --- libvpx (BSD-3), VP8/VP9 ----------------------------------------------
@@ -135,15 +165,19 @@ if ! done_marker ffmpeg; then
       --enable-static --disable-shared --enable-pic \
       --disable-everything --disable-programs --disable-doc --disable-network \
       --disable-avdevice --disable-avfilter --disable-postproc --disable-debug \
-      --disable-autodetect --disable-iconv --disable-sdl2 --disable-xlib \
+      --disable-autodetect --disable-iconv --disable-sdl2 --disable-xlib --enable-zlib \
       --enable-libopenh264 --enable-libvpx --enable-libsvtav1 --enable-libdav1d --enable-libopus \
+      --enable-libvorbis --enable-libmp3lame \
+      --extra-cflags="-I$prefix/include" --extra-ldflags="-L$prefix/lib" \
       --enable-protocol=file,pipe \
-      --enable-demuxer=mov,matroska,mp3,wav,aac,flac,ogg,image2,mpegts,avi,gif \
-      --enable-muxer=mp4,mov,matroska,webm,wav,flac,ogg,opus,adts,image2 \
+      --enable-demuxer=mov,matroska,mp3,wav,aac,flac,ogg,image2,mpegts,avi,gif,mxf,srt,webvtt \
+      --enable-muxer=mp4,mov,matroska,webm,wav,flac,ogg,opus,adts,image2,mxf,mp3,srt,webvtt \
       --enable-decoder=h264,hevc,vp8,vp9,libdav1d,mpeg4,mpeg2video,mjpeg,png,prores,dnxhd,rawvideo,gif \
       --enable-decoder=aac,mp3,flac,vorbis,libopus,alac,ac3,eac3,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,pcm_s16be,pcm_u8 \
-      --enable-encoder=libopenh264,libvpx_vp9,libsvtav1,aac,libopus,flac,pcm_s16le,pcm_s24le,pcm_f32le,png,mjpeg,prores_ks,rawvideo \
-      --enable-parser=h264,hevc,vp8,vp9,av1,aac,mpeg4video,mpegvideo,mjpeg,png,flac,vorbis,opus,mpegaudio,ac3 \
+      --enable-decoder=subrip,webvtt,mov_text \
+      --enable-encoder=libopenh264,libvpx_vp9,libsvtav1,prores_ks,dnxhd,png,mjpeg,rawvideo \
+      --enable-encoder=aac,libopus,flac,alac,ac3,libmp3lame,libvorbis,pcm_s16le,pcm_s24le,pcm_f32le \
+      --enable-parser=h264,hevc,vp8,vp9,av1,aac,mpeg4video,mpegvideo,mjpeg,png,flac,vorbis,opus,mpegaudio,ac3,dnxhd \
       --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc,extract_extradata,vp9_superframe,null \
       $extra >"$src/ffmpeg-configure.log" 2>&1 || { tail -30 "$src/ffmpeg-configure.log"; exit 1; }
    make -j"$jobs" >"$src/ffmpeg-build.log" 2>&1 || { tail -30 "$src/ffmpeg-build.log"; exit 1; }
@@ -154,4 +188,6 @@ fi
 
 echo
 echo "media libraries installed under $prefix"
-echo "build with: FFMPEG_DIR=$prefix cargo build --release"
+echo "build with: cargo build --release"
+echo "(after rebuilding the libraries, run: cargo clean -p ffmpeg-sys-next, whose"
+echo " compiled form bundles the archives it was first built against)"

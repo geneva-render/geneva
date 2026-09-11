@@ -66,6 +66,10 @@ pub fn link_media_libraries() {
                 "macos" | "ios" => "-lc++".to_owned(),
                 _ => cxx_runtime.clone().unwrap_or(flag),
             }
+        } else if name == "z" && target_os == "linux" {
+            // zlib comes from the system; its static archive keeps the
+            // binary free of shared-library dependencies where it exists.
+            static_archive("libz.a").unwrap_or(flag)
         } else {
             flag
         };
@@ -148,8 +152,13 @@ fn pkg_config(prefix: &str, flag: &str) -> Vec<String> {
 
 /// The path of the static C++ runtime archive, if the compiler knows it.
 fn static_cxx_runtime() -> Option<String> {
+    static_archive("libstdc++.a")
+}
+
+/// The path of a static archive on the compiler's library path, if any.
+fn static_archive(name: &str) -> Option<String> {
     let out = Command::new("cc")
-        .arg("-print-file-name=libstdc++.a")
+        .arg(format!("-print-file-name={name}"))
         .output()
         .ok()?;
     let path = String::from_utf8_lossy(&out.stdout).trim().to_owned();

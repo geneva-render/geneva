@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use ffmpeg_next::Error as FfError;
+use ffmpeg_next::Packet;
 use ffmpeg_next::codec;
 use ffmpeg_next::media::Type;
 use ffmpeg_next::software::{resampling, scaling};
@@ -102,8 +103,21 @@ impl StreamDecoder {
                 return Ok(false);
             }
             let mut fed = false;
-            while let Some((stream, packet)) = self.ictx.packets().next() {
-                if stream.index() == self.stream_index {
+            let mut packet = Packet::empty();
+            loop {
+                match packet.read(&mut self.ictx) {
+                    Ok(()) => {}
+                    // A demuxer may have nothing ready yet without being at
+                    // the end; only the end of the file ends the stream.
+                    Err(FfError::Other { errno }) if errno == ffmpeg_next::error::EAGAIN => {
+                        continue;
+                    }
+                    Err(FfError::Eof) => break,
+                    Err(e) => {
+                        return Err(codec_error(format!("{}: reading", self.path.display()), e));
+                    }
+                }
+                if packet.stream() == self.stream_index {
                     decoder.send_packet(&packet).map_err(|e| {
                         codec_error(format!("{}: decoding", self.path.display()), e)
                     })?;
@@ -179,7 +193,16 @@ impl VideoReader {
         if rgb {
             merged.matrix = Some(geneva_color::Matrix::Identity);
         }
-        let (tags, _) = geneva_color::infer(merged, decoder.width(), decoder.height());
+        let (mut tags, _) = geneva_color::infer(merged, decoder.width(), decoder.height());
+        // The widening conversion below compresses the full-range JPEG
+        // layouts to limited range on the way, so the samples it hands
+        // over are limited whatever the file says.
+        if matches!(
+            decoder.format(),
+            Pixel::YUVJ420P | Pixel::YUVJ422P | Pixel::YUVJ444P | Pixel::YUVJ440P
+        ) {
+            tags.range = geneva_color::Range::Limited;
+        }
         let dst = if rgb { Pixel::RGBA } else { Pixel::YUV444P16LE };
         let scaler = scaling::Context::get(
             decoder.format(),
@@ -206,10 +229,9 @@ impl VideoReader {
         })
     }
 
-    /// Whether decoded frames are already 8-bit 4:2:0 Y'CbCr, the format
-    /// the encoders take.
-    pub fn is_yuv420p(&self) -> bool {
-        self.decoder.format() == Pixel::YUV420P
+    /// Pixel format of the decoded frames.
+    pub fn pixel_format(&self) -> Pixel {
+        self.decoder.format()
     }
 
     /// The resolved color tags used to interpret the stream.
@@ -452,11 +474,14 @@ impl AudioReader {
         let mut write_pos: Option<i64> = None;
         let mut resampler = None;
         let mut raw = frame::Audio::empty();
-        let mut resampled = frame::Audio::empty();
         loop {
             if !self.inner.next_frame(&mut self.decoder, &mut raw)? {
                 break;
             }
+            // A fresh output frame each time: the converter sizes it to the
+            // input, and decoders such as Opus and Vorbis start with a short
+            // frame that would otherwise cap every later one.
+            let mut resampled = frame::Audio::empty();
             let secs = self.inner.secs(&raw);
             if write_pos.is_none() {
                 write_pos = Some(((secs - from).to_f64() * f64::from(rate)).round() as i64);

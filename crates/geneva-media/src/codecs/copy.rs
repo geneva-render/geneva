@@ -15,6 +15,7 @@ use geneva_timeline::{Composition, Ratio, ResolvedSource};
 
 use super::ffi;
 use super::probe::ts_to_secs;
+use super::subtitle_streams::{SubtitleSettings, SubtitleWriter};
 use super::{init, open_error};
 use crate::MediaError;
 
@@ -266,24 +267,36 @@ pub(super) fn untouched_video_clips(
 
 /// Audio codecs each container can hold without re-encoding.
 fn container_accepts_audio(container: Container, codec: codec::Id) -> bool {
+    use codec::Id;
     match container {
-        Container::Mp4 | Container::Mov | Container::M4a => {
+        Container::Mp4 | Container::M4a => {
             matches!(
                 codec,
-                codec::Id::AAC
-                    | codec::Id::MP3
-                    | codec::Id::ALAC
-                    | codec::Id::AC3
-                    | codec::Id::EAC3
+                Id::AAC | Id::MP3 | Id::ALAC | Id::AC3 | Id::EAC3 | Id::OPUS | Id::FLAC
             )
         }
-        Container::Mkv => true,
-        Container::Webm | Container::Ogg => matches!(codec, codec::Id::OPUS | codec::Id::VORBIS),
-        Container::Flac => codec == codec::Id::FLAC,
-        Container::Wav => matches!(
+        Container::Mov => matches!(
             codec,
-            codec::Id::PCM_S16LE | codec::Id::PCM_S24LE | codec::Id::PCM_F32LE
+            Id::AAC
+                | Id::MP3
+                | Id::ALAC
+                | Id::AC3
+                | Id::EAC3
+                | Id::OPUS
+                | Id::FLAC
+                | Id::PCM_S16LE
+                | Id::PCM_S24LE
+                | Id::PCM_F32LE
         ),
+        Container::Mkv => true,
+        Container::Webm => matches!(codec, Id::OPUS | Id::VORBIS),
+        Container::Ogg => matches!(codec, Id::OPUS | Id::VORBIS | Id::FLAC),
+        Container::Flac => codec == Id::FLAC,
+        Container::Mp3 => codec == Id::MP3,
+        Container::Wav | Container::Mxf => {
+            matches!(codec, Id::PCM_S16LE | Id::PCM_S24LE | Id::PCM_F32LE)
+        }
+        Container::ImageSequence => false,
     }
 }
 
@@ -311,10 +324,9 @@ impl AudioShape {
 fn container_accepts(container: Container, codec: Option<VideoCodec>) -> bool {
     match codec {
         None => false,
-        Some(VideoCodec::Vp9 | VideoCodec::Av1) => !container.is_audio_only(),
-        Some(VideoCodec::H264 | VideoCodec::H265) => {
-            !container.is_audio_only() && container != Container::Webm
-        }
+        // Image sequences are written frame by frame, never copied.
+        Some(_) if container == Container::ImageSequence => false,
+        Some(c) => super::encode::container_accepts_video(container, c),
     }
 }
 
@@ -360,6 +372,10 @@ impl StreamShape {
                 codec::Id::HEVC => Some(VideoCodec::H265),
                 codec::Id::VP9 => Some(VideoCodec::Vp9),
                 codec::Id::AV1 => Some(VideoCodec::Av1),
+                codec::Id::PRORES => Some(VideoCodec::Prores),
+                codec::Id::DNXHD => Some(VideoCodec::Dnxhd),
+                codec::Id::MJPEG => Some(VideoCodec::Mjpeg),
+                codec::Id::PNG => Some(VideoCodec::Png),
                 _ => None,
             },
             codec_id: params.id(),
@@ -389,7 +405,11 @@ impl StreamShape {
 }
 
 /// Writes `output` by copying the planned segments' packets.
-pub fn stream_copy(plan: &CopyPlan, output: &Path) -> Result<CopyReport, MediaError> {
+pub fn stream_copy(
+    plan: &CopyPlan,
+    output: &Path,
+    subtitles: &[SubtitleSettings],
+) -> Result<CopyReport, MediaError> {
     init();
     let container = super::encode::container_for(output, None);
     let mut octx = match container.and_then(super::encode::muxer_name) {
@@ -438,6 +458,7 @@ pub fn stream_copy(plan: &CopyPlan, output: &Path) -> Result<CopyReport, MediaEr
             reason: "nothing to copy".to_owned(),
         });
     }
+    let mut cues = SubtitleWriter::add_streams(&mut octx, container, subtitles, output)?;
     octx.write_header().map_err(|e| open_error(output, e))?;
 
     let mut report_segments = Vec::new();
@@ -450,18 +471,27 @@ pub fn stream_copy(plan: &CopyPlan, output: &Path) -> Result<CopyReport, MediaEr
             Type::Video,
             out_idx,
             &mut video_packets,
+            &mut cues,
         )?;
         report_segments = segs;
         duration = total;
     }
     if let Some(out_idx) = out_audio {
         let mut ignored = 0u64;
-        let (segs, total) = copy_track(&mut octx, &plan.audio, Type::Audio, out_idx, &mut ignored)?;
+        let (segs, total) = copy_track(
+            &mut octx,
+            &plan.audio,
+            Type::Audio,
+            out_idx,
+            &mut ignored,
+            &mut cues,
+        )?;
         if out_video.is_none() {
             report_segments = segs;
             duration = total;
         }
     }
+    cues.finish(&mut octx)?;
     octx.write_trailer().map_err(|e| open_error(output, e))?;
     Ok(CopyReport {
         segments: report_segments,
@@ -478,9 +508,15 @@ fn copy_track(
     kind: Type,
     out_idx: usize,
     packets: &mut u64,
+    cues: &mut SubtitleWriter,
 ) -> Result<(Vec<SegmentReport>, Ratio), MediaError> {
     let mut report = Vec::new();
     let mut offset = Ratio::ZERO;
+    // Cues are written alongside the video packets, or the audio ones when
+    // the output has no video.
+    let cues_follow_video = octx
+        .streams()
+        .any(|s| s.parameters().medium() == Type::Video);
     let out_tb = octx.stream(out_idx).expect("added").time_base();
     let out_scale = Ratio::new(
         i64::from(out_tb.denominator()),
@@ -548,6 +584,9 @@ fn copy_track(
                 .write_interleaved(octx)
                 .map_err(|e| super::codec_error("writing copied packet", e))?;
             *packets += 1;
+            if kind == Type::Video || !cues_follow_video {
+                cues.write_due(octx, shifted)?;
+            }
         }
         let seg_start = segment_start.unwrap_or(segment.from);
         let seg_end = segment

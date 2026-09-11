@@ -9,11 +9,12 @@ use ffmpeg_next::{Dictionary, Error as FfError, Packet, Rational};
 use geneva_color::ResolvedTags;
 use geneva_render::Frame;
 use geneva_timeline::Ratio;
-use geneva_timeline::schema::{AudioCodec, Container, HardwarePolicy, VideoCodec};
+use geneva_timeline::schema::{AudioCodec, Container, HardwarePolicy, VideoCodec, VideoProfile};
 
+use super::subtitle_streams::{SubtitleSettings, SubtitleWriter};
 use super::{codec_error, init, open_error, tags};
 use crate::MediaError;
-use crate::convert::{Yuv420p, frame_to_yuv420p};
+use crate::convert::{PlaneFormat, Planes, frame_to_planes};
 
 /// What to write and how.
 #[derive(Debug, Clone)]
@@ -24,6 +25,8 @@ pub struct EncodeSettings {
     pub container: Option<Container>,
     /// Audio track settings; `None` writes no audio.
     pub audio: Option<AudioSettings>,
+    /// Subtitle tracks written as text streams.
+    pub subtitles: Vec<SubtitleSettings>,
 }
 
 /// Video track settings.
@@ -45,6 +48,8 @@ pub struct VideoSettings {
     pub hardware: HardwarePolicy,
     /// Output color tags; frames are converted to and tagged with these.
     pub color: ResolvedTags,
+    /// Codec profile, for the codecs that have them.
+    pub profile: Option<VideoProfile>,
 }
 
 /// Audio track settings.
@@ -66,24 +71,44 @@ pub fn container_for(path: &Path, requested: Option<Container>) -> Option<Contai
             "mov" => Some(Container::Mov),
             "mkv" => Some(Container::Mkv),
             "webm" => Some(Container::Webm),
+            "mxf" => Some(Container::Mxf),
             "m4a" => Some(Container::M4a),
             "ogg" | "oga" | "opus" => Some(Container::Ogg),
             "flac" => Some(Container::Flac),
             "wav" => Some(Container::Wav),
+            "mp3" => Some(Container::Mp3),
+            "png" | "jpg" | "jpeg" => Some(Container::ImageSequence),
             _ => None,
         },
     )
 }
 
-/// Default codecs per container.
+/// Default codecs per container. For image sequences the video codec
+/// follows the file extension (`default_image_codec`).
 pub fn default_codecs(container: Container) -> (VideoCodec, AudioCodec) {
     match container {
         Container::Webm | Container::Ogg => (VideoCodec::Vp9, AudioCodec::Opus),
         Container::Mp4 | Container::Mov | Container::Mkv | Container::M4a => {
             (VideoCodec::H264, AudioCodec::Aac)
         }
+        Container::Mxf => (VideoCodec::Dnxhd, AudioCodec::Pcm24),
         Container::Flac => (VideoCodec::H264, AudioCodec::Flac),
         Container::Wav => (VideoCodec::H264, AudioCodec::Pcm),
+        Container::Mp3 => (VideoCodec::H264, AudioCodec::Mp3),
+        Container::ImageSequence => (VideoCodec::Png, AudioCodec::Pcm),
+    }
+}
+
+/// The image codec an image-sequence pattern asks for by extension.
+pub fn default_image_codec(path: &Path) -> VideoCodec {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("jpg" | "jpeg") => VideoCodec::Mjpeg,
+        _ => VideoCodec::Png,
     }
 }
 
@@ -94,8 +119,108 @@ pub(super) fn muxer_name(container: Container) -> Option<&'static str> {
         Container::M4a => Some("mp4"),
         Container::Ogg => Some("ogg"),
         Container::Mp4 | Container::Mov | Container::Mkv | Container::Webm => None,
+        Container::Mxf => Some("mxf"),
         Container::Flac => Some("flac"),
         Container::Wav => Some("wav"),
+        Container::Mp3 => Some("mp3"),
+        Container::ImageSequence => Some("image2"),
+    }
+}
+
+/// Whether a container can hold a video codec.
+pub fn container_accepts_video(container: Container, codec: VideoCodec) -> bool {
+    use VideoCodec::{Av1, Dnxhd, H264, H265, Mjpeg, Png, Prores, Vp9};
+    match container {
+        Container::Mp4 => matches!(codec, H264 | H265 | Vp9 | Av1 | Mjpeg),
+        Container::Mov => true,
+        Container::Mkv => !matches!(codec, Png),
+        Container::Webm => matches!(codec, Vp9 | Av1),
+        Container::Mxf => matches!(codec, Dnxhd | Prores | H264),
+        Container::ImageSequence => matches!(codec, Png | Mjpeg),
+        Container::M4a | Container::Ogg | Container::Flac | Container::Wav | Container::Mp3 => {
+            false
+        }
+    }
+}
+
+/// Whether a container can hold an audio codec.
+pub fn container_accepts_audio(container: Container, codec: AudioCodec) -> bool {
+    use AudioCodec::{Aac, Ac3, Alac, Flac, Mp3, Opus, Pcm, Pcm24, Vorbis};
+    match container {
+        Container::Mp4 => matches!(codec, Aac | Mp3 | Alac | Ac3 | Opus | Flac),
+        Container::Mov => matches!(codec, Aac | Mp3 | Alac | Ac3 | Pcm | Pcm24 | Flac),
+        Container::Mkv => true,
+        Container::Webm => matches!(codec, Opus | Vorbis),
+        Container::Mxf | Container::Wav => matches!(codec, Pcm | Pcm24),
+        Container::M4a => matches!(codec, Aac | Mp3 | Alac | Ac3),
+        Container::Ogg => matches!(codec, Opus | Vorbis | Flac),
+        Container::Flac => codec == Flac,
+        Container::Mp3 => codec == Mp3,
+        Container::ImageSequence => false,
+    }
+}
+
+/// The sample layout a codec (and profile) takes.
+pub fn plane_format_for(codec: VideoCodec, profile: Option<VideoProfile>) -> PlaneFormat {
+    match codec {
+        VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Vp9 | VideoCodec::Av1 => {
+            PlaneFormat::Yuv420p8
+        }
+        VideoCodec::Mjpeg => PlaneFormat::Yuv420p8,
+        VideoCodec::Png => PlaneFormat::Rgba8,
+        VideoCodec::Prores => match profile.unwrap_or(VideoProfile::Hq) {
+            VideoProfile::P4444 | VideoProfile::P4444Xq => PlaneFormat::Yuv444p10,
+            _ => PlaneFormat::Yuv422p10,
+        },
+        VideoCodec::Dnxhd => match profile.unwrap_or(VideoProfile::DnxhrHq) {
+            VideoProfile::DnxhrHqx => PlaneFormat::Yuv422p10,
+            VideoProfile::Dnxhr444 => PlaneFormat::Yuv444p10,
+            _ => PlaneFormat::Yuv422p8,
+        },
+    }
+}
+
+/// The color tags an encoder actually writes: JPEG frames are full-range
+/// BT.601 and PNG frames sRGB whatever the composition asked for.
+pub fn output_tags_for(codec: VideoCodec, tags: ResolvedTags) -> ResolvedTags {
+    match codec {
+        // JPEG is full-range BT.601 by convention (JFIF).
+        VideoCodec::Mjpeg => ResolvedTags {
+            matrix: geneva_color::Matrix::Bt601,
+            range: geneva_color::Range::Full,
+            ..tags
+        },
+        // RGB frames are written with the sRGB curve, full range, no matrix.
+        VideoCodec::Png => ResolvedTags {
+            primaries: tags.primaries,
+            transfer: geneva_color::Transfer::Srgb,
+            matrix: geneva_color::Matrix::Identity,
+            range: geneva_color::Range::Full,
+        },
+        _ => tags,
+    }
+}
+
+/// The library's pixel format for a sample layout.
+pub(super) fn pixel_of(format: PlaneFormat) -> Pixel {
+    match format {
+        PlaneFormat::Yuv420p8 => Pixel::YUV420P,
+        PlaneFormat::Yuv422p8 => Pixel::YUV422P,
+        PlaneFormat::Yuv422p10 => Pixel::YUV422P10LE,
+        PlaneFormat::Yuv444p10 => Pixel::YUV444P10LE,
+        PlaneFormat::Rgba8 => Pixel::RGBA,
+    }
+}
+
+/// The sample layout of a library pixel format, when it is one we pack.
+pub(super) fn format_of(pixel: Pixel) -> Option<PlaneFormat> {
+    match pixel {
+        Pixel::YUV420P => Some(PlaneFormat::Yuv420p8),
+        Pixel::YUV422P => Some(PlaneFormat::Yuv422p8),
+        Pixel::YUV422P10LE => Some(PlaneFormat::Yuv422p10),
+        Pixel::YUV444P10LE => Some(PlaneFormat::Yuv444p10),
+        Pixel::RGBA => Some(PlaneFormat::Rgba8),
+        _ => None,
     }
 }
 
@@ -104,7 +229,7 @@ fn hardware_encoder_names(codec: VideoCodec) -> &'static [&'static str] {
     match codec {
         VideoCodec::H264 => &["h264_videotoolbox", "h264_nvenc"],
         VideoCodec::H265 => &["hevc_videotoolbox", "hevc_nvenc"],
-        VideoCodec::Vp9 | VideoCodec::Av1 => &[],
+        _ => &[],
     }
 }
 
@@ -115,6 +240,10 @@ fn software_encoder_names(codec: VideoCodec) -> &'static [&'static str] {
         VideoCodec::H265 => &[],
         VideoCodec::Vp9 => &["libvpx-vp9"],
         VideoCodec::Av1 => &["libsvtav1"],
+        VideoCodec::Prores => &["prores_ks"],
+        VideoCodec::Dnxhd => &["dnxhd"],
+        VideoCodec::Png => &["png"],
+        VideoCodec::Mjpeg => &["mjpeg"],
     }
 }
 
@@ -126,6 +255,7 @@ fn video_encoder_candidates(codec: VideoCodec, policy: HardwarePolicy) -> Vec<&'
     let sw = software_encoder_names(codec);
     match policy {
         HardwarePolicy::Auto => hw.iter().chain(sw.iter()).copied().collect(),
+        HardwarePolicy::Require if hw.is_empty() => sw.to_vec(),
         HardwarePolicy::Require => hw.to_vec(),
         HardwarePolicy::Never => sw.to_vec(),
     }
@@ -154,6 +284,25 @@ fn audio_encoder_names(codec: AudioCodec) -> &'static [&'static str] {
         AudioCodec::Opus => &["libopus"],
         AudioCodec::Flac => &["flac"],
         AudioCodec::Pcm => &["pcm_s16le"],
+        AudioCodec::Pcm24 => &["pcm_s24le"],
+        AudioCodec::Mp3 => &["libmp3lame"],
+        AudioCodec::Vorbis => &["libvorbis"],
+        AudioCodec::Alac => &["alac"],
+        AudioCodec::Ac3 => &["ac3"],
+    }
+}
+
+/// The sample format each audio encoder takes, and whether it is a
+/// bitrate-driven codec.
+fn audio_sample_format(codec: AudioCodec) -> (Sample, bool) {
+    match codec {
+        AudioCodec::Aac | AudioCodec::Mp3 | AudioCodec::Vorbis | AudioCodec::Ac3 => {
+            (Sample::F32(sample::Type::Planar), true)
+        }
+        AudioCodec::Opus => (Sample::F32(sample::Type::Packed), true),
+        AudioCodec::Flac | AudioCodec::Pcm => (Sample::I16(sample::Type::Packed), false),
+        AudioCodec::Alac => (Sample::I16(sample::Type::Planar), false),
+        AudioCodec::Pcm24 => (Sample::I32(sample::Type::Packed), false),
     }
 }
 
@@ -188,7 +337,7 @@ fn open_video_encoder(
         .map_err(|e| codec_error(format!("{name}: encoder setup"), e))?;
     venc.set_width(settings.width);
     venc.set_height(settings.height);
-    venc.set_format(Pixel::YUV420P);
+    venc.set_format(pixel_of(plane_format_for(settings.codec, settings.profile)));
     venc.set_time_base(video_time_base);
     venc.set_frame_rate(Some(fps));
     let (space, range, primaries, transfer) = tags::to_codec_tags(settings.color);
@@ -223,6 +372,25 @@ fn open_video_encoder(
                 &svt_preset(settings.preset.as_deref().unwrap_or("medium")),
             );
         }
+        "prores_ks" => {
+            opts.set(
+                "profile",
+                settings.profile.unwrap_or(VideoProfile::Hq).as_str(),
+            );
+            opts.set("vendor", "apl0");
+        }
+        "dnxhd" => {
+            opts.set(
+                "profile",
+                settings.profile.unwrap_or(VideoProfile::DnxhrHq).as_str(),
+            );
+        }
+        "mjpeg" => {
+            // Quality 1..=31 with 1 best; the 0..=51 scale halves onto it.
+            let q = (1 + i32::from(settings.crf.unwrap_or(8)) / 2).clamp(1, 31);
+            venc.set_qmin(q);
+            venc.set_qmax(q);
+        }
         n if n.ends_with("_nvenc") => {
             opts.set("rc", "constqp");
             opts.set("qp", &quality.to_string());
@@ -245,9 +413,20 @@ fn open_video_encoder(
 fn open_video_track(
     octx: &mut ffmpeg_next::format::context::Output,
     path: &Path,
-    settings: VideoSettings,
+    mut settings: VideoSettings,
     global_header: bool,
 ) -> Result<VideoTrack, MediaError> {
+    settings.color = output_tags_for(settings.codec, settings.color);
+    if settings.codec == VideoCodec::Dnxhd && (settings.width < 256 || settings.height < 120) {
+        return Err(MediaError::Codec {
+            context: "encoder setup".to_owned(),
+            reason: format!(
+                "DNxHR needs a picture of at least 256×120; the output is {}×{}",
+                settings.width, settings.height
+            ),
+        });
+    }
+    let format = plane_format_for(settings.codec, settings.profile);
     let fps = Rational::new(settings.fps.numer() as i32, settings.fps.denom() as i32);
     let time_base = Rational::new(fps.denominator(), fps.numerator());
     let candidates = video_encoder_candidates(settings.codec, settings.hardware);
@@ -305,6 +484,7 @@ fn open_video_track(
         stream_index,
         time_base,
         settings,
+        format,
     })
 }
 
@@ -325,6 +505,7 @@ struct VideoTrack {
     stream_index: usize,
     time_base: Rational,
     settings: VideoSettings,
+    format: PlaneFormat,
 }
 
 /// Writes video and/or audio to a file.
@@ -334,6 +515,8 @@ pub struct Encoder {
     video: Option<VideoTrack>,
     frame_index: i64,
     audio: Option<AudioTrack>,
+    subtitles: SubtitleWriter,
+    image_sequence: bool,
     finished: bool,
 }
 
@@ -348,6 +531,24 @@ impl Encoder {
             });
         }
         let container = container_for(path, settings.container);
+        if let Some(c) = container {
+            if let Some(v) = &settings.video {
+                if !container_accepts_video(c, v.codec) {
+                    return Err(MediaError::Codec {
+                        context: "encoder setup".to_owned(),
+                        reason: format!("the {c:?} container cannot hold {:?} video", v.codec),
+                    });
+                }
+            }
+            if let Some(a) = &settings.audio {
+                if !container_accepts_audio(c, a.codec) {
+                    return Err(MediaError::Codec {
+                        context: "encoder setup".to_owned(),
+                        reason: format!("the {c:?} container cannot hold {:?} audio", a.codec),
+                    });
+                }
+            }
+        }
         let mut octx = match container.and_then(muxer_name) {
             Some(name) => ffmpeg_next::format::output_as(path, name),
             None => ffmpeg_next::format::output(path),
@@ -380,16 +581,12 @@ impl Encoder {
                     .encoder()
                     .audio()
                     .map_err(|e| codec_error("audio encoder setup", e))?;
-                let format = match a.codec {
-                    AudioCodec::Aac => Sample::F32(sample::Type::Planar),
-                    AudioCodec::Opus => Sample::F32(sample::Type::Packed),
-                    AudioCodec::Flac | AudioCodec::Pcm => Sample::I16(sample::Type::Packed),
-                };
+                let (format, bitrate_driven) = audio_sample_format(a.codec);
                 aenc.set_rate(a.sample_rate as i32);
                 aenc.set_format(format);
                 aenc.set_channel_layout(ChannelLayout::STEREO);
                 aenc.set_time_base(time_base);
-                if matches!(a.codec, AudioCodec::Aac | AudioCodec::Opus) {
+                if bitrate_driven {
                     aenc.set_bit_rate(a.bitrate_kbps as usize * 1000);
                 }
                 let encoder = aenc
@@ -423,6 +620,8 @@ impl Encoder {
             }
         };
 
+        let subtitles =
+            SubtitleWriter::add_streams(&mut octx, container, &settings.subtitles, path)?;
         octx.write_header().map_err(|e| open_error(path, e))?;
         Ok(Self {
             path: path.to_owned(),
@@ -430,6 +629,8 @@ impl Encoder {
             video,
             frame_index: 0,
             audio,
+            subtitles,
+            image_sequence: container == Some(Container::ImageSequence),
             finished: false,
         })
     }
@@ -437,43 +638,53 @@ impl Encoder {
     /// Encodes one frame. Frames must be pushed in order; each is shown
     /// for exactly one frame period.
     pub fn push_frame(&mut self, frame: &Frame) -> Result<(), MediaError> {
-        let color = self.video_color()?;
-        let yuv = frame_to_yuv420p(frame, color);
-        self.push_yuv420p(&yuv)
+        let (color, format) = self.video_format()?;
+        let planes = frame_to_planes(frame, color, format);
+        self.push_planes(&planes)
     }
 
-    /// Output color tags of the video track, which frames converted ahead
-    /// of [`push_yuv420p`](Self::push_yuv420p) must use.
-    pub fn video_color(&self) -> Result<ResolvedTags, MediaError> {
+    /// Output color tags and sample layout of the video track, which
+    /// frames converted ahead of [`push_planes`](Self::push_planes) must
+    /// use.
+    pub fn video_format(&self) -> Result<(ResolvedTags, PlaneFormat), MediaError> {
         self.video
             .as_ref()
-            .map(|t| t.settings.color)
+            .map(|t| (t.settings.color, t.format))
             .ok_or_else(|| MediaError::Codec {
                 context: "encoding video".to_owned(),
                 reason: "the output has no video track".to_owned(),
             })
     }
 
-    /// Encodes one frame already converted to the output's color tags.
-    pub fn push_yuv420p(&mut self, yuv: &Yuv420p) -> Result<(), MediaError> {
+    /// Encodes one frame already packed in the track's sample layout.
+    pub fn push_planes(&mut self, planes: &Planes) -> Result<(), MediaError> {
         let Some(track) = self.video.as_mut() else {
             return Err(MediaError::Codec {
                 context: "encoding video".to_owned(),
                 reason: "the output has no video track".to_owned(),
             });
         };
-        let mut out = frame::Video::new(Pixel::YUV420P, yuv.width, yuv.height);
-        let strides = [out.stride(0), out.stride(1), out.stride(2)];
-        copy_plane(
-            out.data_mut(0),
-            strides[0],
-            &yuv.y,
-            yuv.width as usize,
-            yuv.height as usize,
-        );
-        let (cw, ch) = (yuv.chroma_width() as usize, yuv.chroma_height() as usize);
-        copy_plane(out.data_mut(1), strides[1], &yuv.cb, cw, ch);
-        copy_plane(out.data_mut(2), strides[2], &yuv.cr, cw, ch);
+        if planes.format != track.format {
+            return Err(MediaError::Codec {
+                context: "encoding video".to_owned(),
+                reason: format!(
+                    "frame is {} but the track takes {}",
+                    planes.format.name(),
+                    track.format.name()
+                ),
+            });
+        }
+        let mut out = frame::Video::new(pixel_of(track.format), planes.width, planes.height);
+        for (i, plane) in planes.planes.iter().enumerate() {
+            let stride = out.stride(i);
+            let row_bytes = plane.width * planes.format.bytes_per_sample();
+            let dst = out.data_mut(i);
+            for row in 0..plane.height {
+                dst[row * stride..row * stride + row_bytes].copy_from_slice(
+                    &plane.data[row * plane.stride..row * plane.stride + row_bytes],
+                );
+            }
+        }
         let (space, range, primaries, transfer) = tags::to_codec_tags(track.settings.color);
         out.set_color_space(space);
         out.set_color_range(range);
@@ -491,7 +702,9 @@ impl Encoder {
             track.stream_index,
             track.time_base,
             1,
-        )
+        )?;
+        let time = Ratio::from_int(self.frame_index) / track.settings.fps;
+        self.subtitles.write_due(&mut self.octx, time)
     }
 
     /// Queues interleaved stereo samples at the configured sample rate.
@@ -503,6 +716,10 @@ impl Encoder {
         while track.pending.len() >= track.frame_size * 2 {
             let chunk: Vec<f32> = track.pending.drain(..track.frame_size * 2).collect();
             Self::send_audio_chunk(&mut self.octx, track, &chunk)?;
+        }
+        if self.video.is_none() {
+            let time = Ratio::new(track.next_pts, i64::from(track.encoder.rate()).max(1));
+            self.subtitles.write_due(&mut self.octx, time)?;
         }
         Ok(())
     }
@@ -604,22 +821,23 @@ impl Encoder {
                 1,
             )?;
         }
+        self.subtitles.finish(&mut self.octx)?;
         self.octx
             .write_trailer()
             .map_err(|e| open_error(&self.path, e))?;
         self.finished = true;
+        if self.image_sequence {
+            // Opening the output created an empty file named after the
+            // pattern itself; the frames went to the numbered files.
+            if std::fs::metadata(&self.path).is_ok_and(|m| m.len() == 0) {
+                let _ = std::fs::remove_file(&self.path);
+            }
+        }
         Ok(())
     }
 
     /// Number of frames pushed so far.
     pub fn frames_written(&self) -> u64 {
         self.frame_index as u64
-    }
-}
-
-fn copy_plane(dst: &mut [u8], stride: usize, src: &[u8], width: usize, height: usize) {
-    for row in 0..height {
-        dst[row * stride..row * stride + width]
-            .copy_from_slice(&src[row * width..(row + 1) * width]);
     }
 }

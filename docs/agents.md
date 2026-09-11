@@ -92,3 +92,7 @@ the deepest directory containing every input).
   typos surface at validation rather than as a silently wrong render.
 - **Long renders print progress on stderr** only in human mode; with
   `--format json` stderr stays quiet apart from library messages.
+- **Containers reject codecs they cannot hold** with a plain error rather
+  than a broken file; the table in [cli.md](cli.md#containers-and-codecs)
+  says what goes where. Image sequences need a `%04d`-style pattern in the
+  output path.

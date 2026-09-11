@@ -119,7 +119,7 @@ pub fn probe_assets(text: &str, root: &Path) -> ProbedAssets {
     out
 }
 
-pub use imp::{describe, probe, render, renderer};
+pub use imp::{describe, probe, read_subtitles, render, renderer};
 
 #[cfg(feature = "media")]
 mod imp {
@@ -201,7 +201,24 @@ mod imp {
                 if a.channels == 1 { "" } else { "s" }
             );
         }
+        for sub in &info.subtitles {
+            let _ = writeln!(
+                s,
+                "  subtitles: {}{}",
+                sub.codec,
+                sub.language
+                    .as_deref()
+                    .map(|l| format!(" ({l})"))
+                    .unwrap_or_default()
+            );
+        }
         s
+    }
+
+    /// Reads the cues of the `nth` subtitle stream of a file.
+    pub fn read_subtitles(path: &Path, nth: usize) -> Result<Vec<geneva_media::subtitles::Cue>> {
+        geneva_media::read_subtitles(path, nth)
+            .with_context(|| format!("reading subtitles from {}", path.display()))
     }
 
     /// Renders every frame of `comp` to `output`, mixing audio unless disabled.
@@ -219,11 +236,20 @@ mod imp {
                     RenderError::Asset {
             id: output.display().to_string(),
             reason:
-                "unknown container; use .mp4, .mov, .mkv, .webm, .m4a, .ogg, .flac or .wav or set output.encode.container"
+                "unknown container; use .mp4, .mov, .mkv, .webm, .mxf, .m4a, .ogg, .flac, .wav, .mp3, an image pattern such as frames/%04d.png, or set output.encode.container"
                     .to_owned(),
         }
                 })?;
-        let (default_video, default_audio) = geneva_media::default_codecs(container);
+        let (mut default_video, default_audio) = geneva_media::default_codecs(container);
+        if container == geneva_timeline::schema::Container::ImageSequence {
+            default_video = geneva_media::default_image_codec(output);
+            if !output.to_string_lossy().contains('%') {
+                return Err(RenderError::Asset {
+                    id: output.display().to_string(),
+                    reason: "an image sequence needs a numbered pattern in the output path, for example frames/%04d.png".to_owned(),
+                });
+            }
+        }
         let video = comp.encode.as_ref().and_then(|e| e.video.as_ref());
         let audio = comp.encode.as_ref().and_then(|e| e.audio.as_ref());
         let sample_rate = comp
@@ -231,7 +257,7 @@ mod imp {
             .as_ref()
             .and_then(|a| a.sample_rate)
             .unwrap_or(48000);
-        let audio_settings = if overrides.no_audio {
+        let audio_settings = if overrides.no_audio || container.is_video_only() {
             None
         } else {
             Some(AudioSettings {
@@ -257,6 +283,7 @@ mod imp {
                     .and_then(|v| v.hardware)
                     .unwrap_or(geneva_timeline::schema::HardwarePolicy::Auto),
                 color: comp.color,
+                profile: video.and_then(|v| v.profile),
             })
         };
         if video_settings.is_none() && audio_settings.is_none() {
@@ -265,10 +292,33 @@ mod imp {
                 reason: "an audio-only output with audio disabled has nothing to write".to_owned(),
             });
         }
+        let mut subtitles = Vec::new();
+        for track in &comp.subtitles {
+            let Some(asset) = comp.assets.get(&track.asset) else {
+                continue;
+            };
+            let path = root.join(&asset.src);
+            let text = std::fs::read_to_string(&path).map_err(|e| RenderError::Asset {
+                id: track.asset.clone(),
+                reason: format!("{}: {e}", path.display()),
+            })?;
+            let mut cues =
+                geneva_media::subtitles::parse(&text).map_err(|e| RenderError::Asset {
+                    id: track.asset.clone(),
+                    reason: e.to_string(),
+                })?;
+            geneva_media::subtitles::shift(&mut cues, track.offset);
+            subtitles.push(geneva_media::SubtitleSettings {
+                language: track.language.clone(),
+                title: track.title.clone(),
+                cues,
+            });
+        }
         let settings = EncodeSettings {
             video: video_settings,
             container: Some(container),
             audio: audio_settings,
+            subtitles,
         };
         let has_audio = settings.audio.is_some();
         let media_err = |e: geneva_media::MediaError| RenderError::Asset {
@@ -292,7 +342,8 @@ mod imp {
                 }
             }
             if let Some(plan) = plan {
-                let report = geneva_media::stream_copy(&plan, output).map_err(media_err)?;
+                let report = geneva_media::stream_copy(&plan, output, &settings.subtitles)
+                    .map_err(media_err)?;
                 let mut notes = vec![plan.reason.clone()];
                 notes.extend(report.notes());
                 return Ok(RenderStats {
@@ -307,10 +358,13 @@ mod imp {
         let has_video = settings.video.is_some();
         // When the picture is the source's own, decoded frames skip the
         // compositing pipeline.
-        let mut direct = if has_video {
-            geneva_media::DirectSource::open(comp, root).map_err(media_err)?
-        } else {
-            None
+        let mut direct = match &settings.video {
+            Some(v) => {
+                let format = geneva_media::plane_format_for(v.codec, v.profile);
+                let tags = geneva_media::output_tags_for(v.codec, v.color);
+                geneva_media::DirectSource::open(comp, root, format, tags).map_err(media_err)?
+            }
+            None => None,
         };
         let mut notes = Vec::new();
         if let Some(d) = &direct {
@@ -321,16 +375,16 @@ mod imp {
         let total = if has_video { comp.frame_count() } else { 0 };
         // Frames are rendered and converted here while the encoder runs on
         // its own thread, a few frames behind.
-        let color = if has_video {
-            Some(encoder.video_color().map_err(media_err)?)
+        let video_format = if has_video {
+            Some(encoder.video_format().map_err(media_err)?)
         } else {
             None
         };
-        let (tx, rx) = std::sync::mpsc::sync_channel::<geneva_media::convert::Yuv420p>(4);
+        let (tx, rx) = std::sync::mpsc::sync_channel::<geneva_media::convert::Planes>(4);
         let worker = std::thread::spawn(move || -> Result<Encoder, geneva_media::MediaError> {
             let mut encoder = encoder;
-            for yuv in rx {
-                encoder.push_yuv420p(&yuv)?;
+            for planes in rx {
+                encoder.push_planes(&planes)?;
             }
             Ok(encoder)
         });
@@ -338,9 +392,9 @@ mod imp {
         let mut frame = geneva_render::Frame::new(0, 0, geneva_color::Color::BLACK);
         for n in 0..total {
             let t = comp.frame_time(n);
-            let yuv = if let Some(d) = direct.as_mut() {
+            let planes = if let Some(d) = direct.as_mut() {
                 match d.frame(t) {
-                    Ok(yuv) => yuv,
+                    Ok(planes) => planes,
                     Err(e) => {
                         render_error = Some(media_err(e));
                         break;
@@ -351,12 +405,10 @@ mod imp {
                     render_error = Some(e);
                     break;
                 }
-                geneva_media::convert::frame_to_yuv420p(
-                    &frame,
-                    color.expect("video output has color tags"),
-                )
+                let (color, format) = video_format.expect("video output has a format");
+                geneva_media::convert::frame_to_planes(&frame, color, format)
             };
-            if tx.send(yuv).is_err() {
+            if tx.send(planes).is_err() {
                 // The encoder stopped; its error is reported below.
                 break;
             }
@@ -418,6 +470,10 @@ mod imp {
 
     pub fn describe(_: &Path, _: &geneva_media::MediaInfo) -> String {
         String::new()
+    }
+
+    pub fn read_subtitles(_: &Path, _: usize) -> Result<Vec<geneva_media::subtitles::Cue>> {
+        Err(unavailable())
     }
 
     pub fn render(

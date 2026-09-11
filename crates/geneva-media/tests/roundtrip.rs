@@ -103,8 +103,10 @@ fn encoded_solid_color_survives_the_round_trip() {
             preset: Some("veryfast".to_owned()),
             hardware: HardwarePolicy::Never,
             color: ResolvedTags::SDR_VIDEO,
+            profile: None,
         }),
         container: None,
+        subtitles: Vec::new(),
         audio: Some(AudioSettings {
             codec: AudioCodec::Aac,
             bitrate_kbps: 96,
@@ -196,8 +198,10 @@ fn audio_lands_at_its_timeline_position_in_the_output_file() {
             preset: Some("ultrafast".to_owned()),
             hardware: HardwarePolicy::Never,
             color: ResolvedTags::SDR_VIDEO,
+            profile: None,
         }),
         container: None,
+        subtitles: Vec::new(),
         audio: Some(AudioSettings {
             codec: AudioCodec::Aac,
             bitrate_kbps: 96,
@@ -247,7 +251,7 @@ fn stream_copy_trims_at_keyframes_and_joins_compatible_sources() {
         .expect("copyable");
     assert_eq!(plan.audio.len(), 1);
     let out = dir.path().join("cut.mp4");
-    let report = stream_copy(&plan, &out).unwrap();
+    let report = stream_copy(&plan, &out, &[]).unwrap();
     // Keyframes every 12 frames at 25 fps: the cut moves back to 0.48 s.
     assert_eq!(report.segments[0].1, Ratio::new(12, 25));
     assert!(!report.notes().is_empty());
@@ -278,7 +282,7 @@ fn stream_copy_trims_at_keyframes_and_joins_compatible_sources() {
         .expect("copyable");
     assert_eq!(plan.segments.len(), 2);
     let out = dir.path().join("joined.mp4");
-    let report = stream_copy(&plan, &out).unwrap();
+    let report = stream_copy(&plan, &out, &[]).unwrap();
     assert_eq!(report.video_packets, 100);
     let info = probe(&out).unwrap();
     assert_eq!(info.video.unwrap().frames, Some(100));
@@ -375,6 +379,7 @@ fn audio_only_outputs_round_trip_through_wav() {
     let settings = EncodeSettings {
         video: None,
         container: None,
+        subtitles: Vec::new(),
         audio: Some(AudioSettings {
             codec: AudioCodec::Pcm,
             bitrate_kbps: 0,
@@ -402,7 +407,8 @@ fn audio_only_outputs_round_trip_through_wav() {
 
 #[test]
 fn direct_frames_match_the_reference_renderer() {
-    use geneva_media::{DirectSource, MediaAssets, convert::frame_to_yuv420p};
+    use geneva_media::convert::{PlaneFormat, frame_to_planes};
+    use geneva_media::{DirectSource, MediaAssets};
     use geneva_render::{CpuRenderer, Renderer};
 
     let root = clip().parent().unwrap().to_path_buf();
@@ -419,21 +425,26 @@ fn direct_frames_match_the_reference_renderer() {
         )
     };
     let comp = load(&doc("")).composition.unwrap();
-    let mut direct = DirectSource::open(&comp, &root)
+    let mut direct = DirectSource::open(&comp, &root, PlaneFormat::Yuv420p8, comp.color)
         .unwrap()
         .expect("a plain cut qualifies");
     let mut renderer = CpuRenderer::new(MediaAssets::new(root.clone()));
     for n in [0u64, 7, 24] {
         let t = comp.frame_time(n);
         let fast = direct.frame(t).unwrap();
-        let slow = frame_to_yuv420p(&renderer.render_frame(&comp, t).unwrap(), comp.color);
-        assert_eq!(fast.y.len(), slow.y.len());
+        let slow = frame_to_planes(
+            &renderer.render_frame(&comp, t).unwrap(),
+            comp.color,
+            PlaneFormat::Yuv420p8,
+        );
+        let (fast, slow) = (&fast.planes[0].data, &slow.planes[0].data);
+        assert_eq!(fast.len(), slow.len());
         // The reference path resamples chroma up and back down through
         // linear light, which moves luma at hard edges in both directions;
         // the two must agree closely on average and show no bias.
-        let n_px = fast.y.len() as f64;
+        let n_px = fast.len() as f64;
         let (mut abs, mut signed) = (0.0f64, 0.0f64);
-        for (a, b) in fast.y.iter().zip(&slow.y) {
+        for (a, b) in fast.iter().zip(slow.iter()) {
             let d = f64::from(*a) - f64::from(*b);
             abs += d.abs();
             signed += d;
@@ -445,5 +456,163 @@ fn direct_frames_match_the_reference_renderer() {
 
     // Anything that changes the picture disqualifies the direct path.
     let comp = load(&doc(r#", "opacity": 0.5"#)).composition.unwrap();
-    assert!(DirectSource::open(&comp, &root).unwrap().is_none());
+    assert!(
+        DirectSource::open(&comp, &root, PlaneFormat::Yuv420p8, comp.color)
+            .unwrap()
+            .is_none()
+    );
+}
+
+fn solid_settings(
+    codec: VideoCodec,
+    profile: Option<geneva_timeline::schema::VideoProfile>,
+    width: u32,
+    height: u32,
+) -> EncodeSettings {
+    EncodeSettings {
+        video: Some(VideoSettings {
+            width,
+            height,
+            fps: Ratio::from_int(25),
+            codec,
+            crf: None,
+            preset: None,
+            hardware: HardwarePolicy::Never,
+            color: ResolvedTags::SDR_VIDEO,
+            profile,
+        }),
+        container: None,
+        subtitles: Vec::new(),
+        audio: None,
+    }
+}
+
+#[test]
+fn intermediate_codecs_keep_a_solid_color_through_ten_bit_layouts() {
+    use geneva_timeline::schema::VideoProfile;
+    let dir = tempfile::tempdir().unwrap();
+    let color = Color::from_rgba8(255, 136, 0, 255);
+    for (name, codec, profile, w, h) in [
+        ("prores.mov", VideoCodec::Prores, None, 320, 180),
+        (
+            "prores4444.mov",
+            VideoCodec::Prores,
+            Some(VideoProfile::P4444),
+            320,
+            180,
+        ),
+        ("dnxhr.mxf", VideoCodec::Dnxhd, None, 256, 144),
+        (
+            "dnxhrx.mov",
+            VideoCodec::Dnxhd,
+            Some(VideoProfile::DnxhrHqx),
+            256,
+            144,
+        ),
+        ("png.mov", VideoCodec::Png, None, 64, 64),
+        ("mjpeg.mkv", VideoCodec::Mjpeg, None, 64, 64),
+    ] {
+        let out = dir.path().join(name);
+        let mut enc = Encoder::new(&out, solid_settings(codec, profile, w, h)).unwrap();
+        let frame = Frame::new(w, h, color);
+        for _ in 0..5 {
+            enc.push_frame(&frame).unwrap();
+        }
+        enc.finish().unwrap();
+        let mut reader = VideoReader::open(&out, ColorTags::default()).unwrap();
+        let px = reader.frame_at(Ratio::ZERO).unwrap().pixels[w as usize * 10 + 10].to_srgb8();
+        let tolerance = if codec == VideoCodec::Mjpeg { 6 } else { 3 };
+        for (got, want) in px[..3].iter().zip([255u8, 136, 0]) {
+            assert!(
+                got.abs_diff(want) <= tolerance,
+                "{name}: got {px:?}, wanted (255, 136, 0)"
+            );
+        }
+    }
+}
+
+#[test]
+fn every_audio_codec_round_trips_a_tone() {
+    let dir = tempfile::tempdir().unwrap();
+    let tone: Vec<f32> = (0..48000 * 2)
+        .map(|i| ((i / 2) as f32 * 440.0 * std::f32::consts::TAU / 48000.0).sin() * 0.5)
+        .collect();
+    for (name, codec) in [
+        ("tone.mp3", AudioCodec::Mp3),
+        ("tone.ogg", AudioCodec::Vorbis),
+        ("tone.m4a", AudioCodec::Alac),
+        ("tone.mkv", AudioCodec::Ac3),
+        ("tone.wav", AudioCodec::Pcm24),
+    ] {
+        let out = dir.path().join(name);
+        let settings = EncodeSettings {
+            video: None,
+            container: None,
+            subtitles: Vec::new(),
+            audio: Some(AudioSettings {
+                codec,
+                bitrate_kbps: 160,
+                sample_rate: 48000,
+            }),
+        };
+        let mut enc = Encoder::new(&out, settings).unwrap();
+        enc.push_audio(&tone).unwrap();
+        enc.finish().unwrap();
+        let mut reader = AudioReader::open(&out).unwrap();
+        let back = reader
+            .read(Ratio::new(1, 4), Ratio::new(1, 2), 48000)
+            .unwrap();
+        let rms_out = rms(&back);
+        assert!(
+            (rms_out - 0.3535).abs() < 0.05,
+            "{name}: rms {rms_out} after {codec:?}"
+        );
+    }
+}
+
+#[test]
+fn subtitle_tracks_are_written_as_streams_and_read_back() {
+    use geneva_media::SubtitleSettings;
+    use geneva_media::subtitles::{Cue, parse};
+
+    let dir = tempfile::tempdir().unwrap();
+    let cues = parse("1\n00:00:00,200 --> 00:00:00,900\nHello <i>there</i>\n\n2\n00:00:01,000 --> 00:00:01,800\nSecond\nline\n").unwrap();
+    for (name, keeps_tags) in [("subs.mp4", false), ("subs.mkv", true), ("subs.webm", true)] {
+        let out = dir.path().join(name);
+        let codec = if name.ends_with("webm") {
+            VideoCodec::Vp9
+        } else {
+            VideoCodec::H264
+        };
+        let mut settings = solid_settings(codec, None, 64, 64);
+        settings.subtitles = vec![SubtitleSettings {
+            language: Some("en".to_owned()),
+            title: None,
+            cues: cues.clone(),
+        }];
+        let mut enc = Encoder::new(&out, settings).unwrap();
+        let frame = Frame::new(64, 64, Color::BLACK);
+        for _ in 0..50 {
+            enc.push_frame(&frame).unwrap();
+        }
+        enc.finish().unwrap();
+
+        let info = probe(&out).unwrap();
+        assert_eq!(info.subtitles.len(), 1, "{name}");
+        assert_eq!(info.subtitles[0].language.as_deref(), Some("eng"), "{name}");
+        let back = geneva_media::read_subtitles(&out, 0).unwrap();
+        let expected: Vec<Cue> = cues
+            .iter()
+            .map(|c| Cue {
+                start: c.start,
+                end: c.end,
+                text: if keeps_tags {
+                    c.text.clone()
+                } else {
+                    geneva_media::subtitles::strip_tags(&c.text)
+                },
+            })
+            .collect();
+        assert_eq!(back, expected, "{name}");
+    }
 }

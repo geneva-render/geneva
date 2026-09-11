@@ -15,6 +15,9 @@ binary distribution.
 | SVT-AV1 | AV1 encoding | BSD-2-Clause-Patent |
 | dav1d | AV1 decoding | BSD-2-Clause |
 | Opus | Opus encoding and decoding | BSD-3-Clause |
+| libvorbis, libogg | Vorbis encoding | BSD-3-Clause |
+| LAME | MP3 encoding | GNU LGPL 2.0 or later (`lame.txt` in the binary distribution) |
+| zlib | PNG compression | zlib license (system library) |
 | nv-codec-headers | interface to NVIDIA hardware encoders (Linux) | MIT |
 
 The LGPL-licensed libraries are statically linked. Their complete source,

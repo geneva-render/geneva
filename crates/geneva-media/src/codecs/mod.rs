@@ -6,6 +6,7 @@ mod direct;
 mod encode;
 mod ffi;
 mod probe;
+mod subtitle_streams;
 mod tags;
 
 use std::path::Path;
@@ -16,9 +17,14 @@ pub use copy::{CopyPlan, CopyReport, CopySegment, plan_stream_copy, stream_copy}
 pub use decode::{AudioReader, VideoReader};
 pub use direct::DirectSource;
 pub use encode::{
-    AudioSettings, EncodeSettings, Encoder, VideoSettings, container_for, default_codecs,
+    AudioSettings, EncodeSettings, Encoder, VideoSettings, container_accepts_audio,
+    container_accepts_video, container_for, default_codecs, default_image_codec, output_tags_for,
+    plane_format_for,
 };
 pub use probe::probe;
+pub use subtitle_streams::{
+    SubtitleSettings, SubtitleStreamInfo, read_subtitles, subtitle_streams,
+};
 
 /// Initializes the libraries once. Safe to call repeatedly.
 fn init() {

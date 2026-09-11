@@ -40,6 +40,9 @@ pub struct Timeline {
     /// Audio-only tracks, mixed together with the audio of video clips.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub audio: Vec<AudioTrack>,
+    /// Subtitle tracks written to the output as text streams.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subtitles: Vec<SubtitleTrack>,
 }
 
 /// A reusable composition: its own frame, its own layers, rendered as a
@@ -127,20 +130,35 @@ pub enum Container {
     Mkv,
     /// WebM.
     Webm,
+    /// MXF (Material Exchange Format), for broadcast delivery.
+    Mxf,
     /// MPEG-4 audio only (AAC).
     M4a,
-    /// Ogg audio only (Opus).
+    /// Ogg audio only (Opus or Vorbis).
     Ogg,
     /// FLAC audio only, lossless.
     Flac,
     /// WAV audio only, uncompressed.
     Wav,
+    /// MP3 audio only.
+    Mp3,
+    /// One image file per frame. The output path is a pattern such as
+    /// `frames/%04d.png`; the extension picks PNG or JPEG.
+    ImageSequence,
 }
 
 impl Container {
     /// Whether the container holds audio only.
     pub fn is_audio_only(self) -> bool {
-        matches!(self, Self::M4a | Self::Ogg | Self::Flac | Self::Wav)
+        matches!(
+            self,
+            Self::M4a | Self::Ogg | Self::Flac | Self::Wav | Self::Mp3
+        )
+    }
+
+    /// Whether the container holds video only.
+    pub fn is_video_only(self) -> bool {
+        matches!(self, Self::ImageSequence)
     }
 }
 
@@ -161,6 +179,10 @@ pub struct VideoEncode {
     /// Hardware encoder policy. Defaults to "auto".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hardware: Option<HardwarePolicy>,
+    /// Codec profile, for prores and dnxhd. Defaults to "hq" for prores
+    /// and "dnxhr-hq" for dnxhd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<VideoProfile>,
 }
 
 /// Video codec.
@@ -175,6 +197,75 @@ pub enum VideoCodec {
     Vp9,
     /// AV1.
     Av1,
+    /// Apple ProRes, 10-bit 4:2:2 (4:4:4 for the 4444 profiles).
+    Prores,
+    /// Avid DNxHD / DNxHR, 8-bit or 10-bit 4:2:2 by profile.
+    Dnxhd,
+    /// PNG frames, lossless RGBA.
+    Png,
+    /// Motion JPEG.
+    Mjpeg,
+}
+
+/// Profiles of the intermediate codecs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum VideoProfile {
+    /// ProRes 422 Proxy.
+    Proxy,
+    /// ProRes 422 LT.
+    Lt,
+    /// ProRes 422.
+    Standard,
+    /// ProRes 422 HQ.
+    Hq,
+    /// ProRes 4444.
+    #[serde(rename = "4444")]
+    P4444,
+    /// ProRes 4444 XQ.
+    #[serde(rename = "4444-xq")]
+    P4444Xq,
+    /// DNxHR LB (low bandwidth, 8-bit 4:2:2).
+    DnxhrLb,
+    /// DNxHR SQ (standard quality, 8-bit 4:2:2).
+    DnxhrSq,
+    /// DNxHR HQ (high quality, 8-bit 4:2:2).
+    DnxhrHq,
+    /// DNxHR HQX (10-bit 4:2:2).
+    DnxhrHqx,
+    /// DNxHR 444 (10-bit 4:4:4).
+    Dnxhr444,
+}
+
+impl VideoProfile {
+    /// The codec a profile belongs to.
+    pub fn codec(self) -> VideoCodec {
+        match self {
+            Self::Proxy | Self::Lt | Self::Standard | Self::Hq | Self::P4444 | Self::P4444Xq => {
+                VideoCodec::Prores
+            }
+            Self::DnxhrLb | Self::DnxhrSq | Self::DnxhrHq | Self::DnxhrHqx | Self::Dnxhr444 => {
+                VideoCodec::Dnxhd
+            }
+        }
+    }
+
+    /// The name the encoder knows the profile by.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Proxy => "proxy",
+            Self::Lt => "lt",
+            Self::Standard => "standard",
+            Self::Hq => "hq",
+            Self::P4444 => "4444",
+            Self::P4444Xq => "4444xq",
+            Self::DnxhrLb => "dnxhr_lb",
+            Self::DnxhrSq => "dnxhr_sq",
+            Self::DnxhrHq => "dnxhr_hq",
+            Self::DnxhrHqx => "dnxhr_hqx",
+            Self::Dnxhr444 => "dnxhr_444",
+        }
+    }
 }
 
 /// Whether to use a hardware encoder.
@@ -214,6 +305,16 @@ pub enum AudioCodec {
     Flac,
     /// 16-bit PCM, uncompressed.
     Pcm,
+    /// 24-bit PCM, uncompressed.
+    Pcm24,
+    /// MP3.
+    Mp3,
+    /// Vorbis.
+    Vorbis,
+    /// Apple Lossless.
+    Alac,
+    /// Dolby Digital (AC-3).
+    Ac3,
 }
 
 /// A media file referenced by the composition.
@@ -243,16 +344,19 @@ pub enum AssetKind {
     Audio,
     /// A font file (TrueType or OpenType).
     Font,
+    /// A subtitle file (SubRip `.srt` or WebVTT `.vtt`).
+    Subtitle,
 }
 
 impl AssetKind {
     /// Guesses the kind from a file extension.
     pub fn from_extension(ext: &str) -> Option<Self> {
         match ext.to_ascii_lowercase().as_str() {
-            "mp4" | "mov" | "mkv" | "webm" | "m4v" => Some(Self::Video),
+            "mp4" | "mov" | "mkv" | "webm" | "m4v" | "mxf" | "ts" | "avi" => Some(Self::Video),
             "png" | "jpg" | "jpeg" | "webp" | "bmp" | "gif" => Some(Self::Image),
-            "wav" | "mp3" | "aac" | "m4a" | "flac" | "ogg" | "opus" => Some(Self::Audio),
+            "wav" | "mp3" | "aac" | "m4a" | "flac" | "ogg" | "opus" | "oga" => Some(Self::Audio),
             "ttf" | "otf" | "ttc" => Some(Self::Font),
+            "srt" | "vtt" => Some(Self::Subtitle),
             _ => None,
         }
     }
@@ -264,6 +368,7 @@ impl AssetKind {
             Self::Image => "image",
             Self::Audio => "audio",
             Self::Font => "font",
+            Self::Subtitle => "subtitle",
         }
     }
 }
@@ -608,6 +713,31 @@ pub struct AudioTrack {
     /// Clips in time order. A clip without "start" begins where the
     /// previous clip ends.
     pub clips: Vec<AudioClip>,
+}
+
+/// A subtitle track: one subtitle file written to the output as a text
+/// stream, for players to show or hide.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SubtitleTrack {
+    /// Optional identifier used in diagnostics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Set to false to leave the track out without removing it.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// The subtitle asset.
+    pub asset: String,
+    /// Language as a BCP 47 or ISO 639 code, for example "en" or "pt-BR".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// Track title shown by players, for example "English (CC)".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Shifts every cue by this much on the output timeline. Defaults to
+    /// 0; negative values move cues earlier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<Time>,
 }
 
 /// A clip on an audio track.

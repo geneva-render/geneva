@@ -18,6 +18,7 @@ pub mod convert;
 mod info;
 #[cfg(feature = "media")]
 pub mod mix;
+pub mod subtitles;
 
 use std::path::PathBuf;
 
@@ -28,10 +29,12 @@ pub use assets::MediaAssets;
 #[cfg(feature = "media")]
 pub use codecs::{
     AudioReader, AudioSettings, CopyPlan, CopyReport, CopySegment, DirectSource, EncodeSettings,
-    Encoder, VideoReader, VideoSettings, container_for, default_codecs, plan_stream_copy, probe,
-    stream_copy,
+    Encoder, SubtitleSettings, SubtitleStreamInfo, VideoReader, VideoSettings,
+    container_accepts_audio, container_accepts_video, container_for, default_codecs,
+    default_image_codec, output_tags_for, plan_stream_copy, plane_format_for, probe,
+    read_subtitles, stream_copy, subtitle_streams,
 };
-pub use info::{AudioInfo, MediaInfo, VideoInfo};
+pub use info::{AudioInfo, MediaInfo, SubtitleInfo, VideoInfo};
 
 /// Errors from reading or writing media.
 #[derive(Debug, Error)]

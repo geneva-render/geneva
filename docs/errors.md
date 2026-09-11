@@ -77,6 +77,7 @@ result is not what was intended. Notes are informational.
 | E405 | A text source has neither `text` nor `words`. |
 | E411 | Words are out of order, overlapping, or have an end not after their start. |
 | E420 | The output color tags describe HDR, which is not supported. |
+| E421 | `encode.video.profile` names a profile of another codec, or is set without a codec. |
 | W401 | Output width or height is odd; most codecs need even dimensions. |
 
 ## Rendering (E500–E599)

@@ -78,7 +78,8 @@ All verbs take `-o FILE` for the output and these encoding options:
 | Option | Effect |
 | --- | --- |
 | `--crf N`, `--preset NAME` | As for `render`. Setting either forces a re-encode. |
-| `--codec h264\|h265\|vp9\|av1` | Video codec. Defaults to the container's usual one. |
+| `--codec h264\|h265\|vp9\|av1\|prores\|dnxhd\|png\|mjpeg` | Video codec. Defaults to the container's usual one. |
+| `--profile NAME` | Codec profile: `proxy`, `lt`, `standard`, `hq`, `4444`, `4444-xq` for ProRes; `dnxhr-lb`, `dnxhr-sq`, `dnxhr-hq`, `dnxhr-hqx`, `dnxhr-444` for DNxHR. Implies the codec. |
 | `--no-audio` | Write no audio track. |
 | `--exact` | Always decode and re-encode. |
 | `--show-timeline` | Print the timeline the verb built instead of rendering it. Asset paths in it are relative to the directory printed on stderr. |
@@ -155,19 +156,48 @@ geneva audio talk.mp4 -o dubbed.mp4 --replace voice.wav
 geneva audio talk.mp4 -o scored.mp4 --mix music.mp3 --gain -12
 ```
 
+### `geneva subtitles <input> -o FILE --add FILE... [--language CODE...] | --extract [--track N]`
+
+| Operation | Output |
+| --- | --- |
+| `--add FILE` (repeatable) | The input with each subtitle file (`.srt` or `.vtt`) attached as a text stream; `--language` values pair with the files in order. The picture and sound are copied when nothing else changes. |
+| `--extract` | The input's subtitle stream number `--track` (0 by default) written as `.srt` or `.vtt`, by the output's extension. Only text subtitles can be extracted. |
+
+```sh
+geneva subtitles talk.mp4 -o talk-subbed.mkv --add en.srt --add fr.srt --language en --language fr
+geneva subtitles talk-subbed.mkv -o fr.vtt --extract --track 1
+```
+
 ## Containers and codecs
 
-| Extension | Container | Default video | Default audio |
-| --- | --- | --- | --- |
-| `.mp4`, `.m4v` | MP4 | H.264 | AAC |
-| `.mov` | QuickTime | H.264 | AAC |
-| `.mkv` | Matroska | H.264 | AAC |
-| `.webm` | WebM | VP9 | Opus |
-| `.m4a` | MP4, audio only | | AAC |
-| `.ogg`, `.oga`, `.opus` | Ogg, audio only | | Opus |
-| `.flac` | FLAC, audio only | | FLAC |
-| `.wav` | WAV, audio only | | 16-bit PCM |
+| Extension | Container | Video it holds | Audio it holds | Defaults |
+| --- | --- | --- | --- | --- |
+| `.mp4`, `.m4v` | MP4 | H.264, H.265, VP9, AV1, Motion JPEG | AAC, MP3, ALAC, AC-3, Opus, FLAC | H.264, AAC |
+| `.mov` | QuickTime | all | AAC, MP3, ALAC, AC-3, PCM, FLAC | H.264, AAC |
+| `.mkv` | Matroska | all but PNG | all | H.264, AAC |
+| `.webm` | WebM | VP9, AV1 | Opus, Vorbis | VP9, Opus |
+| `.mxf` | MXF | DNxHR, ProRes, H.264 | PCM | DNxHR HQ, 24-bit PCM |
+| `.png`, `.jpg` with a `%04d`-style pattern | image sequence | PNG, Motion JPEG | none | by extension |
+| `.m4a` | MP4, audio only | | AAC, MP3, ALAC, AC-3 | AAC |
+| `.ogg`, `.oga`, `.opus` | Ogg, audio only | | Opus, Vorbis, FLAC | Opus |
+| `.flac` | FLAC, audio only | | FLAC | FLAC |
+| `.wav` | WAV, audio only | | PCM | 16-bit PCM |
+| `.mp3` | MP3, audio only | | MP3 | MP3 |
 
-H.264 is encoded in software, or by a hardware encoder when one is present
-and the timeline's `encode.video.hardware` policy allows it. H.265 needs a
-hardware encoder. VP9 and AV1 are encoded in software.
+Subtitle streams go into MP4, MOV, MKV and WebM.
+
+Video codecs and their sample layouts:
+
+| Codec | Layout | Notes |
+| --- | --- | --- |
+| H.264 | 8-bit 4:2:0 | Software encoder, or a hardware encoder when present and `encode.video.hardware` allows it. |
+| H.265 | 8-bit 4:2:0 | Hardware encoders only. |
+| VP9, AV1 | 8-bit 4:2:0 | Software. |
+| ProRes | 10-bit 4:2:2; 4:4:4 for `4444` and `4444-xq` | Profiles `proxy`, `lt`, `standard`, `hq` (default), `4444`, `4444-xq`. |
+| DNxHR | 8-bit 4:2:2; 10-bit for `dnxhr-hqx`; 10-bit 4:4:4 for `dnxhr-444` | Profiles `dnxhr-lb`, `dnxhr-sq`, `dnxhr-hq` (default), `dnxhr-hqx`, `dnxhr-444`. Needs at least 256×120. |
+| PNG | 8-bit RGBA | Lossless; keeps transparency. |
+| Motion JPEG | 8-bit 4:2:0, full range | `--crf` maps onto JPEG quality (0 best). |
+
+Reading is wider than writing: sources may also be VP8, MPEG-2, MPEG-4
+part 2, DNxHD, raw video or GIF, with E-AC-3 audio, in MPEG-TS or AVI as
+well as the containers above.

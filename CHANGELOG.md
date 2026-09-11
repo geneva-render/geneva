@@ -5,6 +5,39 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## 0.1.1
+
+### Codecs and containers
+
+- ProRes (422 Proxy, LT, 422, HQ, 4444, 4444 XQ) and DNxHR (LB, SQ, HQ,
+  HQX, 444) video, chosen with `encode.video.profile` or `--profile`; the
+  encoder now packs 10-bit 4:2:2 and 4:4:4 as well as 8-bit layouts.
+- PNG and Motion JPEG video, and image sequences: an output path with a
+  numbered pattern such as `frames/%04d.png` writes one file per frame.
+- MP3, Vorbis, ALAC, AC-3 and 24-bit PCM audio; MP3 as an audio-only
+  container.
+- MXF, defaulting to DNxHR HQ with 24-bit PCM.
+
+### Subtitles
+
+- Subtitle assets (`.srt`, `.vtt`) and `subtitles` tracks in the timeline,
+  written as text streams (3GPP timed text in MP4 and MOV, SubRip in MKV,
+  WebVTT in WebM) with language and title.
+- `geneva subtitles --add` attaches subtitle files to a video, `--extract`
+  writes a subtitle stream out as SRT or WebVTT; `probe` lists subtitle
+  streams.
+
+### Fixes
+
+- Opus and Vorbis sources decoded short: the sample-rate converter's
+  output was sized from the first, shorter frame and every later frame was
+  capped to it.
+- A demuxer's transient "try again" was taken as the end of the stream.
+
+### Diagnostics
+
+- E421: a codec profile that does not belong to the chosen codec.
+
 ## 0.1.0
 
 First release.

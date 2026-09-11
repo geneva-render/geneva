@@ -6,7 +6,7 @@ use ffmpeg_next::util::format::Pixel;
 use geneva_timeline::Ratio;
 
 use super::{init, open_error, tags};
-use crate::{AudioInfo, MediaError, MediaInfo, VideoInfo};
+use crate::{AudioInfo, MediaError, MediaInfo, SubtitleInfo, VideoInfo};
 
 /// Converts a libav rational to an exact ratio, or `None` for zero.
 pub(super) fn ratio(r: ffmpeg_next::Rational) -> Option<Ratio> {
@@ -89,11 +89,22 @@ pub fn probe(path: &Path) -> Result<MediaInfo, MediaError> {
         })
     });
 
+    let subtitles = ictx
+        .streams()
+        .filter(|s| s.parameters().medium() == Type::Subtitle)
+        .map(|s| SubtitleInfo {
+            index: s.index(),
+            codec: format!("{:?}", s.parameters().id()).to_ascii_lowercase(),
+            language: s.metadata().get("language").map(str::to_owned),
+        })
+        .collect();
+
     Ok(MediaInfo {
         container,
         duration,
         video,
         audio,
+        subtitles,
     })
 }
 
