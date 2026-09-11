@@ -28,3 +28,10 @@ libraries can be modified and the program relinked as the LGPL provides.
 Rust crates used by Geneva are listed with their licenses by
 `cargo license` and are all MIT or Apache-2.0 licensed unless noted in
 their manifests.
+
+## Not included: x264
+
+The binaries contain no x264 code. When the system has an x264 library
+installed (a GPL-licensed package of the distribution or of Homebrew),
+geneva loads it at run time for software H.264 encoding; that copy is the
+system's own, under its own licence, and geneva runs without it.

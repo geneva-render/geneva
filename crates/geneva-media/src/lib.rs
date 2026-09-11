@@ -32,7 +32,7 @@ pub use codecs::{
     EncodeSettings, Encoder, Packet, SubtitleSettings, SubtitleStreamInfo, VideoReader,
     VideoSettings, container_accepts_audio, container_accepts_video, container_for, default_codecs,
     default_image_codec, output_tags_for, plan_stream_copy, plane_format_for, probe,
-    read_subtitles, stream_copy, subtitle_streams,
+    read_subtitles, stream_copy, subtitle_streams, system_x264, system_x264_error,
 };
 pub use info::{AudioInfo, MediaInfo, SubtitleInfo, VideoInfo};
 

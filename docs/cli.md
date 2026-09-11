@@ -198,7 +198,7 @@ Video codecs and their sample layouts:
 
 | Codec | Layout | Notes |
 | --- | --- | --- |
-| H.264 | 8-bit 4:2:0 | Software encoder, or a hardware encoder when present and `encode.video.hardware` allows it. |
+| H.264 | 8-bit 4:2:0 | A hardware encoder when present and `encode.video.hardware` allows it; otherwise the system's x264 when its library is installed (see the README), otherwise the bundled OpenH264. The notes of a render say which. |
 | H.265 | 8-bit 4:2:0 | Hardware encoders only. |
 | VP9, AV1 | 8-bit 4:2:0 | Software. |
 | ProRes | 10-bit 4:2:2; 4:4:4 for `4444` and `4444-xq` | Profiles `proxy`, `lt`, `standard`, `hq` (default), `4444`, `4444-xq`. |

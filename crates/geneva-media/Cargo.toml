@@ -12,7 +12,7 @@ default = ["media"]
 # Media I/O through the media libraries built by scripts/build-media-libs.sh
 # and linked statically. Without it the crate only offers the
 # hardware-independent conversions and types.
-media = ["dep:ffmpeg-next", "ffmpeg-next/static"]
+media = ["dep:ffmpeg-next", "ffmpeg-next/static", "dep:libloading"]
 
 [dependencies]
 geneva-anim = { workspace = true }
@@ -23,6 +23,7 @@ rayon = { workspace = true }
 ffmpeg-next = { workspace = true, optional = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+libloading = { version = "0.8.9", optional = true }
 
 [build-dependencies]
 geneva-media-link = { workspace = true }

@@ -8,6 +8,7 @@ mod ffi;
 mod probe;
 mod subtitle_streams;
 mod tags;
+mod x264;
 
 use std::path::Path;
 
@@ -27,6 +28,10 @@ pub use probe::probe;
 pub use subtitle_streams::{
     SubtitleSettings, SubtitleStreamInfo, read_subtitles, subtitle_streams,
 };
+/// The system's x264 library, when installed and loadable.
+pub use x264::library as system_x264;
+/// Why a system x264 that was found could not be used.
+pub use x264::load_error as system_x264_error;
 
 /// Initializes the libraries once. Safe to call repeatedly.
 fn init() {

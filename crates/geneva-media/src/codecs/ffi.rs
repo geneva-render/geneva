@@ -75,3 +75,48 @@ pub fn is_rgb(pixel: ffmpeg_next::util::format::Pixel) -> bool {
     let flags = unsafe { (*descriptor.as_ptr()).flags };
     flags & (1u64 << 5) != 0 // AV_PIX_FMT_FLAG_RGB
 }
+
+/// A codec context describing an 8-bit 4:2:0 H.264 stream produced
+/// outside the library (by the system's x264), with its parameter sets as
+/// extradata, for adding the stream to an output without an encoder.
+#[allow(unsafe_code)]
+pub fn h264_context(
+    width: u32,
+    height: u32,
+    extradata: &[u8],
+    tags: (
+        ffmpeg_next::color::Space,
+        ffmpeg_next::color::Range,
+        ffmpeg_next::color::Primaries,
+        ffmpeg_next::color::TransferCharacteristic,
+    ),
+) -> ffmpeg_next::codec::context::Context {
+    use ffmpeg_next::ffi;
+    let mut ctx = ffmpeg_next::codec::context::Context::new();
+    // SAFETY: `ctx` owns a freshly allocated `AVCodecContext`, which frees
+    // its extradata when it is dropped; the fields set are plain values,
+    // and the extradata is allocated by the library's own allocator with
+    // the padding decoders require.
+    unsafe {
+        let raw = &mut *ctx.as_mut_ptr();
+        raw.codec_type = ffi::AVMediaType::AVMEDIA_TYPE_VIDEO;
+        raw.codec_id = ffi::AVCodecID::AV_CODEC_ID_H264;
+        raw.width = width as i32;
+        raw.height = height as i32;
+        raw.pix_fmt = ffi::AVPixelFormat::AV_PIX_FMT_YUV420P;
+        raw.colorspace = tags.0.into();
+        raw.color_range = tags.1.into();
+        raw.color_primaries = tags.2.into();
+        raw.color_trc = tags.3.into();
+        if !extradata.is_empty() {
+            let padded = extradata.len() + ffi::AV_INPUT_BUFFER_PADDING_SIZE as usize;
+            let buf = ffi::av_mallocz(padded).cast::<u8>();
+            if !buf.is_null() {
+                std::ptr::copy_nonoverlapping(extradata.as_ptr(), buf, extradata.len());
+                raw.extradata = buf;
+                raw.extradata_size = extradata.len() as i32;
+            }
+        }
+    }
+    ctx
+}

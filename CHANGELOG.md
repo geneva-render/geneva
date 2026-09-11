@@ -5,6 +5,20 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## 0.1.8
+
+### Changes
+
+- Software H.264 uses the system's x264 when its library is installed
+  (`libx264.so.NNN` from the distribution, Homebrew's dylib on macOS),
+  ahead of the bundled OpenH264 and after any hardware encoder. Nothing of
+  x264 is in the binary; it is loaded at run time through the parts of
+  its interface that are the same across builds 155 to 175. The notes of
+  a render say which encoder was used. `GENEVA_X264=off` turns the lookup
+  off; a path names the library. On four cores, a 70 s SD resize: 5.7 s
+  and 5.1 MB with x264 against 6.5 s and 4.7 MB for ffmpeg's libx264,
+  where OpenH264 wrote 11 MB.
+
 ## 0.1.7
 
 ### Fixes

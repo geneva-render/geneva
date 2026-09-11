@@ -378,6 +378,9 @@ mod imp {
             notes.push(d.reason());
         }
         let encoder = Encoder::new(output, settings).map_err(media_err)?;
+        if let Some(note) = encoder.video_encoder_note() {
+            notes.push(note);
+        }
         let mut renderer = CpuRenderer::new(MediaAssets::new(root));
         let total = if has_video { comp.frame_count() } else { 0 };
         let video_format = if has_video {

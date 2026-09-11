@@ -12,6 +12,7 @@ use geneva_timeline::Ratio;
 use geneva_timeline::schema::{AudioCodec, Container, HardwarePolicy, VideoCodec, VideoProfile};
 
 use super::subtitle_streams::{SubtitleSettings, SubtitleWriter};
+use super::x264::{X264Encoder, X264Settings};
 use super::{codec_error, ffi, init, open_error, tags};
 use crate::MediaError;
 use crate::convert::{PlaneFormat, Planes, frame_to_planes};
@@ -445,7 +446,32 @@ fn open_video_track(
     }
     let mut opened = None;
     let mut last_error = None;
+    let mut x264_tried = false;
+    let mut x264_error = None;
     for name in &candidates {
+        // The system's x264, when installed, comes before the bundled
+        // software encoder and after any hardware encoder the policy
+        // allows.
+        if settings.codec == VideoCodec::H264 && name.starts_with("lib") && !x264_tried {
+            x264_tried = true;
+            let x264 = X264Settings {
+                width: settings.width,
+                height: settings.height,
+                fps,
+                crf: settings.crf.unwrap_or(23).clamp(0, 51),
+                preset: settings.preset.as_deref().unwrap_or("medium"),
+                color: settings.color,
+                global_header,
+            };
+            match X264Encoder::open(&x264) {
+                Ok(enc) => {
+                    opened = Some((VideoBackend::X264(enc), "libx264".to_owned()));
+                    break;
+                }
+                Err(MediaError::MissingEncoder { .. }) => {}
+                Err(e) => x264_error = Some(e.to_string()),
+            }
+        }
         let Some(vcodec) = ffmpeg_next::encoder::find_by_name(name) else {
             continue;
         };
@@ -462,13 +488,13 @@ fn open_video_track(
         }
         match result {
             Ok(enc) => {
-                opened = Some(enc);
+                opened = Some((VideoBackend::Lavc(enc), (*name).to_owned()));
                 break;
             }
             Err(e) => last_error = Some(e),
         }
     }
-    let encoder = match (opened, last_error) {
+    let (backend, name) = match (opened, last_error) {
         (Some(v), _) => v,
         (None, Some(e)) => return Err(e),
         (None, None) => {
@@ -477,15 +503,32 @@ fn open_video_track(
             });
         }
     };
-    let vcodec = encoder.codec().expect("opened encoder has a codec");
-    let mut stream = octx.add_stream(vcodec).map_err(|e| open_error(path, e))?;
+    let mut stream = match &backend {
+        VideoBackend::Lavc(encoder) => {
+            let vcodec = encoder.codec().expect("opened encoder has a codec");
+            let mut stream = octx.add_stream(vcodec).map_err(|e| open_error(path, e))?;
+            stream.set_parameters(encoder);
+            stream
+        }
+        VideoBackend::X264(encoder) => {
+            let ctx = ffi::h264_context(
+                settings.width,
+                settings.height,
+                encoder.extradata(),
+                tags::to_codec_tags(settings.color),
+            );
+            octx.add_stream_with(&ctx)
+                .map_err(|e| open_error(path, e))?
+        }
+    };
     let stream_index = stream.index();
     stream.set_time_base(time_base);
     stream.set_avg_frame_rate(fps);
     stream.set_rate(fps);
-    stream.set_parameters(&encoder);
     Ok(VideoTrack {
-        encoder,
+        backend,
+        name,
+        x264_error,
         stream_index,
         time_base,
         settings,
@@ -606,8 +649,20 @@ impl AudioEncoder {
     }
 }
 
+/// What encodes the video track.
+enum VideoBackend {
+    /// An encoder of the bundled libraries.
+    Lavc(codec::encoder::video::Encoder),
+    /// The system's x264, loaded at run time.
+    X264(X264Encoder),
+}
+
 struct VideoTrack {
-    encoder: codec::encoder::video::Encoder,
+    backend: VideoBackend,
+    /// Encoder implementation name, for the notes.
+    name: String,
+    /// Why the system's x264 was found but not used, if that happened.
+    x264_error: Option<String>,
     stream_index: usize,
     time_base: Rational,
     settings: VideoSettings,
@@ -789,35 +844,50 @@ impl Encoder {
                 ),
             });
         }
-        let mut out = frame::Video::new(pixel_of(track.format), planes.width, planes.height);
-        for (i, plane) in planes.planes.iter().enumerate() {
-            let stride = out.stride(i);
-            let row_bytes = plane.width * planes.format.bytes_per_sample();
-            let dst = out.data_mut(i);
-            for row in 0..plane.height {
-                dst[row * stride..row * stride + row_bytes].copy_from_slice(
-                    &plane.data[row * plane.stride..row * plane.stride + row_bytes],
-                );
+        let pts = self.frame_index;
+        self.frame_index += 1;
+        match &mut track.backend {
+            VideoBackend::Lavc(encoder) => {
+                let mut out =
+                    frame::Video::new(pixel_of(track.format), planes.width, planes.height);
+                for (i, plane) in planes.planes.iter().enumerate() {
+                    let stride = out.stride(i);
+                    let row_bytes = plane.width * planes.format.bytes_per_sample();
+                    let dst = out.data_mut(i);
+                    for row in 0..plane.height {
+                        dst[row * stride..row * stride + row_bytes].copy_from_slice(
+                            &plane.data[row * plane.stride..row * plane.stride + row_bytes],
+                        );
+                    }
+                }
+                let (space, range, primaries, transfer) = tags::to_codec_tags(track.settings.color);
+                out.set_color_space(space);
+                out.set_color_range(range);
+                out.set_color_primaries(primaries);
+                out.set_color_transfer_characteristic(transfer);
+                out.set_pts(Some(pts));
+                encoder
+                    .send_frame(&out)
+                    .map_err(|e| codec_error("encoding video", e))?;
+                Self::drain(
+                    &mut self.octx,
+                    encoder,
+                    track.stream_index,
+                    track.time_base,
+                    1,
+                )?;
+            }
+            VideoBackend::X264(encoder) => {
+                if let Some(frame) = encoder.encode(planes, pts)? {
+                    Self::write_x264_frame(
+                        &mut self.octx,
+                        track.stream_index,
+                        track.time_base,
+                        &frame,
+                    )?;
+                }
             }
         }
-        let (space, range, primaries, transfer) = tags::to_codec_tags(track.settings.color);
-        out.set_color_space(space);
-        out.set_color_range(range);
-        out.set_color_primaries(primaries);
-        out.set_color_transfer_characteristic(transfer);
-        out.set_pts(Some(self.frame_index));
-        self.frame_index += 1;
-        track
-            .encoder
-            .send_frame(&out)
-            .map_err(|e| codec_error("encoding video", e))?;
-        Self::drain(
-            &mut self.octx,
-            &mut track.encoder,
-            track.stream_index,
-            track.time_base,
-            1,
-        )?;
         let time = Ratio::from_int(self.frame_index) / track.settings.fps;
         self.subtitles.write_due(&mut self.octx, time)
     }
@@ -861,6 +931,51 @@ impl Encoder {
         Ok(())
     }
 
+    /// Writes one picture from the system's x264.
+    fn write_x264_frame(
+        octx: &mut ffmpeg_next::format::context::Output,
+        stream_index: usize,
+        time_base: Rational,
+        frame: &super::x264::EncodedFrame,
+    ) -> Result<(), MediaError> {
+        let mut packet = Packet::copy(&frame.data);
+        packet.set_stream(stream_index);
+        packet.set_pts(Some(frame.pts));
+        packet.set_dts(Some(frame.dts));
+        packet.set_duration(1);
+        if frame.keyframe {
+            packet.set_flags(codec::packet::Flags::KEY);
+        }
+        let stream_tb = octx
+            .stream(stream_index)
+            .expect("stream exists")
+            .time_base();
+        packet.rescale_ts(time_base, stream_tb);
+        packet
+            .write_interleaved(octx)
+            .map_err(|e| codec_error("writing packet", e))
+    }
+
+    /// A line about the video encoder in use, when it is worth telling:
+    /// which software H.264 encoder was picked, and that the system's
+    /// x264 would be preferred when installed.
+    pub fn video_encoder_note(&self) -> Option<String> {
+        let track = self.video.as_ref()?;
+        match &track.backend {
+            VideoBackend::X264(enc) => Some(format!(
+                "H.264 encoded with the system's x264 (build {})",
+                enc.build()
+            )),
+            VideoBackend::Lavc(_) if track.name == "libopenh264" => Some(match &track.x264_error {
+                Some(e) => format!(
+                    "H.264 encoded with the bundled OpenH264; the system's x264 was found but not used: {e}"
+                ),
+                None => "H.264 encoded with the bundled OpenH264; the system's x264 is used instead when its library is installed (see the README)".to_owned(),
+            }),
+            VideoBackend::Lavc(_) => None,
+        }
+    }
+
     fn drain(
         octx: &mut ffmpeg_next::format::context::Output,
         encoder: &mut codec::encoder::Encoder,
@@ -902,17 +1017,30 @@ impl Encoder {
             self.write_audio_packets(packets, time)?;
         }
         if let Some(mut track) = self.video.take() {
-            track
-                .encoder
-                .send_eof()
-                .map_err(|e| codec_error("flushing video", e))?;
-            Self::drain(
-                &mut self.octx,
-                &mut track.encoder,
-                track.stream_index,
-                track.time_base,
-                1,
-            )?;
+            match &mut track.backend {
+                VideoBackend::Lavc(encoder) => {
+                    encoder
+                        .send_eof()
+                        .map_err(|e| codec_error("flushing video", e))?;
+                    Self::drain(
+                        &mut self.octx,
+                        encoder,
+                        track.stream_index,
+                        track.time_base,
+                        1,
+                    )?;
+                }
+                VideoBackend::X264(encoder) => {
+                    while let Some(frame) = encoder.flush()? {
+                        Self::write_x264_frame(
+                            &mut self.octx,
+                            track.stream_index,
+                            track.time_base,
+                            &frame,
+                        )?;
+                    }
+                }
+            }
         }
         self.subtitles.finish(&mut self.octx)?;
         self.octx

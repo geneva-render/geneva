@@ -537,6 +537,43 @@ fn solid_settings(
 }
 
 #[test]
+fn system_x264_is_used_when_installed() {
+    let Some(lib) = geneva_media::system_x264() else {
+        eprintln!(
+            "no system x264 here; nothing to check ({:?})",
+            geneva_media::system_x264_error()
+        );
+        return;
+    };
+    eprintln!("system x264 build {} from {}", lib.build, lib.path);
+    let dir = tempfile::tempdir().unwrap();
+    let color = Color::from_rgba8(30, 160, 90, 255);
+    for name in ["x264.mp4", "x264.mkv", "x264.mov", "x264.mxf"] {
+        let out = dir.path().join(name);
+        let mut enc = Encoder::new(&out, solid_settings(VideoCodec::H264, None, 192, 108)).unwrap();
+        let note = enc.video_encoder_note().unwrap_or_default();
+        assert!(note.contains("system's x264 (build"), "{name}: {note}");
+        let frame = Frame::new(192, 108, color);
+        for _ in 0..30 {
+            enc.push_frame(&frame).unwrap();
+        }
+        enc.finish().unwrap();
+        let info = probe(&out).unwrap();
+        let v = info.video.unwrap();
+        assert_eq!(v.codec, "h264", "{name}");
+        assert_eq!((v.width, v.height), (192, 108), "{name}");
+        let mut reader = VideoReader::open(&out, ColorTags::default()).unwrap();
+        let px = reader.frame_at(Ratio::new(1, 2)).unwrap().pixels[192 * 54 + 96].to_srgb8();
+        for (got, want) in px[..3].iter().zip([30u8, 160, 90]) {
+            assert!(
+                got.abs_diff(want) <= 4,
+                "{name}: got {px:?}, wanted (30, 160, 90)"
+            );
+        }
+    }
+}
+
+#[test]
 fn intermediate_codecs_keep_a_solid_color_through_ten_bit_layouts() {
     use geneva_timeline::schema::VideoProfile;
     let dir = tempfile::tempdir().unwrap();

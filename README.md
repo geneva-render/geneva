@@ -69,9 +69,9 @@ texts; there is nothing else to install.
 
 ```sh
 # Pick the archive for your machine (adjust the version and the target)
-curl -fsSLO https://github.com/geneva-render/geneva/releases/download/v0.1.7/geneva-v0.1.7-aarch64-apple-darwin.tar.gz
-tar xzf geneva-v0.1.7-aarch64-apple-darwin.tar.gz
-sh geneva-v0.1.7-aarch64-apple-darwin/install.sh
+curl -fsSLO https://github.com/geneva-render/geneva/releases/download/v0.1.8/geneva-v0.1.8-aarch64-apple-darwin.tar.gz
+tar xzf geneva-v0.1.8-aarch64-apple-darwin.tar.gz
+sh geneva-v0.1.8-aarch64-apple-darwin/install.sh
 geneva --help
 ```
 
@@ -91,15 +91,30 @@ on a file you pass) and prints a table with the time each step took, next
 to the time ffmpeg takes for the same step when ffmpeg is installed:
 
 ```sh
-sh geneva-v0.1.7-aarch64-apple-darwin/check.sh            # built-in test clip
-sh geneva-v0.1.7-aarch64-apple-darwin/check.sh input.mp4  # your own file
+sh geneva-v0.1.8-aarch64-apple-darwin/check.sh            # built-in test clip
+sh geneva-v0.1.8-aarch64-apple-darwin/check.sh input.mp4  # your own file
 ```
 
 Linux binaries need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, RHEL 9
 and later). macOS binaries need macOS 12 or newer on Apple silicon; Intel
-Macs build from source. There are no other
-runtime requirements: codecs, container support and font shaping are built
-in.
+Macs build from source. There are no other runtime requirements: codecs,
+container support and font shaping are built in.
+
+One optional extra: software H.264 is encoded by the bundled OpenH264,
+which writes larger files than x264 at the same quality. geneva does not
+include x264 (it is GPL-licensed), but uses the system's copy when one is
+installed, and says so in the notes of each render. Install it before or
+after geneva, from your distribution or Homebrew:
+
+```sh
+sudo apt install libx264-164      # Debian 12, Ubuntu 24.04 (libx264-163 on Ubuntu 22.04)
+sudo dnf install x264-libs        # Fedora (RPM Fusion)
+brew install x264                 # macOS, for renders that ask for a software encoder
+```
+
+Hardware encoders (VideoToolbox on macOS, NVENC on Linux) still come
+first when present. `GENEVA_X264=off` turns the lookup off;
+`GENEVA_X264=/path/to/libx264.so` names a library file.
 
 A first look on a fresh machine:
 

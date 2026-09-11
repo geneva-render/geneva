@@ -141,8 +141,11 @@ The media libraries are built from pinned sources by
 `scripts/build-media-libs.sh` with only the demuxers, muxers, decoders and
 encoders Geneva supports, and linked statically. Every component is LGPL
 or BSD licensed; see `THIRD-PARTY-NOTICES.md`. Software H.264 encoding is
-OpenH264 at a constant quantizer; hardware encoders (NVIDIA on Linux,
-VideoToolbox on macOS) are included in the build for later use.
+OpenH264 at a constant quantizer, unless the system has an x264 library:
+that is loaded at run time (`codecs/x264.rs`, through the parts of its
+interface that have stayed the same across builds) and preferred, with
+nothing of x264 in the binary. Hardware encoders (NVIDIA on Linux,
+VideoToolbox on macOS) are tried first when the encode settings allow.
 
 Decoded frames are converted by the scaler to 16-bit 4:4:4 (or RGBA for
 R'G'B' sources) and then, in Rust, through range normalization, the
