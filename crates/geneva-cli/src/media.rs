@@ -222,6 +222,13 @@ mod imp {
     }
 
     /// Renders every frame of `comp` to `output`, mixing audio unless disabled.
+    /// What the render loop and the audio thread hand to the encoder
+    /// thread.
+    enum Msg {
+        Planes(geneva_media::convert::Planes),
+        Audio(Vec<geneva_media::Packet>, geneva_timeline::Ratio),
+    }
+
     pub fn render(
         comp: &Composition,
         root: &Path,
@@ -373,66 +380,98 @@ mod imp {
         let encoder = Encoder::new(output, settings).map_err(media_err)?;
         let mut renderer = CpuRenderer::new(MediaAssets::new(root));
         let total = if has_video { comp.frame_count() } else { 0 };
-        // Frames are rendered and converted here while the encoder runs on
-        // its own thread, a few frames behind.
         let video_format = if has_video {
             Some(encoder.video_format().map_err(media_err)?)
         } else {
             None
         };
-        let (tx, rx) = std::sync::mpsc::sync_channel::<geneva_media::convert::Planes>(4);
-        let worker = std::thread::spawn(move || -> Result<Encoder, geneva_media::MediaError> {
-            let mut encoder = encoder;
-            for planes in rx {
-                encoder.push_planes(&planes)?;
-            }
-            Ok(encoder)
-        });
+        // Frames are rendered and converted here while the encoder runs on
+        // its own thread, a few frames behind; the audio is mixed and
+        // encoded on a third thread and its packets are interleaved by the
+        // encoder thread as they arrive.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Msg>(8);
+        let mut encoder = encoder;
+        let audio_encoder = if has_audio {
+            encoder.take_audio_encoder()
+        } else {
+            None
+        };
         let mut render_error = None;
-        let mut frame = geneva_render::Frame::new(0, 0, geneva_color::Color::BLACK);
-        for n in 0..total {
-            let t = comp.frame_time(n);
-            let planes = if let Some(d) = direct.as_mut() {
-                match d.frame(t) {
-                    Ok(planes) => planes,
-                    Err(e) => {
-                        render_error = Some(media_err(e));
-                        break;
+        let (joined, audio_joined) = std::thread::scope(|scope| {
+            let worker = scope.spawn(move || -> Result<Encoder, geneva_media::MediaError> {
+                let mut encoder = encoder;
+                for msg in rx {
+                    match msg {
+                        Msg::Planes(planes) => encoder.push_planes(&planes)?,
+                        Msg::Audio(packets, time) => encoder.write_audio_packets(packets, time)?,
                     }
                 }
-            } else {
-                if let Err(e) = renderer.render_into(comp, t, &mut frame) {
-                    render_error = Some(e);
+                Ok(encoder)
+            });
+            let audio_worker = audio_encoder.map(|mut enc| {
+                let tx = tx.clone();
+                scope.spawn(move || -> Result<(), geneva_media::MediaError> {
+                    let samples = geneva_media::mix::mix(comp, root, sample_rate)?;
+                    // A second of audio per message keeps the video frames
+                    // flowing between them.
+                    for chunk in samples.chunks(sample_rate as usize * 2) {
+                        let packets = enc.push(chunk)?;
+                        if tx.send(Msg::Audio(packets, enc.time())).is_err() {
+                            return Ok(());
+                        }
+                    }
+                    let time = enc.time();
+                    let packets = enc.finish()?;
+                    let _ = tx.send(Msg::Audio(packets, time));
+                    Ok(())
+                })
+            });
+            let mut frame = geneva_render::Frame::new(0, 0, geneva_color::Color::BLACK);
+            for n in 0..total {
+                let t = comp.frame_time(n);
+                let planes = if let Some(d) = direct.as_mut() {
+                    match d.frame(t) {
+                        Ok(planes) => planes,
+                        Err(e) => {
+                            render_error = Some(media_err(e));
+                            break;
+                        }
+                    }
+                } else {
+                    if let Err(e) = renderer.render_into(comp, t, &mut frame) {
+                        render_error = Some(e);
+                        break;
+                    }
+                    let (color, format) = video_format.expect("video output has a format");
+                    geneva_media::convert::frame_to_planes(&frame, color, format)
+                };
+                if tx.send(Msg::Planes(planes)).is_err() {
+                    // The encoder stopped; its error is reported below.
                     break;
                 }
-                let (color, format) = video_format.expect("video output has a format");
-                geneva_media::convert::frame_to_planes(&frame, color, format)
-            };
-            if tx.send(planes).is_err() {
-                // The encoder stopped; its error is reported below.
-                break;
+                if progress && (n % 30 == 29 || n + 1 == total) {
+                    eprint!("\rframe {}/{total}", n + 1);
+                }
             }
-            if progress && (n % 30 == 29 || n + 1 == total) {
-                eprint!("\rframe {}/{total}", n + 1);
-            }
-        }
-        drop(tx);
-        let joined = worker
-            .join()
-            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+            drop(tx);
+            let audio_joined = audio_worker.map(|w| {
+                w.join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            });
+            let joined = worker
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+            (joined, audio_joined)
+        });
         if let Some(e) = render_error {
             return Err(e);
         }
-        let mut encoder = joined.map_err(media_err)?;
+        let encoder = joined.map_err(media_err)?;
+        if let Some(Err(e)) = audio_joined {
+            return Err(media_err(e));
+        }
         if progress && total > 0 {
             eprintln!();
-        }
-        if has_audio {
-            if progress {
-                eprintln!("mixing audio");
-            }
-            let samples = geneva_media::mix::mix(comp, root, sample_rate).map_err(media_err)?;
-            encoder.push_audio(&samples).map_err(media_err)?;
         }
         encoder.finish().map_err(media_err)?;
         Ok(RenderStats {

@@ -50,16 +50,19 @@ run() {
   local name=$1 out=$2; shift 2
   local t0 t1 status
   t0=$(now)
-  { echo "== $name: $*"; "$@"; } >>"$log" 2>&1
+  { echo "== $name: $*"; "$@"; } >"$work/step.log" 2>&1
   status=$?
   t1=$(now)
+  cat "$work/step.log" >>"$log"
   local secs; secs=$(elapsed "$t0" "$t1")
   local verdict="ok"
   if [ $status -ne 0 ]; then verdict="FAIL (exit $status)"
   elif [ "$out" != "-" ] && ! has_output "$out"; then verdict="FAIL (no output)"
+  elif grep -q "copied without re-encoding" "$work/step.log"; then verdict="ok, copied"
+  elif [ "${name#*copied}" != "$name" ]; then verdict="ok, RE-ENCODED"
   fi
   last=${#rows[@]}
-  rows[$last]="$name|$verdict|${secs}s|__FF__|$(size_of "$out")"
+  rows[$last]="$name|$verdict|${secs}s|__FF__|$(size_of "$out")|__FFOUT__"
 }
 # has_output PATH : true if PATH exists and is non-empty, or names a written image sequence.
 has_output() {
@@ -76,8 +79,9 @@ ff() {
   { echo "== ffmpeg: $*"; "$ffmpeg" -hide_banner -loglevel error -y "$@"; } >>"$log" 2>&1
   t1=$(now)
   rows[$last]=${rows[$last]//__FF__/$(elapsed "$t0" "$t1")s}
+  rows[$last]=${rows[$last]//__FFOUT__/$(size_of "${*: -1}")}
 }
-noff() { rows[$last]=${rows[$last]//__FF__/-}; }
+noff() { rows[$last]=${rows[$last]//__FF__/-}; rows[$last]=${rows[$last]//__FFOUT__/-}; }
 
 echo "geneva $("$geneva" --version | awk '{print $2}') on $(uname -s) $(uname -m)$( [ -n "$ffmpeg" ] && echo ", comparing with $("$ffmpeg" -version | head -1 | awk '{print $3}')")"
 echo "working in $work"
@@ -147,12 +151,13 @@ fi
 
 # --- summary -----------------------------------------------------------------
 echo
-printf '%-38s %-16s %9s %9s %10s\n' "step" "status" "geneva" "ffmpeg" "output"
-printf '%-38s %-16s %9s %9s %10s\n' "----" "------" "------" "------" "------"
+fmt='%-38s %-15s %8s %8s %11s %11s\n'
+printf "$fmt" "step" "status" "geneva" "ffmpeg" "geneva out" "ffmpeg out"
+printf "$fmt" "----" "------" "------" "------" "----------" "----------"
 fails=0
 for row in "${rows[@]}"; do
-  IFS='|' read -r name verdict g f size <<<"$row"
-  printf '%-38s %-16s %9s %9s %10s\n' "$name" "$verdict" "$g" "$f" "$size"
+  IFS='|' read -r name verdict g f size fsize <<<"$row"
+  printf "$fmt" "$name" "$verdict" "$g" "$f" "$size" "$fsize"
   case "$verdict" in FAIL*) fails=$((fails + 1)) ;; esac
 done
 echo

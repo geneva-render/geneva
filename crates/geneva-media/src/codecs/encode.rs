@@ -488,16 +488,117 @@ fn open_video_track(
     })
 }
 
-struct AudioTrack {
+/// The audio half of an [`Encoder`]. It can be detached with
+/// [`Encoder::take_audio_encoder`] and run on another thread while the
+/// video is encoded; its packets go back through
+/// [`Encoder::write_audio_packets`].
+pub struct AudioEncoder {
     encoder: codec::encoder::audio::Encoder,
     stream_index: usize,
     time_base: Rational,
+    /// The muxer's time base for the stream, known once the header is
+    /// written.
+    stream_time_base: Rational,
     resampler: resampling::Context,
     frame_size: usize,
     /// Interleaved stereo samples waiting to fill a frame.
     pending: Vec<f32>,
     /// Sample position of the next frame to send.
     next_pts: i64,
+}
+
+impl AudioEncoder {
+    /// Encodes interleaved stereo samples at the configured rate and
+    /// returns the packets ready for the muxer. Samples that do not fill
+    /// a whole encoder frame wait for the next call.
+    pub fn push(&mut self, samples: &[f32]) -> Result<Vec<Packet>, MediaError> {
+        let chunk_len = self.frame_size * 2;
+        let mut out = Vec::new();
+        // Whole encoder frames go straight from the caller's slice; only the
+        // remainder is buffered, so the cost stays linear in the audio length.
+        let mut rest = samples;
+        if !self.pending.is_empty() {
+            let need = (chunk_len - self.pending.len()).min(rest.len());
+            self.pending.extend_from_slice(&rest[..need]);
+            rest = &rest[need..];
+            if self.pending.len() == chunk_len {
+                let chunk = std::mem::take(&mut self.pending);
+                self.send_chunk(&chunk, &mut out)?;
+            }
+        }
+        let mut chunks = rest.chunks_exact(chunk_len);
+        for chunk in &mut chunks {
+            self.send_chunk(chunk, &mut out)?;
+        }
+        self.pending.extend_from_slice(chunks.remainder());
+        Ok(out)
+    }
+
+    /// Time reached by the frames sent so far.
+    pub fn time(&self) -> Ratio {
+        Ratio::new(self.next_pts, i64::from(self.encoder.rate()).max(1))
+    }
+
+    /// Pads the last frame, flushes the encoder and returns its final
+    /// packets.
+    pub fn finish(mut self) -> Result<Vec<Packet>, MediaError> {
+        let mut out = Vec::new();
+        if !self.pending.is_empty() {
+            let mut chunk = std::mem::take(&mut self.pending);
+            chunk.resize(self.frame_size * 2, 0.0);
+            self.send_chunk(&chunk, &mut out)?;
+        }
+        self.encoder
+            .send_eof()
+            .map_err(|e| codec_error("flushing audio", e))?;
+        let duration = self.frame_size as i64;
+        self.collect(duration, &mut out)?;
+        Ok(out)
+    }
+
+    fn send_chunk(&mut self, chunk: &[f32], out: &mut Vec<Packet>) -> Result<(), MediaError> {
+        let n = chunk.len() / 2;
+        let mut packed =
+            frame::Audio::new(Sample::F32(sample::Type::Packed), n, ChannelLayout::STEREO);
+        packed.set_rate(self.encoder.rate());
+        let data = packed.data_mut(0);
+        for (dst, v) in data.chunks_exact_mut(4).zip(chunk) {
+            dst.copy_from_slice(&v.to_le_bytes());
+        }
+        let mut converted = frame::Audio::empty();
+        self.resampler
+            .run(&packed, &mut converted)
+            .map_err(|e| codec_error("audio sample format conversion", e))?;
+        converted.set_pts(Some(self.next_pts));
+        self.next_pts += n as i64;
+        self.encoder
+            .send_frame(&converted)
+            .map_err(|e| codec_error("encoding audio", e))?;
+        self.collect(n as i64, out)
+    }
+
+    /// Moves the encoder's ready packets into `out`, stamped for the
+    /// muxer.
+    fn collect(&mut self, duration: i64, out: &mut Vec<Packet>) -> Result<(), MediaError> {
+        loop {
+            let mut packet = Packet::empty();
+            match self.encoder.receive_packet(&mut packet) {
+                Ok(()) => {
+                    packet.set_stream(self.stream_index);
+                    if packet.duration() == 0 {
+                        packet.set_duration(duration);
+                    }
+                    packet.rescale_ts(self.time_base, self.stream_time_base);
+                    out.push(packet);
+                }
+                Err(FfError::Other { errno }) if errno == ffmpeg_next::error::EAGAIN => {
+                    return Ok(());
+                }
+                Err(FfError::Eof) => return Ok(()),
+                Err(e) => return Err(codec_error("encoding audio", e)),
+            }
+        }
+    }
 }
 
 struct VideoTrack {
@@ -514,7 +615,7 @@ pub struct Encoder {
     octx: ffmpeg_next::format::context::Output,
     video: Option<VideoTrack>,
     frame_index: i64,
-    audio: Option<AudioTrack>,
+    audio: Option<AudioEncoder>,
     subtitles: SubtitleWriter,
     image_sequence: bool,
     finished: bool,
@@ -608,10 +709,11 @@ impl Encoder {
                     a.sample_rate,
                 )
                 .map_err(|e| codec_error("audio sample format conversion", e))?;
-                Some(AudioTrack {
+                Some(AudioEncoder {
                     encoder,
                     stream_index,
                     time_base,
+                    stream_time_base: time_base,
                     resampler,
                     frame_size,
                     pending: Vec::new(),
@@ -623,6 +725,14 @@ impl Encoder {
         let subtitles =
             SubtitleWriter::add_streams(&mut octx, container, &settings.subtitles, path)?;
         octx.write_header().map_err(|e| open_error(path, e))?;
+        // The muxer may have chosen another time base for the stream.
+        let mut audio = audio;
+        if let Some(a) = audio.as_mut() {
+            a.stream_time_base = octx
+                .stream(a.stream_index)
+                .expect("stream added")
+                .time_base();
+        }
         Ok(Self {
             path: path.to_owned(),
             octx,
@@ -709,65 +819,41 @@ impl Encoder {
 
     /// Queues interleaved stereo samples at the configured sample rate.
     pub fn push_audio(&mut self, samples: &[f32]) -> Result<(), MediaError> {
-        let Some(track) = self.audio.as_mut() else {
+        let Some(enc) = self.audio.as_mut() else {
             return Ok(());
         };
-        let chunk_len = track.frame_size * 2;
-        // Whole encoder frames go straight from the caller's slice; only the
-        // remainder is buffered, so the cost stays linear in the audio length.
-        let mut rest = samples;
-        if !track.pending.is_empty() {
-            let need = (chunk_len - track.pending.len()).min(rest.len());
-            track.pending.extend_from_slice(&rest[..need]);
-            rest = &rest[need..];
-            if track.pending.len() == chunk_len {
-                let chunk = std::mem::take(&mut track.pending);
-                Self::send_audio_chunk(&mut self.octx, track, &chunk)?;
-            }
+        let packets = enc.push(samples)?;
+        let time = enc.time();
+        self.write_audio_packets(packets, time)
+    }
+
+    /// Detaches the audio encoder so that it can run on another thread.
+    /// Afterwards [`push_audio`](Self::push_audio) does nothing and
+    /// [`finish`](Self::finish) does not flush audio: the caller feeds the
+    /// detached encoder and passes everything it returns, including the
+    /// packets from its own `finish`, to
+    /// [`write_audio_packets`](Self::write_audio_packets) before finishing.
+    pub fn take_audio_encoder(&mut self) -> Option<AudioEncoder> {
+        self.audio.take()
+    }
+
+    /// Writes packets from the audio encoder, interleaved with the video.
+    /// `time` is the audio time they reach, which paces subtitle cues on
+    /// audio-only outputs.
+    pub fn write_audio_packets(
+        &mut self,
+        packets: Vec<Packet>,
+        time: Ratio,
+    ) -> Result<(), MediaError> {
+        for packet in packets {
+            packet
+                .write_interleaved(&mut self.octx)
+                .map_err(|e| codec_error("writing packet", e))?;
         }
-        let mut chunks = rest.chunks_exact(chunk_len);
-        for chunk in &mut chunks {
-            Self::send_audio_chunk(&mut self.octx, track, chunk)?;
-        }
-        track.pending.extend_from_slice(chunks.remainder());
         if self.video.is_none() {
-            let time = Ratio::new(track.next_pts, i64::from(track.encoder.rate()).max(1));
             self.subtitles.write_due(&mut self.octx, time)?;
         }
         Ok(())
-    }
-
-    fn send_audio_chunk(
-        octx: &mut ffmpeg_next::format::context::Output,
-        track: &mut AudioTrack,
-        chunk: &[f32],
-    ) -> Result<(), MediaError> {
-        let n = chunk.len() / 2;
-        let mut packed =
-            frame::Audio::new(Sample::F32(sample::Type::Packed), n, ChannelLayout::STEREO);
-        packed.set_rate(track.encoder.rate());
-        let data = packed.data_mut(0);
-        for (dst, v) in data.chunks_exact_mut(4).zip(chunk) {
-            dst.copy_from_slice(&v.to_le_bytes());
-        }
-        let mut converted = frame::Audio::empty();
-        track
-            .resampler
-            .run(&packed, &mut converted)
-            .map_err(|e| codec_error("audio sample format conversion", e))?;
-        converted.set_pts(Some(track.next_pts));
-        track.next_pts += n as i64;
-        track
-            .encoder
-            .send_frame(&converted)
-            .map_err(|e| codec_error("encoding audio", e))?;
-        Self::drain(
-            octx,
-            &mut track.encoder,
-            track.stream_index,
-            track.time_base,
-            n as i64,
-        )
     }
 
     fn drain(
@@ -805,23 +891,10 @@ impl Encoder {
 
     /// Flushes the encoders and writes the trailer.
     pub fn finish(mut self) -> Result<(), MediaError> {
-        if let Some(mut track) = self.audio.take() {
-            if !track.pending.is_empty() {
-                let mut chunk = std::mem::take(&mut track.pending);
-                chunk.resize(track.frame_size * 2, 0.0);
-                Self::send_audio_chunk(&mut self.octx, &mut track, &chunk)?;
-            }
-            track
-                .encoder
-                .send_eof()
-                .map_err(|e| codec_error("flushing audio", e))?;
-            Self::drain(
-                &mut self.octx,
-                &mut track.encoder,
-                track.stream_index,
-                track.time_base,
-                track.frame_size as i64,
-            )?;
+        if let Some(enc) = self.audio.take() {
+            let time = enc.time();
+            let packets = enc.finish()?;
+            self.write_audio_packets(packets, time)?;
         }
         if let Some(mut track) = self.video.take() {
             track

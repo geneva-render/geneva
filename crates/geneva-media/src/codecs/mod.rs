@@ -17,10 +17,12 @@ pub use copy::{CopyPlan, CopyReport, CopySegment, plan_stream_copy, stream_copy}
 pub use decode::{AudioReader, VideoReader};
 pub use direct::DirectSource;
 pub use encode::{
-    AudioSettings, EncodeSettings, Encoder, VideoSettings, container_accepts_audio,
+    AudioEncoder, AudioSettings, EncodeSettings, Encoder, VideoSettings, container_accepts_audio,
     container_accepts_video, container_for, default_codecs, default_image_codec, output_tags_for,
     plane_format_for,
 };
+/// An encoded packet on its way to the muxer.
+pub use ffmpeg_next::Packet;
 pub use probe::probe;
 pub use subtitle_streams::{
     SubtitleSettings, SubtitleStreamInfo, read_subtitles, subtitle_streams,

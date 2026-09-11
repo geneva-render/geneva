@@ -5,6 +5,18 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## 0.1.6
+
+### Fixes
+
+- The audio track was mixed and encoded after the last video frame, which
+  added about a second per minute of AAC to every render; it is now
+  encoded on its own thread while the frames flow, and the encoder thread
+  interleaves the packets. A 70 s SD resize on four cores went from
+  6.7 s to 4.8 s.
+- `check.sh` shows whether a "copied" step really copied ("ok, copied" or
+  "ok, RE-ENCODED") and the size of ffmpeg's output next to geneva's.
+
 ## 0.1.5
 
 ### Changes
