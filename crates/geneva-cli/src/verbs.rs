@@ -709,7 +709,8 @@ pub fn audio(input: &Path, op: &AudioOp, args: &EncodeArgs) -> Result<Compiled> 
             if !src.has_audio {
                 bail!("{} has no audio stream", input.display());
             }
-            tl.output.duration = src.duration.map(seconds);
+            // The clip's own length sets the output length exactly; a
+            // printed duration would round it at fractional frame rates.
             tl.audio.push(track("in", None));
         }
         AudioOp::Mute => {

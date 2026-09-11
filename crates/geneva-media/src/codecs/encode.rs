@@ -397,9 +397,14 @@ fn open_video_encoder(
             opts.set("preset", "p4");
         }
         n if n.ends_with("_videotoolbox") => {
-            // Quality is 0..=1 with 1 best; invert the 0..=51 scale.
+            // Constant quality is 1..=100 with 100 best; invert the 0..=51
+            // scale. The encoder reads it from the context's global
+            // quality with the qscale flag set, the way `ffmpeg -q:v`
+            // stores it (in lambda units, FF_QP2LAMBDA = 118).
             let q = 1.0 - f64::from(quality) / 51.0;
-            opts.set("q:v", &format!("{}", (q * 100.0).round() as i64));
+            let q = ((q * 100.0).round() as i64).clamp(1, 100);
+            opts.set("global_quality", &(q * 118).to_string());
+            opts.set("flags", "+qscale");
             opts.set("realtime", "0");
         }
         _ => {}

@@ -148,7 +148,7 @@ pub fn plan_stream_copy(
                 && clip.fade_in.is_zero()
                 && clip.fade_out.is_zero()
                 && clip.start.is_zero()
-                && clip.end == comp.duration;
+                && about_equal(clip.end, comp.duration);
             if !untouched {
                 return Ok(None);
             }
@@ -293,10 +293,19 @@ fn video_layer_clips(
         });
         expected_end = clip.end;
     }
-    if clips.is_empty() || expected_end != comp.duration {
+    if clips.is_empty() || !about_equal(expected_end, comp.duration) {
         return Ok(None);
     }
     Ok(Some(clips))
+}
+
+/// Whether two times agree to within a millisecond: the slack that a
+/// duration printed with six decimals leaves against the exact length of
+/// a clip at a fractional frame rate (2123 frames at 29.97 fps last
+/// 70.837433… s), where copying the clip whole is still what was asked.
+fn about_equal(a: Ratio, b: Ratio) -> bool {
+    let diff = if a > b { a - b } else { b - a };
+    diff <= Ratio::new(1, 1000)
 }
 
 /// Whether a `w`×`h` picture fitted into the output covers the whole frame

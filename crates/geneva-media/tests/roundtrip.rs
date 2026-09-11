@@ -300,6 +300,55 @@ fn stream_copy_trims_at_keyframes_and_joins_compatible_sources() {
 }
 
 #[test]
+fn stream_copy_tolerates_a_printed_duration() {
+    use geneva_media::plan_stream_copy;
+    use geneva_timeline::schema::Container;
+    let root = clip().parent().unwrap().to_path_buf();
+    // A duration written with six decimals can differ from a clip's exact
+    // length by a fraction of a millisecond; a real gap is still refused.
+    let cases = [
+        (
+            r#""output": { "width": 192, "height": 108, "fps": 25, "duration": "2.0005s" }, "assets": { "clip": { "src": "clip.mp4" } },
+           "layers": [ { "clips": [ { "source": { "kind": "video", "asset": "clip" } } ] } ]"#,
+            Container::Mp4,
+            true,
+        ),
+        (
+            r#""output": { "width": 192, "height": 108, "fps": 25, "duration": "2.01s" }, "assets": { "clip": { "src": "clip.mp4" } },
+           "layers": [ { "clips": [ { "source": { "kind": "video", "asset": "clip" } } ] } ]"#,
+            Container::Mp4,
+            false,
+        ),
+        (
+            r#""output": { "width": 192, "height": 108, "fps": 25, "duration": "2.0005s" }, "assets": { "clip": { "src": "clip.mp4" } },
+           "audio": [ { "clips": [ { "asset": "clip" } ] } ]"#,
+            Container::M4a,
+            true,
+        ),
+        (
+            r#""output": { "width": 192, "height": 108, "fps": 25, "duration": "2.01s" }, "assets": { "clip": { "src": "clip.mp4" } },
+           "audio": [ { "clips": [ { "asset": "clip" } ] } ]"#,
+            Container::M4a,
+            false,
+        ),
+    ];
+    for (body, container, copyable) in cases {
+        let text = format!(r#"{{"geneva":"0.1",{body}}}"#);
+        let loaded = geneva_timeline::load_with(&text, &Durations);
+        let comp = loaded
+            .composition
+            .unwrap_or_else(|| panic!("{:#?}", loaded.diagnostics));
+        assert_eq!(
+            plan_stream_copy(&comp, &root, container, None)
+                .unwrap()
+                .is_some(),
+            copyable,
+            "{body}"
+        );
+    }
+}
+
+#[test]
 fn stream_copy_is_refused_when_anything_would_change_the_picture() {
     use geneva_media::plan_stream_copy;
     use geneva_timeline::schema::Container;

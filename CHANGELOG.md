@@ -5,6 +5,21 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## 0.1.7
+
+### Fixes
+
+- `geneva audio --extract` re-encoded the audio of files at fractional
+  frame rates (29.97, 59.94) instead of copying it: the verb's compiled
+  timeline printed the output duration with six decimals, which no longer
+  matched the clip's exact length. The extract now takes its length from
+  the clip, and the copy planner accepts a duration within a millisecond
+  of the clip's, so hand-written timelines get the same treatment.
+- The VideoToolbox H.264/H.265 encoders ignored the quality setting and
+  ran at their default bitrate, writing files up to four times larger
+  than ffmpeg at the same `-q:v`; the quality is now passed the way
+  ffmpeg stores it.
+
 ## 0.1.6
 
 ### Fixes
