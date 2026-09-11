@@ -60,6 +60,10 @@ case "$(uname -m)" in
   *) echo "install.sh: unsupported architecture $(uname -m)" >&2; exit 1 ;;
 esac
 target=$arch-$os
+if [ "$target" = x86_64-apple-darwin ]; then
+  echo "install.sh: no prebuilt binary for Intel Macs; build from source (see README)" >&2
+  exit 1
+fi
 
 auth=""
 if [ -n "${GITHUB_TOKEN:-}" ]; then

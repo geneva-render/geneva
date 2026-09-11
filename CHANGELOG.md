@@ -7,6 +7,12 @@ the format version it was written for.
 
 ## 0.1.5
 
+### Changes
+
+- No more Intel macOS archive. Apple stopped selling Intel Macs in 2023
+  and macOS 26 is the last release for them; the build was untested and
+  gated every release on the slowest runner. Intel Macs build from source.
+
 ### Fixes
 
 - macOS archives were built against media libraries from before MXF and

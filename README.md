@@ -63,7 +63,7 @@ changes the picture is rendered.
 
 Prebuilt binaries are published for each release on the
 [releases page](https://github.com/geneva-render/geneva/releases) for Linux
-(x86_64, arm64) and macOS (Apple silicon, Intel). Each archive contains the
+(x86_64, arm64) and macOS (Apple silicon). Each archive contains the
 `geneva` binary, an installer, a check script, this README and the license
 texts; there is nothing else to install.
 
@@ -96,7 +96,8 @@ sh geneva-v0.1.5-aarch64-apple-darwin/check.sh input.mp4  # your own file
 ```
 
 Linux binaries need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, RHEL 9
-and later). macOS binaries need macOS 12 or newer. There are no other
+and later). macOS binaries need macOS 12 or newer on Apple silicon; Intel
+Macs build from source. There are no other
 runtime requirements: codecs, container support and font shaping are built
 in.
 
