@@ -304,6 +304,10 @@ pub struct X264Settings<'a> {
     /// Consecutive B-frames, pinned when the caller must know the
     /// reorder depth.
     pub bframes: Option<u8>,
+    /// x264 tune name, applied with the preset.
+    pub tune: Option<&'a str>,
+    /// Keyframes at the interval only: scene-cut detection off.
+    pub fixed_keyframes: bool,
 }
 
 /// An open x264 encoder taking 8-bit 4:2:0 pictures.
@@ -347,11 +351,16 @@ impl X264Encoder {
         let mut params = Box::new(Params([0; PARAM_BYTES]));
         let p: *mut Params = &raw mut *params;
         let preset = cstr(settings.preset);
+        let tune = settings.tune.map(cstr);
+        let tune_ptr = tune.as_ref().map_or(std::ptr::null(), |t| t.as_ptr());
         // SAFETY: `params` is writable storage larger than any build's
-        // `x264_param_t`; the strings are NUL-terminated.
-        let rc = unsafe { (lib.param_default_preset)(p, preset.as_ptr(), std::ptr::null()) };
+        // `x264_param_t`; the strings are NUL-terminated or null.
+        let rc = unsafe { (lib.param_default_preset)(p, preset.as_ptr(), tune_ptr) };
         if rc != 0 {
-            return Err(setup_error(format!("unknown preset {:?}", settings.preset)));
+            return Err(setup_error(match settings.tune {
+                Some(t) => format!("unknown preset {:?} or tune {t:?}", settings.preset),
+                None => format!("unknown preset {:?}", settings.preset),
+            }));
         }
         let (prim, transfer, matrix) = color_names(settings.color);
         let full_range = if settings.color.range == Range::Full {
@@ -393,6 +402,9 @@ impl X264Encoder {
         }
         if let Some(level) = &settings.level {
             extra.push(("level", level.clone()));
+        }
+        if settings.fixed_keyframes {
+            extra.push(("scenecut", "0".to_owned()));
         }
         if let Some(id) = settings.sps_id {
             extra.push(("sps-id", id.to_string()));

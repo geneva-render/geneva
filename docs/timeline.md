@@ -119,6 +119,8 @@ object with a `keyframes` array:
 | `encode.video.max_bitrate_kbps` | no | none | Bitrate ceiling in kb/s; quality stays constant until it bites (x264). VideoToolbox has no such mode and takes the ceiling only together with `bitrate_kbps`. |
 | `encode.video.bitrate_kbps` | no | none | Average bitrate in kb/s to aim for: bitrate mode for hardware encoders, which cannot hold constant quality under a ceiling; x264 ignores it and keeps constant quality under the ceiling. `--budget` sets it. |
 | `encode.video.level` | no | the encoder's own | H.264 or H.265 level such as `"4.1"`, for the decoders that check it. |
+| `encode.video.tune` | no | none | What the picture is like, in x264's names: `film`, `animation`, `grain`, `stillimage`, `fastdecode`, `zerolatency`. x264 applies all of them; VP9 takes `film`, AV1 `fastdecode`, NVENC and VideoToolbox `zerolatency`. An encoder with no equivalent ignores it and the report says so. |
+| `encode.video.fixed_keyframes` | no | `false` | Keyframes at `keyframe_interval` only, never at scene changes, as streaming platforms and segmenters want; needs the interval (E422). x264, VP9, AV1, NVENC and VideoToolbox place them so; OpenH264 cannot and the report says so. |
 | `encode.fast_start` | no | `true` | Whether MP4, MOV and M4A files carry their index at the front so playback can start before the download ends. |
 | `encode.audio.codec` | no | `aac` (`opus` for webm and ogg, `flac` for flac, `pcm` for wav, `mp3` for mp3, `pcm24` for mxf) | `aac`, `opus`, `mp3`, `vorbis`, `flac`, `alac`, `ac3`, `pcm` (16-bit), `pcm24`. |
 | `encode.audio.bitrate_kbps` | no | 160 | Audio bitrate. |

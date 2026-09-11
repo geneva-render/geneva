@@ -9,7 +9,7 @@ use geneva_media::{
     AudioReader, AudioSettings, EncodeSettings, Encoder, VideoReader, VideoSettings, mix, probe,
 };
 use geneva_render::Frame;
-use geneva_timeline::schema::{AudioCodec, HardwarePolicy, VideoCodec};
+use geneva_timeline::schema::{AudioCodec, HardwarePolicy, VideoCodec, VideoTune};
 use geneva_timeline::{Ratio, load};
 
 fn clip() -> PathBuf {
@@ -148,6 +148,8 @@ fn encoded_solid_color_survives_the_round_trip() {
             max_bitrate_kbps: None,
             bitrate_kbps: None,
             level: None,
+            tune: None,
+            fixed_keyframes: false,
             stitch: None,
         }),
         container: None,
@@ -299,6 +301,8 @@ fn audio_lands_at_its_timeline_position_in_the_output_file() {
             max_bitrate_kbps: None,
             bitrate_kbps: None,
             level: None,
+            tune: None,
+            fixed_keyframes: false,
             stitch: None,
         }),
         container: None,
@@ -840,6 +844,8 @@ fn solid_settings(
             max_bitrate_kbps: None,
             bitrate_kbps: None,
             level: None,
+            tune: None,
+            fixed_keyframes: false,
             stitch: None,
         }),
         container: None,
@@ -1217,4 +1223,130 @@ fn smart_cut_plans_copies_between_keyframes_and_clean_boundaries() {
             .unwrap()
             .is_none()
     );
+}
+
+/// A frame of vertical stripes with the given period: cheap to code
+/// on its own (every row repeats the one above), expensive to predict
+/// from a flat frame.
+fn stripes_frame(width: u32, height: u32, period: usize) -> Frame {
+    let mut frame = Frame::new(width, height, Color::BLACK);
+    let w = width as usize;
+    for (i, px) in frame.pixels_mut().iter_mut().enumerate() {
+        let v = if (i % w) / period % 2 == 0 { 30 } else { 225 };
+        *px = Color::from_rgba8(v, v, v, 255).to_linear();
+    }
+    frame
+}
+
+/// Positions of the keyframes in a file's video stream, as packet
+/// indices in decode order (the display index too, for closed GOPs).
+fn keyframe_positions(path: &Path) -> Vec<usize> {
+    let mut ictx = ffmpeg_next::format::input(path).unwrap();
+    let video = ictx
+        .streams()
+        .best(ffmpeg_next::media::Type::Video)
+        .unwrap()
+        .index();
+    let mut keys = Vec::new();
+    let mut n = 0;
+    for (stream, packet) in ictx.packets() {
+        if stream.index() != video {
+            continue;
+        }
+        if packet.is_key() {
+            keys.push(n);
+        }
+        n += 1;
+    }
+    keys
+}
+
+/// Encodes 72 frames at 24 fps, flat gray then stripes from frame 36:
+/// a hard scene change.
+fn encode_scene_cut(out: &Path, tune: Option<VideoTune>, fixed_keyframes: bool) {
+    let mut settings = solid_settings(VideoCodec::H264, None, 192, 108);
+    let v = settings.video.as_mut().unwrap();
+    v.fps = Ratio::from_int(24);
+    v.crf = Some(23);
+    v.preset = Some("veryfast".to_owned());
+    v.keyframe_interval = Some(1.0);
+    v.tune = tune;
+    v.fixed_keyframes = fixed_keyframes;
+    let mut enc = Encoder::new(out, settings).unwrap();
+    let before = Frame::new(192, 108, Color::from_rgba8(128, 128, 128, 255));
+    let after = stripes_frame(192, 108, 8);
+    for n in 0..72 {
+        enc.push_frame(if n < 36 { &before } else { &after })
+            .unwrap();
+    }
+    enc.finish().unwrap();
+}
+
+#[test]
+fn fixed_keyframes_pin_x264_keyframes_to_the_interval() {
+    if geneva_media::system_x264().is_none() {
+        eprintln!("no system x264 here; nothing to check");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let free = dir.path().join("free.mp4");
+    encode_scene_cut(&free, None, false);
+    let keys = keyframe_positions(&free);
+    assert!(
+        keys.contains(&36),
+        "x264 puts a keyframe at the scene change by default; got {keys:?}"
+    );
+    let fixed = dir.path().join("fixed.mp4");
+    encode_scene_cut(&fixed, None, true);
+    assert_eq!(keyframe_positions(&fixed), vec![0, 24, 48]);
+}
+
+#[test]
+fn every_tune_name_is_taken_by_x264_and_changes_the_encode() {
+    if geneva_media::system_x264().is_none() {
+        eprintln!("no system x264 here; nothing to check");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let plain = dir.path().join("plain.mp4");
+    encode_scene_cut(&plain, None, false);
+    let plain_bytes = std::fs::read(&plain).unwrap();
+    for tune in [
+        VideoTune::Film,
+        VideoTune::Animation,
+        VideoTune::Grain,
+        VideoTune::StillImage,
+        VideoTune::FastDecode,
+        VideoTune::ZeroLatency,
+    ] {
+        let out = dir.path().join(format!("{}.mp4", tune.as_str()));
+        encode_scene_cut(&out, Some(tune), false);
+        let info = probe(&out).unwrap();
+        assert_eq!(info.video.unwrap().frames, Some(72), "{tune:?}");
+        assert_ne!(
+            std::fs::read(&out).unwrap(),
+            plain_bytes,
+            "{tune:?} left the encode unchanged"
+        );
+    }
+}
+
+#[test]
+fn a_tune_without_an_equivalent_is_reported_not_applied() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut settings = solid_settings(VideoCodec::Vp9, None, 192, 108);
+    settings.video.as_mut().unwrap().tune = Some(VideoTune::Grain);
+    let enc = Encoder::new(&dir.path().join("grain.webm"), settings).unwrap();
+    let notes = enc.video_setting_notes();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(
+        notes[0].starts_with("tune \"grain\" is not applied"),
+        "{notes:?}"
+    );
+    drop(enc);
+    // VP9 has an equivalent for film, so nothing to report.
+    let mut settings = solid_settings(VideoCodec::Vp9, None, 192, 108);
+    settings.video.as_mut().unwrap().tune = Some(VideoTune::Film);
+    let enc = Encoder::new(&dir.path().join("film.webm"), settings).unwrap();
+    assert!(enc.video_setting_notes().is_empty());
 }

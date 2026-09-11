@@ -246,6 +246,46 @@ fn odd_dimensions_and_unused_assets_are_reported_softly() {
 }
 
 #[test]
+fn fixed_keyframes_need_an_interval() {
+    let text = r#"{"geneva":"0.2","output":{"width":640,"height":360,"fps":30,"duration":1,"encode":{"video":{"fixed_keyframes":true}}}}"#;
+    let errs = errors(text);
+    assert!(
+        errs.iter()
+            .any(|(c, p)| *c == "E422" && p == "/output/encode/video/fixed_keyframes"),
+        "{errs:?}"
+    );
+    let text = r#"{"geneva":"0.2","output":{"width":640,"height":360,"fps":30,"duration":1,"encode":{"video":{"fixed_keyframes":true,"keyframe_interval":2}}}}"#;
+    assert!(errors(text).is_empty());
+}
+
+#[test]
+fn tune_names_are_x264s() {
+    use geneva_timeline::schema::VideoTune;
+    for (name, tune) in [
+        ("film", VideoTune::Film),
+        ("animation", VideoTune::Animation),
+        ("grain", VideoTune::Grain),
+        ("stillimage", VideoTune::StillImage),
+        ("fastdecode", VideoTune::FastDecode),
+        ("zerolatency", VideoTune::ZeroLatency),
+    ] {
+        let text = format!(
+            r#"{{"geneva":"0.2","output":{{"width":640,"height":360,"fps":30,"duration":1,"encode":{{"video":{{"tune":"{name}"}}}}}}}}"#
+        );
+        let l = load(&text);
+        assert!(errors(&text).is_empty(), "{name}");
+        let video = l.timeline.unwrap().output.encode.unwrap().video.unwrap();
+        assert_eq!(video.tune, Some(tune));
+        assert_eq!(tune.as_str(), name);
+    }
+    assert!(
+        errors(r#"{"geneva":"0.2","output":{"width":640,"height":360,"fps":30,"duration":1,"encode":{"video":{"tune":"psnr"}}}}"#)
+            .iter()
+            .any(|(c, _)| c.starts_with("E1"))
+    );
+}
+
+#[test]
 fn hdr_output_is_refused() {
     let text = r#"{"geneva":"0.1","output":{"width":640,"height":360,"fps":30,"duration":1,"color":{"transfer":"pq"}}}"#;
     assert!(errors(text).iter().any(|(c, _)| *c == "E420"));

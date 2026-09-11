@@ -522,6 +522,8 @@ pub fn apply(tl: &mut Timeline, facts: &Facts, opts: &Options<'_>) -> Vec<Diagno
         max_bitrate_kbps: None,
         bitrate_kbps: None,
         level: None,
+        tune: None,
+        fixed_keyframes: None,
     });
     video.codec = Some(codec);
     video.crf = Some(crf);

@@ -78,6 +78,7 @@ result is not what was intended. Notes are informational.
 | E411 | Words are out of order, overlapping, or have an end not after their start. |
 | E420 | The output color tags describe HDR, which is not supported. |
 | E421 | `encode.video.profile` names a profile of another codec, or is set without a codec. |
+| E422 | `encode.video.fixed_keyframes` is set without `encode.video.keyframe_interval`. |
 | W401 | Output width or height is odd; most codecs need even dimensions. |
 | W402 | `subtitles --burn` found no cues in the file; the picture is written unchanged. |
 | W403 | A burned-in subtitle cue extends off-screen. The message gives the box size and by how much it leaves the frame; the path names the clip. |

@@ -538,6 +538,24 @@
             "null"
           ],
           "description": "H.264 or H.265 level, for example \"4.1\", which tells old decoders\nwhat the stream needs. Defaults to what the encoder picks."
+        },
+        "tune": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoTune"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the picture is like, so the encoder spends its bits\naccordingly, in x264's names. Encoders without an equivalent\nignore it and the report says so."
+        },
+        "fixed_keyframes": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Place keyframes at the interval only, never at scene changes, as\nstreaming platforms and segmenters want. Needs `keyframe_interval`."
         }
       },
       "description": "Video encoder settings."
@@ -666,6 +684,41 @@
         }
       ],
       "description": "Profiles of the intermediate codecs."
+    },
+    "VideoTune": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "film",
+          "description": "Live-action film: keeps fine detail."
+        },
+        {
+          "type": "string",
+          "const": "animation",
+          "description": "Animation: flat areas and sharp edges."
+        },
+        {
+          "type": "string",
+          "const": "grain",
+          "description": "Grainy material: keeps the grain instead of smoothing it."
+        },
+        {
+          "type": "string",
+          "const": "stillimage",
+          "description": "Slideshows and near-still pictures."
+        },
+        {
+          "type": "string",
+          "const": "fastdecode",
+          "description": "Cheaper to decode, for weak players."
+        },
+        {
+          "type": "string",
+          "const": "zerolatency",
+          "description": "No lookahead or frame delay, for live use."
+        }
+      ],
+      "description": "What the picture is like, in x264's tune names."
     },
     "AudioEncode": {
       "type": "object",

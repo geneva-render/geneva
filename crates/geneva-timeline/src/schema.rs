@@ -210,6 +210,47 @@ pub struct VideoEncode {
     /// what the stream needs. Defaults to what the encoder picks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level: Option<String>,
+    /// What the picture is like, so the encoder spends its bits
+    /// accordingly, in x264's names. Encoders without an equivalent
+    /// ignore it and the report says so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tune: Option<VideoTune>,
+    /// Place keyframes at the interval only, never at scene changes, as
+    /// streaming platforms and segmenters want. Needs `keyframe_interval`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed_keyframes: Option<bool>,
+}
+
+/// What the picture is like, in x264's tune names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VideoTune {
+    /// Live-action film: keeps fine detail.
+    Film,
+    /// Animation: flat areas and sharp edges.
+    Animation,
+    /// Grainy material: keeps the grain instead of smoothing it.
+    Grain,
+    /// Slideshows and near-still pictures.
+    StillImage,
+    /// Cheaper to decode, for weak players.
+    FastDecode,
+    /// No lookahead or frame delay, for live use.
+    ZeroLatency,
+}
+
+impl VideoTune {
+    /// The name x264 uses.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Film => "film",
+            Self::Animation => "animation",
+            Self::Grain => "grain",
+            Self::StillImage => "stillimage",
+            Self::FastDecode => "fastdecode",
+            Self::ZeroLatency => "zerolatency",
+        }
+    }
 }
 
 /// Video codec.

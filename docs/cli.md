@@ -127,6 +127,9 @@ otherwise. The printed timeline (`--show-timeline`) shows the choice.
 | `--budget SIZE` | With `--for`: cap the bitrate so that the file fits `SIZE` (for example `25MB`), and warn when it still does not. |
 | `--codec h264\|h265\|vp9\|av1\|prores\|dnxhd\|png\|mjpeg` | Video codec. Defaults to the container's usual one. |
 | `--profile NAME` | Codec profile: `proxy`, `lt`, `standard`, `hq`, `4444`, `4444-xq` for ProRes; `dnxhr-lb`, `dnxhr-sq`, `dnxhr-hq`, `dnxhr-hqx`, `dnxhr-444` for DNxHR. Implies the codec. |
+| `--tune NAME` | What the picture is like, in x264's names: `film`, `animation`, `grain`, `stillimage`, `fastdecode`, `zerolatency`. Encoders without an equivalent say so in the report. Forces a re-encode. |
+| `--keyframe-interval SECONDS` | Seconds between keyframes. `--for` sets its own. Forces a re-encode. |
+| `--fixed-keyframes` | Keyframes at the interval only, never at scene changes, for streaming platforms and segmenters. Needs `--keyframe-interval` or `--for`. Forces a re-encode. |
 | `--no-audio` | Write no audio track. |
 | `--exact` | Cut on the exact frame; a [smart cut](#smart-cut) when the source allows. |
 | `--show-timeline` | Print the timeline the verb built instead of rendering it. Asset paths in it are relative to the directory printed on stderr. |

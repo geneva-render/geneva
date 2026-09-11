@@ -13,7 +13,7 @@ use geneva_color::{ColorTags, ResolvedTags};
 use geneva_timeline::schema::{
     Asset, AudioClip, AudioTrack, Clip, Crop, Encode, Fit, Layer, Output, Source, SubtitleTrack,
     TextSource, Timeline, Transform, Transition, TransitionKind, VideoCodec, VideoEncode,
-    VideoProfile,
+    VideoProfile, VideoTune,
 };
 use geneva_timeline::{Animated, Diagnostic, Fps, Length, Point, Ratio, Scale, Time};
 
@@ -108,6 +108,7 @@ fn shared_color(inputs: &[&Input]) -> Option<ColorTags> {
 
 /// Encoder options shared by every verb.
 #[derive(Args, Debug, Clone, Default)]
+#[allow(clippy::struct_excessive_bools, reason = "command-line switches")]
 pub struct EncodeArgs {
     /// Constant-quality level; lower is better. Setting it forces a
     /// re-encode even when the streams could be copied.
@@ -122,6 +123,16 @@ pub struct EncodeArgs {
     /// Codec profile, for prores and dnxhd.
     #[arg(long, value_enum)]
     pub profile: Option<ProfileArg>,
+    /// What the picture is like, in x264's names; encoders without an
+    /// equivalent say so in the report.
+    #[arg(long, value_enum)]
+    pub tune: Option<TuneArg>,
+    /// Seconds between keyframes.
+    #[arg(long, value_name = "SECONDS")]
+    pub keyframe_interval: Option<f64>,
+    /// Keyframes at the interval only, never at scene changes.
+    #[arg(long, requires = "keyframe_interval")]
+    pub fixed_keyframes: bool,
     /// Write no audio track.
     #[arg(long)]
     pub no_audio: bool,
@@ -237,6 +248,33 @@ impl From<CodecArg> for VideoCodec {
             CodecArg::Dnxhd => Self::Dnxhd,
             CodecArg::Png => Self::Png,
             CodecArg::Mjpeg => Self::Mjpeg,
+        }
+    }
+}
+
+/// `--tune` values, x264's names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum TuneArg {
+    Film,
+    Animation,
+    Grain,
+    #[value(name = "stillimage")]
+    StillImage,
+    #[value(name = "fastdecode")]
+    FastDecode,
+    #[value(name = "zerolatency")]
+    ZeroLatency,
+}
+
+impl From<TuneArg> for VideoTune {
+    fn from(t: TuneArg) -> Self {
+        match t {
+            TuneArg::Film => Self::Film,
+            TuneArg::Animation => Self::Animation,
+            TuneArg::Grain => Self::Grain,
+            TuneArg::StillImage => Self::StillImage,
+            TuneArg::FastDecode => Self::FastDecode,
+            TuneArg::ZeroLatency => Self::ZeroLatency,
         }
     }
 }
@@ -369,7 +407,13 @@ fn common_root(paths: &[PathBuf]) -> Result<(PathBuf, Vec<String>)> {
 }
 
 fn encode_block(args: &EncodeArgs) -> Option<Encode> {
-    if args.crf.is_none() && args.preset.is_none() && args.codec.is_none() && args.profile.is_none()
+    if args.crf.is_none()
+        && args.preset.is_none()
+        && args.codec.is_none()
+        && args.profile.is_none()
+        && args.tune.is_none()
+        && args.keyframe_interval.is_none()
+        && !args.fixed_keyframes
     {
         return None;
     }
@@ -388,10 +432,12 @@ fn encode_block(args: &EncodeArgs) -> Option<Encode> {
             preset: args.preset.clone(),
             hardware: None,
             profile,
-            keyframe_interval: None,
+            keyframe_interval: args.keyframe_interval,
             max_bitrate_kbps: None,
             bitrate_kbps: None,
             level: None,
+            tune: args.tune.map(Into::into),
+            fixed_keyframes: args.fixed_keyframes.then_some(true),
         }),
         audio: None,
         fast_start: None,

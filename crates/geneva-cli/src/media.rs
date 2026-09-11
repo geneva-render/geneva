@@ -320,6 +320,8 @@ mod imp {
                 max_bitrate_kbps: video.and_then(|v| v.max_bitrate_kbps),
                 bitrate_kbps: video.and_then(|v| v.bitrate_kbps),
                 level: video.and_then(|v| v.level.clone()),
+                tune: video.and_then(|v| v.tune),
+                fixed_keyframes: video.and_then(|v| v.fixed_keyframes).unwrap_or(false),
                 stitch: None,
             })
         };
@@ -373,7 +375,12 @@ mod imp {
         // for exact cuts.
         let wants_encode = overrides.crf.is_some()
             || overrides.preset.is_some()
-            || video.is_some_and(|v| v.crf.is_some() || v.preset.is_some());
+            || video.is_some_and(|v| {
+                v.crf.is_some()
+                    || v.preset.is_some()
+                    || v.tune.is_some()
+                    || v.fixed_keyframes == Some(true)
+            });
         let copyable = !overrides.exact && !wants_encode;
         if copyable {
             let requested = video.and_then(|v| v.codec);
@@ -480,6 +487,7 @@ mod imp {
         if let Some(note) = encoder.video_encoder_note() {
             notes.push(note);
         }
+        notes.extend(encoder.video_setting_notes());
         let mut renderer = CpuRenderer::new(MediaAssets::new(root));
         let total = if has_video { comp.frame_count() } else { 0 };
         let video_format = if has_video {

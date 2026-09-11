@@ -5,6 +5,24 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## Unreleased
+
+### Added
+
+- `encode.video.tune`, in x264's names (`film`, `animation`, `grain`,
+  `stillimage`, `fastdecode`, `zerolatency`), and `--tune` on the verbs.
+  x264 applies every one; VP9 takes `film`, AV1 `fastdecode`, NVENC and
+  VideoToolbox `zerolatency`. An encoder with no equivalent ignores the
+  tune and the report says so.
+- `encode.video.fixed_keyframes`: keyframes at `keyframe_interval` only,
+  never at scene changes, as streaming platforms and segmenters want. It
+  needs the interval (E422). `--keyframe-interval SECONDS` and
+  `--fixed-keyframes` on the verbs. x264, VP9, AV1, NVENC and
+  VideoToolbox place keyframes so; OpenH264 cannot and the report says
+  so.
+- Both settings ask for a real encode: no stream copy or smart cut when
+  they are set, as with `crf` and `preset`.
+
 ## 0.2.0 — 2026-09-11
 
 The timeline format reaches 0.2: `crop`, `effects` (a Gaussian blur),

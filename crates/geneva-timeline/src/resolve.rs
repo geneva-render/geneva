@@ -636,6 +636,16 @@ impl Resolver<'_> {
             }
         }
         if let Some(video) = out.encode.as_ref().and_then(|e| e.video.as_ref()) {
+            if video.fixed_keyframes == Some(true) && video.keyframe_interval.is_none() {
+                self.push(
+                    Diagnostic::error(
+                        "E422",
+                        out_path.key("encode").key("video").key("fixed_keyframes"),
+                        "fixed keyframes need an interval to be fixed at",
+                    )
+                    .with_help("set encode.video.keyframe_interval, in seconds"),
+                );
+            }
             if let Some(profile) = video.profile {
                 let wanted = profile.codec();
                 match video.codec {

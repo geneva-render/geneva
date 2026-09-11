@@ -9,7 +9,9 @@ use ffmpeg_next::{Dictionary, Error as FfError, Packet, Rational};
 use geneva_color::ResolvedTags;
 use geneva_render::Frame;
 use geneva_timeline::Ratio;
-use geneva_timeline::schema::{AudioCodec, Container, HardwarePolicy, VideoCodec, VideoProfile};
+use geneva_timeline::schema::{
+    AudioCodec, Container, HardwarePolicy, VideoCodec, VideoProfile, VideoTune,
+};
 
 use super::subtitle_streams::{SubtitleSettings, SubtitleWriter};
 use super::x264::{X264Encoder, X264Settings};
@@ -69,6 +71,10 @@ pub struct VideoSettings {
     pub stitch: Option<StitchSettings>,
     /// H.264/H.265 level such as "4.1", for the encoders that take one.
     pub level: Option<String>,
+    /// What the picture is like, for the encoders with an equivalent.
+    pub tune: Option<VideoTune>,
+    /// Keyframes at the interval only, never at scene changes.
+    pub fixed_keyframes: bool,
 }
 
 /// A level string such as "4.1" as the integer code encoders use (41).
@@ -419,8 +425,32 @@ fn open_video_encoder(
     video_time_base: Rational,
     fps: Rational,
     global_header: bool,
-) -> Result<codec::encoder::video::Encoder, MediaError> {
+) -> Result<(codec::encoder::video::Encoder, Vec<String>), MediaError> {
     let name = vcodec.name().to_owned();
+    let mut notes = Vec::new();
+    // Keyframes per interval, when one is set.
+    let gop_frames = settings.keyframe_interval.map(|secs| {
+        (secs * f64::from(fps.numerator()) / f64::from(fps.denominator()))
+            .round()
+            .max(1.0) as u32
+    });
+    let tune = settings.tune;
+    let fixed = settings.fixed_keyframes;
+    let no_tune = |notes: &mut Vec<String>| {
+        if let Some(t) = tune {
+            notes.push(format!(
+                "tune \"{}\" is not applied: {name} has no equivalent",
+                t.as_str()
+            ));
+        }
+    };
+    let no_fixed = |notes: &mut Vec<String>| {
+        if fixed {
+            notes.push(format!(
+                "fixed keyframes are not applied: {name} also places keyframes at scene changes"
+            ));
+        }
+    };
     let mut vctx = codec::context::Context::new_with_codec(vcodec);
     if global_header {
         vctx.set_flags(codec::Flags::GLOBAL_HEADER);
@@ -456,11 +486,23 @@ fn open_video_encoder(
             venc.set_qmax(quality);
             venc.set_bit_rate(50_000_000);
             venc.set_gop(u32::try_from(settings.fps.round().max(1) * 2).unwrap_or(60));
+            no_tune(&mut notes);
+            no_fixed(&mut notes);
         }
         "libvpx-vp9" => {
             opts.set("crf", &settings.crf.unwrap_or(31).to_string());
             opts.set("b", "0");
             opts.set("row-mt", "1");
+            match tune {
+                Some(VideoTune::Film) => opts.set("tune-content", "film"),
+                Some(_) => no_tune(&mut notes),
+                None => {}
+            }
+            // Keyframes at a fixed distance: the shortest and longest the
+            // same, which turns the automatic placement off.
+            if let (true, Some(frames)) = (fixed, gop_frames) {
+                opts.set("keyint_min", &frames.to_string());
+            }
         }
         "libsvtav1" => {
             opts.set("crf", &settings.crf.unwrap_or(30).to_string());
@@ -468,6 +510,18 @@ fn open_video_encoder(
                 "preset",
                 &svt_preset(settings.preset.as_deref().unwrap_or("medium")),
             );
+            let mut params = Vec::new();
+            match tune {
+                Some(VideoTune::FastDecode) => params.push("fast-decode=1"),
+                Some(_) => no_tune(&mut notes),
+                None => {}
+            }
+            if fixed {
+                params.push("scd=0");
+            }
+            if !params.is_empty() {
+                opts.set("svtav1-params", &params.join(":"));
+            }
         }
         "prores_ks" => {
             opts.set(
@@ -475,25 +529,44 @@ fn open_video_encoder(
                 settings.profile.unwrap_or(VideoProfile::Hq).as_str(),
             );
             opts.set("vendor", "apl0");
+            no_tune(&mut notes);
         }
         "dnxhd" => {
             opts.set(
                 "profile",
                 settings.profile.unwrap_or(VideoProfile::DnxhrHq).as_str(),
             );
+            no_tune(&mut notes);
         }
         "mjpeg" => {
             // Quality 1..=31 with 1 best; the 0..=51 scale halves onto it.
             let q = (1 + i32::from(settings.crf.unwrap_or(8)) / 2).clamp(1, 31);
             venc.set_qmin(q);
             venc.set_qmax(q);
+            no_tune(&mut notes);
         }
+        "png" => no_tune(&mut notes),
         n if n.ends_with("_nvenc") => {
             opts.set("rc", "constqp");
             opts.set("qp", &quality.to_string());
             opts.set("preset", "p4");
+            match tune {
+                Some(VideoTune::ZeroLatency) => opts.set("tune", "ll"),
+                Some(_) => no_tune(&mut notes),
+                None => {}
+            }
+            if fixed {
+                opts.set("no-scenecut", "1");
+            }
         }
         n if n.ends_with("_videotoolbox") => {
+            // VideoToolbox places keyframes at the interval only, so fixed
+            // keyframes need nothing from it.
+            match tune {
+                Some(VideoTune::ZeroLatency) => opts.set("realtime", "1"),
+                Some(_) => no_tune(&mut notes),
+                None => {}
+            }
             if let Some(kbps) = settings.bitrate_kbps {
                 // Bitrate mode: the only way VideoToolbox holds a size.
                 venc.set_bit_rate(kbps as usize * 1000);
@@ -508,17 +581,20 @@ fn open_video_encoder(
                 opts.set("global_quality", &(q * 118).to_string());
                 opts.set("flags", "+qscale");
             }
-            opts.set("realtime", "0");
+            if tune != Some(VideoTune::ZeroLatency) {
+                opts.set("realtime", "0");
+            }
         }
         _ => {
             if let Some(kbps) = settings.bitrate_kbps {
                 venc.set_bit_rate(kbps as usize * 1000);
             }
+            no_tune(&mut notes);
+            no_fixed(&mut notes);
         }
     }
-    if let Some(secs) = settings.keyframe_interval {
-        let frames = (secs * f64::from(fps.numerator()) / f64::from(fps.denominator())).round();
-        venc.set_gop(frames.max(1.0) as u32);
+    if let Some(frames) = gop_frames {
+        venc.set_gop(frames);
     }
     // A ceiling on top of constant quality is a software encoder's trick:
     // VideoToolbox given a data rate limit in quality mode writes files
@@ -534,8 +610,10 @@ fn open_video_encoder(
             opts.set("level", &code.to_string());
         }
     }
-    venc.open_with(opts)
-        .map_err(|e| codec_error(format!("opening {name} encoder"), e))
+    let venc = venc
+        .open_with(opts)
+        .map_err(|e| codec_error(format!("opening {name} encoder"), e))?;
+    Ok((venc, notes))
 }
 
 /// Opens the first video encoder candidate that accepts the settings and
@@ -595,10 +673,12 @@ fn open_video_track(
                 annexb: true,
                 sps_id: None,
                 bframes: None,
+                tune: settings.tune.map(VideoTune::as_str),
+                fixed_keyframes: settings.fixed_keyframes,
             };
             match X264Encoder::open(&x264) {
                 Ok(enc) => {
-                    opened = Some((VideoBackend::X264(enc), "libx264".to_owned()));
+                    opened = Some((VideoBackend::X264(enc), "libx264".to_owned(), Vec::new()));
                     break;
                 }
                 Err(MediaError::MissingEncoder { .. }) => {}
@@ -620,14 +700,14 @@ fn open_video_track(
             ffmpeg_next::log::set_level(ffmpeg_next::log::Level::Error);
         }
         match result {
-            Ok(enc) => {
-                opened = Some((VideoBackend::Lavc(enc), (*name).to_owned()));
+            Ok((enc, notes)) => {
+                opened = Some((VideoBackend::Lavc(enc), (*name).to_owned(), notes));
                 break;
             }
             Err(e) => last_error = Some(e),
         }
     }
-    let (backend, name) = match (opened, last_error) {
+    let (backend, name, notes) = match (opened, last_error) {
         (Some(v), _) => v,
         (None, Some(e)) => return Err(e),
         (None, None) => {
@@ -663,6 +743,7 @@ fn open_video_track(
         backend,
         scratch: frame::Video::empty(),
         name,
+        notes,
         x264_error,
         stream_index,
         time_base,
@@ -697,6 +778,8 @@ impl StitchX264 {
             annexb: false,
             sps_id: Some(self.sps_id),
             bframes: Some(STITCH_BFRAMES),
+            tune: None,
+            fixed_keyframes: false,
         }
     }
 }
@@ -782,6 +865,7 @@ fn open_stitch_track(
         }),
         scratch: frame::Video::empty(),
         name: "libx264".to_owned(),
+        notes: Vec::new(),
         x264_error: None,
         stream_index,
         time_base,
@@ -920,6 +1004,8 @@ struct VideoTrack {
     scratch: frame::Video,
     /// Encoder implementation name, for the notes.
     name: String,
+    /// Settings the encoder had no equivalent for.
+    notes: Vec<String>,
     /// Why the system's x264 was found but not used, if that happened.
     x264_error: Option<String>,
     stream_index: usize,
@@ -1394,6 +1480,15 @@ impl Encoder {
         packet
             .write_interleaved(octx)
             .map_err(|e| codec_error("writing packet", e))
+    }
+
+    /// Lines about video settings the encoder in use had no equivalent
+    /// for (a tune, fixed keyframes), each saying so.
+    pub fn video_setting_notes(&self) -> Vec<String> {
+        self.video
+            .as_ref()
+            .map(|t| t.notes.clone())
+            .unwrap_or_default()
     }
 
     /// A line about the video encoder in use, when it is worth telling:
