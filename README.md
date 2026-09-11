@@ -5,10 +5,11 @@ declarative, versioned timeline format. It owns compositing, typography,
 animation, color management and audio mixing, and delegates container
 parsing, decoding and encoding to established media libraries.
 
-**Status: 0.1.** The timeline format, validation, the CPU reference
-renderer, text layout, media decoding and encoding, stream copy and the
-everyday verbs work end to end. GPU rendering is not there yet. Expect
-breaking changes to the format until the schema reaches 1.0; see
+**Status: 0.2.** The timeline format (now with crop, effects, masks and
+speed on clips), validation, the CPU reference renderer, text layout,
+media decoding and encoding, stream copy, smart cuts and the everyday
+verbs work end to end. GPU rendering is not there yet. Expect breaking
+changes to the format until the schema reaches 1.0; see
 [CHANGELOG.md](CHANGELOG.md).
 
 ## What works today
@@ -71,9 +72,9 @@ texts; there is nothing else to install.
 
 ```sh
 # Pick the archive for your machine (adjust the version and the target)
-curl -fsSLO https://github.com/geneva-render/geneva/releases/download/v0.1.11/geneva-v0.1.11-aarch64-apple-darwin.tar.gz
-tar xzf geneva-v0.1.11-aarch64-apple-darwin.tar.gz
-sh geneva-v0.1.11-aarch64-apple-darwin/install.sh
+curl -fsSLO https://github.com/geneva-render/geneva/releases/download/v0.2.0/geneva-v0.2.0-aarch64-apple-darwin.tar.gz
+tar xzf geneva-v0.2.0-aarch64-apple-darwin.tar.gz
+sh geneva-v0.2.0-aarch64-apple-darwin/install.sh
 geneva --help
 ```
 
@@ -93,8 +94,8 @@ on a file you pass) and prints a table with the time each step took, next
 to the time ffmpeg takes for the same step when ffmpeg is installed:
 
 ```sh
-sh geneva-v0.1.11-aarch64-apple-darwin/check.sh            # built-in test clip
-sh geneva-v0.1.11-aarch64-apple-darwin/check.sh input.mp4  # your own file
+sh geneva-v0.2.0-aarch64-apple-darwin/check.sh            # built-in test clip
+sh geneva-v0.2.0-aarch64-apple-darwin/check.sh input.mp4  # your own file
 ```
 
 Linux binaries need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, RHEL 9
@@ -131,7 +132,7 @@ geneva render examples/lower-third.json -o out.mp4
 
 ```json
 {
-  "geneva": "0.1",
+  "geneva": "0.2",
   "output": { "width": 1280, "height": 720, "fps": 30, "duration": "3s" },
   "assets": { "logo": { "src": "logo.png" } },
   "layers": [

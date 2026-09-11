@@ -5,7 +5,12 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
-## Unreleased
+## 0.2.0 — 2026-09-11
+
+The timeline format reaches 0.2: `crop`, `effects` (a Gaussian blur),
+`mask` and `speed` on clips, all optional, so every 0.1 document still
+reads as it is. The compositor was profiled and its largest costs
+fixed, and the audio mix is streamed.
 
 ### Added
 

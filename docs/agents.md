@@ -83,6 +83,18 @@ geneva render job.json --assets /path/printed/on/stderr -o out.mp4
 The asset root the printed document expects is written to stderr (it is
 the deepest directory containing every input).
 
+Format 0.2 added four optional clip fields, all documented in
+[timeline.md](timeline.md): `crop` (a rectangle of the source that
+becomes the clip's box), `effects` (a list; `blur` with an animatable
+`radius`), `mask` (a rectangle or ellipse with `radius` and `feather`,
+or a luma image `asset`, in the box's own coordinates) and `speed` (a
+constant rate change; the clip lasts its range divided by it). The verbs
+expose the everyday cases as `--crop X,Y,WxH` (or `WxH` for the middle),
+`--speed FACTOR` and `--fill blur` (a blurred, scaled-up copy of the
+picture behind it on a canvas it does not cover). A clip using any of
+these is composited; the copy, smart-cut and direct paths do not apply
+to it, so the report's mode will be `render`.
+
 ## Things that trip programs up
 
 - **Asset paths are relative to a root**, the timeline's directory by
