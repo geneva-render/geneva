@@ -307,6 +307,9 @@ pub struct Options<'a> {
     pub resize: bool,
     /// The output file's extension, to warn when it is not MP4.
     pub extension: Option<&'a str>,
+    /// Whether a picture that does not cover the canvas gets a blurred,
+    /// scaled-up copy of itself behind it instead of bars.
+    pub fill_blur: bool,
 }
 
 fn even(v: f64) -> u32 {
@@ -339,12 +342,13 @@ pub fn apply(tl: &mut Timeline, facts: &Facts, opts: &Options<'_>) -> Vec<Diagno
     let mut why: Vec<String> = Vec::new();
     let mut diagnostics = Vec::new();
     let (w, h) = (facts.width, facts.height);
-    // A `cover` fit asked for on the verb crops instead of leaving bars.
-    let cover = tl
-        .layers
-        .iter()
-        .flat_map(|l| &l.clips)
-        .any(|c| matches!(c.source, Source::Video { .. }) && c.fit == Some(Fit::Cover));
+    // A `cover` fit asked for on the verb crops instead of leaving bars
+    // (a blurred fill layer is cover-fitted too, but is not the picture).
+    let cover = tl.layers.iter().flat_map(|l| &l.clips).any(|c| {
+        matches!(c.source, Source::Video { .. })
+            && c.fit == Some(Fit::Cover)
+            && c.effects.is_empty()
+    });
 
     // Size: never upscaled; fitted onto a portrait canvas when the
     // target's orientation is fixed. With bars the canvas keeps the
@@ -379,9 +383,13 @@ pub fn apply(tl: &mut Timeline, facts: &Facts, opts: &Options<'_>) -> Vec<Diagno
             why.push(format!(
                 "{w}×{h} cropped to its center {ow}×{oh} (9:16, never upscaled)"
             ));
+        } else if t.portrait && w > h && opts.fill_blur && crate::verbs::add_blur_fill(tl, w, h) {
+            why.push(format!(
+                "{w}×{h} shown whole on a {ow}×{oh} portrait canvas over a blurred, scaled-up copy of itself (--fill blur; 9:16, never upscaled)"
+            ));
         } else if t.portrait && w > h {
             why.push(format!(
-                "{w}×{h} fitted onto a {ow}×{oh} portrait canvas (9:16, never upscaled; --fit cover crops instead)"
+                "{w}×{h} fitted onto a {ow}×{oh} portrait canvas (9:16, never upscaled; --fit cover crops instead, --fill blur fills with a blurred copy)"
             ));
         } else {
             why.push(format!(

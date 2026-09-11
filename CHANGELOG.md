@@ -21,6 +21,17 @@ the format version it was written for.
 - `--crop RECT` on `convert`, `resize` and `trim`: `X,Y,WxH`, or `WxH`
   for the middle of the picture. The output takes the crop's size unless
   a size is given.
+- `effects` on clips, a list applied to the placed picture before
+  opacity and blending, with one kind so far: `blur`, a Gaussian blur
+  whose `radius` (the standard deviation in output pixels, as CSS's
+  `blur()`) is animatable. A wide blur is computed on a smaller layer
+  and brought back bilinearly, so its cost does not grow with the
+  radius.
+- `--fill blur` on the verbs: a picture that does not cover its frame (a
+  landscape video on a portrait canvas, from `--for tiktok` or an
+  explicit size) is shown whole over a blurred, scaled-up copy of
+  itself instead of bars, as the phone editors do. The copy is a first
+  layer named `fill` with no audio; `--show-timeline` shows it.
 
 ### Performance
 

@@ -172,6 +172,7 @@ contain other compositions up to 8 levels deep, and never themselves (E207).
 | `transition` | no | | `{ "kind": "crossfade", "duration": ... }` from the previous clip. |
 | `crop` | no | the whole source | A rectangle of the source that becomes the clip's box; see below. |
 | `fit` | no | `contain` for video, `none` otherwise | `none`, `contain`, `cover`, `fill`: how the source box is sized to the frame before the transform. |
+| `effects` | no | `[]` | Effects on the placed picture, in order; see below. |
 | `transform` | no | centered | Position, anchor, scale, rotation. |
 | `opacity` | no | `1` | Animatable, 0 to 1. |
 | `blend` | no | `normal` | `normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `difference`, `soft-light`, `add`. Computed in linear light. |
@@ -192,6 +193,37 @@ reaches past the source's actual size is clamped to it, and one that
 leaves nothing paints nothing. The anchor's percentages refer to the
 cropped box. A video shown as it is with a crop still takes the direct
 path: the region is scaled straight from the decoder.
+
+### `effects`
+
+A list of effects applied to the picture after the transform, so their
+sizes are in output pixels, and before opacity and blending. Each has a
+`kind`.
+
+`blur`
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `radius` | | Standard deviation of a Gaussian blur in output pixels, as CSS's `blur()`; animatable; 0 leaves the picture as it is. |
+
+The blur spreads past the picture's edges into transparency, so a
+blurred clip fades out at its border rather than stopping. A wide blur
+is computed on a smaller layer and brought back, which looks the same
+and keeps the cost flat. A clip with effects is always composited; the
+copy, smart-cut and direct paths do not apply.
+
+The idiom for a portrait canvas is the picture whole over a blurred,
+scaled-up copy of itself:
+
+```json
+"layers": [
+  { "clips": [ { "source": { "kind": "video", "asset": "v", "audio": false }, "fit": "cover",
+      "effects": [ { "kind": "blur", "radius": 45 } ] } ] },
+  { "clips": [ { "source": { "kind": "video", "asset": "v" }, "fit": "contain" } ] }
+]
+```
+
+`--fill blur` on the verbs builds exactly this.
 
 ### `transform`
 

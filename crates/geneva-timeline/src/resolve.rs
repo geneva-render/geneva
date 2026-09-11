@@ -18,7 +18,7 @@ use crate::length::{Length, Point, Scale};
 use crate::ratio::Ratio;
 use crate::schema::{
     ACCEPTED_VERSIONS, Asset, AssetKind, AudioOutput, AudioTrack, BlendMode, CompositionDef, Crop,
-    Encode, FORMAT_VERSION, Fit, Layer, ShapeKind, Source, TextSource, Timeline, Transform,
+    Effect, Encode, FORMAT_VERSION, Fit, Layer, ShapeKind, Source, TextSource, Timeline, Transform,
     TransitionKind,
 };
 use crate::time::Time;
@@ -127,6 +127,15 @@ pub struct ResolvedClip {
     pub opacity: Track<f64>,
     /// Transition from the previous clip, with its duration.
     pub transition_in: Option<(TransitionKind, Ratio)>,
+    /// Effects on the placed picture, in order.
+    pub effects: Vec<ResolvedEffect>,
+}
+
+/// An effect with its parameters sampleable over clip-local time.
+#[derive(Debug, Clone)]
+pub enum ResolvedEffect {
+    /// A Gaussian blur with its standard deviation in output pixels.
+    Blur(Track<f64>),
 }
 
 impl ResolvedClip {
@@ -966,6 +975,21 @@ impl Resolver<'_> {
             if let Some(crop) = &clip.crop {
                 self.check_crop(crop, &cpath.key("crop"));
             }
+            let effects = clip
+                .effects
+                .iter()
+                .enumerate()
+                .map(|(k, e)| match e {
+                    Effect::Blur { radius } => ResolvedEffect::Blur(self.track_f64(
+                        Some(radius),
+                        &cpath.key("effects").index(k).key("radius"),
+                        0.0,
+                        length,
+                        Some((0.0, 4096.0)),
+                        "blur radius",
+                    )),
+                })
+                .collect();
 
             clips.push(ResolvedClip {
                 id: clip_id,
@@ -985,6 +1009,7 @@ impl Resolver<'_> {
                 rotation,
                 opacity,
                 transition_in,
+                effects,
             });
             cursor = end;
         }

@@ -144,6 +144,74 @@ pub struct EncodeArgs {
     /// fits, and warns when the result is still larger.
     #[arg(long, value_name = "SIZE", requires = "for_")]
     pub budget: Option<String>,
+    /// What fills the frame around a picture that does not cover it
+    /// (a landscape video on a portrait canvas): bars in the background
+    /// color (default), or blur, the picture whole over a blurred,
+    /// scaled-up copy of itself.
+    #[arg(long, value_enum, value_name = "FILL")]
+    pub fill: Option<FillArg>,
+}
+
+/// What surrounds a picture that does not cover the frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum FillArg {
+    /// The background color.
+    Bars,
+    /// A blurred, scaled-up copy of the picture.
+    Blur,
+}
+
+/// The blur's standard deviation for a fill, in output pixels: a
+/// twenty-fourth of the frame's shorter side (45 px on a 1080-wide
+/// portrait frame), heavy enough to read as a backdrop.
+pub fn fill_blur_radius(width: u32, height: u32) -> f64 {
+    (f64::from(width.min(height)) / 24.0).round().max(1.0)
+}
+
+/// Puts a blurred, cover-fitted copy of the timeline's video under it,
+/// for a picture that does not cover a `width`×`height` frame; returns
+/// whether it did. The copy carries no audio and is the first layer;
+/// the picture keeps its own fit.
+pub fn add_blur_fill(tl: &mut Timeline, src_w: u32, src_h: u32) -> bool {
+    let (w, h) = (tl.output.width, tl.output.height);
+    if w == 0 || h == 0 || src_w == 0 || src_h == 0 {
+        return false;
+    }
+    let same_shape =
+        (f64::from(w) / f64::from(h) - f64::from(src_w) / f64::from(src_h)).abs() < 0.01;
+    if same_shape {
+        return false;
+    }
+    let Some(picture) = tl
+        .layers
+        .iter()
+        .flat_map(|l| &l.clips)
+        .find(|c| matches!(c.source, Source::Video { .. }) && c.effects.is_empty())
+    else {
+        return false;
+    };
+    if matches!(picture.fit, Some(Fit::Cover | Fit::Fill)) {
+        return false;
+    }
+    let mut fill = picture.clone();
+    fill.id = Some("fill".to_owned());
+    if let Source::Video { audio, .. } = &mut fill.source {
+        *audio = Some(false);
+    }
+    fill.fit = Some(Fit::Cover);
+    fill.transform = None;
+    fill.effects = vec![geneva_timeline::schema::Effect::Blur {
+        radius: Animated::Constant(fill_blur_radius(w, h)),
+    }];
+    tl.layers.insert(
+        0,
+        Layer {
+            id: Some("fill".to_owned()),
+            enabled: true,
+            clips: vec![fill],
+        },
+    );
+    true
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -357,6 +425,7 @@ fn video_clip(
         transform: None,
         opacity: None,
         blend: None,
+        effects: Vec::new(),
     }
 }
 
@@ -522,6 +591,9 @@ pub fn convert(
         enabled: true,
         clips: vec![clip],
     });
+    if args.fill == Some(FillArg::Blur) {
+        add_blur_fill(&mut tl, pic_w, pic_h);
+    }
     Ok(Compiled {
         timeline: tl,
         root,
@@ -815,6 +887,7 @@ pub fn overlay(
                 Some(Animated::Constant(opacity))
             },
             blend: None,
+            effects: Vec::new(),
         }],
     });
     Ok(Compiled {
@@ -1337,6 +1410,7 @@ pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Re
             }),
             opacity: None,
             blend: None,
+            effects: Vec::new(),
         });
     }
     if offscreen > LISTED {

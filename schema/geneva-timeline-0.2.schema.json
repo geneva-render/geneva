@@ -983,6 +983,13 @@
             }
           ],
           "description": "Blend mode against the layers below. Defaults to \"normal\"."
+        },
+        "effects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Effect"
+          },
+          "description": "Effects applied to the placed picture, in order, before opacity\nand blending."
         }
       },
       "required": [
@@ -2107,6 +2114,30 @@
         }
       ],
       "description": "Blend modes, computed in linear light."
+    },
+    "Effect": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "radius": {
+              "$ref": "#/$defs/Animated_double",
+              "description": "The blur's standard deviation in output pixels (as CSS's\n`blur()`); 0 leaves the picture as it is. Animatable."
+            },
+            "kind": {
+              "type": "string",
+              "const": "blur"
+            }
+          },
+          "required": [
+            "kind",
+            "radius"
+          ],
+          "description": "A Gaussian blur."
+        }
+      ],
+      "description": "An effect on a clip's picture, selected by \"kind\". Effects act on the\npicture as placed in the output frame, so their sizes are in output\npixels."
     },
     "AudioTrack": {
       "type": "object",

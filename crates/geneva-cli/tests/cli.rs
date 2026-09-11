@@ -164,6 +164,48 @@ fn crop_takes_the_region_straight_from_the_decoder() {
     let info = run_json(&["probe"], &[&out]);
     assert_eq!(info["video"]["width"], 96);
     assert_eq!(info["video"]["height"], 54);
+    // A portrait target with a blurred fill: the picture whole over a
+    // blurred, cover-fitted, silent copy of itself, composited.
+    let out = dir.path().join("reel.mp4");
+    let doc = run_json(
+        &["convert", "--for", "tiktok", "--fill", "blur", "-o"],
+        &[&out, &media_dir().join("clip.mp4")],
+    );
+    assert_eq!(doc["mode"], "render", "{doc:#}");
+    assert!(
+        doc["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["message"]
+                .as_str()
+                .unwrap()
+                .contains("blurred, scaled-up copy")),
+        "{doc:#}"
+    );
+    let info = run_json(&["probe"], &[&out]);
+    assert_eq!(info["video"]["width"], 192);
+    assert_eq!(info["video"]["height"], 342);
+    let shown = geneva()
+        .args([
+            "convert",
+            "--for",
+            "tiktok",
+            "--fill",
+            "blur",
+            "--show-timeline",
+            "-o",
+        ])
+        .arg(&out)
+        .arg(media_dir().join("clip.mp4"))
+        .output()
+        .unwrap();
+    let tl: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(tl["layers"][0]["id"], "fill");
+    assert_eq!(tl["layers"][0]["clips"][0]["fit"], "cover");
+    assert_eq!(tl["layers"][0]["clips"][0]["source"]["audio"], false);
+    assert_eq!(tl["layers"][0]["clips"][0]["effects"][0]["kind"], "blur");
+    assert_eq!(tl["layers"][1]["clips"][0]["fit"], "contain");
     // In a timeline, a crop is a clip field; a 0.1 document without one
     // still validates.
     geneva()

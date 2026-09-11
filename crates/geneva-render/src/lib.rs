@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 mod assets;
+mod blur;
 mod cpu;
 mod frame;
 mod text;
@@ -21,6 +22,7 @@ use geneva_timeline::{Composition, Ratio};
 use thiserror::Error;
 
 pub use assets::{AssetSource, FileAssets, Image, NoAssets};
+pub use blur::gaussian_blur;
 pub use cpu::CpuRenderer;
 pub use frame::Frame;
 pub use text::TextEngine;

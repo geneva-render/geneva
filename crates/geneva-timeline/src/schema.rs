@@ -460,6 +460,24 @@ pub struct Clip {
     /// Blend mode against the layers below. Defaults to "normal".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blend: Option<BlendMode>,
+    /// Effects applied to the placed picture, in order, before opacity
+    /// and blending.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<Effect>,
+}
+
+/// An effect on a clip's picture, selected by "kind". Effects act on the
+/// picture as placed in the output frame, so their sizes are in output
+/// pixels.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum Effect {
+    /// A Gaussian blur.
+    Blur {
+        /// The blur's standard deviation in output pixels (as CSS's
+        /// `blur()`); 0 leaves the picture as it is. Animatable.
+        radius: Animated<f64>,
+    },
 }
 
 /// A rectangle of a source, in source pixels or in percentages of the

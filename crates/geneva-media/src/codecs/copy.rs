@@ -260,7 +260,7 @@ fn video_layer_clips(
             .iter()
             .skip(1)
             .flat_map(|l| l.clips.iter())
-            .all(|c| c.blend == geneva_timeline::schema::BlendMode::Normal);
+            .all(|c| c.blend == geneva_timeline::schema::BlendMode::Normal && c.effects.is_empty());
         if !allow_overlays || !plain {
             return Ok(None);
         }
@@ -290,7 +290,7 @@ fn video_layer_clips(
         if !clip.rotation.is_constant() || clip.rotation.sample(0.0) != 0.0 {
             return Ok(None);
         }
-        if clip.blend != geneva_timeline::schema::BlendMode::Normal {
+        if clip.blend != geneva_timeline::schema::BlendMode::Normal || !clip.effects.is_empty() {
             return Ok(None);
         }
         if !clip.position.is_constant() || clip.position.sample(0.0) != center {

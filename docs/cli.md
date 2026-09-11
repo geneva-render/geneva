@@ -53,6 +53,7 @@ extension unless the timeline sets `output.encode.container`.
 | `--no-audio` | Write no audio track. |
 | `--exact` | Cut on the exact frame instead of moving cuts to keyframes; see [smart cut](#smart-cut). |
 | `--for TARGET`, `--quality`, `--budget` | Encode for a destination; see [targets](#targets). On `render` the timeline's size is kept; only the encode block is set. |
+| `--fill bars\|blur` | What surrounds a picture that does not cover its frame (a landscape video on a portrait canvas): the background color, or a blurred, scaled-up copy of the picture behind it. Verbs only. |
 
 When the composition uses its sources as they are, the coded streams are
 copied instead of re-encoded and the report says so
@@ -145,13 +146,17 @@ from the decoder to the encoder, so a crop costs no more than a resize.
 
 `--fit` also decides how the picture meets a canvas that `--for` builds:
 a landscape video on a 9:16 target gets bars by default and is cropped
-to its center with `--fit cover`.
+to its center with `--fit cover`. `--fill blur` keeps the whole picture
+and fills the rest with a blurred, scaled-up copy of it, the way the
+phone editors do; the copy is a first layer named `fill` with no audio,
+visible with `--show-timeline`.
 
 ```sh
 geneva convert talk.mov -o talk.mp4
 geneva convert talk.mp4 -o talk.webm --codec vp9 --crf 32
 geneva convert talk.mp4 -o talk-720.mp4 --height 720 --fps 30
 geneva convert talk.mp4 -o reel.mp4 --for tiktok --fit cover
+geneva convert talk.mp4 -o reel.mp4 --for tiktok --fill blur
 geneva convert talk.mp4 -o square.mp4 --crop 1080x1080
 ```
 
@@ -280,9 +285,9 @@ The rules, in order:
    cover` on `convert` and `resize` (or on the clip, in a timeline) crops
    to the center instead, keeping the source's full height; a blind
    crop keeps the middle third of a 16:9 picture, so use it for content
-   that sits in the middle. A blurred copy of the picture behind it, the
-   way phone editors fill a Reel, is planned with the effects of the 0.2
-   format.
+   that sits in the middle. `--fill blur` keeps the whole picture and
+   puts a blurred, scaled-up copy of it behind, the way phone editors
+   fill a Reel.
 3. H.264 High everywhere, with the level the size and frame rate need
    (`3.1` for 720p, `4.0` or `4.2` for 1080p, `5.1` or `5.2` for 4K), so
    old decoders know what to expect. `--codec` overrides.

@@ -4,7 +4,9 @@ use std::hash::{Hash, Hasher};
 
 use geneva_color::{Color, LinearRgba};
 use geneva_timeline::schema::{BlendMode, Fit, ShapeKind};
-use geneva_timeline::{Composition, Ratio, ResolvedClip, ResolvedLayer, ResolvedSource};
+use geneva_timeline::{
+    Composition, Ratio, ResolvedClip, ResolvedEffect, ResolvedLayer, ResolvedSource,
+};
 use rayon::prelude::*;
 
 use crate::assets::{AssetSource, FileAssets, Image};
@@ -204,7 +206,7 @@ impl<A: AssetSource> CpuRenderer<A> {
             .iter()
             .skip(1)
             .flat_map(|l| l.clips.iter())
-            .all(|c| c.blend == BlendMode::Normal)
+            .all(|c| c.blend == BlendMode::Normal && c.effects.is_empty())
     }
 
     /// Draws the clips above the first layer that are visible at `t` onto
@@ -334,6 +336,20 @@ impl<A: AssetSource> CpuRenderer<A> {
             if opacity <= 0.0 {
                 continue;
             }
+            // The blur's layer buffer comes from the pool now, while the
+            // renderer is free; the paint below borrows it.
+            let sigma = clip
+                .effects
+                .iter()
+                .map(|e| match e {
+                    ResolvedEffect::Blur(radius) => radius.sample(local).max(0.0),
+                })
+                .fold(0.0f64, |acc, s| (acc * acc + s * s).sqrt());
+            let scratch = if sigma > 0.0 {
+                self.spare.pop().unwrap_or_default()
+            } else {
+                Vec::new()
+            };
             let Some(paint) = self.paint_for(comp, clip, t, local)? else {
                 continue;
             };
@@ -343,19 +359,120 @@ impl<A: AssetSource> CpuRenderer<A> {
             let Some(placement) = Placement::new(width, height, clip, local, window) else {
                 continue;
             };
-            draw(
-                frame,
-                [0, 0],
-                &paint,
-                &placement,
-                opacity as f32,
-                clip.blend,
-            );
+            let scratch = if sigma > 0.0 {
+                Some(draw_blurred(
+                    scratch,
+                    frame,
+                    &paint,
+                    &placement,
+                    sigma,
+                    opacity as f32,
+                    clip.blend,
+                ))
+            } else {
+                draw(
+                    frame,
+                    [0, 0],
+                    &paint,
+                    &placement,
+                    opacity as f32,
+                    clip.blend,
+                );
+                None
+            };
             let pixels = owned_pixels(paint);
             self.recycle(pixels);
+            self.recycle(scratch);
         }
         Ok(())
     }
+}
+
+/// Draws a clip blurred by `sigma` output pixels: the picture goes onto
+/// a transparent layer covering everything whose blur can reach the
+/// frame, the layer is blurred, and the result is laid onto the frame
+/// with the clip's opacity and blend mode. A wide blur is computed on a
+/// smaller layer (the picture drawn `k` times smaller and blurred by
+/// `sigma / k`) and brought back bilinearly, which is indistinguishable
+/// at such radii and keeps the cost flat. The layer's buffer is
+/// `scratch`, returned for the next use.
+fn draw_blurred(
+    scratch: Vec<LinearRgba>,
+    frame: &mut Frame,
+    paint: &Paint,
+    place: &Placement,
+    sigma: f64,
+    opacity: f32,
+    blend: BlendMode,
+) -> Vec<LinearRgba> {
+    let reach = (3.0 * sigma).ceil();
+    let (fw, fh) = (f64::from(frame.width()), f64::from(frame.height()));
+    let x0 = (place.extent[0] - reach).max(-reach).floor();
+    let y0 = (place.extent[1] - reach).max(-reach).floor();
+    let x1 = (place.extent[2] + reach).min(fw + reach).ceil();
+    let y1 = (place.extent[3] + reach).min(fh + reach).ceil();
+    if x1 <= x0 || y1 <= y0 {
+        return scratch;
+    }
+    let k = if sigma >= 4.0 {
+        (sigma / 2.0).floor().min(8.0)
+    } else {
+        1.0
+    };
+    let lw = ((x1 - x0) / k).ceil().max(1.0) as u32;
+    let lh = ((y1 - y0) / k).ceil().max(1.0) as u32;
+    let mut layer = Frame::from_pixels(scratch);
+    layer.reset(lw, lh, Color::TRANSPARENT);
+    if let Some(p) = place.moved([-x0, -y0], 1.0 / k, lw, lh) {
+        draw(&mut layer, [0, 0], paint, &p, 1.0, BlendMode::Normal);
+    }
+    crate::blur::gaussian_blur(&mut layer, sigma / k);
+    let image = Image::from_frame_pixels(layer);
+    composite_layer(frame, &image, [x0, y0], k, opacity, blend);
+    image.pixels
+}
+
+/// Lays a layer whose pixel (0, 0) sits at `origin` in the frame, each
+/// of its pixels `k` frame pixels wide, onto the frame with `opacity`
+/// and `blend`; a layer at the frame's own scale is read texel by texel,
+/// a smaller one is sampled bilinearly.
+fn composite_layer(
+    frame: &mut Frame,
+    layer: &Image,
+    origin: [f64; 2],
+    k: f64,
+    opacity: f32,
+    blend: BlendMode,
+) {
+    let (fw, fh) = (frame.width(), frame.height());
+    let x0 = origin[0].max(0.0) as u32;
+    let y0 = origin[1].max(0.0) as u32;
+    let x1 = ((origin[0] + f64::from(layer.width) * k).ceil().max(0.0) as u32).min(fw);
+    let y1 = ((origin[1] + f64::from(layer.height) * k).ceil().max(0.0) as u32).min(fh);
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let plain = opacity >= 1.0 && blend == BlendMode::Normal;
+    let width = fw as usize;
+    let rows = &mut frame.pixels_mut()[y0 as usize * width..y1 as usize * width];
+    let direct = k == 1.0 && origin[0].fract() == 0.0 && origin[1].fract() == 0.0;
+    rows.par_chunks_mut(width).enumerate().for_each(|(i, row)| {
+        let y = y0 + i as u32;
+        for x in x0..x1 {
+            let src = if direct {
+                layer.texel(
+                    i64::from(x) - origin[0] as i64,
+                    i64::from(y) - origin[1] as i64,
+                )
+            } else {
+                layer.sample(
+                    (f64::from(x) + 0.5 - origin[0]) / k,
+                    (f64::from(y) + 0.5 - origin[1]) / k,
+                )
+            };
+            put(row, x as usize, src, opacity, blend, plain);
+        }
+    });
 }
 
 /// The pixel buffer of a paint that owns one, giving up the paint.
@@ -501,6 +618,8 @@ struct Placement {
     sin: f64,
     /// Output-space bounding box `[x0, y0, x1, y1]`, clamped to the frame.
     bounds: [u32; 4],
+    /// The same box before clamping, in output pixels.
+    extent: [f64; 4],
     /// True when box pixels map one-to-one onto output pixels.
     pixel_aligned: bool,
 }
@@ -565,6 +684,30 @@ impl Placement {
             x1 = x1.max(x);
             y1 = y1.max(y);
         }
+        Self::finish(
+            window,
+            anchor,
+            position,
+            scale,
+            (cos, sin),
+            [x0, y0, x1, y1],
+            (frame_w, frame_h),
+        )
+    }
+
+    /// Clamps the extent to the frame and decides pixel alignment.
+    fn finish(
+        window: [f64; 4],
+        anchor: [f64; 2],
+        position: [f64; 2],
+        scale: [f64; 2],
+        (cos, sin): (f64, f64),
+        extent: [f64; 4],
+        (frame_w, frame_h): (u32, u32),
+    ) -> Option<Self> {
+        let out_w = f64::from(frame_w);
+        let out_h = f64::from(frame_h);
+        let [x0, y0, x1, y1] = extent;
         if x1 <= 0.0 || y1 <= 0.0 || x0 >= out_w || y0 >= out_h {
             return None;
         }
@@ -590,8 +733,35 @@ impl Placement {
             cos,
             sin,
             bounds,
+            extent,
             pixel_aligned,
         })
+    }
+
+    /// The same placement in another frame: output coordinates are moved
+    /// by `offset` and then multiplied by `factor`, and the bounds are
+    /// clamped to the new frame's size.
+    fn moved(&self, offset: [f64; 2], factor: f64, frame_w: u32, frame_h: u32) -> Option<Self> {
+        let position = [
+            (self.position[0] + offset[0]) * factor,
+            (self.position[1] + offset[1]) * factor,
+        ];
+        let scale = [self.scale[0] * factor, self.scale[1] * factor];
+        let extent = [
+            (self.extent[0] + offset[0]) * factor,
+            (self.extent[1] + offset[1]) * factor,
+            (self.extent[2] + offset[0]) * factor,
+            (self.extent[3] + offset[1]) * factor,
+        ];
+        Self::finish(
+            self.window,
+            self.anchor,
+            position,
+            scale,
+            (self.cos, self.sin),
+            extent,
+            (frame_w, frame_h),
+        )
     }
 
     /// Whether the placement only moves and scales (no rotation, or a
@@ -1024,6 +1194,54 @@ mod tests {
             "0s",
         );
         assert_eq!(f.get(32, 16).to_srgb8(), [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn blur_spreads_a_shape_past_its_edge() {
+        // A 20×10 white rect with its top-left at (4, 6), blurred by 2 px:
+        // just outside the edge some of it shows, the middle stays white,
+        // far away nothing changes.
+        let f = render(
+            &doc(
+                r##""layers":[{"clips":[{"source":{"kind":"shape","shape":"rect","width":20,"height":10,"fill":"white"},
+                "effects":[{"kind":"blur","radius":2}],
+                "transform":{"position":{"x":4,"y":6},"anchor":{"x":0,"y":0}}}]}]"##,
+            ),
+            "0s",
+        );
+        let outside = f.get(2, 10);
+        let inside = f.get(14, 11);
+        assert!(outside.r > 0.05 && outside.r < 0.5, "{outside:?}");
+        assert!(inside.r > 0.95, "{inside:?}");
+        assert_eq!(f.get(40, 11).to_srgb8(), [0, 0, 0, 255]);
+        // Opacity applies to the blurred result.
+        let faded = render(
+            &doc(
+                r##""layers":[{"clips":[{"source":{"kind":"shape","shape":"rect","width":20,"height":10,"fill":"white"},
+                "effects":[{"kind":"blur","radius":2}],"opacity":0.5,
+                "transform":{"position":{"x":4,"y":6},"anchor":{"x":0,"y":0}}}]}]"##,
+            ),
+            "0s",
+        );
+        assert!((faded.get(14, 11).r - inside.r * 0.5).abs() < 0.02);
+    }
+
+    #[test]
+    fn a_wide_blur_runs_on_a_smaller_layer() {
+        // A frame-sized white solid blurred by 10 px (computed 5 times
+        // smaller): the middle stays bright, the corners fade toward the
+        // transparent outside, and nothing goes above white.
+        let f = render(
+            &doc(
+                r##""layers":[{"clips":[{"source":{"kind":"solid","color":"white"},"effects":[{"kind":"blur","radius":10}]}]}]"##,
+            ),
+            "0s",
+        );
+        let middle = f.get(32, 16);
+        let corner = f.get(0, 0);
+        assert!(middle.r > 0.85 && middle.r <= 1.0 + 1e-5, "{middle:?}");
+        assert!(corner.r < middle.r * 0.6, "{corner:?} vs {middle:?}");
+        assert!(f.pixels().iter().all(|p| p.r <= 1.0 + 1e-5));
     }
 
     #[test]

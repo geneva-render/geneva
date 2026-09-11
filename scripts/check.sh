@@ -149,6 +149,7 @@ run "trim for tiktok (--for, 9:16 canvas)" "$work/tiktok.mp4" "$geneva" trim "$i
 ff -ss 2 -i "$input" -t 5 -vf "scale='min(1080,iw)':-2,pad=iw:iw*16/9:0:(oh-ih)/2" "${ffh264[@]}" -g 60 -movflags +faststart -c:a aac -b:a 128k "$work/ff-tiktok.mp4"
 run "convert for tiktok, --fit cover (crop)" "$work/cover.mp4" "$geneva" convert "$work/trim-exact.mp4" -o "$work/cover.mp4" --for tiktok --fit cover
 ff -i "$work/trim-exact.mp4" -vf "crop=ih*9/16:ih" "${ffh264[@]}" -g 60 -movflags +faststart -c:a aac -b:a 128k "$work/ff-cover.mp4"
+run "convert for tiktok, --fill blur (rendered)" "$work/blurfill.mp4" "$geneva" convert "$work/trim-exact.mp4" -o "$work/blurfill.mp4" --for tiktok --fill blur; noff
 run "trim for email, --budget 2MB" "$work/email.mp4" "$geneva" trim "$input" -o "$work/email.mp4" --from 2s --duration 5s --for email --budget 2MB; noff
 if [ "$quick" = 0 ]; then
   run "5s to VP9/Opus (webm)" "$work/short.webm" "$geneva" trim "$input" -o "$work/short.webm" --from 2s --duration 5s

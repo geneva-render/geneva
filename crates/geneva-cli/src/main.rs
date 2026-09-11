@@ -468,6 +468,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         false,
                         &args.output,
                         !args.no_audio,
+                        false,
                     )?;
                     size_limit = limit;
                     let text = serde_json::to_string_pretty(&tl)?;
@@ -671,6 +672,7 @@ fn run_verb(
             true,
             output,
             !encode.no_audio,
+            encode.fill == Some(verbs::FillArg::Blur),
         )?;
         extra.extend(notes);
         size_limit = limit;
@@ -722,6 +724,7 @@ fn apply_target(
     resize: bool,
     output: &Path,
     audio: bool,
+    fill_blur: bool,
 ) -> Result<(Vec<Diagnostic>, SizeLimit)> {
     let target = targets::find(name).ok_or_else(|| {
         anyhow::anyhow!(
@@ -754,6 +757,7 @@ fn apply_target(
         codec,
         resize,
         extension,
+        fill_blur,
     };
     let notes = targets::apply(timeline, &facts, &opts);
     let limit = match (budget, target.max_bytes) {
