@@ -20,11 +20,11 @@ use geneva_color::ResolvedTags;
 use geneva_timeline::schema::{Container, VideoCodec};
 use geneva_timeline::{Composition, Ratio};
 
-use super::copy::base_video_clips;
+use super::copy::{base_video_clips, container_accepts_audio};
 use super::decode::VideoReader;
 use super::h264::{self, ParameterSets};
 use super::probe::{ratio, ts_to_secs};
-use super::{codec_error, init, open_error, x264};
+use super::{codec_error, ffi, init, open_error, x264};
 use crate::MediaError;
 
 /// Shortest stretch worth copying, in frames: below this the parameter
@@ -42,7 +42,9 @@ pub struct IndexedPacket {
     pub idr: bool,
 }
 
-/// A source whose packets can be copied.
+/// A source whose packets can be copied: a window of its video packets
+/// around the pictures a clip wants, from a keyframe before them to the
+/// IDR after (or the end of the file).
 #[derive(Debug, Clone)]
 pub struct SourceStream {
     /// The file.
@@ -51,12 +53,44 @@ pub struct SourceStream {
     pub stream_index: usize,
     /// The stream's time base.
     pub time_base: Rational,
-    /// Every video packet of the file, in decode order.
+    /// Decode position of the first packet of the window in the file,
+    /// which is also its display index: the window starts clean.
+    pub base: usize,
+    /// The window's packets, in decode order.
     pub packets: Vec<IndexedPacket>,
     /// Bytes of each NAL length prefix in the packets.
     pub length_size: usize,
     /// How many pictures decoding runs ahead of display, at most.
     pub reorder: u32,
+}
+
+impl SourceStream {
+    /// The packet at decode position `k` of the file.
+    pub fn packet(&self, k: usize) -> &IndexedPacket {
+        &self.packets[k - self.base]
+    }
+}
+
+/// Audio copied as coded alongside a stitched video track.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioCopy {
+    /// A file whose audio stream gives the output stream its parameters.
+    pub template: PathBuf,
+    /// The pieces, in output order.
+    pub segments: Vec<AudioSegment>,
+}
+
+/// One stretch of one file's audio, placed at `offset` in the output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioSegment {
+    /// The file.
+    pub path: PathBuf,
+    /// Start in the source, in seconds.
+    pub from: Ratio,
+    /// End in the source, in seconds.
+    pub to: Ratio,
+    /// Where the stretch starts in the output, in seconds.
+    pub offset: Ratio,
 }
 
 /// One piece of the output, in order.
@@ -98,6 +132,10 @@ pub struct SmartPlan {
     pub copied_frames: u64,
     /// Frames rendered and encoded.
     pub encoded_frames: u64,
+    /// The clips' own audio, copied as coded, when every clip has one of
+    /// the same kind that the container takes; `None` means mix and
+    /// encode the audio as usual.
+    pub audio: Option<AudioCopy>,
 }
 
 impl SmartPlan {
@@ -108,8 +146,13 @@ impl SmartPlan {
             .iter()
             .filter(|s| matches!(s, Segment::Encode { .. }))
             .count();
+        let audio = if self.audio.is_some() {
+            "; audio copied as coded, each cut within half a packet"
+        } else {
+            ""
+        };
         format!(
-            "smart cut: {} of {} frames copied from the source, {} encoded in {} run{} around the cuts and overlays",
+            "smart cut: {} of {} frames copied from the source, {} encoded in {} run{} around the cuts and overlays{audio}",
             self.copied_frames,
             self.copied_frames + self.encoded_frames,
             self.encoded_frames,
@@ -182,11 +225,39 @@ pub fn plan_smart_cut(
     let mut sets: Option<(ParameterSets, Vec<u8>)> = None;
     let mut segments: Vec<Segment> = Vec::new();
     let mut copied = 0u64;
+    let mut audio: Option<AudioCopy> = None;
+    let mut audio_shape: Option<(codec::Id, Vec<u8>)> = None;
+    let mut audio_ok = comp.audio.is_empty();
     for clip in &clips {
         let out_start = frame_at(clip.start);
         let out_end = frame_at(clip.end).min(total);
         if out_end <= out_start {
             continue;
+        }
+        // The clip's own audio can be copied when every clip's is of one
+        // kind the container takes.
+        if audio_ok && clip.audio {
+            match audio_stream(&clip.path)? {
+                Some(shape) if container_accepts_audio(container, shape.0) => {
+                    if audio_shape.get_or_insert_with(|| shape.clone()) == &shape {
+                        let copy = audio.get_or_insert_with(|| AudioCopy {
+                            template: clip.path.clone(),
+                            segments: Vec::new(),
+                        });
+                        copy.segments.push(AudioSegment {
+                            path: clip.path.clone(),
+                            from: clip.in_,
+                            to: clip.in_ + (clip.end - clip.start),
+                            offset: clip.start,
+                        });
+                    } else {
+                        audio_ok = false;
+                    }
+                }
+                _ => audio_ok = false,
+            }
+        } else {
+            audio_ok = false;
         }
         let as_is = clip.width == comp.width && clip.height == comp.height && clip.place.is_none();
         let overrides = comp
@@ -194,7 +265,11 @@ pub fn plan_smart_cut(
             .get(&clip.asset)
             .map(|a| a.color)
             .unwrap_or_default();
-        let source = if as_is {
+        // Output frame n shows source picture n + shift.
+        let shift = ((clip.in_ - clip.start) * fps).floor();
+        let wanted =
+            (out_start as i64 + shift).max(0) as u64..(out_end as i64 + shift).max(0) as u64;
+        let source = if as_is && !wanted.is_empty() {
             index_source(
                 &clip.path,
                 overrides,
@@ -202,6 +277,7 @@ pub fn plan_smart_cut(
                 comp.width,
                 comp.height,
                 fps,
+                wanted,
             )?
         } else {
             None
@@ -218,19 +294,20 @@ pub fn plan_smart_cut(
             push_encode(&mut segments, out_start..out_end);
             continue;
         };
-        // Output frame n shows source picture n + offset.
-        let shift = ((clip.in_ - clip.start) * fps).floor();
-        let n_packets = stream.packets.len();
-        // Decode order is clean before packet p when the first p packets
-        // are exactly pictures 0..p; those positions are where a copied
-        // stretch may start (at an IDR) or end.
-        let mut clean = vec![false; n_packets + 1];
-        let mut max_frame = -1i64;
+        // Decode order is clean before position p when the first p packets
+        // of the file are exactly pictures 0..p; those positions are where
+        // a copied stretch may start (at an IDR) or end. The window starts
+        // at a clean position, so the test runs on it with its base added.
+        let base = stream.base;
+        let window_end = base + stream.packets.len();
+        let mut clean = vec![false; stream.packets.len() + 1];
+        let mut max_frame = base as i64 - 1;
         clean[0] = true;
         for (p, packet) in stream.packets.iter().enumerate() {
             max_frame = max_frame.max(packet.frame);
-            clean[p + 1] = max_frame == p as i64;
+            clean[p + 1] = max_frame == (base + p) as i64;
         }
+        let is_clean = |k: usize| k >= base && k <= window_end && clean[k - base];
         let source_index = sources.len();
         sources.push(stream);
         let stream = &sources[source_index];
@@ -248,11 +325,15 @@ pub fn plan_smart_cut(
             while n < out_end && !must_encode[n as usize] {
                 n += 1;
             }
-            // Source pictures [lo, hi) are wanted as they are.
-            let lo = (start as i64 + shift).max(0) as usize;
-            let hi = ((n as i64 + shift).max(0) as usize).min(n_packets);
-            let a = (lo..hi).find(|&p| clean[p] && stream.packets[p].idr);
-            let b = (lo..=hi).rev().find(|&p| clean[p]);
+            // Source pictures [lo, hi) are wanted as they are. A stretch
+            // starts at an IDR that is shown at its own decode position
+            // (nothing after it in decode order is shown before it).
+            let lo = ((start as i64 + shift).max(0) as usize).max(base);
+            let hi = ((n as i64 + shift).max(0) as usize).min(window_end);
+            let a = (lo..hi).find(|&p| {
+                is_clean(p) && stream.packet(p).idr && stream.packet(p).frame == p as i64
+            });
+            let b = (lo..=hi).rev().find(|&p| is_clean(p));
             match (a, b) {
                 (Some(a), Some(b)) if b >= a + MIN_COPY_FRAMES => {
                     let out_a = a as i64 - shift;
@@ -289,6 +370,16 @@ pub fn plan_smart_cut(
         reorder,
         copied_frames: copied,
         encoded_frames: total - copied,
+        audio: if audio_ok { audio } else { None },
+    }))
+}
+
+/// The codec and parameters of a file's audio stream, if any.
+fn audio_stream(path: &Path) -> Result<Option<(codec::Id, Vec<u8>)>, MediaError> {
+    let ictx = ffmpeg_next::format::input(path).map_err(|e| open_error(path, e))?;
+    Ok(ictx.streams().best(Type::Audio).map(|s| {
+        let params = s.parameters();
+        (params.id(), ffi::extradata(&params))
     }))
 }
 
@@ -306,8 +397,10 @@ fn push_encode(segments: &mut Vec<Segment>, frames: Range<u64>) {
     segments.push(Segment::Encode { frames });
 }
 
-/// Indexes the video packets of `path` when its stream can be copied
-/// into an H.264 output of `width`×`height` at `fps` with `tags`.
+/// Indexes the video packets of `path` around pictures `wanted` when its
+/// stream can be copied into an H.264 output of `width`×`height` at
+/// `fps` with `tags`: from the keyframe at or before the first wanted
+/// picture to the IDR at or after the last (or the end of the file).
 fn index_source(
     path: &Path,
     overrides: geneva_color::ColorTags,
@@ -315,6 +408,7 @@ fn index_source(
     width: u32,
     height: u32,
     fps: Ratio,
+    wanted: Range<u64>,
 ) -> Result<Option<(SourceStream, ParameterSets, Vec<u8>)>, MediaError> {
     let mut ictx = ffmpeg_next::format::input(path).map_err(|e| open_error(path, e))?;
     let (stream_index, time_base, params, stream_fps) = {
@@ -352,9 +446,28 @@ fn index_source(
     if VideoReader::open(path, overrides)?.tags() != tags {
         return Ok(None);
     }
-    let mut packets = Vec::new();
+    // Picture 0 is the first packet of the file: the IDR the stream opens
+    // with, shown first.
     let mut packet = Packet::empty();
-    let mut min_pts = i64::MAX;
+    let mut first_pts = None;
+    while packet.read(&mut ictx).is_ok() {
+        if packet.stream() == stream_index {
+            first_pts = packet.pts().or(packet.dts());
+            break;
+        }
+    }
+    let Some(first_pts) = first_pts else {
+        return Ok(None);
+    };
+    let frame_of = |pts: i64| (ts_to_secs(pts - first_pts, time_base) * fps).round();
+    // Back to the keyframe at or before the first wanted picture.
+    let t = Ratio::from_int(wanted.start as i64) / fps + ts_to_secs(first_pts, time_base);
+    let micros = (t.to_f64() * 1_000_000.0) as i64;
+    ictx.seek(micros, ..micros)
+        .map_err(|e| codec_error(format!("{}: seeking", path.display()), e))?;
+    let mut packets: Vec<IndexedPacket> = Vec::new();
+    let mut base: Option<usize> = None;
+    let mut reorder = 0i64;
     while packet.read(&mut ictx).is_ok() {
         if packet.stream() != stream_index {
             continue;
@@ -362,34 +475,49 @@ fn index_source(
         let Some(pts) = packet.pts().or(packet.dts()) else {
             return Ok(None);
         };
-        min_pts = min_pts.min(pts);
+        let frame = frame_of(pts);
         let idr = packet.is_key()
             && packet
                 .data()
                 .is_some_and(|d| h264::is_idr(d, sets.length_size));
-        packets.push(IndexedPacket { pts, frame: 0, idr });
+        let Some(b) = base else {
+            // The window opens at a keyframe.
+            if !packet.is_key() || frame < 0 {
+                continue;
+            }
+            base = Some(frame as usize);
+            packets.push(IndexedPacket { pts, frame, idr });
+            continue;
+        };
+        // Stop at the IDR after the last wanted picture: every picture
+        // before it in display order has been read.
+        if idr && frame as u64 >= wanted.end {
+            break;
+        }
+        let k = b + packets.len();
+        reorder = reorder.max(k as i64 - frame);
+        packets.push(IndexedPacket { pts, frame, idr });
     }
-    if packets.is_empty() {
+    let Some(base) = base else {
         return Ok(None);
-    }
-    // Display indices from timestamps; the pictures must be exactly one
-    // per frame slot (constant rate, nothing dropped or repeated).
+    };
+    // The window must hold exactly the pictures base..base + len, once
+    // each (constant rate, nothing dropped or repeated, and no picture
+    // from before the opening keyframe decoded after it).
     let mut seen = vec![false; packets.len()];
-    let mut reorder = 0i64;
-    for (k, p) in packets.iter_mut().enumerate() {
-        let frame = (ts_to_secs(p.pts - min_pts, time_base) * fps).round();
-        if frame < 0 || frame as usize >= seen.len() || seen[frame as usize] {
+    for p in &packets {
+        let i = p.frame - base as i64;
+        if i < 0 || i as usize >= seen.len() || seen[i as usize] {
             return Ok(None);
         }
-        seen[frame as usize] = true;
-        p.frame = frame;
-        reorder = reorder.max(k as i64 - frame);
+        seen[i as usize] = true;
     }
     Ok(Some((
         SourceStream {
             path: path.to_owned(),
             stream_index,
             time_base,
+            base,
             packets,
             length_size: sets.length_size,
             reorder: reorder as u32,
@@ -412,7 +540,7 @@ pub fn read_copied(
     }
     let path = &source.path;
     let mut ictx = ffmpeg_next::format::input(path).map_err(|e| open_error(path, e))?;
-    let first = &source.packets[range.start];
+    let first = source.packet(range.start);
     // Seek to the stretch's IDR (or an earlier keyframe) and skip up to it.
     let micros = (ts_to_secs(first.pts, source.time_base).to_f64() * 1_000_000.0) as i64;
     ictx.seek(micros, ..micros)
@@ -437,7 +565,7 @@ pub fn read_copied(
         if k >= range.end {
             break;
         }
-        let expected = &source.packets[k];
+        let expected = source.packet(k);
         if pts != expected.pts {
             return Err(MediaError::Codec {
                 context: "smart cut".to_owned(),
@@ -468,4 +596,102 @@ pub fn read_copied(
             ),
         }),
     }
+}
+
+/// The output audio's packet grid, shared by the segments of one output:
+/// every slot holds exactly one copied packet, so the track is gapless
+/// and never overlaps itself, and a decoder that plays packets back to
+/// back stays in time with the video whatever the joins.
+#[derive(Debug, Clone, Default)]
+pub struct AudioGrid {
+    /// Timestamp of the next free slot, in the source stream's time
+    /// base; `None` before the first packet fixes the grid.
+    next: Option<i64>,
+    /// Slot length: the packets' duration.
+    step: i64,
+}
+
+/// Reads the audio packets of `segment` into the next slots of `grid`
+/// and hands each to `sink`, timed for the output in the source stream's
+/// time base; stops early when `sink` says so.
+///
+/// The first packet of the output is the one that straddles the start,
+/// placed early by the part before the cut (a negative start, which the
+/// container turns into an edit, so the sound starts on the sample).
+/// Every later segment starts with the packet nearest to its cut, so a
+/// join is off by at most half a packet and the error never adds up.
+pub fn read_copied_audio(
+    segment: &AudioSegment,
+    grid: &mut AudioGrid,
+    sink: &mut dyn FnMut(Packet) -> bool,
+) -> Result<(), MediaError> {
+    let path = &segment.path;
+    let mut ictx = ffmpeg_next::format::input(path).map_err(|e| open_error(path, e))?;
+    let (index, tb, start) = {
+        let Some(s) = ictx.streams().best(Type::Audio) else {
+            return Err(MediaError::NoStream {
+                path: path.clone(),
+                kind: "audio",
+            });
+        };
+        (s.index(), s.time_base(), s.start_time().max(0))
+    };
+    let to_ts = |secs: Ratio| {
+        (secs * Ratio::new(i64::from(tb.denominator()), i64::from(tb.numerator()))).round()
+    };
+    let from_ts = to_ts(segment.from);
+    let offset_ts = to_ts(segment.offset);
+    let end_ts = offset_ts + to_ts(segment.to - segment.from);
+    if segment.from > Ratio::ZERO {
+        let micros = (segment.from.to_f64() * 1_000_000.0) as i64;
+        ictx.seek(micros, ..micros)
+            .map_err(|e| codec_error(format!("{}: seeking", path.display()), e))?;
+    }
+    let mut packet = Packet::empty();
+    let mut placing = false;
+    while packet.read(&mut ictx).is_ok() {
+        if packet.stream() != index {
+            continue;
+        }
+        let Some(pts) = packet.pts().or(packet.dts()) else {
+            continue;
+        };
+        let pts = pts - start;
+        let duration = packet.duration().max(1);
+        if !placing {
+            match grid.next {
+                // The first packet fixes the grid: the one that straddles
+                // the cut, or the first at or after it.
+                None => {
+                    if pts + duration <= from_ts {
+                        continue;
+                    }
+                    grid.step = duration;
+                    grid.next = Some(pts - from_ts + offset_ts);
+                }
+                // A later segment: the packet nearest to the slot's time.
+                Some(next) => {
+                    let wanted = from_ts + (next - offset_ts);
+                    if pts + grid.step / 2 < wanted {
+                        continue;
+                    }
+                }
+            }
+            placing = true;
+        }
+        let slot = grid.next.expect("set above");
+        if slot >= end_ts {
+            break;
+        }
+        let mut out = packet.clone();
+        out.set_pts(Some(slot));
+        out.set_dts(Some(slot));
+        out.set_duration(grid.step);
+        out.set_position(-1);
+        grid.next = Some(slot + grid.step);
+        if !sink(out) {
+            return Ok(());
+        }
+    }
+    Ok(())
 }

@@ -78,7 +78,12 @@ burned-in subtitle shown for part of the time, it is the frames it
 touches, again up to the next keyframe. A join in a `concat` costs
 nothing when it lands on a keyframe. The report says how many frames
 were copied and how many encoded, and the copied frames are
-bit-identical to the source's.
+bit-identical to the source's. When every clip brings its own audio of
+one kind the container takes, the audio is copied as coded too: the
+file starts on the exact sample, and each later join lands within half
+an audio packet (11 ms for AAC) of the cut, an error that does not add
+up across joins; the first packet after a join is decoded without its
+overlap, which can be heard as a soft click on loud material.
 
 It applies when the source is H.264 4:2:0 shown as it is at the output
 size and rate, the output is MP4, MOV or Matroska with H.264, no

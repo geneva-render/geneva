@@ -98,6 +98,7 @@ fn mono_output_is_written_as_mono() {
         container: None,
         subtitles: Vec::new(),
         fast_start: true,
+        copied_audio: None,
         audio: Some(AudioSettings {
             codec: AudioCodec::Aac,
             bitrate_kbps: 96,
@@ -151,6 +152,7 @@ fn encoded_solid_color_survives_the_round_trip() {
         container: None,
         subtitles: Vec::new(),
         fast_start: true,
+        copied_audio: None,
         audio: Some(AudioSettings {
             codec: AudioCodec::Aac,
             bitrate_kbps: 96,
@@ -252,6 +254,7 @@ fn audio_lands_at_its_timeline_position_in_the_output_file() {
         container: None,
         subtitles: Vec::new(),
         fast_start: true,
+        copied_audio: None,
         audio: Some(AudioSettings {
             codec: AudioCodec::Aac,
             bitrate_kbps: 96,
@@ -563,6 +566,7 @@ fn audio_only_outputs_round_trip_through_wav() {
         container: None,
         subtitles: Vec::new(),
         fast_start: true,
+        copied_audio: None,
         audio: Some(AudioSettings {
             codec: AudioCodec::Pcm,
             bitrate_kbps: 0,
@@ -790,6 +794,7 @@ fn solid_settings(
         container: None,
         subtitles: Vec::new(),
         fast_start: true,
+        copied_audio: None,
         audio: None,
     }
 }
@@ -894,6 +899,7 @@ fn every_audio_codec_round_trips_a_tone() {
             container: None,
             subtitles: Vec::new(),
             fast_start: true,
+            copied_audio: None,
             audio: Some(AudioSettings {
                 codec,
                 bitrate_kbps: 160,
@@ -1106,9 +1112,24 @@ fn smart_cut_plans_copies_between_keyframes_and_clean_boundaries() {
         (source, packets.clone(), offset, frames),
         (0, 24..40, -15, 9..25)
     );
-    assert!(plan.sources[0].packets[24].idr);
+    assert!(plan.sources[0].packet(24).idr);
+    // Only the pictures around the cut were indexed: from the keyframe
+    // before the first wanted picture to the IDR after the last.
+    assert_eq!(plan.sources[0].base, 12);
+    assert_eq!(plan.sources[0].packets.len(), 36);
     assert_eq!(plan.reorder, 2, "B-pyramid decodes two pictures ahead");
     assert_eq!(plan.sps_id, 1);
+    // The clip's own AAC goes into the MP4 as coded.
+    let audio = plan.audio.as_ref().expect("audio copied");
+    assert_eq!(audio.segments.len(), 1);
+    assert_eq!(
+        (
+            audio.segments[0].from,
+            audio.segments[0].to,
+            audio.segments[0].offset
+        ),
+        (Ratio::new(3, 5), Ratio::new(8, 5), Ratio::ZERO)
+    );
 
     // The copied packets cover exactly the frames of the stretch.
     let mut shown = Vec::new();

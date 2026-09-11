@@ -31,6 +31,9 @@ pub struct EncodeSettings {
     /// Put the index of MP4, MOV and M4A files at the front (a second
     /// pass over the file when it is complete).
     pub fast_start: bool,
+    /// Instead of `audio`, an audio stream with the parameters of this
+    /// file's, whose packets come through [`Encoder::write_copied_audio`].
+    pub copied_audio: Option<PathBuf>,
 }
 
 /// Video track settings.
@@ -882,6 +885,8 @@ pub struct Encoder {
     video: Option<VideoTrack>,
     frame_index: i64,
     audio: Option<AudioEncoder>,
+    /// Stream index and source time base of a copied audio stream.
+    copied_audio: Option<(usize, Rational)>,
     subtitles: SubtitleWriter,
     image_sequence: bool,
     finished: bool,
@@ -891,7 +896,7 @@ impl Encoder {
     /// Creates the output file and writes its header.
     pub fn new(path: &Path, settings: EncodeSettings) -> Result<Self, MediaError> {
         init();
-        if settings.video.is_none() && settings.audio.is_none() {
+        if settings.video.is_none() && settings.audio.is_none() && settings.copied_audio.is_none() {
             return Err(MediaError::Codec {
                 context: "encoder setup".to_owned(),
                 reason: "no video or audio track requested".to_owned(),
@@ -995,6 +1000,23 @@ impl Encoder {
 
         let subtitles =
             SubtitleWriter::add_streams(&mut octx, container, &settings.subtitles, path)?;
+        // A copied audio stream takes its parameters from the template.
+        let copied_audio = match &settings.copied_audio {
+            None => None,
+            Some(template) => {
+                let ictx =
+                    ffmpeg_next::format::input(template).map_err(|e| open_error(template, e))?;
+                let stream = ictx
+                    .streams()
+                    .best(ffmpeg_next::media::Type::Audio)
+                    .ok_or_else(|| MediaError::NoStream {
+                        path: template.clone(),
+                        kind: "audio",
+                    })?;
+                let index = super::copy::add_copied_stream(&mut octx, &stream, path)?;
+                Some((index, stream.time_base()))
+            }
+        };
         write_header(&mut octx, container, settings.fast_start, path)?;
         // The muxer may have chosen another time base for the stream.
         let mut audio = audio;
@@ -1010,6 +1032,7 @@ impl Encoder {
             video,
             frame_index: 0,
             audio,
+            copied_audio,
             subtitles,
             image_sequence: container == Some(Container::ImageSequence),
             finished: false,
@@ -1263,6 +1286,26 @@ impl Encoder {
         }
         if self.video.is_none() {
             self.subtitles.write_due(&mut self.octx, time)?;
+        }
+        Ok(())
+    }
+
+    /// Writes packets of the copied audio stream, timed in the source
+    /// stream's time base.
+    pub fn write_copied_audio(&mut self, packets: Vec<Packet>) -> Result<(), MediaError> {
+        let Some((index, source_tb)) = self.copied_audio else {
+            return Err(MediaError::Codec {
+                context: "copying audio".to_owned(),
+                reason: "the output has no copied audio stream".to_owned(),
+            });
+        };
+        let stream_tb = self.octx.stream(index).expect("stream exists").time_base();
+        for mut packet in packets {
+            packet.set_stream(index);
+            packet.rescale_ts(source_tb, stream_tb);
+            packet
+                .write_interleaved(&mut self.octx)
+                .map_err(|e| codec_error("writing copied packet", e))?;
         }
         Ok(())
     }

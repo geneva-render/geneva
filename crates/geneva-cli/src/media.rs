@@ -234,6 +234,7 @@ mod imp {
         Copied(Vec<geneva_media::CopiedPacket>),
         /// The end of an encoded run of a smart cut.
         EndSegment,
+        CopiedAudio(Vec<geneva_media::Packet>),
         Audio(Vec<geneva_media::Packet>, geneva_timeline::Ratio),
     }
 
@@ -354,6 +355,7 @@ mod imp {
                 .as_ref()
                 .and_then(|e| e.fast_start)
                 .unwrap_or(true),
+            copied_audio: None,
         };
         let has_audio = settings.audio.is_some();
         let media_err = |e: geneva_media::MediaError| RenderError::Asset {
@@ -423,6 +425,15 @@ mod imp {
                 reorder: plan.reorder,
                 crf: STITCH_CRF,
             });
+        }
+        // The clips' own audio goes with the video: copied as coded.
+        let copied_audio = match &smart {
+            Some(plan) if settings.audio.is_some() => plan.audio.clone(),
+            _ => None,
+        };
+        if let Some(copy) = &copied_audio {
+            settings.audio = None;
+            settings.copied_audio = Some(copy.template.clone());
         }
         let has_video = settings.video.is_some();
         // When the picture is the source's own, decoded frames skip the
@@ -495,10 +506,37 @@ mod imp {
                             }
                         }
                         Msg::EndSegment => encoder.end_segment()?,
+                        Msg::CopiedAudio(packets) => encoder.write_copied_audio(packets)?,
                         Msg::Audio(packets, time) => encoder.write_audio_packets(packets, time)?,
                     }
                 }
                 Ok(encoder)
+            });
+            let copy_worker = copied_audio.as_ref().map(|copy| {
+                let tx = tx.clone();
+                scope.spawn(move || -> Result<(), geneva_media::MediaError> {
+                    let mut grid = geneva_media::AudioGrid::default();
+                    for segment in &copy.segments {
+                        let mut batch = Vec::with_capacity(64);
+                        let mut stopped = false;
+                        geneva_media::read_copied_audio(segment, &mut grid, &mut |p| {
+                            batch.push(p);
+                            if batch.len() < 64 {
+                                return true;
+                            }
+                            stopped = tx
+                                .send(Msg::CopiedAudio(std::mem::take(&mut batch)))
+                                .is_err();
+                            !stopped
+                        })?;
+                        if stopped
+                            || (!batch.is_empty() && tx.send(Msg::CopiedAudio(batch)).is_err())
+                        {
+                            return Ok(());
+                        }
+                    }
+                    Ok(())
+                })
             });
             let audio_worker = audio_encoder.map(|mut enc| {
                 let tx = tx.clone();
@@ -620,7 +658,7 @@ mod imp {
                 }
             }
             drop(tx);
-            let audio_joined = audio_worker.map(|w| {
+            let audio_joined = audio_worker.or(copy_worker).map(|w| {
                 w.join()
                     .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
             });

@@ -27,7 +27,10 @@ pub use encode::{
 /// An encoded packet on its way to the muxer.
 pub use ffmpeg_next::Packet;
 pub use probe::probe;
-pub use smartcut::{CopiedPacket, Segment, SmartPlan, SourceStream, plan_smart_cut, read_copied};
+pub use smartcut::{
+    AudioCopy, AudioGrid, AudioSegment, CopiedPacket, Segment, SmartPlan, SourceStream,
+    plan_smart_cut, read_copied, read_copied_audio,
+};
 pub use subtitle_streams::{
     SubtitleSettings, SubtitleStreamInfo, read_subtitles, subtitle_streams,
 };

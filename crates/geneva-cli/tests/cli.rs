@@ -600,7 +600,11 @@ fn subtitles_burn_compiles_cues_to_text_clips_and_checks_the_frame() {
     assert_eq!(doc["ok"], true);
     // The video itself skips the compositor; only the cues are drawn, and
     // with the system's x264 the frames without a cue are copied.
-    assert!(doc["mode"] == "smart" || doc["mode"] == "direct", "{}", doc["mode"]);
+    assert!(
+        doc["mode"] == "smart" || doc["mode"] == "direct",
+        "{}",
+        doc["mode"]
+    );
     let codes: Vec<&str> = doc["diagnostics"]
         .as_array()
         .unwrap()
@@ -932,7 +936,9 @@ fn exact_cuts_copy_the_untouched_stretches() {
     assert!(text.contains("16 of 25 frames copied"), "{text}");
     let info = run_json(&["probe"], &[&out]);
     assert_eq!(info["video"]["codec"], "h264");
+    // The audio is the source's own packets, copied.
     assert_eq!(info["audio"]["codec"], "aac");
+    assert!(text.contains("audio copied as coded"), "{text}");
 
     // An overlay shown for part of the time forces only its frames (up to
     // the next keyframe) through the encoder.

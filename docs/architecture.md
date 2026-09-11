@@ -169,6 +169,21 @@ display (the larger of the source's reorder depth and the encoder's),
 which keeps every picture decodable in time without touching the
 pictures themselves. The report names the mode `smart` and counts the
 frames copied and encoded; the copied frames are the source's bytes.
+The planner indexes only a window of each source, from the keyframe
+before the first wanted picture to the IDR after the last, so a short
+cut of a long file reads a few groups of pictures, not the file.
+
+The clips' own audio rides along as coded when every clip has one of
+the same kind the container takes. The output's audio is one packet
+grid: every slot holds exactly one copied packet, so the track is
+gapless and never overlaps itself, and a player that runs packets back
+to back keeps time with the video whatever the joins. The first packet
+is the one that straddles the start, placed early by the part before
+the cut (a negative start the container turns into an edit, so the
+sound begins on the sample); each later segment starts with the packet
+nearest to its cut, so a join is off by at most half a packet and the
+error never accumulates. Anything else (a separate audio track, gain,
+fades, clips of different kinds) mixes and encodes the audio as usual.
 
 ## Verbs
 

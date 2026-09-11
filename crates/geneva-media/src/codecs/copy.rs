@@ -411,7 +411,7 @@ fn placement(fit: Fit, w: u32, h: u32, comp: &Composition) -> Option<Place> {
 }
 
 /// Audio codecs each container can hold without re-encoding.
-fn container_accepts_audio(container: Container, codec: codec::Id) -> bool {
+pub(super) fn container_accepts_audio(container: Container, codec: codec::Id) -> bool {
     use codec::Id;
     match container {
         Container::Mp4 | Container::M4a => {
@@ -752,7 +752,7 @@ fn rescale(value: i64, from: Rational, to: Rational) -> i64 {
     r.round()
 }
 
-fn add_copied_stream(
+pub(super) fn add_copied_stream(
     octx: &mut ffmpeg_next::format::context::Output,
     input: &ffmpeg_next::format::stream::Stream,
     output: &Path,

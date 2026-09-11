@@ -16,9 +16,13 @@ the format version it was written for.
   encoded into the same stream (system x264, CRF 18, parameter sets
   side by side with the source's). The report calls the mode `smart`
   and counts the frames copied and encoded; copied frames are
-  bit-identical to the source. A one-second overlay on a ten-second
-  1080p clip: 3.0 s instead of 4.6 s; an exact trim inside a
-  one-second GOP re-encodes at most a second.
+  bit-identical to the source. The clips' own audio is copied as coded
+  when the container takes it (exact at the start of the file, within
+  half a packet at a join), so nothing is decoded outside the encoded
+  runs. The planner reads only the packets around each clip's range,
+  not the whole file. A one-second overlay on a ten-second 1080p clip:
+  3.0 s instead of 4.6 s; an exact trim inside a one-second GOP
+  re-encodes at most a second.
 
 ### Changes
 
