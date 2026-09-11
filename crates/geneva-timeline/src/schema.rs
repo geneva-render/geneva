@@ -469,6 +469,12 @@ pub struct Clip {
     /// scales with the clip.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mask: Option<Mask>,
+    /// How fast the source plays: 2 is twice as fast, 0.5 half speed.
+    /// The clip lasts its source range divided by this; the source's
+    /// audio is resampled, so its pitch follows. The clip's own keyframes
+    /// stay in output time. Defaults to 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<f64>,
 }
 
 /// A mask on a clip, in the coordinates of the clip's box (after the
@@ -900,4 +906,9 @@ pub struct AudioClip {
     /// Fade-out duration to silence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fade_out: Option<Time>,
+    /// How fast the source plays: 2 is twice as fast, 0.5 half speed.
+    /// The clip lasts its source range divided by this, and the pitch
+    /// follows. Defaults to 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<f64>,
 }

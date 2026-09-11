@@ -166,13 +166,14 @@ geneva convert talk.mp4 -o square.mp4 --crop 1080x1080
 picture with bars when the shape differs; `cover` fills the frame and
 crops; `fill` stretches.
 
-### `geneva trim <input> -o FILE [--from TIME] [--to TIME | --duration TIME] [--crop RECT]`
+### `geneva trim <input> -o FILE [--from TIME] [--to TIME | --duration TIME] [--crop RECT] [--speed FACTOR]`
 
 Keeps a range of the input. Without `--crf`, `--preset` or `--exact` the
 streams are copied and the cut moves back to the previous keyframe; the
 report gives the time actually used. `--crop` (as on `convert`) keeps one
 rectangle of the picture and re-encodes, since a copied stream cannot
-carry a crop.
+carry a crop. `--speed 2` plays the range twice as fast (`0.5` at half
+speed), video and audio alike, the pitch following; also on `convert`.
 
 ```sh
 geneva trim talk.mp4 -o intro.mp4 --to 30s

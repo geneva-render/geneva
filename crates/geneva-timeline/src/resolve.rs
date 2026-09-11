@@ -131,6 +131,8 @@ pub struct ResolvedClip {
     pub effects: Vec<ResolvedEffect>,
     /// The mask, if any.
     pub mask: Option<ResolvedMask>,
+    /// How fast the source plays; 1 is natural speed.
+    pub speed: Ratio,
 }
 
 /// A mask with its values checked; lengths stay as written, since the
@@ -294,6 +296,8 @@ pub struct ResolvedAudioClip {
     pub fade_in: Ratio,
     /// Fade-out duration.
     pub fade_out: Ratio,
+    /// How fast the source plays; 1 is natural speed.
+    pub speed: Ratio,
 }
 
 /// Anchor, position, scale and rotation of a clip after resolution.
@@ -891,6 +895,13 @@ impl Resolver<'_> {
                 explicit_len.or_else(|| output_duration.map(|d| (d - start).max(Ratio::ZERO)));
             let (source, length) =
                 self.resolve_source(&clip.source, &cpath, assets, frame, open_hint);
+            let speed = self.speed_of(clip.speed, &cpath.key("speed"));
+            // The source plays `speed` times faster, so it lasts that much
+            // less.
+            let length = match length {
+                ClipLength::Fixed(l) => ClipLength::Fixed(l / speed),
+                ClipLength::Open => ClipLength::Open,
+            };
             let mut transition_in = None;
             if let Some(tr) = &clip.transition {
                 let tdur = self.time(
@@ -1049,6 +1060,7 @@ impl Resolver<'_> {
                 transition_in,
                 effects,
                 mask,
+                speed,
             });
             cursor = end;
         }
@@ -1341,6 +1353,29 @@ impl Resolver<'_> {
                 Some(len) => (in_secs, ClipLength::Fixed(len - in_secs)),
                 None => (in_secs, ClipLength::Open),
             },
+        }
+    }
+
+    /// A speed factor as an exact ratio; 1 when absent, and 1 with an
+    /// error when out of range.
+    fn speed_of(&mut self, speed: Option<f64>, path: &Path) -> Ratio {
+        let Some(v) = speed else {
+            return Ratio::ONE;
+        };
+        let ratio = Ratio::approximate(v, 10_000);
+        match ratio {
+            Some(r) if v > 0.0 && v <= 100.0 && r > Ratio::ZERO => r,
+            _ => {
+                self.push(
+                    Diagnostic::error(
+                        "E402",
+                        path.clone(),
+                        "speed must be greater than 0 and at most 100",
+                    )
+                    .with_value(json!(v)),
+                );
+                Ratio::ONE
+            }
         }
     }
 
@@ -1756,6 +1791,11 @@ impl Resolver<'_> {
             );
             let (in_secs, src_len) =
                 self.source_range(clip.in_, clip.out, &cpath, &clip.asset, assets);
+            let speed = self.speed_of(clip.speed, &cpath.key("speed"));
+            let src_len = match src_len {
+                ClipLength::Fixed(l) => ClipLength::Fixed(l / speed),
+                ClipLength::Open => ClipLength::Open,
+            };
             let start = clip
                 .start
                 .map_or(cursor, |t| self.time(t, &cpath.key("start"), "start"));
@@ -1840,6 +1880,7 @@ impl Resolver<'_> {
                 gain_db,
                 fade_in,
                 fade_out,
+                speed,
             });
             cursor = end;
         }

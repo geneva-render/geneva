@@ -185,12 +185,12 @@ impl<A: AssetSource> CpuRenderer<A> {
                     nested.width,
                     nested.height,
                     nested.background,
-                    t - clip.start,
+                    (t - clip.start) * clip.speed,
                 )?;
                 Paint::Image(Cow::Owned(Image::from_frame_pixels(inner)))
             }
             ResolvedSource::Video { asset, in_, .. } => {
-                let source_time = *in_ + (t - clip.start);
+                let source_time = *in_ + (t - clip.start) * clip.speed;
                 Paint::Image(Cow::Borrowed(self.assets.video_frame(
                     comp,
                     asset,

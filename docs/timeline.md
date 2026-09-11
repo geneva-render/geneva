@@ -174,6 +174,7 @@ contain other compositions up to 8 levels deep, and never themselves (E207).
 | `fit` | no | `contain` for video, `none` otherwise | `none`, `contain`, `cover`, `fill`: how the source box is sized to the frame before the transform. |
 | `effects` | no | `[]` | Effects on the placed picture, in order; see below. |
 | `mask` | no | | A shape cut from the clip's box, or a luma image over it; see below. |
+| `speed` | no | `1` | How fast the source plays: `2` is twice as fast, `0.5` half speed. The clip lasts its source range divided by it; a video's audio is resampled, so the pitch follows; the clip's own keyframes stay in output time. A clip with a speed is always composited. |
 | `transform` | no | centered | Position, anchor, scale, rotation. |
 | `opacity` | no | `1` | Animatable, 0 to 1. |
 | `blend` | no | `normal` | `normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `difference`, `soft-light`, `add`. Computed in linear light. |
@@ -361,6 +362,7 @@ Tracks have `id`, `enabled` and `clips` like layers. Audio clips:
 | `duration` | no | source range | Length. |
 | `gain_db` | no | `0` | Animatable gain in decibels. |
 | `fade_in`, `fade_out` | no | `0` | Fade lengths. |
+| `speed` | no | `1` | How fast the source plays; the clip lasts its range divided by it and the pitch follows. |
 
 ### `subtitles[]`
 

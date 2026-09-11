@@ -26,20 +26,25 @@ struct Voice {
     gain_db: Track<f64>,
     fade_in: Ratio,
     fade_out: Ratio,
+    /// How fast the source plays; the pitch follows.
+    speed: Ratio,
 }
 
 /// Adds the audible video clips of `layers`, recursing into compositions.
+/// `offset` and `speed` map the layers' own time to the output: a
+/// nested composition shown at speed 2 has its clips run twice as fast.
 fn walk(
     comp: &Composition,
     layers: &[ResolvedLayer],
     offset: Ratio,
+    speed: Ratio,
     limit: Ratio,
     out: &mut Vec<Voice>,
 ) {
     for layer in layers {
         for clip in &layer.clips {
-            let start = clip.start + offset;
-            let end = (clip.end + offset).min(limit);
+            let start = clip.start / speed + offset;
+            let end = (clip.end / speed + offset).min(limit);
             if end <= start {
                 continue;
             }
@@ -63,10 +68,11 @@ fn walk(
                         gain_db: Track::constant(0.0),
                         fade_in: Ratio::ZERO,
                         fade_out: Ratio::ZERO,
+                        speed: clip.speed * speed,
                     });
                 }
                 ResolvedSource::Composition(nested) => {
-                    walk(comp, &nested.layers, start, end, out);
+                    walk(comp, &nested.layers, start, clip.speed * speed, end, out);
                 }
                 _ => {}
             }
@@ -94,10 +100,18 @@ fn voices(comp: &Composition) -> Vec<Voice> {
                 gain_db: c.gain_db.clone(),
                 fade_in: c.fade_in,
                 fade_out: c.fade_out,
+                speed: c.speed,
             });
         }
     }
-    walk(comp, &comp.layers, Ratio::ZERO, comp.duration, &mut out);
+    walk(
+        comp,
+        &comp.layers,
+        Ratio::ZERO,
+        Ratio::ONE,
+        comp.duration,
+        &mut out,
+    );
     out
 }
 
@@ -126,7 +140,20 @@ pub fn mix(comp: &Composition, root: &Path, rate: u32) -> Result<Vec<f32>, Media
                 }
             }
         };
-        let samples = reader.read(voice.in_, length, rate)?;
+        // A sped-up source: that much more of it, resampled to that
+        // much lower a rate, then played at the output rate (the pitch
+        // follows, as on a varispeed deck).
+        let samples = if voice.speed == Ratio::ONE {
+            reader.read(voice.in_, length, rate)?
+        } else {
+            let read_rate = (f64::from(rate) / voice.speed.to_f64()).round().max(1000.0) as u32;
+            let mut s = reader.read(voice.in_, length * voice.speed, read_rate)?;
+            s.resize(
+                ((length.to_f64() * f64::from(rate)).round() as usize) * 2,
+                0.0,
+            );
+            s
+        };
         let offset = (voice.start.to_f64() * f64::from(rate)).round() as usize;
         let frames = samples.len() / 2;
         let fade_in = voice.fade_in.to_f64();

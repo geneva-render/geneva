@@ -1001,6 +1001,14 @@
             }
           ],
           "description": "A mask limiting what the clip shows: a shape cut from the clip's\nbox, or the luma of an image stretched over it. It moves and\nscales with the clip."
+        },
+        "speed": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "How fast the source plays: 2 is twice as fast, 0.5 half speed.\nThe clip lasts its source range divided by this; the source's\naudio is resampled, so its pitch follows. The clip's own keyframes\nstay in output time. Defaults to 1."
         }
       },
       "required": [
@@ -2362,6 +2370,14 @@
             }
           ],
           "description": "Fade-out duration to silence."
+        },
+        "speed": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "How fast the source plays: 2 is twice as fast, 0.5 half speed.\nThe clip lasts its source range divided by this, and the pitch\nfollows. Defaults to 1."
         }
       },
       "required": [

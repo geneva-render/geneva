@@ -164,6 +164,10 @@ struct ConvertArgs {
     /// The output takes its size unless --width or --height is given.
     #[arg(long, value_name = "RECT")]
     crop: Option<verbs::CropArg>,
+    /// Play the source this many times faster (2) or slower (0.5); the
+    /// pitch follows.
+    #[arg(long, value_name = "FACTOR")]
+    speed: Option<f64>,
     /// Output width in pixels. The height follows when not given.
     #[arg(long)]
     width: Option<u32>,
@@ -227,6 +231,10 @@ struct TrimArgs {
     /// (pixels or percentages). The output takes its size.
     #[arg(long, value_name = "RECT")]
     crop: Option<verbs::CropArg>,
+    /// Play the kept range this many times faster (2) or slower (0.5);
+    /// the pitch follows.
+    #[arg(long, value_name = "FACTOR")]
+    speed: Option<f64>,
     #[command(flatten)]
     encode: verbs::EncodeArgs,
 }
@@ -500,6 +508,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let compiled = verbs::convert(
                 &args.input,
                 args.crop.as_ref(),
+                args.speed,
                 args.width,
                 args.height,
                 args.fit,
@@ -512,6 +521,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let compiled = verbs::convert(
                 &args.input,
                 args.crop.as_ref(),
+                None,
                 args.width,
                 args.height,
                 args.fit,
@@ -527,6 +537,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 parse_time("--to", args.to.as_deref())?,
                 parse_time("--duration", args.duration.as_deref())?,
                 args.crop.as_ref(),
+                args.speed,
                 &args.encode,
             )?;
             run_verb(&compiled, &args.output, &args.encode, cli.format)

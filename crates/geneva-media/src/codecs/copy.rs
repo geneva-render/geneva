@@ -144,6 +144,7 @@ pub fn plan_stream_copy(
             }
             let clip = &track.clips[0];
             let untouched = clip.gain_db.is_constant()
+                && clip.speed == Ratio::ONE
                 && clip.gain_db.sample(0.0) == 0.0
                 && clip.fade_in.is_zero()
                 && clip.fade_out.is_zero()
@@ -293,6 +294,7 @@ fn video_layer_clips(
         if clip.blend != geneva_timeline::schema::BlendMode::Normal
             || !clip.effects.is_empty()
             || clip.mask.is_some()
+            || clip.speed != Ratio::ONE
         {
             return Ok(None);
         }

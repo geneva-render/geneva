@@ -427,6 +427,7 @@ fn video_clip(
         blend: None,
         effects: Vec::new(),
         mask: None,
+        speed: None,
     }
 }
 
@@ -536,9 +537,11 @@ fn base_timeline(width: u32, height: u32, fps: Ratio, encode: Option<Encode>) ->
 
 /// `convert` and `resize`: one input, optionally a crop and a new size.
 /// The output takes the crop's size unless a size is given.
+#[allow(clippy::too_many_arguments)]
 pub fn convert(
     input: &Path,
     crop: Option<&CropArg>,
+    speed: Option<f64>,
     width: Option<u32>,
     height: Option<u32>,
     fit: Option<FitArg>,
@@ -587,6 +590,7 @@ pub fn convert(
         },
     );
     clip.crop = crop;
+    clip.speed = speed;
     tl.layers.push(Layer {
         id: None,
         enabled: true,
@@ -610,6 +614,7 @@ pub fn trim(
     to: Option<Time>,
     duration: Option<Time>,
     crop: Option<&CropArg>,
+    speed: Option<f64>,
     args: &EncodeArgs,
 ) -> Result<Compiled> {
     let src = Input::probe(input)?;
@@ -646,6 +651,7 @@ pub fn trim(
         crop.map(|_| Fit::Contain),
     );
     clip.crop = crop;
+    clip.speed = speed;
     tl.layers.push(Layer {
         id: None,
         enabled: true,
@@ -890,6 +896,7 @@ pub fn overlay(
             blend: None,
             effects: Vec::new(),
             mask: None,
+            speed: None,
         }],
     });
     Ok(Compiled {
@@ -949,6 +956,7 @@ pub fn audio(input: &Path, op: &AudioOp, args: &EncodeArgs) -> Result<Compiled> 
             gain_db: gain.map(Animated::Constant),
             fade_in: None,
             fade_out: None,
+            speed: None,
         }],
     };
     // The picture sets the length; a longer replacement or mix-in is cut
@@ -1414,6 +1422,7 @@ pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Re
             blend: None,
             effects: Vec::new(),
             mask: None,
+            speed: None,
         });
     }
     if offscreen > LISTED {

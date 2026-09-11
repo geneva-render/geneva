@@ -34,6 +34,32 @@ fn examples_load_without_errors() {
 }
 
 #[test]
+fn speed_shortens_a_clip_and_must_be_positive() {
+    // Two seconds of source at speed 2 last one second; a nested
+    // composition at speed 0.5 lasts twice its own length.
+    let text = doc(r#""assets":{"v":{"src":"v.mp4"}},
+        "compositions":{"c":{"width":64,"height":64,"layers":[{"clips":[{"source":{"kind":"solid","color":"red"},"duration":"1s"}]}]}},
+        "layers":[{"clips":[
+          {"source":{"kind":"video","asset":"v","out":"2s"},"speed":2},
+          {"source":{"kind":"composition","composition":"c"},"speed":0.5}]}],
+        "audio":[{"clips":[{"asset":"v","out":"3s","speed":1.5}]}]"#);
+    let l = load(&text);
+    assert!(l.is_ok(), "{:#?}", l.diagnostics);
+    let comp = l.composition.unwrap();
+    let clips = &comp.layers[0].clips;
+    assert_eq!(clips[0].end, Ratio::from_int(1));
+    assert_eq!(clips[0].speed, Ratio::from_int(2));
+    assert_eq!(clips[1].start, Ratio::from_int(1));
+    assert_eq!(clips[1].end, Ratio::from_int(3));
+    assert_eq!(comp.audio[0].clips[0].end, Ratio::from_int(2));
+    assert_eq!(comp.audio[0].clips[0].speed, Ratio::new(3, 2));
+    let bad = errors(&doc(
+        r#""assets":{"v":{"src":"v.mp4"}},"layers":[{"clips":[{"source":{"kind":"video","asset":"v","out":"2s"},"speed":0}]}]"#,
+    ));
+    assert_eq!(bad, vec![("E402", "/layers/0/clips/0/speed".to_owned())]);
+}
+
+#[test]
 fn sequential_clips_and_transitions_resolve_exactly() {
     let text = std::fs::read_to_string("../../examples/overlay.json").unwrap();
     let comp = load(&text).composition.unwrap();

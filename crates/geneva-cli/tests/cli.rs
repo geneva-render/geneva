@@ -206,6 +206,24 @@ fn crop_takes_the_region_straight_from_the_decoder() {
     assert_eq!(tl["layers"][0]["clips"][0]["source"]["audio"], false);
     assert_eq!(tl["layers"][0]["clips"][0]["effects"][0]["kind"], "blur");
     assert_eq!(tl["layers"][1]["clips"][0]["fit"], "contain");
+    // Speed: twice as fast halves the clip, video and audio alike, and
+    // is always composited.
+    let out = dir.path().join("fast.mp4");
+    let doc = run_json(
+        &["trim", "--from", "0s", "--to", "2s", "--speed", "2", "-o"],
+        &[&out, &media_dir().join("clip.mp4")],
+    );
+    assert_eq!(doc["mode"], "render", "{doc:#}");
+    assert!(
+        (doc["duration"].as_f64().unwrap() - 1.0).abs() < 0.05,
+        "{doc:#}"
+    );
+    let info = run_json(&["probe"], &[&out]);
+    assert!(
+        (info["duration"].as_f64().unwrap() - 1.0).abs() < 0.1,
+        "{info:#}"
+    );
+    assert!(info["audio"].is_object(), "{info:#}");
     // In a timeline, a crop is a clip field; a 0.1 document without one
     // still validates.
     geneva()

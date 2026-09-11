@@ -37,6 +37,12 @@ the format version it was written for.
   image asset stretched over the box; `invert` flips it. Masks are in
   the box's own coordinates, so they follow the clip's fit and
   transform.
+- `speed` on clips and audio clips: a constant rate change (`2` twice
+  as fast, `0.5` half speed). The clip lasts its source range divided
+  by it, nested compositions run faster inside, and audio is resampled
+  so its pitch follows, as on a varispeed deck; the clip's own
+  keyframes stay in output time. `--speed FACTOR` on `trim` and
+  `convert`.
 
 ### Performance
 
