@@ -7,6 +7,19 @@ the format version it was written for.
 
 ## Unreleased
 
+### Added
+
+- Smart cut. With `--exact`, or with an overlay or burned-in subtitle
+  shown for part of the time, an H.264 source is no longer re-encoded
+  whole: its packets are copied wherever nothing changes and only the
+  frames from a cut to the next keyframe, or under the overlay, are
+  encoded into the same stream (system x264, CRF 18, parameter sets
+  side by side with the source's). The report calls the mode `smart`
+  and counts the frames copied and encoded; copied frames are
+  bit-identical to the source. A one-second overlay on a ten-second
+  1080p clip: 3.0 s instead of 4.6 s; an exact trim inside a
+  one-second GOP re-encodes at most a second.
+
 ### Changes
 
 - A picture fitted onto a larger frame of one color, as a landscape

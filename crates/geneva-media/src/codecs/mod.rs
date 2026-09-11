@@ -5,7 +5,9 @@ mod decode;
 mod direct;
 mod encode;
 mod ffi;
+mod h264;
 mod probe;
+mod smartcut;
 mod subtitle_streams;
 mod tags;
 mod x264;
@@ -18,13 +20,14 @@ pub use copy::{CopyPlan, CopyReport, CopySegment, plan_stream_copy, stream_copy}
 pub use decode::{AudioReader, VideoReader};
 pub use direct::DirectSource;
 pub use encode::{
-    AudioEncoder, AudioSettings, EncodeSettings, Encoder, VideoSettings, container_accepts_audio,
-    container_accepts_video, container_for, default_codecs, default_image_codec, output_tags_for,
-    plane_format_for,
+    AudioEncoder, AudioSettings, EncodeSettings, Encoder, StitchSettings, VideoSettings,
+    container_accepts_audio, container_accepts_video, container_for, default_codecs,
+    default_image_codec, output_tags_for, plane_format_for,
 };
 /// An encoded packet on its way to the muxer.
 pub use ffmpeg_next::Packet;
 pub use probe::probe;
+pub use smartcut::{CopiedPacket, Segment, SmartPlan, SourceStream, plan_smart_cut, read_copied};
 pub use subtitle_streams::{
     SubtitleSettings, SubtitleStreamInfo, read_subtitles, subtitle_streams,
 };

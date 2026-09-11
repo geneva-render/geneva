@@ -147,6 +147,29 @@ not change with time is laid out once per clip. Frame selection
 follows the same rule as the renderer (the last decoded frame at or
 before each output time), and the report names this mode `direct`.
 
+## Smart cut
+
+Between stream copy and the direct path sits a third: when the picture
+is an H.264 source shown as it is but something changes somewhere (an
+exact cut inside a group of pictures, an overlay or a burned-in
+subtitle for part of the time), the planner copies the source's packets
+for every stretch that stays untouched and encodes only the rest, into
+the same track. A copied stretch starts at an IDR picture and ends
+where the source's decode order is clean, that is, where every picture
+before the boundary is shown before every picture after it, so no
+picture is left without its references; the pictures in between that
+the cut wants are decoded and encoded from the previous keyframe
+instead. The encoded runs come from the system's x264 with its
+parameter sets under an id the source does not use, and both sets go
+into the container header side by side, so each picture names its own
+and the decoder switches at the IDR that starts every run and every
+stretch. Decode timestamps are assigned in one sequence across copied
+and encoded pictures, running a fixed number of pictures ahead of
+display (the larger of the source's reorder depth and the encoder's),
+which keeps every picture decodable in time without touching the
+pictures themselves. The report names the mode `smart` and counts the
+frames copied and encoded; the copied frames are the source's bytes.
+
 ## Verbs
 
 `trim`, `concat`, `convert`, `resize`, `overlay` and `audio` do not have

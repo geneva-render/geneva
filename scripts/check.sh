@@ -122,7 +122,7 @@ run "frame to PNG" "$work/logo.png" "$geneva" frame "$work/logo.json" -o "$work/
 run "probe" - "$geneva" probe "$input"; noff
 run "trim, copied (2s..7s)" "$work/trim-copy.mp4" "$geneva" trim "$input" -o "$work/trim-copy.mp4" --from 2s --duration 5s
 ff -ss 2 -i "$input" -t 5 -c copy "$work/ff-trim-copy.mp4"
-run "trim, exact (re-encode H.264)" "$work/trim-exact.mp4" "$geneva" trim "$input" -o "$work/trim-exact.mp4" --from 2s --duration 5s --exact
+run "trim, exact (smart cut)" "$work/trim-exact.mp4" "$geneva" trim "$input" -o "$work/trim-exact.mp4" --from 2s --duration 5s --exact
 ff -ss 2 -i "$input" -t 5 "${ffh264[@]}" -c:a aac "$work/ff-trim-exact.mp4"
 input_height=$("$geneva" --format json probe "$input" 2>/dev/null | sed -n 's/.*"height": *\([0-9]*\).*/\1/p' | head -1)
 if [ "${input_height:-0}" -gt 720 ]; then
@@ -138,6 +138,7 @@ ff -i "$input" -vn "$work/ff-sound.wav"
 run "concat two copies, copied" "$work/joined.mp4" "$geneva" concat "$work/trim-copy.mp4" "$work/trim-copy.mp4" -o "$work/joined.mp4"; noff
 run "concat with crossfade (rendered)" "$work/faded.mp4" "$geneva" concat "$work/trim-exact.mp4" "$work/trim-exact.mp4" -o "$work/faded.mp4" --crossfade 0.5s; noff
 run "overlay a PNG" "$work/branded.mp4" "$geneva" overlay "$work/trim-exact.mp4" "$work/logo.png" -o "$work/branded.mp4" --at bottom-right --scale 0.5 --opacity 0.9; noff
+run "overlay a PNG for 2s of 5s (smart cut)" "$work/branded2.mp4" "$geneva" overlay "$work/trim-exact.mp4" "$work/logo.png" -o "$work/branded2.mp4" --at bottom-right --scale 0.5 --start 1s --duration 2s; noff
 run "subtitles attach (mkv)" "$work/subbed.mkv" "$geneva" subtitles "$work/trim-copy.mp4" -o "$work/subbed.mkv" --add "$work/en.srt" --language en; noff
 run "subtitles extract (vtt)" "$work/back.vtt" "$geneva" subtitles "$work/subbed.mkv" -o "$work/back.vtt" --extract; noff
 run "subtitles burn-in, --fit (5s)" "$work/burned.mp4" "$geneva" subtitles "$work/trim-exact.mp4" -o "$work/burned.mp4" --burn "$work/en.srt" --fit

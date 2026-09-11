@@ -138,8 +138,10 @@ struct RenderArgs {
     /// Write no audio track.
     #[arg(long)]
     no_audio: bool,
-    /// Always decode and re-encode, even when the output could be produced
-    /// by copying the source streams. Cuts then land on the exact frame.
+    /// Cut on the exact frame instead of moving cuts to keyframes. With an
+    /// H.264 source and the system's x264, only the frames from a cut to
+    /// the next keyframe are re-encoded and the rest is copied (smart
+    /// cut); otherwise everything is re-encoded.
     #[arg(long)]
     exact: bool,
 }

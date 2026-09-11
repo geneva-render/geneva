@@ -32,6 +32,8 @@ Every command that touches a timeline returns:
 
 `render` and the verbs add `output`, `mode`, `frames`, `duration` and
 `seconds`. `mode` is `"copy"` (source streams copied, no decoding),
+`"smart"` (packets copied where nothing changes, the frames around cuts
+and under overlays encoded into the same stream),
 `"direct"` (decoded frames handed straight to the encoder, scaled or
 repacked when needed) or `"render"`
 (frames composited by the renderer). `frame` adds `output`, `time`,

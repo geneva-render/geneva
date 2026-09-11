@@ -22,6 +22,10 @@ pub enum RenderMode {
     Copy,
     /// Decoded frames went straight to the encoder without compositing.
     Direct,
+    /// Source packets were copied where nothing changed and the frames
+    /// around the cuts and under the overlays were encoded into the same
+    /// stream.
+    Smart,
     /// Frames were composited by the renderer.
     Render,
 }
@@ -32,6 +36,7 @@ impl RenderMode {
         match self {
             Self::Copy => "copy",
             Self::Direct => "direct",
+            Self::Smart => "smart",
             Self::Render => "render",
         }
     }
@@ -226,8 +231,15 @@ mod imp {
     /// thread.
     enum Msg {
         Planes(geneva_media::convert::Planes),
+        Copied(Vec<geneva_media::CopiedPacket>),
+        /// The end of an encoded run of a smart cut.
+        EndSegment,
         Audio(Vec<geneva_media::Packet>, geneva_timeline::Ratio),
     }
+
+    /// Constant rate factor of the runs a smart cut encodes: near the
+    /// source's quality, since they sit between its own pictures.
+    const STITCH_CRF: u8 = 18;
 
     pub fn render(
         comp: &Composition,
@@ -301,6 +313,7 @@ mod imp {
                 keyframe_interval: video.and_then(|v| v.keyframe_interval),
                 max_bitrate_kbps: video.and_then(|v| v.max_bitrate_kbps),
                 level: video.and_then(|v| v.level.clone()),
+                stitch: None,
             })
         };
         if video_settings.is_none() && audio_settings.is_none() {
@@ -331,7 +344,7 @@ mod imp {
                 cues,
             });
         }
-        let settings = EncodeSettings {
+        let mut settings = EncodeSettings {
             video: video_settings,
             container: Some(container),
             audio: audio_settings,
@@ -382,6 +395,35 @@ mod imp {
                 });
             }
         }
+        // Smart cut: copy the sources' packets wherever nothing changes
+        // and encode only the frames around the cuts and under the
+        // overlays, into the same stream.
+        let smart = match &settings.video {
+            Some(v)
+                if !wants_encode
+                    && v.codec == geneva_timeline::schema::VideoCodec::H264
+                    && v.hardware != geneva_timeline::schema::HardwarePolicy::Require
+                    && geneva_media::system_x264().is_some() =>
+            {
+                geneva_media::plan_smart_cut(
+                    comp,
+                    root,
+                    container,
+                    video.and_then(|v| v.codec),
+                    geneva_media::output_tags_for(v.codec, v.color),
+                )
+                .map_err(media_err)?
+            }
+            _ => None,
+        };
+        if let (Some(plan), Some(v)) = (&smart, settings.video.as_mut()) {
+            v.stitch = Some(geneva_media::StitchSettings {
+                extradata: plan.extradata.clone(),
+                sps_id: plan.sps_id,
+                reorder: plan.reorder,
+                crf: STITCH_CRF,
+            });
+        }
         let has_video = settings.video.is_some();
         // When the picture is the source's own, decoded frames skip the
         // compositing pipeline.
@@ -412,8 +454,10 @@ mod imp {
             .as_ref()
             .map(|v| geneva_media::output_tags_for(v.codec, v.color));
         let mut notes = Vec::new();
-        if let Some(d) = direct.as_ref().or(base.as_ref()) {
-            notes.push(d.reason());
+        match (&smart, direct.as_ref().or(base.as_ref())) {
+            (Some(plan), _) => notes.push(plan.reason()),
+            (None, Some(d)) => notes.push(d.reason()),
+            (None, None) => {}
         }
         let encoder = Encoder::new(output, settings).map_err(media_err)?;
         if let Some(note) = encoder.video_encoder_note() {
@@ -445,6 +489,12 @@ mod imp {
                 for msg in rx {
                     match msg {
                         Msg::Planes(planes) => encoder.push_planes(&planes)?,
+                        Msg::Copied(batch) => {
+                            for p in &batch {
+                                encoder.push_copied(&p.data, p.frame, p.keyframe)?;
+                            }
+                        }
+                        Msg::EndSegment => encoder.end_segment()?,
                         Msg::Audio(packets, time) => encoder.write_audio_packets(packets, time)?,
                     }
                 }
@@ -469,51 +519,104 @@ mod imp {
                 })
             });
             let mut frame = geneva_render::Frame::new(0, 0, geneva_color::Color::BLACK);
-            for n in 0..total {
+            // One output frame, by whichever path applies.
+            let mut produce = |n: u64| -> Result<geneva_media::convert::Planes, RenderError> {
                 let t = comp.frame_time(n);
-                let planes = if let Some(d) = direct.as_mut() {
-                    match d.frame(t) {
-                        Ok(planes) => planes,
-                        Err(e) => {
-                            render_error = Some(media_err(e));
-                            break;
-                        }
+                if let Some(d) = direct.as_mut() {
+                    return d.frame(t).map_err(media_err);
+                }
+                if let Some(b) = base.as_mut() {
+                    let mut planes = b.frame(t).map_err(media_err)?;
+                    if let Some((overlay, rect)) = renderer.render_overlays(comp, t)? {
+                        let tags = output_tags.expect("video output has tags");
+                        geneva_media::convert::blend_overlay(&mut planes, &overlay, rect, tags);
+                        composited += 1;
                     }
-                } else if let Some(b) = base.as_mut() {
-                    let mut planes = match b.frame(t) {
+                    return Ok(planes);
+                }
+                renderer.render_into(comp, t, &mut frame)?;
+                let (color, format) = video_format.expect("video output has a format");
+                Ok(geneva_media::convert::frame_to_planes(
+                    &frame, color, format,
+                ))
+            };
+            let mut done = 0u64;
+            let report = |done: u64| {
+                if progress && (done % 30 == 0 || done == total) {
+                    eprint!("\rframe {done}/{total}");
+                }
+            };
+            // Sends the frames of one run; false once the encoder stopped
+            // (its error is reported below) or a frame failed.
+            let mut encode_run = |range: std::ops::Range<u64>,
+                                  render_error: &mut Option<RenderError>,
+                                  done: &mut u64|
+             -> bool {
+                for n in range {
+                    let planes = match produce(n) {
                         Ok(planes) => planes,
                         Err(e) => {
-                            render_error = Some(media_err(e));
-                            break;
+                            *render_error = Some(e);
+                            return false;
                         }
                     };
-                    match renderer.render_overlays(comp, t) {
-                        Ok(Some((overlay, rect))) => {
-                            let tags = output_tags.expect("video output has tags");
-                            geneva_media::convert::blend_overlay(&mut planes, &overlay, rect, tags);
-                            composited += 1;
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            render_error = Some(e);
+                    if tx.send(Msg::Planes(planes)).is_err() {
+                        return false;
+                    }
+                    *done += 1;
+                    report(*done);
+                }
+                true
+            };
+            match &smart {
+                None => {
+                    encode_run(0..total, &mut render_error, &mut done);
+                }
+                Some(plan) => {
+                    for segment in &plan.segments {
+                        let ok = match segment {
+                            geneva_media::Segment::Encode { frames } => {
+                                encode_run(frames.clone(), &mut render_error, &mut done)
+                                    && tx.send(Msg::EndSegment).is_ok()
+                            }
+                            geneva_media::Segment::Copy {
+                                source,
+                                packets,
+                                offset,
+                                frames,
+                            } => {
+                                let mut batch = Vec::with_capacity(64);
+                                let mut stopped = false;
+                                let result = geneva_media::read_copied(
+                                    &plan.sources[*source],
+                                    packets.clone(),
+                                    *offset,
+                                    &mut |p| {
+                                        batch.push(p);
+                                        if batch.len() < 64 {
+                                            return true;
+                                        }
+                                        stopped = tx
+                                            .send(Msg::Copied(std::mem::take(&mut batch)))
+                                            .is_err();
+                                        !stopped
+                                    },
+                                );
+                                if !stopped && !batch.is_empty() {
+                                    stopped = tx.send(Msg::Copied(batch)).is_err();
+                                }
+                                if let Err(e) = result {
+                                    render_error = Some(media_err(e));
+                                }
+                                done += frames.end - frames.start;
+                                report(done);
+                                !stopped && render_error.is_none()
+                            }
+                        };
+                        if !ok {
                             break;
                         }
                     }
-                    planes
-                } else {
-                    if let Err(e) = renderer.render_into(comp, t, &mut frame) {
-                        render_error = Some(e);
-                        break;
-                    }
-                    let (color, format) = video_format.expect("video output has a format");
-                    geneva_media::convert::frame_to_planes(&frame, color, format)
-                };
-                if tx.send(Msg::Planes(planes)).is_err() {
-                    // The encoder stopped; its error is reported below.
-                    break;
-                }
-                if progress && (n % 30 == 29 || n + 1 == total) {
-                    eprint!("\rframe {}/{total}", n + 1);
                 }
             }
             drop(tx);
@@ -536,7 +639,7 @@ mod imp {
         if progress && total > 0 {
             eprintln!();
         }
-        if base.is_some() {
+        if base.is_some() && smart.is_none() {
             notes.push(format!(
                 "overlays were drawn onto {composited} of {total} frames; the others went from the decoder to the encoder untouched"
             ));
@@ -545,7 +648,9 @@ mod imp {
         Ok(RenderStats {
             frames: total,
             duration: comp.duration,
-            mode: if direct.is_some() || base.is_some() {
+            mode: if smart.is_some() {
+                RenderMode::Smart
+            } else if direct.is_some() || base.is_some() {
                 RenderMode::Direct
             } else {
                 RenderMode::Render

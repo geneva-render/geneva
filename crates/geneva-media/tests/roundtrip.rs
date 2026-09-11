@@ -146,6 +146,7 @@ fn encoded_solid_color_survives_the_round_trip() {
             keyframe_interval: None,
             max_bitrate_kbps: None,
             level: None,
+            stitch: None,
         }),
         container: None,
         subtitles: Vec::new(),
@@ -246,6 +247,7 @@ fn audio_lands_at_its_timeline_position_in_the_output_file() {
             keyframe_interval: None,
             max_bitrate_kbps: None,
             level: None,
+            stitch: None,
         }),
         container: None,
         subtitles: Vec::new(),
@@ -783,6 +785,7 @@ fn solid_settings(
             keyframe_interval: None,
             max_bitrate_kbps: None,
             level: None,
+            stitch: None,
         }),
         container: None,
         subtitles: Vec::new(),
@@ -1056,5 +1059,90 @@ fn scaled_and_repacked_direct_frames_match_the_reference_renderer() {
             .iter()
             .any(|v| *v > 16),
         "middle shows the picture"
+    );
+}
+
+#[test]
+fn smart_cut_plans_copies_between_keyframes_and_clean_boundaries() {
+    use geneva_media::{Segment, plan_smart_cut, read_copied, system_x264};
+    use geneva_timeline::schema::Container;
+
+    if system_x264().is_none() {
+        eprintln!("no system x264; skipping");
+        return;
+    }
+    let root = clip().parent().unwrap().to_path_buf();
+    // 0.6 s into a 2 s clip with a keyframe every 12 frames: frame 15 of
+    // the source is the first wanted, 24 the first IDR after it.
+    let comp = load(
+        r#"{
+          "geneva": "0.1",
+          "output": { "width": 192, "height": 108, "fps": 25 },
+          "assets": { "clip": { "src": "clip.mp4" } },
+          "layers": [ { "clips": [ {
+            "source": { "kind": "video", "asset": "clip", "in": "0.6s", "out": "1.6s" }
+          } ] } ]
+        }"#,
+    )
+    .composition
+    .unwrap();
+    let plan = plan_smart_cut(&comp, &root, Container::Mp4, None, comp.color)
+        .unwrap()
+        .expect("an exact cut of an H.264 clip qualifies");
+    assert_eq!(plan.copied_frames, 16);
+    assert_eq!(plan.encoded_frames, 9);
+    assert_eq!(plan.segments.len(), 2);
+    assert_eq!(plan.segments[0], Segment::Encode { frames: 0..9 });
+    let Segment::Copy {
+        source,
+        packets,
+        offset,
+        frames,
+    } = plan.segments[1].clone()
+    else {
+        panic!("second segment copies");
+    };
+    assert_eq!(
+        (source, packets.clone(), offset, frames),
+        (0, 24..40, -15, 9..25)
+    );
+    assert!(plan.sources[0].packets[24].idr);
+    assert_eq!(plan.reorder, 2, "B-pyramid decodes two pictures ahead");
+    assert_eq!(plan.sps_id, 1);
+
+    // The copied packets cover exactly the frames of the stretch.
+    let mut shown = Vec::new();
+    read_copied(&plan.sources[source], packets, offset, &mut |p| {
+        shown.push(p.frame);
+        true
+    })
+    .unwrap();
+    shown.sort_unstable();
+    assert_eq!(shown, (9..25).collect::<Vec<i64>>());
+    assert!(plan.reason().contains("16 of 25"));
+
+    // A cut on a keyframe copies everything; a re-encode is never planned.
+    let comp = load(
+        r#"{
+          "geneva": "0.1",
+          "output": { "width": 192, "height": 108, "fps": 25 },
+          "assets": { "clip": { "src": "clip.mp4" } },
+          "layers": [ { "clips": [ {
+            "source": { "kind": "video", "asset": "clip", "in": "0.48s", "out": "1.44s" }
+          } ] } ]
+        }"#,
+    )
+    .composition
+    .unwrap();
+    let plan = plan_smart_cut(&comp, &root, Container::Mp4, None, comp.color)
+        .unwrap()
+        .unwrap();
+    assert_eq!((plan.copied_frames, plan.encoded_frames), (24, 0));
+
+    // Anything but H.264 in the output rules it out.
+    assert!(
+        plan_smart_cut(&comp, &root, Container::Webm, None, comp.color)
+            .unwrap()
+            .is_none()
     );
 }

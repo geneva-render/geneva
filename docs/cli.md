@@ -51,7 +51,7 @@ extension unless the timeline sets `output.encode.container`.
 | `--crf N` | Constant-quality level, overriding the timeline. Lower is better; 18 to 30 is the useful range for H.264 and H.265. |
 | `--preset NAME` | Encoder speed preset, `ultrafast` to `veryslow`. |
 | `--no-audio` | Write no audio track. |
-| `--exact` | Always decode and re-encode, even when the streams could be copied. |
+| `--exact` | Cut on the exact frame instead of moving cuts to keyframes; see [smart cut](#smart-cut). |
 | `--for TARGET`, `--quality`, `--budget` | Encode for a destination; see [targets](#targets). On `render` the timeline's size is kept; only the encode block is set. |
 
 When the composition uses its sources as they are, the coded streams are
@@ -66,6 +66,31 @@ sample layout differs, without passing through the compositor; the report
 calls this mode `direct`. Audio that is re-encoded keeps the source's
 sample rate and channel count when every input agrees (mono stays mono,
 44.1 kHz stays 44.1 kHz); otherwise it is written as 48 kHz stereo.
+
+### Smart cut
+
+Between "copy everything, cuts move to keyframes" and "re-encode
+everything" there is a third mode, `smart`: the source's coded packets
+are copied wherever nothing changes, and only the frames that do change
+are encoded, into the same stream. With `--exact`, that is the run from
+each cut to the next keyframe of the source. With an overlay or a
+burned-in subtitle shown for part of the time, it is the frames it
+touches, again up to the next keyframe. A join in a `concat` costs
+nothing when it lands on a keyframe. The report says how many frames
+were copied and how many encoded, and the copied frames are
+bit-identical to the source's.
+
+It applies when the source is H.264 4:2:0 shown as it is at the output
+size and rate, the output is MP4, MOV or Matroska with H.264, no
+quality setting (`--crf`, `--preset`, `--for`) asks for a re-encode, and
+the system's x264 is installed (see the README). The encoded runs use
+CRF 18 so that they sit next to the source's own pictures without a
+visible step, and their parameter sets go into the file next to the
+source's, which every H.264 decoder handles. How much is saved depends
+on the source's keyframe spacing: a phone recording with a keyframe
+every second re-encodes at most a second per cut; an x264 default
+encode with one every ten seconds may have no keyframe inside a short
+trim at all, in which case the whole trim is encoded as before.
 
 ### `geneva probe <file>`
 
@@ -95,7 +120,7 @@ otherwise. The printed timeline (`--show-timeline`) shows the choice.
 | `--codec h264\|h265\|vp9\|av1\|prores\|dnxhd\|png\|mjpeg` | Video codec. Defaults to the container's usual one. |
 | `--profile NAME` | Codec profile: `proxy`, `lt`, `standard`, `hq`, `4444`, `4444-xq` for ProRes; `dnxhr-lb`, `dnxhr-sq`, `dnxhr-hq`, `dnxhr-hqx`, `dnxhr-444` for DNxHR. Implies the codec. |
 | `--no-audio` | Write no audio track. |
-| `--exact` | Always decode and re-encode. |
+| `--exact` | Cut on the exact frame; a [smart cut](#smart-cut) when the source allows. |
 | `--show-timeline` | Print the timeline the verb built instead of rendering it. Asset paths in it are relative to the directory printed on stderr. |
 
 ### `geneva convert <input> -o FILE [--width W] [--height H] [--fit contain|cover|fill] [--fps FPS]`

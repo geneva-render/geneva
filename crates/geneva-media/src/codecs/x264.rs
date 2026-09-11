@@ -262,7 +262,8 @@ fn bind(library: libloading::Library, path: String) -> Result<X264Lib, String> {
 
 /// One encoded picture in coded order.
 pub struct EncodedFrame {
-    /// Annex B NAL units (start codes included).
+    /// NAL units, with start codes (Annex B) or four-byte length prefixes
+    /// as the encoder was opened.
     pub data: Vec<u8>,
     /// Presentation time in frames.
     pub pts: i64,
@@ -295,6 +296,14 @@ pub struct X264Settings<'a> {
     pub max_bitrate_kbps: Option<u32>,
     /// Level such as "4.1".
     pub level: Option<String>,
+    /// Start codes before NAL units (Annex B) rather than four-byte
+    /// lengths.
+    pub annexb: bool,
+    /// Id for the SPS and PPS, when the stream must not use 0.
+    pub sps_id: Option<u8>,
+    /// Consecutive B-frames, pinned when the caller must know the
+    /// reorder depth.
+    pub bframes: Option<u8>,
 }
 
 /// An open x264 encoder taking 8-bit 4:2:0 pictures.
@@ -368,7 +377,7 @@ impl X264Encoder {
             ("transfer", transfer),
             ("colormatrix", matrix),
             ("fullrange", full_range),
-            ("annexb", "1"),
+            ("annexb", if settings.annexb { "1" } else { "0" }),
         ];
         let mut extra: Vec<(&str, String)> = Vec::new();
         if let Some(secs) = settings.keyframe_interval {
@@ -384,6 +393,12 @@ impl X264Encoder {
         }
         if let Some(level) = &settings.level {
             extra.push(("level", level.clone()));
+        }
+        if let Some(id) = settings.sps_id {
+            extra.push(("sps-id", id.to_string()));
+        }
+        if let Some(b) = settings.bframes {
+            extra.push(("bframes", b.to_string()));
         }
         let extra: Vec<(&str, &str)> = extra.iter().map(|(k, v)| (*k, v.as_str())).collect();
         for (name, value) in options.into_iter().chain(extra) {

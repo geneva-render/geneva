@@ -250,7 +250,12 @@ fn render_copies_plain_cuts_and_reencodes_with_exact() {
         .unwrap();
     assert!(exact.status.success());
     let doc: serde_json::Value = serde_json::from_slice(&exact.stdout).unwrap();
-    assert_eq!(doc["mode"], "direct");
+    // A smart cut with the system's x264, a plain re-encode without it.
+    assert!(
+        doc["mode"] == "smart" || doc["mode"] == "direct",
+        "{}",
+        doc["mode"]
+    );
     assert_eq!(doc["frames"], 23);
 }
 
@@ -307,7 +312,11 @@ fn trim_prints_its_timeline_and_copies_the_streams() {
         &["trim", "--from", "0.5", "--duration", "1", "--exact", "-o"],
         &[&dir.path().join("exact.mp4"), &clip],
     );
-    assert_eq!(exact["mode"], "direct");
+    assert!(
+        exact["mode"] == "smart" || exact["mode"] == "direct",
+        "{}",
+        exact["mode"]
+    );
     assert_eq!(exact["frames"], 25);
 }
 
@@ -589,8 +598,9 @@ fn subtitles_burn_compiles_cues_to_text_clips_and_checks_the_frame() {
         &[&out, &clip],
     );
     assert_eq!(doc["ok"], true);
-    // The video itself skips the compositor; only the cues are drawn.
-    assert_eq!(doc["mode"], "direct");
+    // The video itself skips the compositor; only the cues are drawn, and
+    // with the system's x264 the frames without a cue are copied.
+    assert!(doc["mode"] == "smart" || doc["mode"] == "direct", "{}", doc["mode"]);
     let codes: Vec<&str> = doc["diagnostics"]
         .as_array()
         .unwrap()
@@ -898,4 +908,53 @@ fn verbs_keep_the_source_color_encoding() {
     let info = run_json(&["probe"], &[&out]);
     assert_eq!(info["video"]["color"]["matrix"], "bt601");
     assert_eq!(info["video"]["color"]["primaries"], "bt601-625");
+}
+
+#[test]
+#[cfg(feature = "media")]
+fn exact_cuts_copy_the_untouched_stretches() {
+    let dir = tempfile::tempdir().unwrap();
+    let clip = media_dir().join("clip.mp4");
+    // The cut at 0.6 s falls inside a group of pictures: the frames up to
+    // the next keyframe are encoded, the rest copied as coded.
+    let out = dir.path().join("smart.mp4");
+    let doc = run_json(
+        &["trim", "--from", "0.6", "--duration", "1", "--exact", "-o"],
+        &[&out, &clip],
+    );
+    assert_eq!(doc["frames"], 25);
+    if doc["mode"] == "direct" {
+        // No system x264: nothing to stitch with.
+        return;
+    }
+    assert_eq!(doc["mode"], "smart");
+    let text = doc.to_string();
+    assert!(text.contains("16 of 25 frames copied"), "{text}");
+    let info = run_json(&["probe"], &[&out]);
+    assert_eq!(info["video"]["codec"], "h264");
+    assert_eq!(info["audio"]["codec"], "aac");
+
+    // An overlay shown for part of the time forces only its frames (up to
+    // the next keyframe) through the encoder.
+    let logo = dir.path().join("logo.json");
+    std::fs::write(
+        &logo,
+        r##"{ "geneva": "0.1", "output": { "width": 40, "height": 20, "fps": 1, "duration": "1s", "background": "#ff0000" }, "layers": [] }"##,
+    )
+    .unwrap();
+    let png = dir.path().join("logo.png");
+    geneva()
+        .args(["frame", "-o"])
+        .arg(&png)
+        .arg(&logo)
+        .assert()
+        .success();
+    let out = dir.path().join("overlaid.mp4");
+    let doc = run_json(
+        &["overlay", "--start", "0.5s", "--duration", "0.4s", "-o"],
+        &[&out, &clip, &png],
+    );
+    assert_eq!(doc["mode"], "smart");
+    assert_eq!(doc["frames"], 50);
+    assert!(doc.to_string().contains("39 of 50 frames copied"), "{doc}");
 }

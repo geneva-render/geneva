@@ -13,7 +13,7 @@ use geneva_timeline::schema::{AudioCodec, Container, HardwarePolicy, VideoCodec,
 
 use super::subtitle_streams::{SubtitleSettings, SubtitleWriter};
 use super::x264::{X264Encoder, X264Settings};
-use super::{codec_error, ffi, init, open_error, tags};
+use super::{codec_error, ffi, h264, init, open_error, tags};
 use crate::MediaError;
 use crate::convert::{PlaneFormat, Planes, frame_to_planes};
 
@@ -58,6 +58,9 @@ pub struct VideoSettings {
     pub keyframe_interval: Option<f64>,
     /// Bitrate ceiling in kb/s; constant quality below it.
     pub max_bitrate_kbps: Option<u32>,
+    /// Write the track by stitching copied H.264 packets and encoded
+    /// runs (smart cut); see [`StitchSettings`].
+    pub stitch: Option<StitchSettings>,
     /// H.264/H.265 level such as "4.1", for the encoders that take one.
     pub level: Option<String>,
 }
@@ -68,6 +71,22 @@ fn level_code(level: &str) -> Option<i64> {
     let major: i64 = parts.next()?.trim().parse().ok()?;
     let minor: i64 = parts.next().map_or(Some(0), |m| m.trim().parse().ok())?;
     Some(major * 10 + minor)
+}
+
+/// How a stitched H.264 track is written: the copied sources' parameter
+/// sets go into the header next to the encoder's, which uses `sps_id`;
+/// decode timestamps run `reorder` pictures ahead of display so that
+/// copied and encoded pictures alike decode in time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StitchSettings {
+    /// The sources' `avcC` record.
+    pub extradata: Vec<u8>,
+    /// Parameter set id for the encoded runs.
+    pub sps_id: u8,
+    /// Decode-ahead in pictures needed by the copied sources.
+    pub reorder: u32,
+    /// Constant rate factor for the encoded runs.
+    pub crf: u8,
 }
 
 /// Audio track settings.
@@ -492,6 +511,9 @@ fn open_video_track(
     let format = plane_format_for(settings.codec, settings.profile);
     let fps = Rational::new(settings.fps.numer() as i32, settings.fps.denom() as i32);
     let time_base = Rational::new(fps.denominator(), fps.numerator());
+    if let Some(stitch) = settings.stitch.clone() {
+        return open_stitch_track(octx, path, settings, &stitch, fps, time_base, format);
+    }
     let candidates = video_encoder_candidates(settings.codec, settings.hardware);
     if candidates.is_empty() {
         return Err(MediaError::MissingEncoder {
@@ -522,6 +544,9 @@ fn open_video_track(
                 keyframe_interval: settings.keyframe_interval,
                 max_bitrate_kbps: settings.max_bitrate_kbps,
                 level: settings.level.clone(),
+                annexb: true,
+                sps_id: None,
+                bframes: None,
             };
             match X264Encoder::open(&x264) {
                 Ok(enc) => {
@@ -580,6 +605,7 @@ fn open_video_track(
             octx.add_stream_with(&ctx)
                 .map_err(|e| open_error(path, e))?
         }
+        VideoBackend::Stitch(_) => unreachable!("stitched tracks are opened above"),
     };
     let stream_index = stream.index();
     stream.set_time_base(time_base);
@@ -589,6 +615,124 @@ fn open_video_track(
         backend,
         name,
         x264_error,
+        stream_index,
+        time_base,
+        settings,
+        format,
+    })
+}
+
+/// The x264 settings of a stitched track's encoded runs.
+struct StitchX264 {
+    width: u32,
+    height: u32,
+    fps: Rational,
+    crf: u8,
+    color: ResolvedTags,
+    sps_id: u8,
+}
+
+impl StitchX264 {
+    fn settings(&self) -> X264Settings<'static> {
+        X264Settings {
+            width: self.width,
+            height: self.height,
+            fps: self.fps,
+            crf: self.crf,
+            preset: "medium",
+            color: self.color,
+            global_header: true,
+            keyframe_interval: None,
+            max_bitrate_kbps: None,
+            level: None,
+            annexb: false,
+            sps_id: Some(self.sps_id),
+            bframes: Some(STITCH_BFRAMES),
+        }
+    }
+}
+
+/// Consecutive B-frames of the encoded runs; with x264's pyramid the
+/// pictures decode at most this many ahead of display.
+const STITCH_BFRAMES: u8 = 3;
+
+/// A stitched H.264 track: copied packets and encoded runs in one stream.
+struct StitchTrack {
+    x264: StitchX264,
+    /// The encoder of the current run, opened at its first picture and
+    /// flushed when the run ends.
+    current: Option<X264Encoder>,
+    /// Packets written so far: the decode timestamp counter.
+    packets: i64,
+    /// Decode-ahead in pictures.
+    reorder: i64,
+    build: i32,
+}
+
+/// Opens a stitched track: the header carries the sources' parameter
+/// sets and those of the encoder's runs.
+fn open_stitch_track(
+    octx: &mut ffmpeg_next::format::context::Output,
+    path: &Path,
+    settings: VideoSettings,
+    stitch: &StitchSettings,
+    fps: Rational,
+    time_base: Rational,
+    format: PlaneFormat,
+) -> Result<VideoTrack, MediaError> {
+    if settings.codec != VideoCodec::H264 {
+        return Err(MediaError::Codec {
+            context: "encoder setup".to_owned(),
+            reason: "a stitched track must be H.264".to_owned(),
+        });
+    }
+    let x264 = StitchX264 {
+        width: settings.width,
+        height: settings.height,
+        fps,
+        crf: stitch.crf,
+        color: settings.color,
+        sps_id: stitch.sps_id,
+    };
+    // A throwaway encoder yields the runs' parameter sets for the header.
+    let probe = X264Encoder::open(&x264.settings())?;
+    let build = probe.build();
+    let mut sets = h264::parse_avcc(&stitch.extradata).ok_or_else(|| MediaError::Codec {
+        context: "encoder setup".to_owned(),
+        reason: "the source's H.264 parameter sets could not be read".to_owned(),
+    })?;
+    for nal in h264::nal_units(probe.extradata(), 4) {
+        match h264::nal_type(nal) {
+            7 => sets.sps.push(nal.to_vec()),
+            8 => sets.pps.push(nal.to_vec()),
+            _ => {}
+        }
+    }
+    drop(probe);
+    let extradata = h264::build_avcc(&sets);
+    let ctx = ffi::h264_context(
+        settings.width,
+        settings.height,
+        &extradata,
+        tags::to_codec_tags(settings.color),
+    );
+    let mut stream = octx
+        .add_stream_with(&ctx)
+        .map_err(|e| open_error(path, e))?;
+    let stream_index = stream.index();
+    stream.set_time_base(time_base);
+    stream.set_avg_frame_rate(fps);
+    stream.set_rate(fps);
+    Ok(VideoTrack {
+        backend: VideoBackend::Stitch(StitchTrack {
+            x264,
+            current: None,
+            packets: 0,
+            reorder: i64::from(stitch.reorder.max(u32::from(STITCH_BFRAMES))),
+            build,
+        }),
+        name: "libx264".to_owned(),
+        x264_error: None,
         stream_index,
         time_base,
         settings,
@@ -715,6 +859,8 @@ enum VideoBackend {
     Lavc(codec::encoder::video::Encoder),
     /// The system's x264, loaded at run time.
     X264(X264Encoder),
+    /// Copied packets and x264 runs in one stream.
+    Stitch(StitchTrack),
 }
 
 struct VideoTrack {
@@ -952,9 +1098,134 @@ impl Encoder {
                     )?;
                 }
             }
+            VideoBackend::Stitch(stitch) => {
+                let encoder = match stitch.current.as_mut() {
+                    Some(e) => e,
+                    None => stitch
+                        .current
+                        .insert(X264Encoder::open(&stitch.x264.settings())?),
+                };
+                if let Some(frame) = encoder.encode(planes, pts)? {
+                    let dts = stitch.packets - stitch.reorder;
+                    stitch.packets += 1;
+                    Self::write_stitched(
+                        &mut self.octx,
+                        track.stream_index,
+                        track.time_base,
+                        &frame.data,
+                        frame.pts,
+                        dts,
+                        frame.keyframe,
+                    )?;
+                }
+            }
         }
         let time = Ratio::from_int(self.frame_index) / track.settings.fps;
         self.subtitles.write_due(&mut self.octx, time)
+    }
+
+    /// Writes one copied packet of a stitched track: the picture shown at
+    /// output frame `frame`. Copied packets come in their decode order;
+    /// each one takes the frame slot after the previous push.
+    pub fn push_copied(
+        &mut self,
+        data: &[u8],
+        frame: i64,
+        keyframe: bool,
+    ) -> Result<(), MediaError> {
+        let Some(track) = self.video.as_mut() else {
+            return Err(MediaError::Codec {
+                context: "copying video".to_owned(),
+                reason: "the output has no video track".to_owned(),
+            });
+        };
+        let VideoBackend::Stitch(stitch) = &mut track.backend else {
+            return Err(MediaError::Codec {
+                context: "copying video".to_owned(),
+                reason: "the track is not stitched".to_owned(),
+            });
+        };
+        if stitch.current.is_some() {
+            return Err(MediaError::Codec {
+                context: "copying video".to_owned(),
+                reason: "an encoded run is still open".to_owned(),
+            });
+        }
+        let dts = stitch.packets - stitch.reorder;
+        stitch.packets += 1;
+        self.frame_index += 1;
+        Self::write_stitched(
+            &mut self.octx,
+            track.stream_index,
+            track.time_base,
+            data,
+            frame,
+            dts,
+            keyframe,
+        )?;
+        let time = Ratio::from_int(self.frame_index) / track.settings.fps;
+        self.subtitles.write_due(&mut self.octx, time)
+    }
+
+    /// Ends the current encoded run of a stitched track, flushing its
+    /// encoder, so that copied packets can follow. A no-op otherwise.
+    pub fn end_segment(&mut self) -> Result<(), MediaError> {
+        let Some(track) = self.video.as_mut() else {
+            return Ok(());
+        };
+        let VideoBackend::Stitch(stitch) = &mut track.backend else {
+            return Ok(());
+        };
+        let Some(mut encoder) = stitch.current.take() else {
+            return Ok(());
+        };
+        while let Some(frame) = encoder.flush()? {
+            let dts = stitch.packets - stitch.reorder;
+            stitch.packets += 1;
+            Self::write_stitched(
+                &mut self.octx,
+                track.stream_index,
+                track.time_base,
+                &frame.data,
+                frame.pts,
+                dts,
+                frame.keyframe,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn write_stitched(
+        octx: &mut ffmpeg_next::format::context::Output,
+        stream_index: usize,
+        time_base: Rational,
+        data: &[u8],
+        pts: i64,
+        dts: i64,
+        keyframe: bool,
+    ) -> Result<(), MediaError> {
+        if dts > pts {
+            return Err(MediaError::Codec {
+                context: "writing packet".to_owned(),
+                reason: format!("picture {pts} would decode after it is shown (dts {dts})"),
+            });
+        }
+        let mut packet = Packet::copy(data);
+        packet.set_stream(stream_index);
+        packet.set_pts(Some(pts));
+        packet.set_dts(Some(dts));
+        packet.set_duration(1);
+        if keyframe {
+            packet.set_flags(codec::packet::Flags::KEY);
+        }
+        let stream_tb = octx
+            .stream(stream_index)
+            .expect("stream exists")
+            .time_base();
+        packet.rescale_ts(time_base, stream_tb);
+        packet
+            .write_interleaved(octx)
+            .map_err(|e| codec_error("writing packet", e))
     }
 
     /// Queues interleaved stereo samples at the configured sample rate.
@@ -1031,6 +1302,10 @@ impl Encoder {
                 "H.264 encoded with the system's x264 (build {})",
                 enc.build()
             )),
+            VideoBackend::Stitch(stitch) => Some(format!(
+                "H.264 runs encoded with the system's x264 (build {}) at CRF {}",
+                stitch.build, stitch.x264.crf
+            )),
             VideoBackend::Lavc(_) if track.name == "libopenh264" => Some(match &track.x264_error {
                 Some(e) => format!(
                     "H.264 encoded with the bundled OpenH264; the system's x264 was found but not used: {e}"
@@ -1103,6 +1378,23 @@ impl Encoder {
                             track.time_base,
                             &frame,
                         )?;
+                    }
+                }
+                VideoBackend::Stitch(stitch) => {
+                    if let Some(mut encoder) = stitch.current.take() {
+                        while let Some(frame) = encoder.flush()? {
+                            let dts = stitch.packets - stitch.reorder;
+                            stitch.packets += 1;
+                            Self::write_stitched(
+                                &mut self.octx,
+                                track.stream_index,
+                                track.time_base,
+                                &frame.data,
+                                frame.pts,
+                                dts,
+                                frame.keyframe,
+                            )?;
+                        }
                     }
                 }
             }
