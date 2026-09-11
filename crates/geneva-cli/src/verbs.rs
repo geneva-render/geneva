@@ -30,6 +30,8 @@ pub struct Input {
     pub has_audio: bool,
     /// The video's color encoding, as tagged or as inferred from its size.
     pub color: Option<ResolvedTags>,
+    /// Sample rate and channel count of the audio stream, if any.
+    pub audio: Option<(u32, u16)>,
 }
 
 impl Input {
@@ -57,8 +59,32 @@ impl Input {
             has_video: info.video.is_some(),
             has_audio: info.audio.is_some(),
             color,
+            audio: info.audio.as_ref().map(|a| (a.sample_rate, a.channels)),
         })
     }
+}
+
+/// The audio format to write when every input with audio shares one:
+/// the sound then keeps its sample rate and channel count (mono stays
+/// mono, 44.1 kHz stays 44.1 kHz) instead of the 48 kHz stereo default.
+/// More than two channels are written as stereo.
+fn shared_audio(inputs: &[&Input]) -> Option<geneva_timeline::schema::AudioOutput> {
+    let mut found: Option<(u32, u16)> = None;
+    for input in inputs {
+        let Some(audio) = input.audio else {
+            continue;
+        };
+        match found {
+            None => found = Some(audio),
+            Some(f) if f != audio => return None,
+            _ => {}
+        }
+    }
+    let (sample_rate, channels) = found?;
+    Some(geneva_timeline::schema::AudioOutput {
+        sample_rate: Some(sample_rate),
+        channels: Some(u8::try_from(channels.min(2)).expect("at most 2")),
+    })
 }
 
 /// The color encoding to write when every video input shares one: the
@@ -373,6 +399,7 @@ pub fn convert(
     let (root, rel) = common_root(&[input.to_owned()])?;
     let mut tl = base_timeline(w, h, fps.map_or(src.fps, |f| f.0), encode_block(args));
     tl.output.color = shared_color(&[&src]);
+    tl.output.audio = shared_audio(&[&src]);
     tl.assets.insert(
         "in".to_owned(),
         Asset {
@@ -429,6 +456,7 @@ pub fn trim(
         encode_block(args),
     );
     tl.output.color = shared_color(&[&src]);
+    tl.output.audio = shared_audio(&[&src]);
     tl.assets.insert(
         "in".to_owned(),
         Asset {
@@ -473,6 +501,7 @@ pub fn concat(inputs: &[PathBuf], crossfade: Option<Time>, args: &EncodeArgs) ->
         encode_block(args),
     );
     tl.output.color = shared_color(&probed.iter().collect::<Vec<_>>());
+    tl.output.audio = shared_audio(&probed.iter().collect::<Vec<_>>());
     let mut clips = Vec::new();
     for (i, (src, path)) in probed.iter().zip(rel.iter()).enumerate() {
         let id = format!("in{}", i + 1);
@@ -561,6 +590,7 @@ pub fn overlay(
         encode_block(args),
     );
     tl.output.color = shared_color(&[&src]);
+    tl.output.audio = shared_audio(&[&src]);
     // The overlay is open-ended by default, so the output length comes
     // from the input rather than from the clips.
     tl.output.duration = src.duration.map(seconds);
@@ -719,6 +749,7 @@ pub fn audio(input: &Path, op: &AudioOp, args: &EncodeArgs) -> Result<Compiled> 
     };
     let mut tl = base_timeline(w, h, src.fps, encode_block(args));
     tl.output.color = shared_color(&[&src]);
+    tl.output.audio = shared_audio(&[&src]);
     tl.assets.insert(
         "in".to_owned(),
         Asset {
@@ -826,6 +857,7 @@ pub fn add_subtitles(input: &Path, files: &[SubtitleFile], args: &EncodeArgs) ->
     };
     let mut tl = base_timeline(w, h, src.fps, encode_block(args));
     tl.output.color = shared_color(&[&src]);
+    tl.output.audio = shared_audio(&[&src]);
     tl.assets.insert(
         "in".to_owned(),
         Asset {
@@ -963,6 +995,7 @@ pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Re
     let (w, h) = (even(src.width), even(src.height));
     let mut tl = base_timeline(w, h, src.fps, encode_block(args));
     tl.output.color = shared_color(&[&src]);
+    tl.output.audio = shared_audio(&[&src]);
     tl.output.duration = src.duration.map(seconds);
     tl.assets.insert(
         "in".to_owned(),

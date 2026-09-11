@@ -90,6 +90,45 @@ fn audio_reads_are_exact_in_length_and_stereo() {
 }
 
 #[test]
+fn mono_output_is_written_as_mono() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("mono.m4a");
+    let settings = EncodeSettings {
+        video: None,
+        container: None,
+        subtitles: Vec::new(),
+        fast_start: true,
+        audio: Some(AudioSettings {
+            codec: AudioCodec::Aac,
+            bitrate_kbps: 96,
+            sample_rate: 44100,
+            channels: 1,
+        }),
+    };
+    let mut enc = Encoder::new(&out, settings).unwrap();
+    // Left carries the tone, right is silent: the mono file holds their
+    // average at half the level.
+    let tone: Vec<f32> = (0..44100 * 2)
+        .map(|i| {
+            if i % 2 == 0 {
+                ((i / 2) as f32 * 440.0 * std::f32::consts::TAU / 44100.0).sin() * 0.5
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    enc.push_audio(&tone).unwrap();
+    enc.finish().unwrap();
+
+    let a = probe(&out).unwrap().audio.unwrap();
+    assert_eq!((a.sample_rate, a.channels), (44100, 1));
+    let mut reader = AudioReader::open(&out).unwrap();
+    let back = reader.read(Ratio::ZERO, Ratio::from_int(1), 44100).unwrap();
+    let level = rms(&back[2000..]);
+    assert!((0.12..0.24).contains(&level), "downmixed level {level}");
+}
+
+#[test]
 fn encoded_solid_color_survives_the_round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("solid.mp4");
@@ -115,6 +154,7 @@ fn encoded_solid_color_survives_the_round_trip() {
             codec: AudioCodec::Aac,
             bitrate_kbps: 96,
             sample_rate: 48000,
+            channels: 2,
         }),
     };
     let mut enc = Encoder::new(&out, settings).unwrap();
@@ -214,6 +254,7 @@ fn audio_lands_at_its_timeline_position_in_the_output_file() {
             codec: AudioCodec::Aac,
             bitrate_kbps: 96,
             sample_rate: 48000,
+            channels: 2,
         }),
     };
     let mut enc = Encoder::new(&out, settings).unwrap();
@@ -524,6 +565,7 @@ fn audio_only_outputs_round_trip_through_wav() {
             codec: AudioCodec::Pcm,
             bitrate_kbps: 0,
             sample_rate: 48000,
+            channels: 2,
         }),
     };
     let mut enc = Encoder::new(&out, settings).unwrap();
@@ -853,6 +895,7 @@ fn every_audio_codec_round_trips_a_tone() {
                 codec,
                 bitrate_kbps: 160,
                 sample_rate: 48000,
+                channels: 2,
             }),
         };
         let mut enc = Encoder::new(&out, settings).unwrap();

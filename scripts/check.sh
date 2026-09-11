@@ -124,6 +124,11 @@ run "trim, copied (2s..7s)" "$work/trim-copy.mp4" "$geneva" trim "$input" -o "$w
 ff -ss 2 -i "$input" -t 5 -c copy "$work/ff-trim-copy.mp4"
 run "trim, exact (re-encode H.264)" "$work/trim-exact.mp4" "$geneva" trim "$input" -o "$work/trim-exact.mp4" --from 2s --duration 5s --exact
 ff -ss 2 -i "$input" -t 5 "${ffh264[@]}" -c:a aac "$work/ff-trim-exact.mp4"
+input_height=$("$geneva" --format json probe "$input" 2>/dev/null | sed -n 's/.*"height": *\([0-9]*\).*/\1/p' | head -1)
+if [ "${input_height:-0}" -gt 720 ]; then
+  run "resize to 720p" "$work/hd.mp4" "$geneva" resize "$input" -o "$work/hd.mp4" --height 720
+  ff -i "$input" -vf scale=-2:720 "${ffh264[@]}" -c:a aac "$work/ff-hd.mp4"
+fi
 run "resize to 360p" "$work/small.mp4" "$geneva" resize "$input" -o "$work/small.mp4" --height 360
 ff -i "$input" -vf scale=-2:360 "${ffh264[@]}" -c:a aac "$work/ff-small.mp4"
 run "audio extract, copied (m4a)" "$work/sound.m4a" "$geneva" audio "$input" -o "$work/sound.m4a" --extract

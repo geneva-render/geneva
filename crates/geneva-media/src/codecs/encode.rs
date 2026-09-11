@@ -79,6 +79,9 @@ pub struct AudioSettings {
     pub bitrate_kbps: u32,
     /// Sample rate in Hz of the samples pushed and of the output.
     pub sample_rate: u32,
+    /// Channels written: 1 or 2. The samples pushed are always stereo;
+    /// mono is their downmix.
+    pub channels: u8,
 }
 
 /// Picks the container from settings or the file extension.
@@ -800,9 +803,14 @@ impl Encoder {
                     .audio()
                     .map_err(|e| codec_error("audio encoder setup", e))?;
                 let (format, bitrate_driven) = audio_sample_format(a.codec);
+                let layout = if a.channels == 1 {
+                    ChannelLayout::MONO
+                } else {
+                    ChannelLayout::STEREO
+                };
                 aenc.set_rate(a.sample_rate as i32);
                 aenc.set_format(format);
-                aenc.set_channel_layout(ChannelLayout::STEREO);
+                aenc.set_channel_layout(layout);
                 aenc.set_time_base(time_base);
                 if bitrate_driven {
                     aenc.set_bit_rate(a.bitrate_kbps as usize * 1000);
@@ -822,7 +830,7 @@ impl Encoder {
                     ChannelLayout::STEREO,
                     a.sample_rate,
                     format,
-                    ChannelLayout::STEREO,
+                    layout,
                     a.sample_rate,
                 )
                 .map_err(|e| codec_error("audio sample format conversion", e))?;

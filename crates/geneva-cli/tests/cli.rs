@@ -394,12 +394,16 @@ fn audio_extracts_mutes_and_replaces() {
     let dir = tempfile::tempdir().unwrap();
     let clip = media_dir().join("clip.mp4");
     let wav = dir.path().join("sound.wav");
+    let source = run_json(&["probe"], &[&clip])["audio"].clone();
     let doc = run_json(&["audio", "--extract", "-o"], &[&wav, &clip]);
     assert_eq!(doc["mode"], "render");
     assert_eq!(doc["frames"], 0);
     let info = run_json(&["probe"], &[&wav]);
     assert!(info["video"].is_null());
     assert_eq!(info["audio"]["codec"], "pcm_s16le");
+    // The sound keeps the source's rate and channel count.
+    assert_eq!(info["audio"]["sample_rate"], source["sample_rate"]);
+    assert_eq!(info["audio"]["channels"], source["channels"]);
 
     let m4a = dir.path().join("sound.m4a");
     let doc = run_json(&["audio", "--extract", "-o"], &[&m4a, &clip]);
@@ -425,7 +429,7 @@ fn audio_extracts_mutes_and_replaces() {
     );
     assert_eq!(doc["frames"], 50);
     let info = run_json(&["probe"], &[&replaced]);
-    assert_eq!(info["audio"]["channels"], 2);
+    assert_eq!(info["audio"]["channels"], source["channels"]);
 
     geneva()
         .args(["audio", "-o"])

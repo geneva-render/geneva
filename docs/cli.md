@@ -63,7 +63,9 @@ or only scaled, with or without bars, but a re-encode is still needed
 (another codec, a size, a quality setting, `--exact`), decoded frames go straight
 to the encoder, scaled and repacked on the way when the size or the
 sample layout differs, without passing through the compositor; the report
-calls this mode `direct`.
+calls this mode `direct`. Audio that is re-encoded keeps the source's
+sample rate and channel count when every input agrees (mono stays mono,
+44.1 kHz stays 44.1 kHz); otherwise it is written as 48 kHz stereo.
 
 ### `geneva probe <file>`
 

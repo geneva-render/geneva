@@ -21,12 +21,21 @@ the format version it was written for.
   cropped to its center at the source's full height instead of getting
   bars. The crop takes the direct path as well (0.4 s for a 5 s 720p
   clip; ffmpeg 0.4 s), and the N410 note says which of the two was done.
+- The verbs keep the source's audio sample rate and channel count when
+  every input agrees, instead of writing 48 kHz stereo: a mono 44.1 kHz
+  track extracted to WAV is the same size as ffmpeg's now.
 - Releases carry the tag's section of this changelog as their notes; a
   `release-notes` workflow sets them on an existing release.
-- `check.sh` also exercises burned-in subtitles with `--fit`, CSS
+- `check.sh` resizes to 720p as well when the input is taller, and
+  also exercises burned-in subtitles with `--fit`, CSS
   shorthands in a text source, `geneva targets`, `--for tiktok` and
   `--for email --budget`, and compares the burn-in and the portrait
   canvas with ffmpeg.
+
+### Fixes
+
+- `output.audio.channels: 1` was documented but every file was written
+  as stereo; mono is now written as mono, downmixed from the stereo mix.
 
 ## 0.1.10
 

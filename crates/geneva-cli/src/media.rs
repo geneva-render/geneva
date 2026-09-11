@@ -264,6 +264,12 @@ mod imp {
             .as_ref()
             .and_then(|a| a.sample_rate)
             .unwrap_or(48000);
+        let channels = comp
+            .audio_output
+            .as_ref()
+            .and_then(|a| a.channels)
+            .unwrap_or(2)
+            .clamp(1, 2);
         let audio_settings = if overrides.no_audio || container.is_video_only() {
             None
         } else {
@@ -271,6 +277,7 @@ mod imp {
                 codec: audio.and_then(|a| a.codec).unwrap_or(default_audio),
                 bitrate_kbps: audio.and_then(|a| a.bitrate_kbps).unwrap_or(160),
                 sample_rate,
+                channels,
             })
         };
         let video_settings = if container.is_audio_only() {
