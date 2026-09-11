@@ -28,7 +28,8 @@ struct StreamDecoder {
     ictx: ffmpeg_next::format::context::Input,
     stream_index: usize,
     time_base: ffmpeg_next::Rational,
-    start_time: i64,
+    /// The file's time zero, in seconds of the stream's timestamps.
+    zero: Ratio,
     eof: bool,
 }
 
@@ -49,7 +50,22 @@ impl StreamDecoder {
             })?;
         let stream_index = stream.index();
         let time_base = stream.time_base();
-        let start_time = stream.start_time().max(0);
+        // Time zero of a file is its first video frame; an audio track
+        // keeps its offset from that, so the two stay in step however
+        // each stream's own timestamps start. Audio-only files start at
+        // their first sample.
+        let zero_of = |s: &ffmpeg_next::format::stream::Stream| {
+            let start = s.start_time();
+            if start == i64::MIN {
+                Ratio::ZERO
+            } else {
+                ts_to_secs(start, s.time_base())
+            }
+        };
+        let zero = match ictx.streams().best(Type::Video) {
+            Some(video) => zero_of(&video),
+            None => zero_of(&stream).max(Ratio::ZERO),
+        };
         let mut ctx = codec::context::Context::from_parameters(stream.parameters())
             .map_err(|e| codec_error(format!("{}: decoder setup", path.display()), e))?;
         ffi::use_all_threads(&mut ctx);
@@ -59,7 +75,7 @@ impl StreamDecoder {
                 ictx,
                 stream_index,
                 time_base,
-                start_time,
+                zero,
                 eof: false,
             },
             ctx,
@@ -69,16 +85,18 @@ impl StreamDecoder {
     /// Source time in seconds of a decoded frame.
     fn secs(&self, frame: &frame::Frame) -> Ratio {
         let ts = frame.timestamp().or(frame.pts()).unwrap_or(0);
-        ts_to_secs(ts - self.start_time, self.time_base)
+        ts_to_secs(ts, self.time_base) - self.zero
     }
 
     /// Seeks so that decoding resumes at or before source time `t`.
     fn seek(&mut self, t: Ratio, decoder: &mut codec::decoder::Opened) -> Result<(), MediaError> {
-        let micros = (t.to_f64() * 1_000_000.0) as i64
-            + ts_to_secs(self.start_time, self.time_base).to_f64() as i64 * 1_000_000;
-        self.ictx
-            .seek(micros, ..micros)
-            .map_err(|e| codec_error(format!("{}: seeking to {t}s", self.path.display()), e))?;
+        super::probe::seek_before(
+            &mut self.ictx,
+            self.stream_index,
+            t + self.zero,
+            self.time_base,
+        )
+        .map_err(|e| codec_error(format!("{}: seeking to {t}s", self.path.display()), e))?;
         decoder.flush();
         self.eof = false;
         Ok(())
@@ -166,16 +184,19 @@ impl VideoReader {
     /// from the timeline that win over what the file declares.
     pub fn open(path: &Path, overrides: ColorTags) -> Result<Self, MediaError> {
         let (inner, ctx) = StreamDecoder::open(path, Type::Video)?;
-        let decoder = ctx
-            .decoder()
+        let mut decoder = ctx.decoder();
+        // With the packets' time base known, the decoder times its frames
+        // itself (a stream's own timestamps sit ahead of the encoder's
+        // priming, which it drops).
+        decoder.set_packet_time_base(inner.time_base);
+        let decoder = decoder
             .video()
             .map_err(|e| codec_error(format!("{}: opening video decoder", path.display()), e))?;
         let stream = inner
             .ictx
             .stream(inner.stream_index)
             .expect("stream exists");
-        let fps = ratio(stream.avg_frame_rate())
-            .or_else(|| ratio(stream.rate()))
+        let fps = super::probe::frame_rate(ratio(stream.avg_frame_rate()), ratio(stream.rate()))
             .unwrap_or(Ratio::from_int(25));
         let file_tags = tags::from_codec_tags(
             decoder.color_space(),
@@ -278,8 +299,13 @@ impl VideoReader {
     /// Makes `current` the frame displayed at source time `t`.
     fn advance_to(&mut self, t: Ratio) -> Result<(), MediaError> {
         let t = t.max(Ratio::ZERO);
+        // A frame starting a hair after `t` is the frame for `t`:
+        // containers that keep milliseconds put frames up to half a
+        // millisecond off their grid, and nothing is a quarter of a
+        // frame away from the one before it.
+        let slack = self.frame_duration / Ratio::from_int(4);
         let covered = match (&self.current, &self.pending) {
-            (Some(cur), Some((next, _))) => cur.from <= t && t < *next,
+            (Some(cur), Some((next, _))) => cur.from <= t && t + slack < *next,
             (Some(cur), None) => cur.from <= t && self.inner.eof,
             _ => false,
         };
@@ -309,7 +335,7 @@ impl VideoReader {
                     (pts, raw)
                 }
             };
-            if pts <= t || self.current.is_none() {
+            if pts <= t + slack || self.current.is_none() {
                 // The first frame after a seek is shown even for times before
                 // its timestamp, so `from` covers everything up to it.
                 let from = if self.current.is_none() {
@@ -447,8 +473,12 @@ impl AudioReader {
     /// Opens the first audio stream of `path`.
     pub fn open(path: &Path) -> Result<Self, MediaError> {
         let (inner, ctx) = StreamDecoder::open(path, Type::Audio)?;
-        let decoder = ctx
-            .decoder()
+        let mut decoder = ctx.decoder();
+        // As for video: the decoder moves the first frame's time past the
+        // samples it drops (AAC priming, Opus pre-skip) only when it knows
+        // the packets' time base.
+        decoder.set_packet_time_base(inner.time_base);
+        let decoder = decoder
             .audio()
             .map_err(|e| codec_error(format!("{}: opening audio decoder", path.display()), e))?;
         Ok(Self { inner, decoder })

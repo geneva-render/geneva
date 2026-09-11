@@ -1350,3 +1350,58 @@ fn a_tune_without_an_equivalent_is_reported_not_applied() {
     let enc = Encoder::new(&dir.path().join("film.webm"), settings).unwrap();
     assert!(enc.video_setting_notes().is_empty());
 }
+
+/// The sync corpus (`tests/media/sync`): the tone starts at 1.0 s of
+/// every file, even where the audio track itself begins later. Both
+/// readers must put it there, whatever the file's timestamps look like.
+#[test]
+fn corpus_audio_starts_where_it_should_through_both_readers() {
+    let corpus = clip().parent().unwrap().join("sync");
+    let onset = |samples: &[f32]| {
+        let peak = samples.iter().fold(0f32, |m, s| m.max(s.abs()));
+        samples
+            .iter()
+            .position(|s| s.abs() > peak / 3.0)
+            .map_or(f64::NAN, |i| i as f64 / 2.0 / 48000.0)
+    };
+    let mut problems = Vec::new();
+    for (name, want) in [
+        ("cfr.mp4", 1.0),
+        ("bframes-editlist.mp4", 1.0),
+        ("bframes-negative-cts.mp4", 1.0),
+        ("start-at-10s.mp4", 1.0),
+        ("audio-late.mp4", 1.0),
+        ("audio-late.mkv", 1.0),
+        ("ntsc-2997.mp4", 1.0),
+        ("aac-44k.mp4", 1.0),
+        ("opus.webm", 1.0),
+        ("mpegts.ts", 1.0),
+    ] {
+        let path = corpus.join(name);
+        let mut reader = AudioReader::open(&path).unwrap();
+        let whole = reader.read(Ratio::ZERO, Ratio::from_int(3), 48000).unwrap();
+        let got = onset(&whole);
+        let off = (got - want).abs();
+        if off.is_nan() || off > 0.003 {
+            problems.push(format!(
+                "{name}: read() puts the tone at {got:.4}s, wanted {want}"
+            ));
+        }
+        let mut stream = AudioReader::open(&path)
+            .unwrap()
+            .into_stream(Ratio::ZERO, 48000)
+            .unwrap();
+        let mut streamed = Vec::new();
+        for _ in 0..30 {
+            streamed.extend(stream.read(4800).unwrap());
+        }
+        let got = onset(&streamed);
+        let off = (got - want).abs();
+        if off.is_nan() || off > 0.003 {
+            problems.push(format!(
+                "{name}: into_stream() puts the tone at {got:.4}s, wanted {want}"
+            ));
+        }
+    }
+    assert!(problems.is_empty(), "\n{}", problems.join("\n"));
+}

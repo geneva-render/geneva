@@ -55,6 +55,10 @@ after an intentional rendering change:
 GENEVA_UPDATE_GOLDEN=1 cargo test -p geneva-golden
 ```
 
+The A/V sync corpus under `tests/media/sync/` is built by
+`scripts/make-sync-corpus.sh` (needs ffmpeg) and committed; rebuild it only
+when the scene or the traps change, and commit the files with the script.
+
 Commit the updated PNGs together with the change that motivated them, and
 describe the visual difference in the pull request.
 

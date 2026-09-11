@@ -22,6 +22,41 @@ the format version it was written for.
   so.
 - Both settings ask for a real encode: no stream copy or smart cut when
   they are set, as with `crf` and `preset`.
+- An A/V sync corpus: `tests/media/sync`, twelve small files from one
+  scene with a flash and a tone at known times, muxed with the traps
+  real files carry (B-frame edit lists and negative offsets, variable
+  frame rate, a 10 s start, an audio track starting after the video,
+  NTSC rates, 44.1 kHz, Opus, MPEG-TS), and tests that the marks come
+  out where they went in on every path: direct, compositor, stream copy,
+  trims copied and exact.
+
+### Fixes
+
+- Time zero of a file is its first video frame, for the picture and the
+  sound alike. Each stream used to be rebased on its own start, so an
+  audio track that began later than the video (a delayed recording, an
+  offset applied at muxing) lost its offset on every path.
+- Stream copies of B-frame video from Matroska failed ("non
+  monotonically increasing dts"): the container stores no decode
+  timestamps, so they are now derived from presentation order.
+- AAC priming and Opus pre-skip shifted decoded audio by 21 ms and
+  6.5 ms: the decoders now know the packets' time base and move the
+  first frame's time past the samples they drop.
+- A stream copy dropped the audio packet under the cut, so the decoder
+  lost its lead-in and the file its priming trim. Into MP4 and MOV the
+  packet is kept and the container trims it.
+- A variable-frame-rate source was converted at its average rate (which
+  no frame has); the output now takes the source's base rate.
+- Frames on a millisecond timestamp grid could be sampled one frame
+  late; the sampler allows a quarter of a frame of slack.
+- Seeking in MPEG-TS, which has no index, could land past the target,
+  so a copied cut moved to a later keyframe and a decoded clip started
+  late. A seek that lands late is repeated a few seconds earlier and
+  read forward; copied segments start at the last keyframe at or
+  before the cut.
+- When a copied cut moved to a keyframe, the clips' own audio was still
+  cut at the time asked for, a few milliseconds off the picture. It now
+  moves with the cut.
 
 ## 0.2.0 — 2026-09-11
 

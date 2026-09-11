@@ -23,7 +23,7 @@ use geneva_timeline::{Composition, Ratio};
 use super::copy::{base_video_clips, container_accepts_audio};
 use super::decode::VideoReader;
 use super::h264::{self, ParameterSets};
-use super::probe::{ratio, ts_to_secs};
+use super::probe::{ratio, seek_before, ts_to_secs};
 use super::{codec_error, ffi, init, open_error, x264};
 use crate::MediaError;
 
@@ -466,8 +466,7 @@ fn index_source(
     let frame_of = |pts: i64| (ts_to_secs(pts - first_pts, time_base) * fps).round();
     // Back to the keyframe at or before the first wanted picture.
     let t = Ratio::from_int(wanted.start as i64) / fps + ts_to_secs(first_pts, time_base);
-    let micros = (t.to_f64() * 1_000_000.0) as i64;
-    ictx.seek(micros, ..micros)
+    seek_before(&mut ictx, stream_index, t, time_base)
         .map_err(|e| codec_error(format!("{}: seeking", path.display()), e))?;
     let mut packets: Vec<IndexedPacket> = Vec::new();
     let mut base: Option<usize> = None;
@@ -546,9 +545,13 @@ pub fn read_copied(
     let mut ictx = ffmpeg_next::format::input(path).map_err(|e| open_error(path, e))?;
     let first = source.packet(range.start);
     // Seek to the stretch's IDR (or an earlier keyframe) and skip up to it.
-    let micros = (ts_to_secs(first.pts, source.time_base).to_f64() * 1_000_000.0) as i64;
-    ictx.seek(micros, ..micros)
-        .map_err(|e| codec_error(format!("{}: seeking", path.display()), e))?;
+    seek_before(
+        &mut ictx,
+        source.stream_index,
+        ts_to_secs(first.pts, source.time_base),
+        source.time_base,
+    )
+    .map_err(|e| codec_error(format!("{}: seeking", path.display()), e))?;
     let mut packet = Packet::empty();
     let mut index = None;
     while packet.read(&mut ictx).is_ok() {
@@ -631,24 +634,27 @@ pub fn read_copied_audio(
 ) -> Result<(), MediaError> {
     let path = &segment.path;
     let mut ictx = ffmpeg_next::format::input(path).map_err(|e| open_error(path, e))?;
-    let (index, tb, start) = {
+    let (index, tb) = {
         let Some(s) = ictx.streams().best(Type::Audio) else {
             return Err(MediaError::NoStream {
                 path: path.clone(),
                 kind: "audio",
             });
         };
-        (s.index(), s.time_base(), s.start_time().max(0))
+        (s.index(), s.time_base())
     };
+    // Time zero of the file is its first video frame, as everywhere: the
+    // audio keeps its offset from the picture.
+    let zero = super::copy::file_zero(&ictx);
     let to_ts = |secs: Ratio| {
         (secs * Ratio::new(i64::from(tb.denominator()), i64::from(tb.numerator()))).round()
     };
+    let start = to_ts(zero);
     let from_ts = to_ts(segment.from);
     let offset_ts = to_ts(segment.offset);
     let end_ts = offset_ts + to_ts(segment.to - segment.from);
     if segment.from > Ratio::ZERO {
-        let micros = (segment.from.to_f64() * 1_000_000.0) as i64;
-        ictx.seek(micros, ..micros)
+        seek_before(&mut ictx, index, segment.from + zero, tb)
             .map_err(|e| codec_error(format!("{}: seeking", path.display()), e))?;
     }
     let mut packet = Packet::empty();

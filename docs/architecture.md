@@ -239,6 +239,27 @@ Tolerances are perceptual on purpose: different GPUs round shader math
 differently, and the harness must accept those differences while catching
 real regressions.
 
+## A/V sync corpus
+
+`tests/media/sync/` holds twelve small files built by
+`scripts/make-sync-corpus.sh` from one scene: black with one white frame
+at 1.0 s and one at 2.0 s, silence with a 1 kHz tone from 1.0 to 1.5 s
+and from 2.0 to 2.5 s. Each file carries a trap real files carry:
+B-frames with an edit list or with negative composition offsets,
+variable frame rate, streams starting at 10 s, an audio track starting
+half a second after the video (MP4 and Matroska), 29.97 and 23.976 fps,
+44.1 kHz audio, Opus in WebM, MPEG-TS. `crates/geneva-cli/tests/sync.rs`
+runs each through the direct path, the compositor, stream copy, and a
+trim copied and exact, and checks that the flash frame and the tone
+onset come out where they went in, to the frame and within 3 ms; the
+media crate checks the readers alone the same way.
+
+The rule the corpus pins down: time zero of a file is its first video
+frame, for the picture and for the sound, so an audio track that starts
+later keeps its offset. A file without video starts at its first
+sample. What the corpus shows the same as ffmpeg and is left alone:
+MPEG-TS carries no priming information, so its AAC starts 21 ms late.
+
 ## Not here yet
 
 - **GPU renderer.** A second `Renderer` implementation with the same

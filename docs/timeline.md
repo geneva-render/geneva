@@ -278,7 +278,7 @@ Every source has a `kind`.
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
 | `asset` | yes | | Id of a `video` asset. |
-| `in` | no | `0` | Source time at the clip start. |
+| `in` | no | `0` | Source time at the clip start. Time 0 of a file is its first video frame; an audio track that starts later keeps its offset. |
 | `out` | no | end of file | Source time to stop at. Must be after `in` (E301). |
 | `audio` | no | `true` | Mix the file's audio into the output. |
 

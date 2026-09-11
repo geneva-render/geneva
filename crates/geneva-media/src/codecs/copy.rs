@@ -660,6 +660,10 @@ pub fn stream_copy(
     let mut report_segments = Vec::new();
     let mut video_packets = 0u64;
     let mut duration = Ratio::ZERO;
+    // MP4 and QuickTime hold a packet that starts before time zero (an
+    // audio lead-in) in an edit list; other containers would shift every
+    // stream to make room for it.
+    let lead_in_ok = matches!(container, Some(Container::Mp4 | Container::Mov));
     if let Some(out_idx) = out_video {
         let (segs, total) = copy_track(
             &mut octx,
@@ -668,19 +672,29 @@ pub fn stream_copy(
             out_idx,
             &mut video_packets,
             &mut cues,
+            lead_in_ok,
         )?;
         report_segments = segs;
         duration = total;
+    }
+    // The clips' own audio is cut where the picture actually starts: a
+    // cut that moved to a keyframe takes the sound with it.
+    let mut audio_plan = plan.audio.clone();
+    if plan.audio == plan.segments {
+        for (seg, (_, actual, _)) in audio_plan.iter_mut().zip(&report_segments) {
+            seg.from = *actual;
+        }
     }
     if let Some(out_idx) = out_audio {
         let mut ignored = 0u64;
         let (segs, total) = copy_track(
             &mut octx,
-            &plan.audio,
+            &audio_plan,
             Type::Audio,
             out_idx,
             &mut ignored,
             &mut cues,
+            lead_in_ok,
         )?;
         if out_video.is_none() {
             report_segments = segs;
@@ -705,6 +719,7 @@ fn copy_track(
     out_idx: usize,
     packets: &mut u64,
     cues: &mut SubtitleWriter,
+    lead_in_ok: bool,
 ) -> Result<(Vec<SegmentReport>, Ratio), MediaError> {
     let mut report = Vec::new();
     let mut offset = Ratio::ZERO;
@@ -721,54 +736,126 @@ fn copy_track(
     for segment in segments {
         let mut ictx =
             ffmpeg_next::format::input(&segment.path).map_err(|e| open_error(&segment.path, e))?;
-        let (in_idx, tb, start) = {
+        let (in_idx, tb) = {
             let s = ictx.streams().best(kind).expect("checked by the plan");
-            (s.index(), s.time_base(), s.start_time().max(0))
+            (s.index(), s.time_base())
         };
-        if segment.from > Ratio::ZERO {
-            let micros = (segment.from.to_f64() * 1_000_000.0) as i64;
-            ictx.seek(micros, ..micros).map_err(|e| {
-                super::codec_error(format!("{}: seeking", segment.path.display()), e)
-            })?;
-        }
-        // The segment starts at the first keyframe the demuxer yields (every
-        // audio packet is one); everything is timed relative to it.
-        let mut segment_start: Option<Ratio> = None;
-        let mut last_end = segment.from;
-        let mut packet = Packet::empty();
-        while packet.read(&mut ictx).is_ok() {
-            if packet.stream() != in_idx {
-                continue;
+        // Time zero of the file is its first video frame, for both kinds
+        // of stream, so an audio track keeps its offset from the picture.
+        let zero = file_zero(&ictx);
+        let seek_to = |ictx: &mut ffmpeg_next::format::context::Input| {
+            if segment.from > Ratio::ZERO {
+                super::probe::seek_before(ictx, in_idx, segment.from + zero, tb).map_err(|e| {
+                    super::codec_error(format!("{}: seeking", segment.path.display()), e)
+                })?;
             }
+            Ok::<(), MediaError>(())
+        };
+        seek_to(&mut ictx)?;
+        // Video without decode timestamps (Matroska stores none) gets them
+        // from the presentation order, as the container needs.
+        let mut decode_times = None;
+        // The segment starts at the first keyframe the demuxer yields;
+        // audio starts where it is asked to, so that its offset from the
+        // picture survives, and at the start of the output the packet
+        // under the cut comes too, so that the decoder has its lead-in
+        // (an encoder's priming, which the container then trims).
+        // Everything is timed relative to the segment's start.
+        let mut segment_start: Option<Ratio> = if kind == Type::Audio {
+            Some(segment.from)
+        } else {
+            None
+        };
+        let mut last_end = segment.from;
+        let mut index = 0usize;
+        // Video packets from the latest keyframe at or before `from`,
+        // held until it is known to be the last such keyframe (a packet
+        // past `from` arrives), then written as the segment's start.
+        let mut held: Vec<Packet> = Vec::new();
+        let mut held_start: Option<Ratio> = None;
+        let mut queue: std::collections::VecDeque<Packet> = std::collections::VecDeque::new();
+        let mut packet = Packet::empty();
+        loop {
+            let mut packet = match queue.pop_front() {
+                Some(p) => p,
+                None => {
+                    if packet.read(&mut ictx).is_err() {
+                        break;
+                    }
+                    if packet.stream() != in_idx {
+                        continue;
+                    }
+                    packet.clone()
+                }
+            };
             let Some(pts) = packet.pts().or(packet.dts()) else {
                 continue;
             };
-            let time = ts_to_secs(pts - start, tb);
-            if segment_start.is_none() {
-                if !packet.is_key() {
-                    continue;
-                }
-                segment_start = Some(time);
-            }
-            let seg_start = segment_start.expect("set above");
-            if time < seg_start {
-                continue;
-            }
-            if segment.to.is_some_and(|to| time >= to) {
-                break;
-            }
+            let time = ts_to_secs(pts, tb) - zero;
             let packet_duration = if packet.duration() > 0 {
                 ts_to_secs(packet.duration(), tb)
             } else {
                 Ratio::ZERO
             };
+            if segment_start.is_none() {
+                if time <= segment.from {
+                    if packet.is_key() {
+                        held.clear();
+                        held_start = Some(time);
+                    }
+                    if held_start.is_some() {
+                        held.push(packet);
+                    }
+                    continue;
+                }
+                match held_start {
+                    Some(start) => {
+                        // Every later keyframe is past `from`: the held
+                        // one starts the segment, its packets first.
+                        segment_start = Some(start);
+                        queue.extend(held.drain(..));
+                        queue.push_back(packet);
+                        continue;
+                    }
+                    None if packet.is_key() => segment_start = Some(time),
+                    None => continue,
+                }
+            }
+            let seg_start = segment_start.expect("set above");
+            let lead_in = kind == Type::Audio
+                && lead_in_ok
+                && offset == Ratio::ZERO
+                && time + packet_duration >= seg_start;
+            if time < seg_start && !lead_in {
+                continue;
+            }
+            if segment.to.is_some_and(|to| time >= to) {
+                break;
+            }
+            if kind == Type::Video && packet.dts().is_none() && decode_times.is_none() {
+                let mut pass = ffmpeg_next::format::input(&segment.path)
+                    .map_err(|e| open_error(&segment.path, e))?;
+                seek_to(&mut pass)?;
+                decode_times = Some(decode_order_times(
+                    &mut pass,
+                    in_idx,
+                    tb,
+                    zero + seg_start,
+                    segment.to.map(|to| to + zero),
+                ));
+            }
             last_end = last_end.max(time + packet_duration);
             let shifted = time - seg_start + offset;
             let out_pts = (shifted * out_scale).round();
-            let out_dts = match packet.dts() {
-                Some(d) => ((shifted + ts_to_secs(d - pts, tb)) * out_scale).round(),
-                None => out_pts,
+            let out_dts = match (packet.dts(), &decode_times) {
+                (Some(d), _) => ((shifted + ts_to_secs(d - pts, tb)) * out_scale).round(),
+                (None, Some(times)) => match times.get(index) {
+                    Some(&d) => ((shifted + ts_to_secs(d - pts, tb)) * out_scale).round(),
+                    None => out_pts,
+                },
+                (None, None) => out_pts,
             };
+            index += 1;
             packet.set_stream(out_idx);
             packet.set_pts(Some(out_pts));
             packet.set_dts(Some(out_dts));
@@ -793,6 +880,89 @@ fn copy_track(
         offset = offset + (seg_end - seg_start);
     }
     Ok((report, offset))
+}
+
+/// Time zero of a file: its first video frame, or its first sample when
+/// it has no video.
+pub(super) fn file_zero(ictx: &ffmpeg_next::format::context::Input) -> Ratio {
+    let start = |s: ffmpeg_next::format::stream::Stream| {
+        let t = s.start_time();
+        if t == i64::MIN {
+            Ratio::ZERO
+        } else {
+            ts_to_secs(t, s.time_base())
+        }
+    };
+    match ictx.streams().best(Type::Video) {
+        Some(video) => start(video),
+        None => ictx
+            .streams()
+            .best(Type::Audio)
+            .map_or(Ratio::ZERO, |a| start(a).max(Ratio::ZERO)),
+    }
+}
+
+/// Decode timestamps for the video packets of one segment, in the order
+/// they are stored, for a container that stores only presentation
+/// times: the k-th packet decodes at the k-th earliest presentation
+/// time, shifted back by the reorder depth so that every packet decodes
+/// before it is shown. The result is indexed like the packets read from
+/// `from` (the first keyframe at or after it) up to `to`.
+fn decode_order_times(
+    ictx: &mut ffmpeg_next::format::context::Input,
+    in_idx: usize,
+    tb: Rational,
+    from: Ratio,
+    to: Option<Ratio>,
+) -> Vec<i64> {
+    let mut pts_list = Vec::new();
+    let mut started = false;
+    let mut packet = Packet::empty();
+    while packet.read(ictx).is_ok() {
+        if packet.stream() != in_idx {
+            continue;
+        }
+        let Some(pts) = packet.pts() else {
+            continue;
+        };
+        let time = ts_to_secs(pts, tb);
+        if !started {
+            if !packet.is_key() || time < from {
+                continue;
+            }
+            started = true;
+        }
+        if to.is_some_and(|to| time >= to) {
+            break;
+        }
+        pts_list.push(pts);
+    }
+    let mut sorted = pts_list.clone();
+    sorted.sort_unstable();
+    // The reorder depth: how far a packet is stored ahead of its place
+    // in presentation order.
+    let depth = pts_list
+        .iter()
+        .enumerate()
+        .map(|(k, p)| k.saturating_sub(sorted.partition_point(|s| s < p)))
+        .max()
+        .unwrap_or(0);
+    // One frame, for the first packets that decode before anything is shown.
+    let step = sorted
+        .windows(2)
+        .map(|w| w[1] - w[0])
+        .filter(|d| *d > 0)
+        .min()
+        .unwrap_or(1);
+    (0..pts_list.len())
+        .map(|k| {
+            if k >= depth {
+                sorted[k - depth]
+            } else {
+                sorted[0] - (depth - k) as i64 * step
+            }
+        })
+        .collect()
 }
 
 fn rescale(value: i64, from: Rational, to: Rational) -> i64 {

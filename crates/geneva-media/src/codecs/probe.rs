@@ -47,8 +47,7 @@ pub fn probe(path: &Path) -> Result<MediaInfo, MediaError> {
         let ctx = codec::context::Context::from_parameters(stream.parameters()).ok()?;
         let decoder = ctx.decoder().video().ok()?;
         let fmt = decoder.format();
-        let fps = ratio(stream.avg_frame_rate())
-            .or_else(|| ratio(stream.rate()))
+        let fps = frame_rate(ratio(stream.avg_frame_rate()), ratio(stream.rate()))
             .unwrap_or(Ratio::from_int(25));
         Some(VideoInfo {
             index: stream.index(),
@@ -129,4 +128,60 @@ fn has_alpha(fmt: Pixel) -> bool {
             | Pixel::GBRAP12LE
             | Pixel::GBRAP16LE
     )
+}
+
+/// The frame rate to work at, from the stream's average rate (frames
+/// over duration) and its base rate (the timestamp grid). When they
+/// agree, the base rate is the exact one (24/1, 30000/1001) while the
+/// average carries the rounding of the file's timestamps and length
+/// (a millisecond grid makes 24 fps read as 24.016). On a
+/// variable-rate file the average is not a rate any frame has, so the
+/// base rate is used there too, unless it is the doubled figure some
+/// H.264 streams carry (field rate) or nonsense, which the average
+/// corrects.
+pub(super) fn frame_rate(average: Option<Ratio>, base: Option<Ratio>) -> Option<Ratio> {
+    match (average, base) {
+        (Some(avg), Some(base)) => {
+            let (a, b) = (avg.to_f64(), base.to_f64());
+            let doubled = (b - 2.0 * a).abs() <= a * 0.01;
+            if doubled || !(1.0..=240.0).contains(&b) {
+                Some(avg)
+            } else {
+                Some(base)
+            }
+        }
+        (avg, base) => avg.or(base),
+    }
+}
+
+/// Seeks `ictx` so that reading resumes at or before `target` (seconds
+/// in the file's own timestamps) on stream `stream_index`. Indexed
+/// containers land on a keyframe at or before the target; MPEG-TS has
+/// no index and can land past it, in which case the seek is repeated
+/// a few seconds earlier and the caller reads forward from there.
+pub(super) fn seek_before(
+    ictx: &mut ffmpeg_next::format::context::Input,
+    stream_index: usize,
+    target: Ratio,
+    time_base: ffmpeg_next::Rational,
+) -> Result<(), ffmpeg_next::Error> {
+    let micros = |t: Ratio| (t.to_f64() * 1_000_000.0) as i64;
+    ictx.seek(micros(target), ..micros(target))?;
+    // Where did it land? The packet read here is read again after the
+    // seek below.
+    let mut packet = ffmpeg_next::Packet::empty();
+    let mut landed = None;
+    while packet.read(ictx).is_ok() {
+        if packet.stream() == stream_index {
+            landed = packet.pts().or(packet.dts());
+            break;
+        }
+    }
+    let late = landed.is_none_or(|ts| ts_to_secs(ts, time_base) > target);
+    let again = if late && target > Ratio::ZERO {
+        (target - Ratio::from_int(3)).max(Ratio::ZERO)
+    } else {
+        target
+    };
+    ictx.seek(micros(again), ..micros(again))
 }
