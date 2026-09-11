@@ -865,6 +865,38 @@ pub struct BurnOptions {
     /// Title-safe inset as a percentage of each dimension; cues outside
     /// it get a note. Zero turns the note off.
     pub safe: f64,
+    /// Shrink a cue that does not fit the title-safe area (or the frame
+    /// when the safe inset is zero) until it does, down to half its size.
+    pub fit: bool,
+}
+
+/// Lays a cue out the way the renderer will and returns its box size.
+fn measure_cue(
+    engine: &mut geneva_render::TextEngine,
+    spec: &TextSource,
+    max_width: f64,
+) -> (f64, f64) {
+    let resolved = geneva_timeline::ResolvedText {
+        text: spec.text.clone().unwrap_or_default(),
+        words: Vec::new(),
+        max_width,
+        spec: spec.clone(),
+    };
+    let image = engine.render(&resolved, 0.0);
+    (f64::from(image.width), f64::from(image.height))
+}
+
+/// Scales the size-dependent parts of a cue's style by `ratio`.
+fn scale_style(spec: &mut TextSource, template: &TextSource, ratio: f64) {
+    spec.style.size = Some(template.style.size.unwrap_or(48.0) * ratio);
+    if let (Some(o), Some(t)) = (spec.outline.as_mut(), template.outline.as_ref()) {
+        o.width = t.width * ratio;
+    }
+    if let (Some(sh), Some(t)) = (spec.shadow.as_mut(), template.shadow.as_ref()) {
+        sh.x = t.x * ratio;
+        sh.y = t.y * ratio;
+        sh.blur = t.blur * ratio;
+    }
 }
 
 /// The default look of burned-in subtitles for a frame `height` pixels
@@ -937,7 +969,10 @@ pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Re
     }
     let template: TextSource = serde_json::from_value(style)
         .context("--style: not a valid text style (see docs/timeline.md, text sources)")?;
-    let margin = opts.margin.unwrap_or_else(|| (f64::from(h) * 0.05).round());
+    // The default margin keeps the cues inside the title-safe area.
+    let margin = opts
+        .margin
+        .unwrap_or_else(|| (f64::from(h) * (opts.safe / 100.0).max(0.05)).ceil());
     let (anchor, position) = match opts.position {
         SubtitlePosition::Bottom => (
             Point {
@@ -985,20 +1020,13 @@ pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Re
     let mut diagnostics = Vec::new();
     let mut offscreen = 0usize;
     let mut unsafe_cues = 0usize;
+    let mut shrunk_cues = 0usize;
     for (n, cue) in cues.iter().enumerate() {
         if cue.end <= cue.start {
             continue;
         }
         let mut spec = template.clone();
         spec.text = Some(geneva_media::subtitles::strip_tags(&cue.text));
-        let resolved = geneva_timeline::ResolvedText {
-            text: spec.text.clone().unwrap_or_default(),
-            words: Vec::new(),
-            max_width,
-            spec: spec.clone(),
-        };
-        let image = engine.render(&resolved, 0.0);
-        let (bw, bh) = (f64::from(image.width), f64::from(image.height));
         // Layer assignment: the first layer whose last cue has ended. A
         // cue that lands on a higher layer sits beyond the boxes of the
         // cues still showing on the layers below, away from the edge.
@@ -1015,7 +1043,6 @@ pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Re
             .filter(|(end, _)| *end > cue.start)
             .map(|(_, height)| height)
             .sum();
-        layer_ends[layer] = (cue.end, bh);
         let position = match opts.position {
             SubtitlePosition::Bottom => Point {
                 x: position.x,
@@ -1026,15 +1053,49 @@ pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Re
                 y: Length::Px(position.y.to_px(f64::from(h)) + stacked),
             },
         };
-        let ax = anchor.x.to_px(bw);
-        let ay = anchor.y.to_px(bh);
         let px = position.x.to_px(f64::from(w));
         let py = position.y.to_px(f64::from(h));
-        let (x0, y0) = (px - ax, py - ay);
-        let (x1, y1) = (x0 + bw, y0 + bh);
+        let box_of = |bw: f64, bh: f64| {
+            let (x0, y0) = (px - anchor.x.to_px(bw), py - anchor.y.to_px(bh));
+            (x0, y0, x0 + bw, y0 + bh)
+        };
+        let (mut bw, mut bh) = measure_cue(&mut engine, &spec, max_width);
+        let mut shrunk = None;
+        if opts.fit {
+            let (lx0, ly0, lx1, ly1) = if opts.safe > 0.0 {
+                (safe_x, safe_y, f64::from(w) - safe_x, f64::from(h) - safe_y)
+            } else {
+                (0.0, 0.0, f64::from(w), f64::from(h))
+            };
+            let fits = |(x0, y0, x1, y1): (f64, f64, f64, f64)| {
+                x0 >= lx0 && y0 >= ly0 && x1 <= lx1 && y1 <= ly1
+            };
+            let base_size = template.style.size.unwrap_or(48.0);
+            let mut ratio = 1.0f64;
+            while !fits(box_of(bw, bh)) && ratio > 0.5 {
+                ratio = (ratio - 0.05).max(0.5);
+                scale_style(&mut spec, &template, ratio);
+                (bw, bh) = measure_cue(&mut engine, &spec, max_width);
+            }
+            if ratio < 1.0 {
+                shrunk = Some((base_size, base_size * ratio));
+            }
+        }
+        layer_ends[layer] = (cue.end, bh);
+        let (x0, y0, x1, y1) = box_of(bw, bh);
         let clip_index = layers[layer].len();
         let where_ = format!("/layers/{}/clips/{clip_index}", layer + 1);
         let cue_name = format!("cue {} ({}s to {}s)", n + 1, cue.start, cue.end);
+        if let Some((from, to)) = shrunk {
+            shrunk_cues += 1;
+            if shrunk_cues <= LISTED {
+                diagnostics.push(Diagnostic::note(
+                    "N405",
+                    where_.clone(),
+                    format!("{cue_name} was shrunk from {from:.0} px to {to:.0} px to fit"),
+                ));
+            }
+        }
         let mut over = Vec::new();
         if x0 < 0.0 {
             over.push(format!("{:.0} px past the left edge", -x0));
@@ -1078,7 +1139,7 @@ pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Re
                         "N404",
                         where_.clone(),
                         format!(
-                            "{cue_name} lies outside the title-safe area ({}% in from each edge)",
+                            "{cue_name} lies outside the title-safe area ({}% in from each edge): its box spans x {x0:.0}..{x1:.0}, y {y0:.0}..{y1:.0} of the {w}×{h} frame",
                             opts.safe
                         ),
                     )
@@ -1108,6 +1169,13 @@ pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Re
             "W403",
             "/layers/1",
             format!("{} more cues extend off-screen", offscreen - LISTED),
+        ));
+    }
+    if shrunk_cues > LISTED {
+        diagnostics.push(Diagnostic::note(
+            "N405",
+            "/layers/1",
+            format!("{} more cues were shrunk to fit", shrunk_cues - LISTED),
         ));
     }
     if unsafe_cues > LISTED {

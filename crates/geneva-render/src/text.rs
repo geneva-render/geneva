@@ -104,7 +104,9 @@ impl TextEngine {
             &mut self.fonts,
             Metrics::new(base.size, base.size * line_height),
         );
-        buffer.set_wrap(Wrap::Word);
+        // Lines break between words; a word longer than the line breaks
+        // inside rather than running past the edge.
+        buffer.set_wrap(Wrap::WordOrGlyph);
         buffer.set_size(Some(wrap_width), None);
         let default_attrs = attrs_for(&base, 0);
         if text.words.is_empty() {

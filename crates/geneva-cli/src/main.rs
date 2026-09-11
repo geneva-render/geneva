@@ -311,8 +311,8 @@ struct SubtitlesArgs {
     /// Where burned-in subtitles sit.
     #[arg(long, default_value = "bottom", requires = "burn")]
     position: verbs::SubtitlePosition,
-    /// Distance from the top or bottom edge in pixels (5% of the height
-    /// by default).
+    /// Distance from the top or bottom edge in pixels; by default the
+    /// title-safe inset (--safe), at least 5% of the height.
     #[arg(long, value_name = "PX", requires = "burn")]
     margin: Option<f64>,
     /// JSON object of text fields merged over the default look, for
@@ -323,6 +323,10 @@ struct SubtitlesArgs {
     /// get a note. 0 turns the note off.
     #[arg(long, default_value_t = 5.0, value_name = "PERCENT", requires = "burn")]
     safe: f64,
+    /// Shrink cues that do not fit the title-safe area until they do,
+    /// down to half their size; each one shrunk is reported.
+    #[arg(long, requires = "burn")]
+    fit: bool,
     #[command(flatten)]
     encode: verbs::EncodeArgs,
 }
@@ -545,6 +549,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     margin: args.margin,
                     style: args.style.clone(),
                     safe: args.safe,
+                    fit: args.fit,
                 };
                 let compiled = verbs::burn_subtitles(&args.input, &opts, &args.encode)?;
                 return run_verb(&compiled, &args.output, &args.encode, cli.format);

@@ -15,6 +15,10 @@ the format version it was written for.
   the frame. Overlapping cues go on further layers. Every cue is laid out
   before rendering; one that leaves the frame is warning W403, one
   outside the title-safe area (`--safe`, 5% by default) is note N404.
+  `--fit` shrinks such cues in steps until they fit, down to half size,
+  and reports each one (N405).
+- A word longer than a text line now breaks inside the word instead of
+  running past the edge, in every text source.
 
 ### Fixes
 

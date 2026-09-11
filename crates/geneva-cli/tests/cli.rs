@@ -608,6 +608,47 @@ fn subtitles_burn_compiles_cues_to_text_clips_and_checks_the_frame() {
     );
     assert!(out.exists());
 
+    // With --fit the same style is shrunk until it fits, and says so.
+    let doc = run_json(
+        &[
+            "subtitles",
+            "--burn",
+            srt.to_str().unwrap(),
+            "--style",
+            r#"{"size": 24}"#,
+            "--safe",
+            "30",
+            "--fit",
+            "--show-timeline",
+            "-o",
+        ],
+        &[&out, &clip],
+    );
+    // Size 24 wraps "Hello there" onto two lines on this 192×108 frame,
+    // too tall for a 40% safe area; half the size fits on one line.
+    let size = doc["layers"][1]["clips"][0]["source"]["size"]
+        .as_f64()
+        .unwrap();
+    assert!((12.0..24.0).contains(&size), "{size}");
+    let mut cmd = geneva();
+    cmd.args(["--format", "json", "subtitles", "--burn"])
+        .arg(&srt)
+        .args(["--style", r#"{"size": 24}"#, "--safe", "30", "--fit", "-o"])
+        .arg(&out)
+        .arg(&clip);
+    let result = cmd.output().unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    let codes: Vec<&str> = doc["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["code"].as_str().unwrap())
+        .collect();
+    assert!(
+        codes.contains(&"N405") && !codes.contains(&"W403") && !codes.contains(&"N404"),
+        "{codes:?}"
+    );
+
     // At the default size the cues fit; a tiny safe area makes them a note.
     let doc = run_json(
         &[

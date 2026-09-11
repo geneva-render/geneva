@@ -82,6 +82,7 @@ result is not what was intended. Notes are informational.
 | W402 | `subtitles --burn` found no cues in the file; the picture is written unchanged. |
 | W403 | A burned-in subtitle cue extends off-screen. The message gives the box size and by how much it leaves the frame; the path names the clip. |
 | N404 | (note) A burned-in subtitle cue lies outside the title-safe area (`--safe`, 5% in from each edge by default). |
+| N405 | (note) A burned-in subtitle cue was shrunk to fit (`--fit`); the message gives the sizes. |
 
 ## Rendering (E500–E599)
 
