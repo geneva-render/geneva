@@ -57,7 +57,14 @@ encoder's Y'CbCr happens at the edge.
 - Output pixels inside the placement's bounding box are mapped back into the
   clip's box; coverage and color come from a 2×2 supersample, except when the
   placement is pixel-aligned, in which case one center sample keeps images
-  bit-exact.
+  bit-exact. An image that is only moved and scaled is resampled span by
+  span: well inside the picture, a magnified or unit-scale image takes one
+  bilinear sample at the pixel center (the usual resampling), a minified one
+  keeps the 2×2 supersample so that detail is filtered rather than dropped,
+  and the pixels near the picture's edges keep the general path for their
+  coverage. Nested compositions draw from their own frame's buffer, which
+  is kept for the next one instead of being allocated each frame.
+  `cargo run --release -p geneva-cli --example profile` times these paths.
 - The result is scaled by opacity (and by the crossfade ramp when a
   transition is active) and composited with the clip's blend mode.
 - Rows are independent, so drawing, the decoder's 16-bit-to-linear

@@ -22,8 +22,32 @@ the format version it was written for.
   for the middle of the picture. The output takes the crop's size unless
   a size is given.
 
+### Performance
+
+- The compositor was profiled on the check scene at 720p and 1080p and
+  its four largest costs fixed. At 1080p on four cores: clearing the
+  frame 2.9 → 0.65 ms (parallel), the check scene 4.3 → 1.6 ms, a
+  frame-sized nested composition 38 → 2.7 ms (its buffer is drawn from
+  directly and kept for the next frame instead of being allocated,
+  cleared and copied every frame), a scaled or fractionally placed
+  image 43 → 6.4 ms (spans are resampled with a constant step and no
+  per-texel bounds checks), and the 8-bit 4:2:0 conversion 6.7 → 4.4
+  ms (a dedicated loop over 2×2 blocks). A magnified or unit-scale image
+  is now sampled once at the pixel center well inside the picture, so
+  text and pictures at fractional positions come out sharper; minified
+  images, rotated ones and edges keep the 2×2 supersample. The text
+  golden references were regenerated for the sharper edges.
+- Decoded 8-bit 4:2:0 frames go straight to linear light for the
+  compositor, with bilinear chroma upsampling at the standard siting,
+  instead of through a 16-bit 4:4:4 pass first. What remains of a
+  composited 1080p frame's cost is the memory traffic of the 16-byte
+  working pixel (each full-frame pass moves 33 MB) and the encoder.
+
 ### Fixes
 
+- The build without the media feature (checked by CI with clippy)
+  compiled again: the examples and the tests that need media are gated
+  on the feature.
 - Keeping the source's audio sample rate (0.1.11) broke outputs whose
   codec or container cannot take it: Opus (48 kHz and its own rates
   only) and MXF (48 kHz only) failed on a 44.1 kHz source. The rate

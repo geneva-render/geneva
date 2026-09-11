@@ -23,11 +23,37 @@ impl Frame {
     /// Resizes the frame if needed and clears it to `color`, keeping the
     /// pixel buffer when the size is unchanged.
     pub fn reset(&mut self, width: u32, height: u32, color: Color) {
+        use rayon::prelude::*;
         self.width = width;
         self.height = height;
-        self.pixels.clear();
+        let n = width as usize * height as usize;
+        let c = color.to_linear();
+        if self.pixels.len() == n && n >= 1 << 16 {
+            // A frame-sized clear is memory-bound: rows go in parallel.
+            let chunk = n.div_ceil(rayon::current_num_threads().max(1));
+            self.pixels
+                .par_chunks_mut(chunk.max(1))
+                .for_each(|part| part.fill(c));
+        } else {
+            self.pixels.clear();
+            self.pixels.resize(n, c);
+        }
+    }
+
+    /// An empty frame that owns `pixels` as its buffer, so that a buffer
+    /// can be used again by [`reset`](Self::reset) without a new
+    /// allocation.
+    pub fn from_pixels(pixels: Vec<LinearRgba>) -> Self {
+        Self {
+            width: 0,
+            height: 0,
+            pixels,
+        }
+    }
+
+    /// The pixel buffer, giving up the frame.
+    pub fn into_pixels(self) -> Vec<LinearRgba> {
         self.pixels
-            .resize(width as usize * height as usize, color.to_linear());
     }
 
     /// Width in pixels.

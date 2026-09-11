@@ -146,6 +146,98 @@ pub fn ycbcr16_into(
         });
 }
 
+/// Three 8-bit planes with chroma subsampled 2×2 (4:2:0), each row
+/// `stride` bytes apart; the chroma planes hold `ceil(width / 2)` ×
+/// `ceil(height / 2)` samples.
+pub struct Planes420<'a> {
+    /// Luma.
+    pub y: &'a [u8],
+    /// Cb.
+    pub cb: &'a [u8],
+    /// Cr.
+    pub cr: &'a [u8],
+    /// Bytes per luma row.
+    pub y_stride: usize,
+    /// Bytes per chroma row.
+    pub c_stride: usize,
+}
+
+/// Converts an 8-bit 4:2:0 Y'CbCr frame straight to a premultiplied
+/// linear image, without the pass through 16-bit 4:4:4 that other
+/// layouts take. Chroma is upsampled bilinearly at the usual siting
+/// (co-sited with the even luma columns, centered between luma rows).
+pub fn yuv420p8_into(
+    planes: &Planes420,
+    width: u32,
+    height: u32,
+    tags: ResolvedTags,
+    out: &mut Image,
+) {
+    let lut = to_linear_lut(tags.transfer);
+    let (kr, kb) = matrix::luma_coefficients(tags.matrix).unwrap_or((0.2126, 0.0722));
+    let kg = 1.0 - kr - kb;
+    let (y_off, y_scale, c_scale) = match tags.range {
+        Range::Full => (0.0f32, 1.0 / 255.0, 1.0 / 255.0),
+        Range::Limited => (16.0, 1.0 / 219.0, 1.0 / 224.0),
+    };
+    let (cr_r, cb_b) = (2.0 * (1.0 - kr as f32), 2.0 * (1.0 - kb as f32));
+    let (kr, kb, kg) = (kr as f32, kb as f32, kg as f32);
+    let w = width as usize;
+    let h = height as usize;
+    let cw = w.div_ceil(2);
+    let ch = h.div_ceil(2);
+    out.width = width;
+    out.height = height;
+    out.pixels.resize(w * h, LinearRgba::TRANSPARENT);
+    out.pixels
+        .par_chunks_mut(w)
+        .enumerate()
+        .for_each(|(row, out)| {
+            let y_row = &planes.y[row * planes.y_stride..][..w];
+            // The chroma row this luma row belongs to, and the neighbour
+            // it is interpolated with: the one above for an even row, the
+            // one below for an odd row, at a quarter of the weight.
+            let cy = row / 2;
+            let other = if row % 2 == 0 {
+                cy.saturating_sub(1)
+            } else {
+                (cy + 1).min(ch - 1)
+            };
+            let cb0 = &planes.cb[cy * planes.c_stride..][..cw];
+            let cb1 = &planes.cb[other * planes.c_stride..][..cw];
+            let cr0 = &planes.cr[cy * planes.c_stride..][..cw];
+            let cr1 = &planes.cr[other * planes.c_stride..][..cw];
+            // The chroma row at this luma row's height, normalized; the
+            // odd columns are then the mean of their two neighbours.
+            let mut chroma: Vec<(f32, f32)> = Vec::with_capacity(cw);
+            for cx in 0..cw {
+                let mix = |a: &[u8], b: &[u8]| {
+                    (0.75 * f32::from(a[cx]) + 0.25 * f32::from(b[cx]) - 128.0) * c_scale
+                };
+                chroma.push((mix(cb0, cb1), mix(cr0, cr1)));
+            }
+            for (x, px) in out.iter_mut().enumerate() {
+                let cx = x / 2;
+                let (cbn, crn) = if x % 2 == 0 {
+                    chroma[cx]
+                } else {
+                    let (a, b) = (chroma[cx], chroma[(cx + 1).min(cw - 1)]);
+                    (0.5 * (a.0 + b.0), 0.5 * (a.1 + b.1))
+                };
+                let yn = (f32::from(y_row[x]) - y_off) * y_scale;
+                let r = yn + cr_r * crn;
+                let b = yn + cb_b * cbn;
+                let g = (yn - kr * r - kb * b) / kg;
+                *px = LinearRgba {
+                    r: lut[lut_index(r)],
+                    g: lut[lut_index(g)],
+                    b: lut[lut_index(b)],
+                    a: 1.0,
+                };
+            }
+        });
+}
+
 /// Converts 8-bit straight-alpha RGBA rows with `stride` bytes per row to a
 /// premultiplied linear image using the given transfer function.
 pub fn rgba8_to_image(
@@ -389,6 +481,37 @@ pub fn frame_to_planes(frame: &Frame, tags: ResolvedTags, format: PlaneFormat) -
     let [y_plane, cb_plane, cr_plane] = &mut out.planes[..] else {
         unreachable!("Y'CbCr layouts have three planes");
     };
+    // The common layout, 8-bit 4:2:0 at an even size, has its own loop:
+    // one pass per pair of rows over 2×2 blocks with no per-sample
+    // branching, which is what the generic loop below costs most on.
+    if format == PlaneFormat::Yuv420p8 && w % 2 == 0 && height % 2 == 0 {
+        let (ys, yo, cs) = (y_scale, y_off, c_scale);
+        let code8 = |v: f32, scale: f32, off: f32| (v * scale + off + 0.5).clamp(0.0, 255.0) as u8;
+        frame
+            .pixels()
+            .par_chunks(w * 2)
+            .zip(y_plane.data.par_chunks_mut(y_plane.stride * 2))
+            .zip(cb_plane.data.par_chunks_mut(cb_plane.stride))
+            .zip(cr_plane.data.par_chunks_mut(cr_plane.stride))
+            .for_each(|(((src, y_rows), cb_row), cr_row)| {
+                let (top, bottom) = src.split_at(w);
+                let (y_top, y_bottom) = y_rows.split_at_mut(y_plane.stride);
+                for cx in 0..w / 2 {
+                    let x = cx * 2;
+                    let (y00, b00, r00) = to_ycc(&top[x]);
+                    let (y01, b01, r01) = to_ycc(&top[x + 1]);
+                    let (y10, b10, r10) = to_ycc(&bottom[x]);
+                    let (y11, b11, r11) = to_ycc(&bottom[x + 1]);
+                    y_top[x] = code8(y00, ys, yo);
+                    y_top[x + 1] = code8(y01, ys, yo);
+                    y_bottom[x] = code8(y10, ys, yo);
+                    y_bottom[x + 1] = code8(y11, ys, yo);
+                    cb_row[cx] = code8((b00 + b01 + b10 + b11) * 0.25, cs, c_off);
+                    cr_row[cx] = code8((r00 + r01 + r10 + r11) * 0.25, cs, c_off);
+                }
+            });
+        return out;
+    }
     // Each task handles one chroma row: `dy` picture rows, whose chroma is
     // averaged over `dx × dy` blocks (fewer samples at a right or bottom
     // edge).
@@ -615,6 +738,48 @@ mod tests {
                 assert!(got.abs_diff(want) <= 2, "{:?} vs {:?}", back, (r, g, b));
             }
             assert_eq!(back[3], 255);
+        }
+    }
+
+    #[test]
+    fn eight_bit_420_converts_straight_to_the_colors() {
+        for (r, g, b) in [
+            (255u8, 255u8, 255u8),
+            (0, 0, 0),
+            (255, 136, 0),
+            (30, 90, 200),
+            (128, 128, 128),
+        ] {
+            // A 4×4 frame of one color: its 4:2:0 planes are what the
+            // encoder writes, and the way back must give the color.
+            let frame = Frame::new(4, 4, Color::from_rgba8(r, g, b, 255));
+            let yuv = frame_to_planes(&frame, ResolvedTags::SDR_VIDEO, PlaneFormat::Yuv420p8);
+            let mut img = Image {
+                width: 0,
+                height: 0,
+                pixels: Vec::new(),
+            };
+            yuv420p8_into(
+                &Planes420 {
+                    y: &yuv.planes[0].data,
+                    cb: &yuv.planes[1].data,
+                    cr: &yuv.planes[2].data,
+                    y_stride: yuv.planes[0].stride,
+                    c_stride: yuv.planes[1].stride,
+                },
+                4,
+                4,
+                ResolvedTags::SDR_VIDEO,
+                &mut img,
+            );
+            assert_eq!((img.width, img.height, img.pixels.len()), (4, 4, 16));
+            for px in &img.pixels {
+                let back = px.to_srgb8();
+                for (got, want) in back[..3].iter().zip([r, g, b]) {
+                    assert!(got.abs_diff(want) <= 2, "{:?} vs {:?}", back, (r, g, b));
+                }
+                assert_eq!(back[3], 255);
+            }
         }
     }
 

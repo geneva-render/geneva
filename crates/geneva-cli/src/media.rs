@@ -746,6 +746,8 @@ mod imp {
             overrides.crf,
             overrides.preset.as_deref(),
             overrides.no_audio,
+            overrides.exact,
+            [RenderMode::Direct, RenderMode::Smart, RenderMode::Render],
         );
         Err(RenderError::Asset {
             id: output.display().to_string(),

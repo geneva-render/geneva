@@ -121,6 +121,7 @@ fn schema_prints_json_schema() {
 }
 
 #[test]
+#[cfg(feature = "media")]
 fn crop_takes_the_region_straight_from_the_decoder() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("cropped.mp4");
@@ -174,6 +175,7 @@ fn crop_takes_the_region_straight_from_the_decoder() {
 }
 
 #[test]
+#[cfg(feature = "media")]
 fn missing_file_is_a_usage_error() {
     geneva()
         .args(["validate", "/nonexistent/timeline.json"])
@@ -329,6 +331,7 @@ fn run_json(args: &[&str], extra: &[&std::path::Path]) -> serde_json::Value {
 }
 
 #[test]
+#[cfg(feature = "media")]
 fn trim_prints_its_timeline_and_copies_the_streams() {
     let dir = tempfile::tempdir().unwrap();
     let clip = media_dir().join("clip.mp4");
@@ -374,6 +377,7 @@ fn trim_prints_its_timeline_and_copies_the_streams() {
 }
 
 #[test]
+#[cfg(feature = "media")]
 fn resize_keeps_the_aspect_ratio_and_scales_directly() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("small.mp4");
@@ -388,6 +392,7 @@ fn resize_keeps_the_aspect_ratio_and_scales_directly() {
 }
 
 #[test]
+#[cfg(feature = "media")]
 fn concat_copies_matching_sources_and_renders_crossfades() {
     let dir = tempfile::tempdir().unwrap();
     let clip = media_dir().join("clip.mp4");
@@ -415,6 +420,7 @@ fn concat_copies_matching_sources_and_renders_crossfades() {
 }
 
 #[test]
+#[cfg(feature = "media")]
 fn overlay_places_an_image_for_the_length_of_the_video() {
     let dir = tempfile::tempdir().unwrap();
     let logo = dir.path().join("logo.png");
@@ -452,6 +458,7 @@ fn overlay_places_an_image_for_the_length_of_the_video() {
 }
 
 #[test]
+#[cfg(feature = "media")]
 fn audio_extracts_mutes_and_replaces() {
     let dir = tempfile::tempdir().unwrap();
     let clip = media_dir().join("clip.mp4");
@@ -503,6 +510,7 @@ fn audio_extracts_mutes_and_replaces() {
 }
 
 #[test]
+#[cfg(feature = "media")]
 fn convert_hands_decoded_frames_straight_to_the_encoder() {
     let dir = tempfile::tempdir().unwrap();
     let clip = media_dir().join("clip.mp4");
@@ -543,6 +551,7 @@ fn convert_hands_decoded_frames_straight_to_the_encoder() {
 }
 
 #[test]
+#[cfg(feature = "media")]
 fn image_sequences_write_one_file_per_frame() {
     let dir = tempfile::tempdir().unwrap();
     let pattern = dir.path().join("frame-%03d.png");
@@ -571,6 +580,7 @@ fn image_sequences_write_one_file_per_frame() {
 }
 
 #[test]
+#[cfg(feature = "media")]
 fn subtitles_attach_as_streams_and_extract_again() {
     let dir = tempfile::tempdir().unwrap();
     let srt = dir.path().join("en.srt");
@@ -605,6 +615,7 @@ fn subtitles_attach_as_streams_and_extract_again() {
 }
 
 #[test]
+#[cfg(feature = "media")]
 fn subtitles_burn_compiles_cues_to_text_clips_and_checks_the_frame() {
     let dir = tempfile::tempdir().unwrap();
     let srt = dir.path().join("en.srt");
@@ -762,6 +773,7 @@ fn subtitles_burn_compiles_cues_to_text_clips_and_checks_the_frame() {
 }
 
 #[test]
+#[cfg(feature = "media")]
 fn css_shorthands_expand_into_the_object_form() {
     let dir = tempfile::tempdir().unwrap();
     let srt = dir.path().join("en.srt");
@@ -804,6 +816,7 @@ fn css_shorthands_expand_into_the_object_form() {
 }
 
 #[test]
+#[cfg(feature = "media")]
 fn targets_pick_size_codec_quality_and_caps_from_the_table() {
     let dir = tempfile::tempdir().unwrap();
     let clip = media_dir().join("clip.mp4");
@@ -919,6 +932,7 @@ fn targets_pick_size_codec_quality_and_caps_from_the_table() {
 }
 
 #[test]
+#[cfg(feature = "media")]
 fn mxf_defaults_to_dnxhr_and_pcm() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("delivery.mxf");
@@ -935,6 +949,7 @@ fn mxf_defaults_to_dnxhr_and_pcm() {
 }
 
 #[test]
+#[cfg(feature = "media")]
 fn a_container_that_rejects_the_source_audio_is_rendered_not_copied() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("same-size.mxf");

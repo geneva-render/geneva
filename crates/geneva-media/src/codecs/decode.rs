@@ -15,7 +15,7 @@ use geneva_timeline::Ratio;
 use super::probe::{ratio, ts_to_secs};
 use super::{codec_error, ffi, init, open_error, tags};
 use crate::MediaError;
-use crate::convert::{Planes16, rgba8_into, ycbcr16_into};
+use crate::convert::{Planes16, Planes420, rgba8_into, ycbcr16_into, yuv420p8_into};
 
 /// Seeking more than this far ahead of the current position restarts from
 /// the nearest keyframe instead of decoding every frame in between.
@@ -355,6 +355,31 @@ impl VideoReader {
     }
 
     fn convert(&mut self, raw: &frame::Video, into: &mut Image) -> Result<(), MediaError> {
+        // The common layout goes straight to linear light, without the
+        // widening pass; a full-range JPEG layout keeps its range here
+        // since nothing compresses it on the way.
+        if matches!(raw.format(), Pixel::YUV420P | Pixel::YUVJ420P)
+            && self.tags.matrix != geneva_color::Matrix::Identity
+        {
+            let mut tags = self.tags;
+            if raw.format() == Pixel::YUVJ420P {
+                tags.range = geneva_color::Range::Full;
+            }
+            yuv420p8_into(
+                &Planes420 {
+                    y: raw.data(0),
+                    cb: raw.data(1),
+                    cr: raw.data(2),
+                    y_stride: raw.stride(0),
+                    c_stride: raw.stride(1),
+                },
+                raw.width(),
+                raw.height(),
+                tags,
+                into,
+            );
+            return Ok(());
+        }
         self.scaler.run(raw, &mut self.scaled).map_err(|e| {
             codec_error(
                 format!("{}: pixel format conversion", self.inner.path.display()),

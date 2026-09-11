@@ -59,3 +59,7 @@ single_match_else = "allow"
 result_large_err = "allow"
 cast_possible_wrap = "allow"
 explicit_iter_loop = "allow"
+
+[[example]]
+name = "direct_bench"
+required-features = ["media"]

@@ -50,6 +50,16 @@ impl Image {
         }
     }
 
+    /// Takes a rendered frame's pixels as an image without copying.
+    pub fn from_frame_pixels(frame: crate::Frame) -> Self {
+        let (width, height) = (frame.width(), frame.height());
+        Self {
+            width,
+            height,
+            pixels: frame.into_pixels(),
+        }
+    }
+
     /// The pixel at integer coordinates, or transparent outside the image.
     pub fn texel(&self, x: i64, y: i64) -> LinearRgba {
         if x < 0 || y < 0 || x >= i64::from(self.width) || y >= i64::from(self.height) {

@@ -36,3 +36,7 @@ tempfile = "3.10"
 
 [lints]
 workspace = true
+
+[[example]]
+name = "profile"
+required-features = ["media"]

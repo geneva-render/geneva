@@ -26,7 +26,14 @@ pub struct CpuRenderer<A: AssetSource> {
     /// Rendered text images that do not change with time, by a hash of
     /// the clip and its text, so a caption is laid out once per clip.
     text_cache: HashMap<u64, Image>,
+    /// Pixel buffers of nested compositions drawn earlier, used again for
+    /// the next ones so that a frame-sized buffer is not allocated and
+    /// faulted in on every frame.
+    spare: Vec<Vec<LinearRgba>>,
 }
+
+/// How many spare buffers are kept.
+const SPARE_BUFFERS: usize = 4;
 
 impl<A: AssetSource> std::fmt::Debug for CpuRenderer<A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -41,6 +48,7 @@ impl CpuRenderer<FileAssets> {
             assets: FileAssets::new(root),
             text: TextEngine::new(),
             text_cache: HashMap::new(),
+            spare: Vec::new(),
         }
     }
 }
@@ -52,7 +60,13 @@ impl<A: AssetSource> CpuRenderer<A> {
             assets,
             text: TextEngine::new(),
             text_cache: HashMap::new(),
+            spare: Vec::new(),
         }
+    }
+
+    /// The asset source.
+    pub fn assets_mut(&mut self) -> &mut A {
+        &mut self.assets
     }
 }
 
@@ -148,7 +162,7 @@ impl<A: AssetSource> CpuRenderer<A> {
                     nested.background,
                     t - clip.start,
                 )?;
-                Paint::Image(Cow::Owned(Image::from_frame(&inner)))
+                Paint::Image(Cow::Owned(Image::from_frame_pixels(inner)))
             }
             ResolvedSource::Video { asset, in_, .. } => {
                 let source_time = *in_ + (t - clip.start);
@@ -252,15 +266,17 @@ impl<A: AssetSource> CpuRenderer<A> {
             return Ok(None);
         };
         let mut frame = Frame::new(rect[2] - rect[0], rect[3] - rect[1], Color::TRANSPARENT);
-        for (paint, place, opacity, blend) in &items {
+        for (paint, place, opacity, blend) in items {
             draw(
                 &mut frame,
                 [rect[0], rect[1]],
-                paint,
-                place,
-                *opacity,
-                *blend,
+                &paint,
+                &place,
+                opacity,
+                blend,
             );
+            let pixels = owned_pixels(paint);
+            self.recycle(pixels);
         }
         Ok(Some((frame, rect)))
     }
@@ -277,9 +293,19 @@ impl<A: AssetSource> CpuRenderer<A> {
         background: Color,
         t: Ratio,
     ) -> Result<Frame, RenderError> {
-        let mut frame = Frame::new(0, 0, Color::BLACK);
+        let mut frame = Frame::from_pixels(self.spare.pop().unwrap_or_default());
         self.render_layers_into(comp, layers, width, height, background, t, &mut frame)?;
         Ok(frame)
+    }
+
+    /// Keeps the buffer of a paint that owns one, for the next nested
+    /// composition.
+    fn recycle(&mut self, pixels: Option<Vec<LinearRgba>>) {
+        if let Some(pixels) = pixels {
+            if self.spare.len() < SPARE_BUFFERS {
+                self.spare.push(pixels);
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -325,8 +351,18 @@ impl<A: AssetSource> CpuRenderer<A> {
                 opacity as f32,
                 clip.blend,
             );
+            let pixels = owned_pixels(paint);
+            self.recycle(pixels);
         }
         Ok(())
+    }
+}
+
+/// The pixel buffer of a paint that owns one, giving up the paint.
+fn owned_pixels(paint: Paint<'_>) -> Option<Vec<LinearRgba>> {
+    match paint {
+        Paint::Image(Cow::Owned(img)) => Some(img.pixels),
+        _ => None,
     }
 }
 
@@ -558,6 +594,40 @@ impl Placement {
         })
     }
 
+    /// Whether the placement only moves and scales (no rotation, or a
+    /// half turn), so that source coordinates advance by a constant step
+    /// along an output row.
+    fn axis_aligned(&self) -> bool {
+        self.sin.abs() < 1e-12
+    }
+
+    /// For an axis-aligned image of `img_w`×`img_h` texels: the output
+    /// pixels `[x0, y0, x1, y1)` whose samples, and the texels those
+    /// samples blend, all lie inside the window, so they can be read
+    /// without checks. Empty when the image is too small.
+    fn interior(&self, img_w: u32, img_h: u32) -> [i64; 4] {
+        if img_w < 2 || img_h < 2 {
+            return [0; 4];
+        }
+        let [cx, cy, w, h] = self.window;
+        let along = |q: f64, axis: usize| {
+            self.position[axis] + self.cos * (q - self.anchor[axis]) * self.scale[axis]
+        };
+        let (xa, xb) = (along(cx, 0), along(cx + w, 0));
+        let (ya, yb) = (along(cy, 1), along(cy + h, 1));
+        // A sample must stay 1.5 texels inside the window: its bilinear
+        // footprint is one texel, and the subsamples sit up to 0.75 px
+        // from the pixel's corner.
+        let margin = |scale: f64| (1.5 * scale.abs()).ceil() + 1.0;
+        let (mx, my) = (margin(self.scale[0]), margin(self.scale[1]));
+        [
+            (xa.min(xb).ceil() + mx) as i64,
+            (ya.min(yb).ceil() + my) as i64,
+            (xa.max(xb).floor() - mx) as i64,
+            (ya.max(yb).floor() - my) as i64,
+        ]
+    }
+
     /// The paint's color at a point of paint space, transparent outside
     /// the window.
     fn sample(&self, paint: &Paint, u: f64, v: f64) -> LinearRgba {
@@ -602,6 +672,7 @@ fn draw(
     }
     let width = frame.width() as usize;
     let rows = &mut frame.pixels_mut()[(y0 - oy) as usize * width..(y1 - oy) as usize * width];
+    let plain = opacity >= 1.0 && blend == BlendMode::Normal;
     // A pixel-aligned image maps texels one-to-one onto output pixels at
     // an integer offset, so it is read directly instead of sampled.
     let aligned = match paint {
@@ -610,6 +681,15 @@ fn draw(
             (place.position[0] - place.anchor[0]).round() as i64,
             (place.position[1] - place.anchor[1]).round() as i64,
         )),
+        _ => None,
+    };
+    // An image that is only moved and scaled is resampled span by span:
+    // along a row the source coordinates advance by a constant step, and
+    // well inside the picture the texels need no bounds checks.
+    let spans = match paint {
+        Paint::Image(img) if !place.pixel_aligned && place.axis_aligned() => {
+            Some((img.as_ref(), place.interior(img.width, img.height)))
+        }
         _ => None,
     };
     // The texels shown: the window, within the image.
@@ -625,48 +705,167 @@ fn draw(
             let src_row = &img.pixels[v as usize * img.width as usize..][..img.width as usize];
             let first = i64::from(x0).max(ox_img + wx.max(0));
             let last = i64::from(x1).min(ox_img + (wx + ww).min(i64::from(img.width)));
-            let plain = opacity >= 1.0 && blend == BlendMode::Normal;
             for x in first..last {
                 let src = src_row[(x - ox_img) as usize];
-                if src.a <= 0.0 {
-                    continue;
-                }
-                let i = (x - i64::from(ox)) as usize;
-                if plain && src.a >= 1.0 {
-                    row[i] = src;
-                    continue;
-                }
-                let src = src.scaled(opacity);
-                let dst = row[i];
-                row[i] = composite(src, dst, blend);
+                put(
+                    row,
+                    (x - i64::from(ox)) as usize,
+                    src,
+                    opacity,
+                    blend,
+                    plain,
+                );
+            }
+            return;
+        }
+        if let Some((img, interior)) = spans {
+            let in_rows = interior[1] <= i64::from(y) && i64::from(y) < interior[3];
+            let (fast0, fast1) = if in_rows {
+                (
+                    interior[0].clamp(i64::from(x0), i64::from(x1)) as u32,
+                    interior[2].clamp(i64::from(x0), i64::from(x1)) as u32,
+                )
+            } else {
+                (x1, x1)
+            };
+            for x in x0..fast0 {
+                let src = sample_pixel(paint, place, x, y);
+                put(row, (x - ox) as usize, src, opacity, blend, plain);
+            }
+            if fast0 < fast1 {
+                draw_span(row, ox, img, place, fast0, fast1, y, opacity, blend, plain);
+            }
+            for x in fast1.max(x0)..x1 {
+                let src = sample_pixel(paint, place, x, y);
+                put(row, (x - ox) as usize, src, opacity, blend, plain);
             }
             return;
         }
         for x in x0..x1 {
-            let src = if place.pixel_aligned {
-                let (u, v) = place.inverse(f64::from(x) + 0.5, f64::from(y) + 0.5);
-                place.sample(paint, u, v)
-            } else {
-                let mut acc = LinearRgba::TRANSPARENT;
-                for (ox, oy) in SUBSAMPLES {
-                    let (u, v) = place.inverse(f64::from(x) + ox, f64::from(y) + oy);
-                    let s = place.sample(paint, u, v);
-                    acc.r += s.r;
-                    acc.g += s.g;
-                    acc.b += s.b;
-                    acc.a += s.a;
-                }
-                acc.scaled(1.0 / SUBSAMPLES.len() as f32)
-            };
-            if src.a <= 0.0 {
-                continue;
-            }
-            let src = src.scaled(opacity);
-            let i = (x - ox) as usize;
-            let dst = row[i];
-            row[i] = composite(src, dst, blend);
+            let src = sample_pixel(paint, place, x, y);
+            put(row, (x - ox) as usize, src, opacity, blend, plain);
         }
     });
+}
+
+/// The paint's color over output pixel (`x`, `y`): one sample at the
+/// center when the placement is pixel-aligned, otherwise the average of
+/// the subsamples.
+fn sample_pixel(paint: &Paint, place: &Placement, x: u32, y: u32) -> LinearRgba {
+    if place.pixel_aligned {
+        let (u, v) = place.inverse(f64::from(x) + 0.5, f64::from(y) + 0.5);
+        return place.sample(paint, u, v);
+    }
+    let mut acc = LinearRgba::TRANSPARENT;
+    for (ox, oy) in SUBSAMPLES {
+        let (u, v) = place.inverse(f64::from(x) + ox, f64::from(y) + oy);
+        let s = place.sample(paint, u, v);
+        acc.r += s.r;
+        acc.g += s.g;
+        acc.b += s.b;
+        acc.a += s.a;
+    }
+    acc.scaled(1.0 / SUBSAMPLES.len() as f32)
+}
+
+/// Lays `src` at index `i` of an output row with the clip's opacity and
+/// blend mode; `plain` says the mode is normal at full opacity, where an
+/// opaque source simply replaces the pixel.
+#[inline]
+fn put(
+    row: &mut [LinearRgba],
+    i: usize,
+    src: LinearRgba,
+    opacity: f32,
+    blend: BlendMode,
+    plain: bool,
+) {
+    if src.a <= 0.0 {
+        return;
+    }
+    if plain && src.a >= 1.0 {
+        row[i] = src;
+        return;
+    }
+    let src = src.scaled(opacity);
+    row[i] = composite(src, row[i], blend);
+}
+
+/// Two texel rows and the weight between them, for one subsample row.
+struct RowPair<'a> {
+    top: &'a [LinearRgba],
+    bottom: &'a [LinearRgba],
+    ty: f32,
+    /// Source x of the first output pixel's sample.
+    u0: f64,
+}
+
+/// Resamples the output pixels `[x0, x1)` of row `y` from an axis-aligned
+/// image whose texels around every sample lie inside the window (see
+/// [`Placement::interior`]). Magnified or unit-scale pictures take one
+/// bilinear sample at the pixel center, which is the usual resampling;
+/// minified ones keep the subsample average so that detail is filtered
+/// rather than dropped.
+#[allow(clippy::too_many_arguments)]
+fn draw_span(
+    row: &mut [LinearRgba],
+    ox: u32,
+    img: &Image,
+    place: &Placement,
+    x0: u32,
+    x1: u32,
+    y: u32,
+    opacity: f32,
+    blend: BlendMode,
+    plain: bool,
+) {
+    const CENTER: [(f64, f64); 1] = [(0.5, 0.5)];
+    let magnified = place.scale[0].abs() >= 1.0 && place.scale[1].abs() >= 1.0;
+    let samples: &[(f64, f64)] = if magnified { &CENTER } else { &SUBSAMPLES };
+    let weight = 1.0 / samples.len() as f32;
+    let (w, h) = (img.width as usize, img.height as usize);
+    let du = place.cos / place.scale[0];
+    let mut pairs: [Option<RowPair>; SUBSAMPLES.len()] = [None, None, None, None];
+    for (k, (sx, sy)) in samples.iter().enumerate() {
+        let (u, v) = place.inverse(f64::from(x0) + sx, f64::from(y) + sy);
+        let fy = v - 0.5;
+        let yi = (fy.floor().max(0.0) as usize).min(h - 2);
+        pairs[k] = Some(RowPair {
+            top: &img.pixels[yi * w..][..w],
+            bottom: &img.pixels[(yi + 1) * w..][..w],
+            ty: (fy - yi as f64) as f32,
+            u0: u,
+        });
+    }
+    let lerp = |a: LinearRgba, b: LinearRgba, t: f32| LinearRgba {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: a.a + (b.a - a.a) * t,
+    };
+    for (k, x) in (x0..x1).enumerate() {
+        let mut acc = LinearRgba::TRANSPARENT;
+        for pair in pairs.iter().flatten() {
+            let fx = pair.u0 + k as f64 * du - 0.5;
+            let xi = (fx.floor().max(0.0) as usize).min(w - 2);
+            let tx = (fx - xi as f64) as f32;
+            let top = lerp(pair.top[xi], pair.top[xi + 1], tx);
+            let bottom = lerp(pair.bottom[xi], pair.bottom[xi + 1], tx);
+            let s = lerp(top, bottom, pair.ty);
+            acc.r += s.r;
+            acc.g += s.g;
+            acc.b += s.b;
+            acc.a += s.a;
+        }
+        put(
+            row,
+            (x - ox) as usize,
+            acc.scaled(weight),
+            opacity,
+            blend,
+            plain,
+        );
+    }
 }
 
 /// Blends premultiplied `src` onto premultiplied `dst`.
