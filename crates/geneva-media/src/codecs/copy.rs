@@ -112,6 +112,13 @@ pub fn plan_stream_copy(
         if clip.audio && !shape.has_audio {
             return Ok(None);
         }
+        if clip.audio
+            && shape
+                .audio_id
+                .is_some_and(|id| !container_accepts_audio(container, id))
+        {
+            return Ok(None);
+        }
         match &reference {
             None => reference = Some(shape),
             Some(r) if !r.compatible(&shape) => return Ok(None),

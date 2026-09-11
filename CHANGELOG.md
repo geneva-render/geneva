@@ -5,6 +5,32 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## 0.1.2
+
+### Fixes
+
+- Writing the audio of a long output no longer slows to a crawl after the
+  last frame: samples were shifted through the pending buffer once per
+  encoder frame, which is quadratic in the length of the audio. A seven
+  minute join now finishes seconds after its last frame instead of minutes.
+- ProRes, DNxHR, PNG and Motion JPEG encode on all cores; the encoder
+  context did not allow frame or slice threading, so FFmpeg's own encoders
+  ran on one thread.
+- A video whose picture could be copied but whose audio codec the
+  container refuses (AAC into MXF, for one) is rendered instead of failing
+  at muxing.
+- `render` prints a "mixing audio" line so a long job shows what it is
+  doing after the last frame.
+
+### Installing
+
+- Release archives include `install.sh`, which puts `geneva` on the PATH
+  (and clears the macOS quarantine flag), and `check.sh`, which runs the
+  everyday commands on one machine and prints a timing table with ffmpeg
+  alongside when it is installed.
+- The release workflow signs and notarizes the macOS binaries when the
+  Apple signing secrets are configured.
+
 ## 0.1.1
 
 ### Codecs and containers

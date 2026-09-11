@@ -17,6 +17,15 @@ jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    env:
+      # Set these repository secrets to get signed and notarized macOS
+      # binaries; without them the macOS build is shipped unsigned.
+      APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
     strategy:
       fail-fast: false
       matrix:
@@ -51,11 +60,34 @@ jobs:
         run: scripts/build-media-libs.sh
       - name: Build
         run: cargo build --release --locked
+      - name: Sign (macOS)
+        if: runner.os == 'macOS' && env.APPLE_CERTIFICATE_P12 != ''
+        run: |
+          keychain=$RUNNER_TEMP/signing.keychain-db
+          password=$(uuidgen)
+          echo "$APPLE_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain"
+          security list-keychain -d user -s "$keychain"
+          codesign --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp \
+            --force target/release/geneva
+          codesign --verify --strict --verbose=2 target/release/geneva
+      - name: Notarize (macOS)
+        if: runner.os == 'macOS' && env.APPLE_CERTIFICATE_P12 != ''
+        run: |
+          ditto -c -k target/release/geneva "$RUNNER_TEMP/geneva.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/geneva.zip" --wait \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
       - name: Package
         run: |
           name=geneva-${RELEASE_TAG}-${{ matrix.target }}
           mkdir -p "$name/licenses"
           cp target/release/geneva README.md LICENSE THIRD-PARTY-NOTICES.md "$name/"
+          cp scripts/install.sh scripts/check.sh "$name/"
           cp licenses/* target/media-libs/share/licenses/* "$name/licenses/"
           tar czf "$name.tar.gz" "$name"
       - uses: actions/upload-artifact@v4

@@ -12,7 +12,7 @@ use geneva_timeline::Ratio;
 use geneva_timeline::schema::{AudioCodec, Container, HardwarePolicy, VideoCodec, VideoProfile};
 
 use super::subtitle_streams::{SubtitleSettings, SubtitleWriter};
-use super::{codec_error, init, open_error, tags};
+use super::{codec_error, ffi, init, open_error, tags};
 use crate::MediaError;
 use crate::convert::{PlaneFormat, Planes, frame_to_planes};
 
@@ -330,7 +330,7 @@ fn open_video_encoder(
     }
     // Software encoders spread work over all cores; the count is theirs to
     // pick from the machine.
-    vctx.set_threading(codec::threading::Config::count(0));
+    ffi::use_all_threads(&mut vctx);
     let mut venc = vctx
         .encoder()
         .video()
@@ -712,11 +712,24 @@ impl Encoder {
         let Some(track) = self.audio.as_mut() else {
             return Ok(());
         };
-        track.pending.extend_from_slice(samples);
-        while track.pending.len() >= track.frame_size * 2 {
-            let chunk: Vec<f32> = track.pending.drain(..track.frame_size * 2).collect();
-            Self::send_audio_chunk(&mut self.octx, track, &chunk)?;
+        let chunk_len = track.frame_size * 2;
+        // Whole encoder frames go straight from the caller's slice; only the
+        // remainder is buffered, so the cost stays linear in the audio length.
+        let mut rest = samples;
+        if !track.pending.is_empty() {
+            let need = (chunk_len - track.pending.len()).min(rest.len());
+            track.pending.extend_from_slice(&rest[..need]);
+            rest = &rest[need..];
+            if track.pending.len() == chunk_len {
+                let chunk = std::mem::take(&mut track.pending);
+                Self::send_audio_chunk(&mut self.octx, track, &chunk)?;
+            }
         }
+        let mut chunks = rest.chunks_exact(chunk_len);
+        for chunk in &mut chunks {
+            Self::send_audio_chunk(&mut self.octx, track, chunk)?;
+        }
+        track.pending.extend_from_slice(chunks.remainder());
         if self.video.is_none() {
             let time = Ratio::new(track.next_pts, i64::from(track.encoder.rate()).max(1));
             self.subtitles.write_due(&mut self.octx, time)?;
@@ -733,8 +746,10 @@ impl Encoder {
         let mut packed =
             frame::Audio::new(Sample::F32(sample::Type::Packed), n, ChannelLayout::STEREO);
         packed.set_rate(track.encoder.rate());
-        let bytes: Vec<u8> = chunk.iter().flat_map(|v| v.to_le_bytes()).collect();
-        packed.data_mut(0)[..bytes.len()].copy_from_slice(&bytes);
+        let data = packed.data_mut(0);
+        for (dst, v) in data.chunks_exact_mut(4).zip(chunk) {
+            dst.copy_from_slice(&v.to_le_bytes());
+        }
         let mut converted = frame::Audio::empty();
         track
             .resampler

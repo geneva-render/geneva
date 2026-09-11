@@ -540,3 +540,19 @@ fn mxf_defaults_to_dnxhr_and_pcm() {
     assert_eq!(info["video"]["pixel_format"], "yuv422p");
     assert_eq!(info["audio"]["codec"], "pcm_s24le");
 }
+
+#[test]
+fn a_container_that_rejects_the_source_audio_is_rendered_not_copied() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("same-size.mxf");
+    // The H.264 picture could be copied into MXF as it is, but MXF takes
+    // PCM audio only, so the AAC track rules the copy out.
+    let doc = run_json(
+        &["convert", "--codec", "h264", "-o"],
+        &[&out, &media_dir().join("clip.mp4")],
+    );
+    assert_ne!(doc["mode"], "copy");
+    let info = run_json(&["probe"], &[&out]);
+    assert_eq!(info["video"]["codec"], "h264");
+    assert_eq!(info["audio"]["codec"], "pcm_s24le");
+}

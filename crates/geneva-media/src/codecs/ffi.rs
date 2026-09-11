@@ -48,3 +48,18 @@ pub fn subtitle_context(id: ffmpeg_next::codec::Id) -> ffmpeg_next::codec::conte
     }
     ctx
 }
+
+/// Lets the codec use every core: frame and slice threading are both
+/// permitted (the codec picks what it supports) and the thread count is
+/// chosen from the machine.
+#[allow(unsafe_code)]
+pub fn use_all_threads(ctx: &mut ffmpeg_next::codec::context::Context) {
+    // SAFETY: `ctx` owns an `AVCodecContext` that has not been opened yet;
+    // `thread_type` and `thread_count` are plain integer fields read when
+    // the codec opens.
+    unsafe {
+        let raw = &mut *ctx.as_mut_ptr();
+        raw.thread_type = ffmpeg_next::ffi::FF_THREAD_FRAME | ffmpeg_next::ffi::FF_THREAD_SLICE;
+        raw.thread_count = 0;
+    }
+}

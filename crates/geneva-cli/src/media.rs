@@ -428,6 +428,9 @@ mod imp {
             eprintln!();
         }
         if has_audio {
+            if progress {
+                eprintln!("mixing audio");
+            }
             let samples = geneva_media::mix::mix(comp, root, sample_rate).map_err(media_err)?;
             encoder.push_audio(&samples).map_err(media_err)?;
         }

@@ -64,14 +64,35 @@ changes the picture is rendered.
 Prebuilt binaries are published for each release on the
 [releases page](https://github.com/geneva-render/geneva/releases) for Linux
 (x86_64, arm64) and macOS (Apple silicon, Intel). Each archive contains the
-`geneva` binary, this README, the license texts, and nothing else to install.
+`geneva` binary, an installer, a check script, this README and the license
+texts; there is nothing else to install.
 
 ```sh
-# Linux x86_64 (adjust the version and the target for your machine)
-curl -fsSLO https://github.com/geneva-render/geneva/releases/download/v0.1.0/geneva-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
-tar xzf geneva-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
-sudo install -m 755 geneva-v0.1.0-x86_64-unknown-linux-gnu/geneva /usr/local/bin/geneva
+# Pick the archive for your machine (adjust the version and the target)
+curl -fsSLO https://github.com/geneva-render/geneva/releases/download/v0.1.2/geneva-v0.1.2-aarch64-apple-darwin.tar.gz
+tar xzf geneva-v0.1.2-aarch64-apple-darwin.tar.gz
+sh geneva-v0.1.2-aarch64-apple-darwin/install.sh
 geneva --help
+```
+
+`install.sh` copies the binary to `/usr/local/bin` when that is writable
+and to `~/.local/bin` otherwise (`GENEVA_PREFIX` overrides the choice), and
+on macOS clears the quarantine flag a browser download carries, so the
+binary starts without a Gatekeeper detour. Running the script straight
+from the repository downloads the latest release first:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/geneva-render/geneva/main/scripts/install.sh | sh
+```
+
+To see that everything works on your machine, run the check script from
+the archive. It renders a short clip, runs the everyday commands on it (or
+on a file you pass) and prints a table with the time each step took, next
+to the time ffmpeg takes for the same step when ffmpeg is installed:
+
+```sh
+sh geneva-v0.1.2-aarch64-apple-darwin/check.sh            # built-in test clip
+sh geneva-v0.1.2-aarch64-apple-darwin/check.sh input.mp4  # your own file
 ```
 
 Linux binaries need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, RHEL 9
