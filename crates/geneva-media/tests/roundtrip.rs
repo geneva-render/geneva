@@ -674,6 +674,34 @@ fn direct_frames_match_the_reference_renderer() {
             "frame {n}: bars are not the background"
         );
     }
+    // A `cover` fit crops instead: the region of the source that the
+    // frame shows is scaled to the whole frame, no bars.
+    let comp = load(&portrait.replace(r#""out": "1.5s" }"#, r#""out": "1.5s" }, "fit": "cover""#))
+        .composition
+        .unwrap();
+    let mut direct = DirectSource::open(&comp, &root, PlaneFormat::Yuv420p8, comp.color)
+        .unwrap()
+        .expect("a cropped picture qualifies");
+    assert!(direct.reason().contains("cropped"), "{}", direct.reason());
+    for n in [0u64, 24] {
+        let t = comp.frame_time(n);
+        let fast = direct.frame(t).unwrap();
+        let slow = frame_to_planes(
+            &renderer.render_frame(&comp, t).unwrap(),
+            comp.color,
+            PlaneFormat::Yuv420p8,
+        );
+        let (a, b) = (&fast.planes[0].data, &slow.planes[0].data);
+        assert_eq!(a.len(), b.len());
+        let abs: f64 = a
+            .iter()
+            .zip(b)
+            .map(|(x, y)| (f64::from(*x) - f64::from(*y)).abs())
+            .sum::<f64>()
+            / a.len() as f64;
+        assert!(abs < 6.0, "frame {n}: mean luma difference {abs}");
+    }
+
     // A translucent background needs the compositor.
     let comp = load(&portrait.replace("#336699", "#33669980"))
         .composition

@@ -8,7 +8,7 @@ use geneva_render::Frame;
 use geneva_timeline::{Composition, Ratio};
 use rayon::prelude::*;
 
-use super::copy::{base_video_clips, filling_video_clips};
+use super::copy::{Place, base_video_clips, filling_video_clips};
 use super::decode::VideoReader;
 use super::encode::{format_of, pixel_of};
 use super::{codec_error, ffi, init};
@@ -26,7 +26,8 @@ use crate::convert::{PlaneFormat, Planes, frame_to_planes};
 /// layouts in their coded encoding, which is what a plain transcode does
 /// and what a resize or a change of codec needs. A picture fitted onto a
 /// larger frame of one opaque color (a landscape video on a portrait
-/// canvas) is scaled to its place and laid onto that color.
+/// canvas) is scaled to its place and laid onto that color; one that
+/// covers the frame by cropping has the region it shows scaled to it.
 ///
 /// An RGB output (PNG) is also served here from 8-bit YCbCr sources: the
 /// scaler applies the source's matrix and range, and a per-channel table
@@ -37,7 +38,8 @@ pub struct DirectSource {
     format: PlaneFormat,
     width: u32,
     height: u32,
-    scaled: bool,
+    /// What happens to the decoded frames on the way to the encoder.
+    how: Conversion,
     /// Whether frames are converted to RGB.
     to_rgb: bool,
     /// Whether the composition has layers above the video, which the
@@ -48,12 +50,23 @@ pub struct DirectSource {
     bars: Option<Planes>,
 }
 
+/// How decoded frames reach the encoder's layout and size.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Conversion {
+    /// Copied as they are.
+    AsIs,
+    /// Scaled or repacked.
+    Scaled,
+    /// One region scaled to the frame.
+    Cropped,
+}
+
 struct DirectClip {
     start: Ratio,
     end: Ratio,
     in_: Ratio,
-    /// Where the picture sits when it does not cover the frame.
-    rect: Option<[u32; 4]>,
+    /// How the picture is placed when scaling alone does not do it.
+    place: Option<Place>,
     reader: VideoReader,
     converter: Converter,
 }
@@ -140,7 +153,7 @@ impl DirectSource {
         // between YCbCr encodings, RGB sources) is the compositor's.
         let to_rgb = format == PlaneFormat::Rgba8;
         let mut clips = Vec::with_capacity(filling.len());
-        let mut scaled = false;
+        let mut how = Conversion::AsIs;
         for clip in filling {
             let overrides = comp
                 .assets
@@ -166,19 +179,19 @@ impl DirectSource {
             };
             let same_layout = format_of(pixel) == Some(format);
             let same_size = clip.width == comp.width && clip.height == comp.height;
-            if !(same_layout && same_size) || clip.rect.is_some() {
+            if !(same_layout && same_size) || clip.place.is_some() {
                 // Only YCbCr sources are scaled here; RGB ones would need
                 // a matrix conversion, which is the compositor's job.
                 if ffi::is_rgb(pixel) {
                     return Ok(None);
                 }
-                scaled = true;
+                how = Conversion::Scaled;
             }
             clips.push(DirectClip {
                 start: clip.start,
                 end: clip.end,
                 in_: clip.in_,
-                rect: clip.rect,
+                place: clip.place,
                 reader,
                 converter: Converter {
                     scaler: None,
@@ -190,19 +203,28 @@ impl DirectSource {
                 },
             });
         }
-        let bars = clips.iter().any(|c| c.rect.is_some()).then(|| {
-            frame_to_planes(
-                &Frame::new(comp.width, comp.height, comp.background),
-                tags,
-                format,
-            )
-        });
+        let bars = clips
+            .iter()
+            .any(|c| matches!(c.place, Some(Place::Bars(_))))
+            .then(|| {
+                frame_to_planes(
+                    &Frame::new(comp.width, comp.height, comp.background),
+                    tags,
+                    format,
+                )
+            });
+        if clips
+            .iter()
+            .any(|c| matches!(c.place, Some(Place::Crop(_))))
+        {
+            how = Conversion::Cropped;
+        }
         Ok(Some(Self {
             clips,
             format,
             width: comp.width,
             height: comp.height,
-            scaled,
+            how,
             to_rgb,
             with_overlays,
             bars,
@@ -215,7 +237,9 @@ impl DirectSource {
             "converted to RGB straight from the decoder"
         } else if self.bars.is_some() {
             "scaled straight from the decoder onto the background of the frame"
-        } else if self.scaled {
+        } else if self.how == Conversion::Cropped {
+            "cropped and scaled straight from the decoder to the encoder"
+        } else if self.how == Conversion::Scaled {
             "scaled and repacked straight from the decoder to the encoder"
         } else {
             "handed to the encoder as decoded"
@@ -246,10 +270,20 @@ impl DirectSource {
                 reason: format!("no clip covers {t}s"),
             })?;
         let raw = clip.reader.raw_frame_at(clip.in_ + (t - clip.start))?;
+        // A cropped clip shows one region of the decoded frame.
+        let view;
+        let raw = match clip.place {
+            Some(Place::Crop([x, y, w, h])) => {
+                view = ffi::cropped(raw, x, y, w, h).map_err(|e| codec_error("cropping", e))?;
+                &view
+            }
+            _ => raw,
+        };
         // The picture's size: the frame's, or its place on the background.
-        let (width, height) = clip
-            .rect
-            .map_or((self.width, self.height), |r| (r[2], r[3]));
+        let (width, height) = match clip.place {
+            Some(Place::Bars(r)) => (r[2], r[3]),
+            _ => (self.width, self.height),
+        };
         let needs_scaler = raw.width() != width
             || raw.height() != height
             || format_of(raw.format()) != Some(self.format);
@@ -259,8 +293,8 @@ impl DirectSource {
         } else {
             copy_planes(raw, self.format)
         };
-        match (clip.rect, &self.bars) {
-            (Some(rect), Some(bars)) => {
+        match (clip.place, &self.bars) {
+            (Some(Place::Bars(rect)), Some(bars)) => {
                 let mut out = bars.clone();
                 blit_planes(&mut out, &planes, rect[0], rect[1]);
                 Ok(out)

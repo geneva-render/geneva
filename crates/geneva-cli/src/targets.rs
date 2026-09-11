@@ -339,11 +339,21 @@ pub fn apply(tl: &mut Timeline, facts: &Facts, opts: &Options<'_>) -> Vec<Diagno
     let mut why: Vec<String> = Vec::new();
     let mut diagnostics = Vec::new();
     let (w, h) = (facts.width, facts.height);
+    // A `cover` fit asked for on the verb crops instead of leaving bars.
+    let cover = tl
+        .layers
+        .iter()
+        .flat_map(|l| &l.clips)
+        .any(|c| matches!(c.source, Source::Video { .. }) && c.fit == Some(Fit::Cover));
 
     // Size: never upscaled; fitted onto a portrait canvas when the
-    // target's orientation is fixed.
+    // target's orientation is fixed. With bars the canvas keeps the
+    // source's width; cropped, it keeps the source's height.
     let (ow, oh) = if !opts.resize {
         (w, h)
+    } else if t.portrait && w > h && cover {
+        let ch = h.min(t.max_height);
+        (even(f64::from(ch) * 9.0 / 16.0), even(f64::from(ch)))
     } else if t.portrait && w > h {
         let cw = w.min(t.max_width);
         (even(f64::from(cw)), even(f64::from(cw) * 16.0 / 9.0))
@@ -365,9 +375,13 @@ pub fn apply(tl: &mut Timeline, facts: &Facts, opts: &Options<'_>) -> Vec<Diagno
                 }
             }
         }
-        if t.portrait && w > h {
+        if t.portrait && w > h && cover {
             why.push(format!(
-                "{w}×{h} fitted onto a {ow}×{oh} portrait canvas (9:16, never upscaled)"
+                "{w}×{h} cropped to its center {ow}×{oh} (9:16, never upscaled)"
+            ));
+        } else if t.portrait && w > h {
+            why.push(format!(
+                "{w}×{h} fitted onto a {ow}×{oh} portrait canvas (9:16, never upscaled; --fit cover crops instead)"
             ));
         } else {
             why.push(format!(

@@ -163,9 +163,10 @@ struct ConvertArgs {
     /// Output height in pixels. The width follows when not given.
     #[arg(long)]
     height: Option<u32>,
-    /// How to fit the picture when the shape changes.
-    #[arg(long, value_enum, default_value_t = verbs::FitArg::Contain)]
-    fit: verbs::FitArg,
+    /// How to fit the picture when the shape changes (also the canvas
+    /// --for builds): contain by default.
+    #[arg(long, value_enum)]
+    fit: Option<verbs::FitArg>,
     /// Output frame rate, for example 30 or 30000/1001.
     #[arg(long, value_name = "FPS")]
     fps: Option<String>,
@@ -186,9 +187,10 @@ struct ResizeArgs {
     /// Output height in pixels. The width follows when not given.
     #[arg(long, required_unless_present = "width")]
     height: Option<u32>,
-    /// How to fit the picture when the shape changes.
-    #[arg(long, value_enum, default_value_t = verbs::FitArg::Contain)]
-    fit: verbs::FitArg,
+    /// How to fit the picture when the shape changes (also the canvas
+    /// --for builds): contain by default.
+    #[arg(long, value_enum)]
+    fit: Option<verbs::FitArg>,
     #[command(flatten)]
     encode: verbs::EncodeArgs,
 }

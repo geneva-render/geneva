@@ -102,10 +102,15 @@ Re-encodes a video, optionally to another container, codec, size or frame
 rate. Giving one of `--width` and `--height` keeps the aspect ratio.
 Dimensions are rounded to even numbers.
 
+`--fit` also decides how the picture meets a canvas that `--for` builds:
+a landscape video on a 9:16 target gets bars by default and is cropped
+to its center with `--fit cover`.
+
 ```sh
 geneva convert talk.mov -o talk.mp4
 geneva convert talk.mp4 -o talk.webm --codec vp9 --crf 32
 geneva convert talk.mp4 -o talk-720.mp4 --height 720 --fps 30
+geneva convert talk.mp4 -o reel.mp4 --for tiktok --fit cover
 ```
 
 ### `geneva resize <input> -o FILE --width W | --height H [--fit contain|cover|fill]`
@@ -226,8 +231,14 @@ The rules, in order:
 1. Never upscale. The ceiling only ever shrinks a picture, to even
    dimensions.
 2. Keep the aspect, unless the target is 9:16: a landscape source is then
-   fitted onto a portrait canvas of its own width (black above and below);
-   `--fit cover` on the clip crops instead, in a timeline.
+   fitted onto a portrait canvas of its own width, with the background
+   (black by default) above and below, so that nothing is lost. `--fit
+   cover` on `convert` and `resize` (or on the clip, in a timeline) crops
+   to the center instead, keeping the source's full height; a blind
+   crop keeps the middle third of a 16:9 picture, so use it for content
+   that sits in the middle. A blurred copy of the picture behind it, the
+   way phone editors fill a Reel, is planned with the effects of the 0.2
+   format.
 3. H.264 High everywhere, with the level the size and frame rate need
    (`3.1` for 720p, `4.0` or `4.2` for 1080p, `5.1` or `5.2` for 4K), so
    old decoders know what to expect. `--codec` overrides.

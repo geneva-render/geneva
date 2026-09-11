@@ -120,7 +120,10 @@ it. A picture that does not cover the frame (a `contain` fit with bars,
 as a landscape video on a portrait canvas) is served the same way when
 the background is one opaque color: the frame is cleared to that color
 in the encoder's layout once, and each picture is scaled to its place,
-rounded to even pixels so that subsampled chroma lines up. This is the one
+rounded to even pixels so that subsampled chroma lines up. A `cover` fit
+that crops is served too: the region of the decoded frame that the output
+shows (a view sharing the frame's buffers) is scaled to the whole frame.
+This is the one
 place Geneva resamples outside linear light: with a single picture and
 nothing composited over it there is no blending to get wrong, and the
 difference from the reference renderer is the difference between

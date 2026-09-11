@@ -235,6 +235,43 @@ impl ThreadedScaler {
     }
 }
 
+/// A view of the region `x, y, width, height` of `src`, sharing its
+/// buffers: a frame whose data pointers start at the region and whose
+/// size is the region's, for scaling or copying a crop.
+#[allow(unsafe_code)]
+pub fn cropped(
+    src: &ffmpeg_next::util::frame::Video,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> Result<ffmpeg_next::util::frame::Video, ffmpeg_next::Error> {
+    use ffmpeg_next::ffi;
+    let mut out = ffmpeg_next::util::frame::Video::empty();
+    // SAFETY: `out` is an empty frame that `av_frame_ref` fills with a
+    // reference to `src`'s buffers (or a copy when they are not
+    // reference-counted); the crop fields are set before the library
+    // applies them, and the region lies inside the frame.
+    unsafe {
+        let rc = ffi::av_frame_ref(out.as_mut_ptr(), src.as_ptr());
+        if rc < 0 {
+            return Err(ffmpeg_next::Error::from(rc));
+        }
+        let f = &mut *out.as_mut_ptr();
+        let (x, y, w, h) = (x as usize, y as usize, width as usize, height as usize);
+        f.crop_left = x;
+        f.crop_top = y;
+        f.crop_right = (src.width() as usize).saturating_sub(x + w);
+        f.crop_bottom = (src.height() as usize).saturating_sub(y + h);
+        let rc =
+            ffi::av_frame_apply_cropping(out.as_mut_ptr(), ffi::AV_FRAME_CROP_UNALIGNED as i32);
+        if rc < 0 {
+            return Err(ffmpeg_next::Error::from(rc));
+        }
+    }
+    Ok(out)
+}
+
 impl Drop for ThreadedScaler {
     #[allow(unsafe_code)]
     fn drop(&mut self) {

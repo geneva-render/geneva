@@ -16,6 +16,11 @@ the format version it was written for.
   threads, instead of every frame passing through the compositor. A 5 s
   720p clip onto a 1080×1920 canvas takes 1.2 s where it took 5.7 s
   (ffmpeg: 1.4 s).
+- `--fit cover` on `convert` and `resize` also decides how the picture
+  meets the canvas `--for` builds: a landscape video on a 9:16 target is
+  cropped to its center at the source's full height instead of getting
+  bars. The crop takes the direct path as well (0.4 s for a 5 s 720p
+  clip; ffmpeg 0.4 s), and the N410 note says which of the two was done.
 - Releases carry the tag's section of this changelog as their notes; a
   `release-notes` workflow sets them on an existing release.
 - `check.sh` also exercises burned-in subtitles with `--fit`, CSS

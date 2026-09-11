@@ -358,7 +358,7 @@ pub fn convert(
     input: &Path,
     width: Option<u32>,
     height: Option<u32>,
-    fit: FitArg,
+    fit: Option<FitArg>,
     fps: Option<Fps>,
     args: &EncodeArgs,
 ) -> Result<Compiled> {
@@ -390,7 +390,13 @@ pub fn convert(
             None,
             None,
             !args.no_audio,
-            if resized { Some(fit.into()) } else { None },
+            // A fit given without a size still counts: `--for` may build
+            // a differently shaped canvas after this.
+            if resized {
+                Some(fit.unwrap_or_default().into())
+            } else {
+                fit.map(Into::into)
+            },
         )],
     });
     Ok(Compiled {
