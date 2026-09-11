@@ -40,7 +40,7 @@ fetch() { # name url [strip-components, default 1]
   if [ -f "$dir/.fetched" ]; then return; fi
   echo "==> fetching $name"
   rm -rf "$dir"
-  curl -sSL --retry 3 -o "$src/$name.tar" "$url"
+  curl -sSL --retry 5 --retry-all-errors --retry-delay 3 -o "$src/$name.tar" "$url"
   mkdir -p "$dir"
   tar xf "$src/$name.tar" --strip-components="$strip" -C "$dir"
   rm -f "$src/$name.tar"
