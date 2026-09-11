@@ -594,9 +594,9 @@ pub enum ShapeKind {
     Ellipse,
 }
 
-/// An outline.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+/// An outline: an object, or the shorthand `"2px black"` (see
+/// [`css`](crate::css)).
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Stroke {
     /// Outline color.
     pub color: ColorValue,
@@ -604,9 +604,9 @@ pub struct Stroke {
     pub width: f64,
 }
 
-/// A drop shadow.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+/// A drop shadow: an object, or the `text-shadow` shorthand
+/// `"0 2px 8px #0008"` (see [`css`](crate::css)).
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Shadow {
     /// Shadow color. Defaults to 50% black.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -651,7 +651,12 @@ pub struct TextSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_height: Option<f64>,
     /// Padding between the text and its background box, in pixels.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::css::de_opt_pixels"
+    )]
+    #[schemars(schema_with = "crate::css::pixels_schema")]
     pub padding: Option<f64>,
     /// Background box color. Defaults to none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -683,8 +688,10 @@ pub struct Word {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TextStyle {
-    /// Font: the id of an asset of kind "font", or a family name available
-    /// on the system.
+    /// Font: the id of an asset of kind "font", a family name available
+    /// on the system, or the CSS `font` shorthand ("600 40px/1.2 Inter"),
+    /// whose parts fill in size, weight, italic and line_height unless
+    /// those are set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
     /// Font size in pixels. Defaults to 48.

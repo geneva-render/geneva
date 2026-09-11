@@ -234,7 +234,7 @@ Every source has a `kind`.
 | `text` | unless `words` | | The text. |
 | `words` | no | | `[{ "text", "start", "end" }]` with clip-relative times, in order, non-overlapping (E411). |
 | `highlight` | no | | Style overrides for the word whose range contains the current time. |
-| `font` | no | system sans-serif | Id of a `font` asset, or a family name. A font asset also supplies its weight and style unless set here. |
+| `font` | no | system sans-serif | Id of a `font` asset, a family name, or the CSS `font` shorthand (`"600 40px/1.2 Inter"`), whose parts fill in `size`, `weight`, `italic` and `line_height` unless those are set. A font asset also supplies its weight and style unless set here. |
 | `size` | no | `48` | Font size in pixels. |
 | `weight` | no | `400` | 100 to 900. |
 | `italic` | no | `false` | |
@@ -243,11 +243,31 @@ Every source has a `kind`.
 | `max_width` | no | output width | Wrap width. |
 | `align` | no | `center` | `left`, `center`, `right`. |
 | `line_height` | no | `1.2` | Multiple of the font size. |
-| `padding` | no | `0` | Space between text and background box. |
+| `padding` | no | `0` | Space between text and background box, as a number or `"8px"`. |
 | `background` | no | none | Background box color. |
 | `radius` | no | `0` | Background box corner radius. |
-| `outline` | no | | `{ "color", "width" }`. |
-| `shadow` | no | | `{ "color", "x", "y", "blur" }`. |
+| `outline` | no | | `{ "color", "width" }`, or the shorthand `"2px black"` (width and color in either order). |
+| `shadow` | no | | `{ "color", "x", "y", "blur" }`, or the `text-shadow` shorthand `"0 2px 8px #0008"` (x, y, optional blur, optional color). |
+
+#### CSS shorthands
+
+Where an author would write CSS, the timeline takes the same strings, for
+the values that map one to one:
+
+| CSS | Timeline field | Example |
+| --- | --- | --- |
+| `text-shadow` | `shadow` | `"0 2px 8px #0008"` |
+| `outline` (`-webkit-text-stroke`) | `outline` | `"2px black"` |
+| `font` | `font` | `"italic 600 40px/1.2 Inter"` |
+| `padding` | `padding` | `"8px"` (one value) |
+| `color`, `background-color` | `color`, `background` | `"#ffdd00"`, `"rgba(0, 0, 0, 0.5)"` |
+
+The object form stays canonical: a printed timeline (`--show-timeline`)
+writes `shadow` and `outline` as objects, and a `font` shorthand is
+expanded into its fields when the document is resolved. There is no
+cascade, box model or selector; each value belongs to one text source.
+A string that does not parse is an `E103` at the field, with the form
+expected.
 
 ### `audio[]` and `audio[].clips[]`
 

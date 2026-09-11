@@ -1280,6 +1280,26 @@ impl Resolver<'_> {
         assets: &BTreeMap<String, ResolvedAsset>,
         frame: FrameSize,
     ) -> ResolvedText {
+        // A `font` shorthand becomes its fields first, so the checks below
+        // and the renderer see the same style.
+        let mut expanded = text.clone();
+        if let Err(e) = crate::css::expand_font(&mut expanded.style, &mut expanded.line_height) {
+            self.push(
+                Diagnostic::error("E103", spath.key("font"), e)
+                    .with_help("a font is a family name, a font asset id, or \"[italic] [weight] <size>[/<line-height>] <family>\""),
+            );
+        }
+        if let Some(h) = expanded.highlight.as_mut() {
+            let mut ignored = None;
+            if let Err(e) = crate::css::expand_font(h, &mut ignored) {
+                self.push(Diagnostic::error(
+                    "E103",
+                    spath.key("highlight").key("font"),
+                    e,
+                ));
+            }
+        }
+        let text = &expanded;
         let mut words = Vec::new();
         if let Some(list) = &text.words {
             let wpath = spath.key("words");

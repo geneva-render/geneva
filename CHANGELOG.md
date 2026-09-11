@@ -21,6 +21,11 @@ the format version it was written for.
   prints the table with the source and date of each platform's numbers.
 - Encode block fields `keyframe_interval`, `max_bitrate_kbps`, `level`
   and `fast_start`, wired through every encoder.
+- CSS shorthand strings where an object also is: `shadow` as
+  `"0 2px 8px #0008"`, `outline` as `"2px black"`, `padding` as `"8px"`,
+  and the `font` shorthand `"italic 600 40px/1.2 Inter"`, whose parts fill
+  in size, weight, italic and line height. Same structures underneath;
+  the object form stays canonical. Still format 0.1.
 
 ### Changes
 

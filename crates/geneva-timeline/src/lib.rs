@@ -22,6 +22,7 @@
 
 mod animated;
 mod color;
+pub mod css;
 mod diagnostic;
 mod json_schema;
 mod length;

@@ -1151,7 +1151,7 @@
                 "string",
                 "null"
               ],
-              "description": "Font: the id of an asset of kind \"font\", or a family name available\non the system."
+              "description": "Font: the id of an asset of kind \"font\", a family name available\non the system, or the CSS `font` shorthand (\"600 40px/1.2 Inter\"),\nwhose parts fill in size, weight, italic and line_height unless\nthose are set."
             },
             "size": {
               "type": [
@@ -1228,12 +1228,16 @@
               "description": "Line height as a multiple of the font size. Defaults to 1.2."
             },
             "padding": {
-              "type": [
-                "number",
-                "null"
-              ],
-              "format": "double",
-              "description": "Padding between the text and its background box, in pixels."
+              "description": "Padding between the text and its background box, in pixels.",
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\s*-?\\d+(\\.\\d+)?\\s*(px)?\\s*$"
+                }
+              ]
             },
             "background": {
               "anyOf": [
@@ -1492,24 +1496,33 @@
       ]
     },
     "Stroke": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "color": {
-          "$ref": "#/$defs/Color",
-          "description": "Outline color."
+      "title": "Stroke",
+      "description": "An outline: an object with width and color, or the shorthand \"<width> <color>\" such as \"2px black\".",
+      "anyOf": [
+        {
+          "description": "The object form of an outline.",
+          "type": "object",
+          "properties": {
+            "color": {
+              "description": "Outline color.",
+              "$ref": "#/$defs/Color"
+            },
+            "width": {
+              "description": "Outline width in pixels.",
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "color",
+            "width"
+          ]
         },
-        "width": {
-          "type": "number",
-          "format": "double",
-          "description": "Outline width in pixels."
+        {
+          "type": "string"
         }
-      },
-      "required": [
-        "color",
-        "width"
-      ],
-      "description": "An outline."
+      ]
     },
     "Word": {
       "type": "object",
@@ -1544,7 +1557,7 @@
             "string",
             "null"
           ],
-          "description": "Font: the id of an asset of kind \"font\", or a family name available\non the system."
+          "description": "Font: the id of an asset of kind \"font\", a family name available\non the system, or the CSS `font` shorthand (\"600 40px/1.2 Inter\"),\nwhose parts fill in size, weight, italic and line_height unless\nthose are set."
         },
         "size": {
           "type": [
@@ -1614,40 +1627,49 @@
       "description": "Horizontal text alignment."
     },
     "Shadow": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "color": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Color"
+      "title": "Shadow",
+      "description": "A drop shadow: an object with x, y, blur and color, or the text-shadow shorthand \"<x> <y> [blur] [color]\" such as \"0 2px 8px #0008\".",
+      "anyOf": [
+        {
+          "description": "The object form of a shadow.",
+          "type": "object",
+          "properties": {
+            "color": {
+              "description": "Shadow color. Defaults to 50% black.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Color"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
-            {
-              "type": "null"
+            "x": {
+              "description": "Horizontal offset in pixels.",
+              "type": "number",
+              "format": "double",
+              "default": 0.0
+            },
+            "y": {
+              "description": "Vertical offset in pixels.",
+              "type": "number",
+              "format": "double",
+              "default": 0.0
+            },
+            "blur": {
+              "description": "Blur radius in pixels.",
+              "type": "number",
+              "format": "double",
+              "default": 0.0
             }
-          ],
-          "description": "Shadow color. Defaults to 50% black."
+          },
+          "additionalProperties": false
         },
-        "x": {
-          "type": "number",
-          "format": "double",
-          "description": "Horizontal offset in pixels.",
-          "default": 0.0
-        },
-        "y": {
-          "type": "number",
-          "format": "double",
-          "description": "Vertical offset in pixels.",
-          "default": 0.0
-        },
-        "blur": {
-          "type": "number",
-          "format": "double",
-          "description": "Blur radius in pixels.",
-          "default": 0.0
+        {
+          "type": "string"
         }
-      },
-      "description": "A drop shadow."
+      ]
     },
     "Transition": {
       "type": "object",

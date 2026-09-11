@@ -980,12 +980,27 @@ pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Re
         let serde_json::Value::Object(fields) = user else {
             bail!("--style must be a JSON object of text fields, for example {{\"size\": 40}}");
         };
+        // A `font` shorthand carries its own size, weight, style and line
+        // height; those replace the default look unless given explicitly.
+        let shorthand = fields
+            .get("font")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|f| geneva_timeline::css::parse_font(f).is_some());
+        if shorthand {
+            for key in ["size", "weight", "italic", "line_height"] {
+                if !fields.contains_key(key) {
+                    style.as_object_mut().map(|o| o.remove(key));
+                }
+            }
+        }
         for (k, v) in fields {
             style[k] = v;
         }
     }
-    let template: TextSource = serde_json::from_value(style)
+    let mut template: TextSource = serde_json::from_value(style)
         .context("--style: not a valid text style (see docs/timeline.md, text sources)")?;
+    geneva_timeline::css::expand_font(&mut template.style, &mut template.line_height)
+        .map_err(|e| anyhow::anyhow!("--style: font: {e}"))?;
     // The default margin keeps the cues inside the title-safe area.
     let margin = opts
         .margin

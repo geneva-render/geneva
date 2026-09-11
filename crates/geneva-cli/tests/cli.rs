@@ -691,6 +691,48 @@ fn subtitles_burn_compiles_cues_to_text_clips_and_checks_the_frame() {
 }
 
 #[test]
+fn css_shorthands_expand_into_the_object_form() {
+    let dir = tempfile::tempdir().unwrap();
+    let srt = dir.path().join("en.srt");
+    std::fs::write(&srt, "1\n00:00:00,200 --> 00:00:00,900\nHello\n").unwrap();
+    let out = dir.path().join("burned.mp4");
+    let shown = run_json(
+        &[
+            "subtitles",
+            "--burn",
+            srt.to_str().unwrap(),
+            "--style",
+            r#"{"font": "italic 600 14px/1.5 Inter", "shadow": "0 1px 3px #000a", "outline": "1px black", "padding": "4px"}"#,
+            "--show-timeline",
+            "-o",
+        ],
+        &[&out, &media_dir().join("clip.mp4")],
+    );
+    let src = &shown["layers"][1]["clips"][0]["source"];
+    assert_eq!(src["font"], "Inter");
+    assert_eq!(src["size"], 14.0);
+    assert_eq!(src["weight"], 600);
+    assert_eq!(src["italic"], true);
+    assert_eq!(src["line_height"], 1.5);
+    assert_eq!(src["shadow"]["y"], 1.0);
+    assert_eq!(src["shadow"]["blur"], 3.0);
+    assert_eq!(src["shadow"]["color"], "#000000aa");
+    assert_eq!(src["outline"]["width"], 1.0);
+    assert_eq!(src["padding"], 4.0);
+
+    // A bad shorthand is an error at the field, with the form expected.
+    let mut cmd = geneva();
+    cmd.args(["subtitles", "--burn"])
+        .arg(&srt)
+        .args(["--style", r#"{"shadow": "2px"}"#, "-o"])
+        .arg(&out)
+        .arg(media_dir().join("clip.mp4"));
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("0 2px 8px #0008"));
+}
+
+#[test]
 fn targets_pick_size_codec_quality_and_caps_from_the_table() {
     let dir = tempfile::tempdir().unwrap();
     let clip = media_dir().join("clip.mp4");
