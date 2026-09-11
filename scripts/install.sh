@@ -38,9 +38,13 @@ install_binary() {
   esac
 }
 
-# Inside an unpacked archive there is nothing to download.
+# Inside an unpacked archive there is nothing to download. The archive
+# itself may carry the quarantine flag when a browser fetched it, and
+# macOS extends it to everything unpacked; the copies here are cleared
+# too so that check.sh and the binary in place run as well.
 here=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 if [ -n "$here" ] && [ -x "$here/geneva" ]; then
+  if command -v xattr >/dev/null 2>&1; then xattr -dr com.apple.quarantine "$here" 2>/dev/null || true; fi
   install_binary "$here/geneva"
   exit 0
 fi

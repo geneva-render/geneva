@@ -29,6 +29,9 @@ if [ -z "$geneva" ]; then
   else geneva=$(command -v geneva || true); fi
 fi
 [ -x "$geneva" ] || { echo "check.sh: geneva binary not found; pass --geneva PATH" >&2; exit 1; }
+# A binary unpacked from a browser download carries the macOS quarantine
+# flag, and an unsigned one is then refused outright; clear it first.
+if command -v xattr >/dev/null 2>&1; then xattr -d com.apple.quarantine "$geneva" 2>/dev/null || true; fi
 ffmpeg=$(command -v ffmpeg || true)
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/geneva-check.XXXXXX")

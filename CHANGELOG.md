@@ -5,6 +5,16 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## 0.1.4
+
+### Fixes
+
+- On macOS, a release archive fetched with a browser carries the
+  quarantine flag on everything it unpacks, and Gatekeeper refuses the
+  unsigned binary in place even after `install.sh` has installed a clean
+  copy. `install.sh` now clears the flag on the unpacked folder as well,
+  and `check.sh` clears it on the binary it runs.
+
 ## 0.1.3
 
 ### Performance
