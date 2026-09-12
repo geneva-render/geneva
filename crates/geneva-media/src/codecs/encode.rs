@@ -680,6 +680,37 @@ fn pack_p010(planes: &Planes, out: &mut frame::Video) {
     }
 }
 
+#[cfg(test)]
+mod p010_tests {
+    use super::*;
+
+    #[test]
+    fn ten_bit_planes_pack_into_p010_words_and_interleaved_chroma() {
+        let mut planes = Planes::new(PlaneFormat::Yuv420p10, 4, 2);
+        let put = |plane: &mut crate::convert::Plane, i: usize, v: u16| {
+            plane.data[i * 2..i * 2 + 2].copy_from_slice(&v.to_le_bytes());
+        };
+        for i in 0..8 {
+            put(&mut planes.planes[0], i, 100 + i as u16);
+        }
+        for i in 0..2 {
+            put(&mut planes.planes[1], i, 500 + i as u16);
+            put(&mut planes.planes[2], i, 700 + i as u16);
+        }
+        let mut out = frame::Video::new(Pixel::P010LE, 4, 2);
+        pack_p010(&planes, &mut out);
+        let word = |data: &[u8], i: usize| u16::from_le_bytes([data[i * 2], data[i * 2 + 1]]);
+        // Luma in the top ten bits of each word, row by row.
+        assert_eq!(word(out.data(0), 0), 100 << 6);
+        assert_eq!(word(&out.data(0)[out.stride(0)..], 0), 104 << 6);
+        // Chroma interleaved Cb, Cr.
+        assert_eq!(word(out.data(1), 0), 500 << 6);
+        assert_eq!(word(out.data(1), 1), 700 << 6);
+        assert_eq!(word(out.data(1), 2), 501 << 6);
+        assert_eq!(word(out.data(1), 3), 701 << 6);
+    }
+}
+
 /// Opens the first video encoder candidate that accepts the settings and
 /// adds its stream to the output.
 fn open_video_track(
@@ -1309,7 +1340,9 @@ impl Encoder {
         self.frame_index += 1;
         match &mut track.backend {
             VideoBackend::Lavc(encoder) => {
-                let pixel = pixel_of(track.format);
+                // The frame takes the encoder's own layout, which for a
+                // hardware encoder fed ten bits is P010, not the planes'.
+                let pixel = encoder.format();
                 let out = &mut track.scratch;
                 if out.format() != pixel
                     || out.width() != planes.width

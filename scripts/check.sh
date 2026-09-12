@@ -22,6 +22,10 @@ while [ $# -gt 0 ]; do
     *) input=$1; shift ;;
   esac
 done
+if [ -n "$input" ] && [ ! -f "$input" ]; then
+  echo "check.sh: no such file: $input" >&2
+  exit 2
+fi
 if [ -z "$geneva" ]; then
   here=$(cd "$(dirname "$0")" && pwd)
   if [ -x "$here/geneva" ]; then geneva=$here/geneva

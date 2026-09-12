@@ -5,6 +5,24 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## 0.3.1 — 2026-09-12
+
+Fixes from the first Mac run of 0.3.0.
+
+### Fixes
+
+- `--keep-hdr` on a Mac failed at the first frame: the hardware encoder
+  takes ten-bit pictures as P010, and the frames were laid out as the
+  planes were. An HLG iPhone clip now goes through VideoToolbox as HDR
+  HEVC.
+- Chunked encoding's `auto` made every Mac encode slower, since the
+  hardware encoder is its own bottleneck and two sessions contend for
+  it; on four cores it also slowed x264 and DNxHD. `auto` now chunks
+  only the two encoders measured to gain, VP9 and OpenH264, and never a
+  hardware encoder. A number in `chunks` still forces it for any.
+- `check.sh` ran every step against a missing input file, printing a
+  column of failures; it now stops at once and says which file.
+
 ## 0.3.0 — 2026-09-12
 
 HDR in and out, an A/V sync corpus that found eight timing bugs, chunked

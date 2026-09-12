@@ -18,11 +18,14 @@ const MIN_CHUNK_SECS: f64 = 2.0;
 const MAX_CHUNKS: u32 = 16;
 
 /// How many cores one pipeline with this encoder keeps busy before more
-/// stop helping: the point past which chunking pays. Measured on a
-/// four-core machine with 1080p sources (10 s, direct path): VP9 gains a
-/// fifth from two stretches, OpenH264 a tenth, AV1 nothing, DNxHD and
-/// x264 lose (their decode and encode already fill the machine). The
-/// figures for larger machines are estimates until measured there.
+/// stop helping: the point past which chunking pays. `u32::MAX` means
+/// `auto` never chunks for it. Only two encoders have been measured to
+/// gain: VP9 (a fifth from two stretches on four cores) and OpenH264 (a
+/// tenth). AV1 gained nothing; x264 and DNxHD lost on four cores, since
+/// one pipeline already fills the machine; and a hardware encoder lost
+/// on an eight-core M1 (VideoToolbox is the bottleneck, and two sessions
+/// contend for it). The rest stay off until measured otherwise; a count
+/// in `chunks` forces them.
 pub fn scaling_ceiling(codec: VideoCodec, hardware: HardwarePolicy) -> u32 {
     let hardware_possible = hardware != HardwarePolicy::Never && cfg!(target_os = "macos");
     #[cfg(feature = "media")]
@@ -30,13 +33,15 @@ pub fn scaling_ceiling(codec: VideoCodec, hardware: HardwarePolicy) -> u32 {
     #[cfg(not(feature = "media"))]
     let has_x264 = false;
     match codec {
-        VideoCodec::Prores | VideoCodec::Mjpeg | VideoCodec::Png => u32::MAX,
-        // A hardware encoder uses no cores; the decoder and compositor
-        // in front of it use a few.
-        VideoCodec::H264 if hardware_possible => 4,
-        VideoCodec::H264 if has_x264 => 12,
-        VideoCodec::H264 | VideoCodec::Vp9 => 2,
-        VideoCodec::H265 | VideoCodec::Av1 | VideoCodec::Dnxhd => 4,
+        VideoCodec::Vp9 => 2,
+        VideoCodec::H264 if !hardware_possible && !has_x264 => 2,
+        VideoCodec::H264
+        | VideoCodec::H265
+        | VideoCodec::Av1
+        | VideoCodec::Dnxhd
+        | VideoCodec::Prores
+        | VideoCodec::Mjpeg
+        | VideoCodec::Png => u32::MAX,
     }
 }
 
@@ -219,11 +224,12 @@ mod tests {
                 .ranges
                 .len()
         };
-        assert_eq!(n(VideoCodec::Dnxhd, 4), 1);
-        assert_eq!(n(VideoCodec::Dnxhd, 8), 2);
         assert_eq!(n(VideoCodec::Vp9, 4), 2);
         assert_eq!(n(VideoCodec::Vp9, 16), 8);
-        assert_eq!(n(VideoCodec::Av1, 32), 8);
+        // Not measured to gain: one run, whatever the machine.
+        assert_eq!(n(VideoCodec::Dnxhd, 8), 1);
+        assert_eq!(n(VideoCodec::Av1, 32), 1);
+        assert_eq!(n(VideoCodec::H265, 8), 1);
         assert_eq!(n(VideoCodec::Prores, 64), 1);
     }
 

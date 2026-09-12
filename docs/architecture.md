@@ -214,9 +214,10 @@ several machines.
 
 Measured on four cores with 1080p sources: VP9 gains a fifth from two
 stretches, OpenH264 a tenth, AV1 nothing, and DNxHD and x264 lose, since
-one pipeline already fills the machine; the ceilings encode that. A
-hardware encoder uses no cores, so what chunking parallelizes for it is
-the decoding and compositing in front of it. `scripts/check.sh` runs one
+one pipeline already fills the machine. On an eight-core M1 with
+VideoToolbox, two stretches lose too (the hardware is the bottleneck and
+two sessions contend for it). So `auto` chunks VP9 and OpenH264 only;
+everything else needs an explicit count. `scripts/check.sh` runs one
 encode with chunks off and on `auto` and prints both times.
 
 ## Verbs
