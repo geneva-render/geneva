@@ -8,7 +8,10 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use geneva_color::{LinearRgba, Matrix, Range, ResolvedTags, Transfer, matrix};
+use geneva_color::hdr::HdrToSdr;
+use geneva_color::{
+    LinearRgba, Matrix, Primaries, Range, ResolvedTags, Transfer, matrix, primaries,
+};
 use geneva_render::{Frame, Image};
 use rayon::prelude::*;
 
@@ -83,20 +86,45 @@ pub fn ycbcr16_to_image(planes: &Planes16, width: u32, height: u32, tags: Resolv
         height,
         pixels: Vec::new(),
     };
-    ycbcr16_into(planes, width, height, tags, &mut image);
+    let hdr = HdrToSdr::new(tags, None);
+    ycbcr16_into(planes, width, height, tags, hdr.as_ref(), &mut image);
     image
 }
 
+/// The matrix taking linear light in `tags`' primaries into the working
+/// space, when they differ.
+fn to_working_primaries(tags: ResolvedTags) -> Option<[[f32; 3]; 3]> {
+    primaries::conversion(tags.primaries, Primaries::Bt709)
+        .map(|m| m.map(|row| row.map(|v| v as f32)))
+}
+
+#[inline]
+fn apply3(m: &[[f32; 3]; 3], [r, g, b]: [f32; 3]) -> [f32; 3] {
+    [
+        m[0][0] * r + m[0][1] * g + m[0][2] * b,
+        m[1][0] * r + m[1][1] * g + m[1][2] * b,
+        m[2][0] * r + m[2][1] * g + m[2][2] * b,
+    ]
+}
+
 /// Like [`ycbcr16_to_image`], writing into `out` and keeping its buffer
-/// when the size has not changed.
+/// when the size has not changed. HDR material needs the conversion
+/// built for its tags and peak ([`HdrToSdr::new`]); with `None`, HDR
+/// tags are treated per channel and clip at white.
 pub fn ycbcr16_into(
     planes: &Planes16,
     width: u32,
     height: u32,
     tags: ResolvedTags,
+    hdr: Option<&HdrToSdr>,
     out: &mut Image,
 ) {
     let lut = to_linear_lut(tags.transfer);
+    let to_working = if hdr.is_some() {
+        None
+    } else {
+        to_working_primaries(tags)
+    };
     let (kr, kb) = matrix::luma_coefficients(tags.matrix).unwrap_or((0.0, 0.0));
     let kg = 1.0 - kr - kb;
     let identity = tags.matrix == Matrix::Identity;
@@ -136,12 +164,12 @@ pub fn ycbcr16_into(
                     let g = (yn - kr as f32 * r - kb as f32 * b) / kg as f32;
                     (r, g, b)
                 };
-                *px = LinearRgba {
-                    r: encode(r),
-                    g: encode(g),
-                    b: encode(b),
-                    a: 1.0,
+                let [r, g, b] = match (hdr, &to_working) {
+                    (Some(h), _) => h.convert([r, g, b]),
+                    (None, Some(m)) => apply3(m, [encode(r), encode(g), encode(b)]),
+                    (None, None) => [encode(r), encode(g), encode(b)],
                 };
+                *px = LinearRgba { r, g, b, a: 1.0 };
             }
         });
 }
@@ -174,6 +202,7 @@ pub fn yuv420p8_into(
     out: &mut Image,
 ) {
     let lut = to_linear_lut(tags.transfer);
+    let to_working = to_working_primaries(tags);
     let (kr, kb) = matrix::luma_coefficients(tags.matrix).unwrap_or((0.2126, 0.0722));
     let kg = 1.0 - kr - kb;
     let (y_off, y_scale, c_scale) = match tags.range {
@@ -228,12 +257,12 @@ pub fn yuv420p8_into(
                 let r = yn + cr_r * crn;
                 let b = yn + cb_b * cbn;
                 let g = (yn - kr * r - kb * b) / kg;
-                *px = LinearRgba {
-                    r: lut[lut_index(r)],
-                    g: lut[lut_index(g)],
-                    b: lut[lut_index(b)],
-                    a: 1.0,
+                let rgb = [lut[lut_index(r)], lut[lut_index(g)], lut[lut_index(b)]];
+                let [r, g, b] = match &to_working {
+                    Some(m) => apply3(m, rgb),
+                    None => rgb,
                 };
+                *px = LinearRgba { r, g, b, a: 1.0 };
             }
         });
 }

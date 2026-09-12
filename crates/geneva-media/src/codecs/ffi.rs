@@ -295,3 +295,49 @@ pub fn make_writable(
     }
     Ok(())
 }
+
+/// The peak luminance in nits a stream's HDR metadata declares: the
+/// content light level's MaxCLL, else the mastering display's maximum.
+/// `None` without either.
+#[allow(unsafe_code)]
+pub fn hdr_peak_nits(params: &Parameters) -> Option<f64> {
+    use ffmpeg_next::ffi::{AVPacketSideDataType, av_packet_side_data_get};
+    // SAFETY: the parameters are valid for the borrow; the side data
+    // array and count come from the same struct, and each entry's bytes
+    // are read only within its declared size.
+    unsafe {
+        let raw = &*params.as_ptr();
+        let get = |kind: AVPacketSideDataType| {
+            let sd = av_packet_side_data_get(raw.coded_side_data, raw.nb_coded_side_data, kind);
+            if sd.is_null() {
+                None
+            } else {
+                Some(std::slice::from_raw_parts((*sd).data, (*sd).size))
+            }
+        };
+        // AVContentLightMetadata: two unsigned ints, MaxCLL then MaxFALL.
+        if let Some(bytes) = get(AVPacketSideDataType::AV_PKT_DATA_CONTENT_LIGHT_LEVEL) {
+            if bytes.len() >= 4 {
+                let max_cll = u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                if max_cll > 0 {
+                    return Some(f64::from(max_cll));
+                }
+            }
+        }
+        // AVMasteringDisplayMetadata: three primaries and the white point
+        // as pairs of rationals (64 bytes), then min and max luminance as
+        // rationals, then two flags.
+        if let Some(bytes) = get(AVPacketSideDataType::AV_PKT_DATA_MASTERING_DISPLAY_METADATA) {
+            if bytes.len() >= 88 {
+                let int = |at: usize| {
+                    i32::from_ne_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
+                };
+                let (num, den, has_luminance) = (int(72), int(76), int(84));
+                if has_luminance != 0 && den != 0 && num > 0 {
+                    return Some(f64::from(num) / f64::from(den));
+                }
+            }
+        }
+    }
+    None
+}

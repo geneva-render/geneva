@@ -7,14 +7,18 @@
 //! blending in linear light ([`LinearRgba`]).
 //!
 //! The working space for compositing is linear light with BT.709 primaries,
-//! premultiplied alpha, `f32` per channel.
+//! premultiplied alpha, `f32` per channel. Material with other primaries
+//! is converted on the way in ([`primaries`]); HDR material is tone-mapped
+//! on the way in ([`hdr`]).
 
 #![forbid(unsafe_code)]
 
 mod css;
+pub mod hdr;
 mod infer;
 pub mod matrix;
 mod pixel;
+pub mod primaries;
 mod tags;
 pub mod transfer;
 

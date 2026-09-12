@@ -16,6 +16,7 @@ use super::probe::{ratio, ts_to_secs};
 use super::{codec_error, ffi, init, open_error, tags};
 use crate::MediaError;
 use crate::convert::{Planes16, Planes420, rgba8_into, ycbcr16_into, yuv420p8_into};
+use geneva_color::hdr::HdrToSdr;
 
 /// Seeking more than this far ahead of the current position restarts from
 /// the nearest keyframe instead of decoding every frame in between.
@@ -161,6 +162,8 @@ pub struct VideoReader {
     rgb: bool,
     scaler: scaling::Context,
     scaled: frame::Video,
+    /// The HDR-to-SDR conversion for the stream's tags, when they are HDR.
+    hdr: Option<HdrToSdr>,
     /// The frame shown for the current time range.
     current: Option<Current>,
     /// The next decoded frame after `current`.
@@ -235,6 +238,16 @@ impl VideoReader {
             scaling::Flags::BICUBIC,
         )
         .map_err(|e| codec_error(format!("{}: pixel format conversion", path.display()), e))?;
+        // HDR material is tone-mapped on the way in, from the peak its
+        // metadata declares.
+        let peak = {
+            let stream = inner
+                .ictx
+                .stream(inner.stream_index)
+                .expect("stream exists");
+            ffi::hdr_peak_nits(&stream.parameters())
+        };
+        let hdr = HdrToSdr::new(tags, peak);
         Ok(Self {
             inner,
             decoder,
@@ -243,6 +256,7 @@ impl VideoReader {
             rgb,
             scaler,
             scaled: frame::Video::empty(),
+            hdr,
             current: None,
             pending: None,
             position: None,
@@ -386,6 +400,7 @@ impl VideoReader {
         // since nothing compresses it on the way.
         if matches!(raw.format(), Pixel::YUV420P | Pixel::YUVJ420P)
             && self.tags.matrix != geneva_color::Matrix::Identity
+            && self.hdr.is_none()
         {
             let mut tags = self.tags;
             if raw.format() == Pixel::YUVJ420P {
@@ -433,6 +448,7 @@ impl VideoReader {
                 w,
                 h,
                 self.tags,
+                self.hdr.as_ref(),
                 into,
             );
         }

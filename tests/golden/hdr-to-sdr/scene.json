@@ -1,0 +1,14 @@
+{
+  "geneva": "0.2",
+  "output": { "width": 256, "height": 144, "fps": 24, "duration": "1s", "background": "#202020" },
+  "assets": {
+    "pq": { "src": "hdr-to-sdr/pq.png", "color": { "primaries": "bt2020", "transfer": "pq" } },
+    "hlg": { "src": "hdr-to-sdr/hlg.png", "color": { "primaries": "bt2020", "transfer": "hlg" } }
+  },
+  "layers": [
+    { "id": "pq", "clips": [ { "source": { "kind": "image", "asset": "pq" },
+        "transform": { "anchor": { "x": 0, "y": 0 }, "position": { "x": 0, "y": 8 } } } ] },
+    { "id": "hlg", "clips": [ { "source": { "kind": "image", "asset": "hlg" },
+        "transform": { "anchor": { "x": 0, "y": 0 }, "position": { "x": 0, "y": 80 } } } ] }
+  ]
+}

@@ -30,6 +30,18 @@ the format version it was written for.
   out where they went in on every path: direct, compositor, stream copy,
   trims copied and exact.
 
+- HDR sources are tone-mapped instead of clipped: PQ and HLG material
+  goes through the BT.2390 curve from the source's peak (its mastering
+  metadata, 1000 nits without) down to reference white, with hue held
+  and highlights rolled off, and its BT.2020 primaries are converted
+  into the working space. Still images tagged `pq` or `hlg` on their
+  asset take the same path, and 16-bit images keep their depth. A
+  golden case, `hdr-to-sdr`, holds gray steps at known nits and the
+  BT.2020 primaries in both encodings. See [color.md](docs/color.md).
+- Sources with other primaries than BT.709 (the BT.601 sets, BT.2020
+  SDR) are converted into the working space; they used to be taken as
+  BT.709.
+
 ### Fixes
 
 - Time zero of a file is its first video frame, for the picture and the

@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use geneva_color::{LinearRgba, Transfer};
+use geneva_color::hdr::HdrToSdr;
+use geneva_color::{ColorTags, LinearRgba, Primaries, ResolvedTags, Transfer, primaries};
 use geneva_timeline::{Composition, Ratio};
 
 use crate::RenderError;
@@ -30,6 +31,49 @@ impl Image {
                     r: lut[p[0] as usize] * a,
                     g: lut[p[1] as usize] * a,
                     b: lut[p[2] as usize] * a,
+                    a,
+                }
+            })
+            .collect();
+        Self {
+            width,
+            height,
+            pixels,
+        }
+    }
+
+    /// Builds an image from 16-bit straight-alpha samples under `tags`:
+    /// their transfer curve, their primaries brought into the working
+    /// space, and HDR material tone-mapped.
+    pub fn from_rgba16(width: u32, height: u32, data: &[u16], tags: ResolvedTags) -> Self {
+        let hdr = HdrToSdr::new(tags, None);
+        let to_working = primaries::conversion(tags.primaries, Primaries::Bt709)
+            .map(|m| m.map(|row| row.map(|v| v as f32)));
+        let lut: Vec<f32> = (0..=u16::MAX)
+            .map(|c| tags.transfer.to_linear(f64::from(c) / f64::from(u16::MAX)) as f32)
+            .collect();
+        let pixels = data
+            .chunks_exact(4)
+            .map(|p| {
+                let a = f32::from(p[3]) / f32::from(u16::MAX);
+                let code = |c: u16| f32::from(c) / f32::from(u16::MAX);
+                let [r, g, b] = match (&hdr, &to_working) {
+                    (Some(h), _) => h.convert([code(p[0]), code(p[1]), code(p[2])]),
+                    (None, Some(m)) => {
+                        let [r, g, b] =
+                            [lut[p[0] as usize], lut[p[1] as usize], lut[p[2] as usize]];
+                        [
+                            m[0][0] * r + m[0][1] * g + m[0][2] * b,
+                            m[1][0] * r + m[1][1] * g + m[1][2] * b,
+                            m[2][0] * r + m[2][1] * g + m[2][2] * b,
+                        ]
+                    }
+                    (None, None) => [lut[p[0] as usize], lut[p[1] as usize], lut[p[2] as usize]],
+                };
+                LinearRgba {
+                    r: r * a,
+                    g: g * a,
+                    b: b * a,
                     a,
                 }
             })
@@ -192,11 +236,31 @@ impl AssetSource for FileAssets {
                 id: id.to_owned(),
                 reason: format!("{} ({e})", path.display()),
             })?;
-            let rgba = decoded.to_rgba8();
-            let img = Image::from_rgba8(rgba.width(), rgba.height(), rgba.as_raw());
+            // Untagged images are sRGB. A tagged image, or one with more
+            // than 8 bits, goes through its tags at full depth.
+            let tags = image_tags(asset.color);
+            let deep = decoded.color().bits_per_pixel() > 32;
+            let img = if tags == ResolvedTags::SRGB && !deep {
+                let rgba = decoded.to_rgba8();
+                Image::from_rgba8(rgba.width(), rgba.height(), rgba.as_raw())
+            } else {
+                let rgba = decoded.to_rgba16();
+                Image::from_rgba16(rgba.width(), rgba.height(), rgba.as_raw(), tags)
+            };
             self.images.insert(id.to_owned(), img);
         }
         Ok(&self.images[id])
+    }
+}
+
+/// The color tags of a still image: sRGB with BT.709 primaries unless
+/// the asset says otherwise. Images are RGB, so the matrix and range
+/// tags do not apply.
+fn image_tags(color: ColorTags) -> ResolvedTags {
+    ResolvedTags {
+        primaries: color.primaries.unwrap_or(Primaries::Bt709),
+        transfer: color.transfer.unwrap_or(Transfer::Srgb),
+        ..ResolvedTags::SRGB
     }
 }
 

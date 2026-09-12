@@ -54,6 +54,38 @@ graphics and BT.709 video consistent: a color written as `#ff8800` in a
 timeline comes back as `#ff8800` in the output when nothing is blended over
 it.
 
+## Wide gamut and HDR sources
+
+Material whose primaries are not BT.709 (BT.2020 as a rule, the BT.601
+sets for standard definition) is converted into the working space in
+linear light, so its colors keep their meaning; wide-gamut colors can
+land outside `[0, 1]` and are clipped by the output encoder.
+
+PQ and HLG material is tone-mapped on the way in, per pixel, so that
+highlights roll off instead of clipping at white:
+
+1. The signal becomes light. PQ is absolute; its values are taken
+   relative to HDR reference white, 203 nits (BT.2408), which is `1.0`
+   in the working space. HLG is scene-referred; the OOTF of a 1000-nit
+   display (system gamma 1.2 on luminance) makes it display light first.
+2. Luminance goes through the BT.2390 EETF from the source's peak (the
+   file's mastering metadata, MaxCLL or the mastering display's maximum;
+   1000 nits when the file has none) down to reference white: a
+   Hermite-spline knee in the PQ domain. The three channels are scaled
+   by the same ratio, so hue holds.
+3. Primaries are converted to BT.709.
+4. What still leaves the SDR cube is pulled toward its own luminance
+   until it fits, so a bright saturated highlight desaturates rather
+   than shifting hue.
+
+The curve is the broadcast reference and what ffmpeg's tone-mapper
+calls `bt2390`. It is deterministic and looks at no other pixel. Its
+character: the source's peak lands on SDR white, and a 1000-nit source's
+reference white lands at about 78% of it, so an HDR frame tone-mapped
+this way reads slightly darker than an SDR grade of the same scene, as
+the standard prescribes. Still images tagged `pq` or `hlg` on their
+asset (16-bit PNGs, for instance) take the same path.
+
 ## Output
 
 The frame is converted from linear light to the output transfer, then to

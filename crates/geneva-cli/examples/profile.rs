@@ -240,6 +240,7 @@ fn conversions() {
             w as u32,
             h as u32,
             tags,
+            None,
             &mut img,
         );
     }

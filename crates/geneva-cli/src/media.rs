@@ -193,7 +193,7 @@ mod imp {
                 );
             }
             if resolved.is_hdr() {
-                s.push_str("    note: HDR material; output will be SDR\n");
+                s.push_str("    note: HDR material; tone-mapped to SDR (BT.2390) unless the output is HDR\n");
             }
         }
         if let Some(a) = &info.audio {

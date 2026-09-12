@@ -1,17 +1,23 @@
 //! Transfer functions: conversions between encoded signal and linear light.
 //!
 //! All functions take and return values nominally in `[0, 1]`, where 1 is
-//! SDR reference white. PQ and HLG return linear values relative to SDR white
-//! so that HDR material can be tone-mapped rather than clipped; their peaks
-//! exceed 1.
+//! reference white. PQ and HLG return linear values relative to HDR
+//! reference white (203 nits, [`crate::hdr::REFERENCE_WHITE_NITS`]) so
+//! that HDR material can be tone-mapped rather than clipped; their peaks
+//! exceed 1. Per channel they are the display-referred approximation;
+//! [`crate::hdr`] does the full conversion with the luminance in hand.
 
 use crate::Transfer;
+use crate::hdr::REFERENCE_WHITE_NITS;
 
-/// Peak luminance of the PQ curve relative to SDR reference white (100 nits).
-const PQ_PEAK_RELATIVE: f64 = 10_000.0 / 100.0;
+/// Peak luminance of the PQ curve relative to reference white.
+const PQ_PEAK_RELATIVE: f64 = 10_000.0 / REFERENCE_WHITE_NITS;
 
-/// Nominal HLG peak relative to SDR white (1000 nits).
-const HLG_PEAK_RELATIVE: f64 = 1000.0 / 100.0;
+/// Nominal HLG display peak relative to reference white (1000 nits).
+const HLG_PEAK_RELATIVE: f64 = 1000.0 / REFERENCE_WHITE_NITS;
+
+/// HLG system gamma for a 1000-nit display.
+const HLG_GAMMA: f64 = 1.2;
 
 impl Transfer {
     /// Converts an encoded value to linear light.
@@ -108,28 +114,41 @@ const HLG_A: f64 = 0.178_832_77;
 const HLG_B: f64 = 0.284_668_92;
 const HLG_C: f64 = 0.559_910_73;
 
-/// ARIB STD-B67 inverse OETF, returning scene light relative to SDR white.
-///
-/// The system gamma of the HLG OOTF is not applied; the value is scene
-/// linear scaled so that the nominal peak maps to 10× SDR white.
-pub fn hlg_to_linear(v: f64) -> f64 {
+/// ARIB STD-B67 inverse OETF: scene light in `[0, 1]`, 1 at the
+/// signal's peak.
+pub fn hlg_scene_linear(v: f64) -> f64 {
     let v = v.max(0.0);
-    let scene = if v <= 0.5 {
+    if v <= 0.5 {
         v * v / 3.0
     } else {
         (((v - HLG_C) / HLG_A).exp() + HLG_B) / 12.0
-    };
-    scene * HLG_PEAK_RELATIVE
+    }
 }
 
-/// Inverse of [`hlg_to_linear`].
-pub fn linear_to_hlg(l: f64) -> f64 {
-    let e = (l / HLG_PEAK_RELATIVE).clamp(0.0, 1.0);
+/// Inverse of [`hlg_scene_linear`].
+pub fn hlg_from_scene_linear(e: f64) -> f64 {
+    let e = e.clamp(0.0, 1.0);
     if e <= 1.0 / 12.0 {
         (3.0 * e).sqrt()
     } else {
         HLG_A * (12.0 * e - HLG_B).ln() + HLG_C
     }
+}
+
+/// HLG signal to display light relative to reference white, per channel:
+/// the inverse OETF and the OOTF of a 1000-nit display applied to the
+/// channel alone, which is exact for gray and an approximation elsewhere
+/// (the OOTF acts on luminance; see [`crate::hdr`]).
+pub fn hlg_to_linear(v: f64) -> f64 {
+    hlg_scene_linear(v).powf(HLG_GAMMA) * HLG_PEAK_RELATIVE
+}
+
+/// Inverse of [`hlg_to_linear`].
+pub fn linear_to_hlg(l: f64) -> f64 {
+    let e = (l / HLG_PEAK_RELATIVE)
+        .clamp(0.0, 1.0)
+        .powf(1.0 / HLG_GAMMA);
+    hlg_from_scene_linear(e)
 }
 
 #[cfg(test)]
@@ -164,15 +183,20 @@ mod tests {
     #[test]
     fn pq_reference_points() {
         // PQ code 0.5 corresponds to roughly 92 nits.
-        assert_close(pq_to_linear(0.5) * 100.0, 92.24, 0.1);
+        assert_close(pq_to_linear(0.5) * REFERENCE_WHITE_NITS, 92.24, 0.1);
         assert_close(pq_to_linear(1.0), PQ_PEAK_RELATIVE, 1e-6);
         assert_close(pq_to_linear(0.0), 0.0, 1e-12);
+        // Reference white (BT.2408).
+        assert_close(linear_to_pq(1.0), 0.5807, 1e-4);
     }
 
     #[test]
     fn hlg_reference_points() {
-        assert_close(hlg_to_linear(0.5) / HLG_PEAK_RELATIVE, 1.0 / 12.0, 1e-9);
+        assert_close(hlg_scene_linear(0.5), 1.0 / 12.0, 1e-9);
+        assert_close(hlg_scene_linear(1.0), 1.0, 1e-6);
         assert_close(hlg_to_linear(1.0), HLG_PEAK_RELATIVE, 1e-6);
+        // 75% signal is reference white on a 1000-nit display (BT.2408).
+        assert_close(hlg_to_linear(0.75) * REFERENCE_WHITE_NITS, 203.0, 2.0);
     }
 
     #[test]
