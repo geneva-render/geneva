@@ -148,7 +148,7 @@ mod imp {
         comp: &Composition,
         root: &Path,
         output: &Path,
-        settings: EncodeSettings,
+        settings: &EncodeSettings,
         plan: &geneva_media::chunks::ChunkPlan,
         progress: bool,
         started: Instant,
@@ -159,8 +159,7 @@ mod imp {
         };
         let name = output
             .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "output".to_owned());
+            .map_or_else(|| "output".to_owned(), |n| n.to_string_lossy().into_owned());
         let dir = output
             .parent()
             .map(Path::to_path_buf)
@@ -172,8 +171,7 @@ mod imp {
         })?;
         let ext = output
             .extension()
-            .map(|e| e.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "mkv".to_owned());
+            .map_or_else(|| "mkv".to_owned(), |e| e.to_string_lossy().into_owned());
         let paths: Vec<std::path::PathBuf> = (0..plan.ranges.len())
             .map(|i| dir.join(format!("chunk-{i:03}.{ext}")))
             .collect();
@@ -272,7 +270,7 @@ mod imp {
         let join_secs = join_started.elapsed().as_secs_f64();
         let _ = std::fs::remove_dir_all(&dir);
         let report = report.map_err(media_err)?;
-        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
         let mut notes = Vec::new();
         if let Some(reason) = direct_reason {
             notes.push(reason);
@@ -330,7 +328,10 @@ mod imp {
         } else {
             None
         };
-        let reason = direct.as_ref().or(base.as_ref()).map(|d| d.reason());
+        let reason = direct
+            .as_ref()
+            .or(base.as_ref())
+            .map(geneva_media::DirectSource::reason);
         let sample_rate = settings.audio.as_ref().map(|a| a.sample_rate);
         let mut encoder = Encoder::new(path, settings)?;
         let (color, format) = encoder.video_format()?;
@@ -831,7 +832,15 @@ mod imp {
             _ => geneva_media::chunks::ChunkPlan::single(comp.frame_count()),
         };
         if chunk_plan.is_chunked() {
-            return render_chunked(comp, root, output, settings, &chunk_plan, progress, started);
+            return render_chunked(
+                comp,
+                root,
+                output,
+                &settings,
+                &chunk_plan,
+                progress,
+                started,
+            );
         }
         let has_video = settings.video.is_some();
         // When the picture is the source's own, decoded frames skip the

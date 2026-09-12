@@ -53,7 +53,7 @@ impl ChunkPlan {
     /// One run over everything: no chunking.
     pub fn single(frames: u64) -> Self {
         Self {
-            ranges: Vec::from([0..frames]),
+            ranges: std::iter::once(0..frames).collect(),
             threads_each: 0,
         }
     }
