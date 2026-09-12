@@ -10,9 +10,11 @@ use std::path::{Path, PathBuf};
 use ffmpeg_next::codec;
 use ffmpeg_next::media::Type;
 use ffmpeg_next::{Packet, Rational};
+use geneva_color::ResolvedTags;
 use geneva_timeline::schema::{Container, Fit, VideoCodec};
 use geneva_timeline::{Composition, Ratio, ResolvedSource};
 
+use super::decode::VideoReader;
 use super::ffi;
 use super::probe::ts_to_secs;
 use super::subtitle_streams::{SubtitleSettings, SubtitleWriter};
@@ -101,6 +103,18 @@ impl CopyRefusal {
     }
 }
 
+/// A color encoding in a few words, for a note.
+fn describe_tags(t: ResolvedTags) -> String {
+    let kind = if t.is_hdr() { "HDR" } else { "SDR" };
+    format!(
+        "{kind} ({} {}, {} matrix, {} range)",
+        lowercase(t.transfer),
+        lowercase(t.primaries),
+        lowercase(t.matrix),
+        lowercase(t.range)
+    )
+}
+
 /// The JSON spelling of a container or codec name, for a note.
 fn lowercase(v: impl std::fmt::Debug) -> String {
     format!("{v:?}").to_lowercase()
@@ -159,6 +173,22 @@ pub fn plan_stream_copy_explained(
                     ));
                 }
             }
+        }
+        // The copied pictures keep their color encoding, so it must be
+        // the output's: an HDR source into an SDR output is tone-mapped,
+        // not copied.
+        let overrides = comp
+            .assets
+            .get(&clip.asset)
+            .map(|a| a.color)
+            .unwrap_or_default();
+        let source_tags = VideoReader::open(&clip.path, overrides)?.tags();
+        if source_tags != comp.color {
+            return refuse(format!(
+                "{name} is {}, and the output is {}",
+                describe_tags(source_tags),
+                describe_tags(comp.color)
+            ));
         }
         match &reference {
             None => reference = Some((shape, clip.path.clone())),

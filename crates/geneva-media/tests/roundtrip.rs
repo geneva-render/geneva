@@ -1507,3 +1507,51 @@ fn an_hdr_output_refuses_an_eight_bit_codec() {
         .expect("H.264 cannot carry HDR");
     assert!(err.to_string().contains("ten-bit"), "{err}");
 }
+
+/// A copied stream keeps its color encoding, so an HDR source is copied
+/// only into an HDR output; into the SDR default it is tone-mapped.
+#[test]
+fn stream_copy_refuses_an_hdr_source_for_an_sdr_output() {
+    use geneva_media::plan_stream_copy;
+    use geneva_timeline::schema::Container;
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("hlg.mkv");
+    let mut enc = Encoder::new(&out, hdr_settings(Transfer::Hlg)).unwrap();
+    let white = gray_frame(1.0);
+    for _ in 0..25 {
+        enc.push_frame(&white).unwrap();
+    }
+    enc.finish().unwrap();
+    let timeline = |color: &str| {
+        format!(
+            r#"{{
+              "geneva": "0.2",
+              "output": {{ "width": 64, "height": 64, "fps": 25, "duration": "1s" {color} }},
+              "assets": {{ "hlg": {{ "src": "hlg.mkv" }} }},
+              "layers": [ {{ "clips": [ {{ "source": {{ "kind": "video", "asset": "hlg", "audio": false }} }} ] }} ]
+            }}"#
+        )
+    };
+    let sdr = load(&timeline("")).composition.unwrap();
+    let plan =
+        geneva_media::plan_stream_copy_explained(&sdr, dir.path(), Container::Mkv, None).unwrap();
+    let Err(refusal) = plan else {
+        panic!("an HDR source is not copied into an SDR output");
+    };
+    let reason = refusal.0.expect("the refusal is explained");
+    assert!(
+        reason.contains("hlg.mkv is HDR") && reason.contains("output is SDR"),
+        "{reason}"
+    );
+    let hdr = load(&timeline(
+        r#", "color": { "primaries": "bt2020", "transfer": "hlg", "matrix": "bt2020-ncl" }, "encode": { "video": { "codec": "vp9" } }"#,
+    ))
+    .composition
+    .unwrap();
+    assert!(
+        plan_stream_copy(&hdr, dir.path(), Container::Mkv, None)
+            .unwrap()
+            .is_some(),
+        "into a matching HDR output the stream is copied"
+    );
+}

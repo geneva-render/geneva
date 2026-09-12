@@ -5,6 +5,18 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## 0.3.3 — 2026-09-12
+
+### Fixes
+
+- An HDR source into an SDR output was copied as it was once 0.3.2 let
+  phone recordings through the copy planner: `convert hlg.mov -o out.mp4`
+  wrote the HEVC HLG stream unchanged instead of tone-mapping it. The
+  planner now copies only when the source's color encoding is the
+  output's, and says so in the notes otherwise ("hlg.mov is HDR (hlg
+  bt2020, ...), and the output is SDR (...)"). With `--keep-hdr` the
+  copy still happens.
+
 ## 0.3.2 — 2026-09-12
 
 ### Fixes
