@@ -274,3 +274,99 @@ fn trims_keep_the_marks_in_place_copied_and_exact() {
     }
     assert!(problems.is_empty(), "\n{}", problems.join("\n"));
 }
+
+#[test]
+fn chunked_encoding_keeps_the_marks_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut problems = Vec::new();
+    for (name, want) in corpus_files() {
+        let info = probe(&corpus().join(name)).unwrap();
+        let fps = info.video.unwrap().fps;
+        // Three stretches of a 3 s output, encoded at once and joined.
+        let text = format!(
+            r#"{{"geneva":"0.2",
+                "output":{{"width":160,"height":90,"fps":"{}/{}","duration":"3s",
+                           "encode":{{"video":{{"crf":16,"preset":"ultrafast","chunks":3}}}}}},
+                "assets":{{"clip":{{"src":"{name}"}}}},
+                "layers":[{{"clips":[{{"source":{{"kind":"video","asset":"clip"}}}}]}}]}}"#,
+            fps.numer(),
+            fps.denom(),
+        );
+        let timeline = dir.path().join(format!("{name}.chunked.json"));
+        std::fs::write(&timeline, text).unwrap();
+        let out = dir.path().join(format!("chunked-{name}.mp4"));
+        run(&[
+            "render",
+            timeline.to_str().unwrap(),
+            "--assets",
+            corpus().to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ]);
+        problems.extend(check("chunked", name, &out, &want));
+    }
+    assert!(problems.is_empty(), "\n{}", problems.join("\n"));
+}
+
+#[test]
+fn chunked_and_single_runs_give_the_same_frames() {
+    let dir = tempfile::tempdir().unwrap();
+    let name = "cfr.mp4";
+    let render = |chunks: u32| {
+        let text = format!(
+            r#"{{"geneva":"0.2",
+                "output":{{"width":160,"height":90,"fps":24,"duration":"3s",
+                           "encode":{{"video":{{"crf":10,"preset":"ultrafast","chunks":{chunks}}}}}}},
+                "assets":{{"clip":{{"src":"{name}"}}}},
+                "layers":[{{"clips":[{{"source":{{"kind":"video","asset":"clip"}},
+                                       "transform":{{"scale":0.75}}}}]}}]}}"#
+        );
+        let timeline = dir.path().join(format!("chunks-{chunks}.json"));
+        std::fs::write(&timeline, text).unwrap();
+        let out = dir.path().join(format!("chunks-{chunks}.mp4"));
+        run(&[
+            "render",
+            timeline.to_str().unwrap(),
+            "--assets",
+            corpus().to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ]);
+        out
+    };
+    let single = render(1);
+    let chunked = render(3);
+    for path in [&single, &chunked] {
+        let info = probe(path).unwrap();
+        assert_eq!(
+            info.video.as_ref().unwrap().frames,
+            Some(72),
+            "{}",
+            path.display()
+        );
+        assert!(info.audio.is_some(), "{}", path.display());
+    }
+    // The same picture, within the encoders' rounding: the stretches
+    // restart rate control, so bits differ, pixels barely.
+    let mut a = VideoReader::open(&single, ColorTags::default()).unwrap();
+    let mut b = VideoReader::open(&chunked, ColorTags::default()).unwrap();
+    for n in [0u64, 23, 24, 25, 47, 48, 49, 71] {
+        let t = Ratio::from_int(n as i64) / Ratio::from_int(24);
+        let x = a.frame_at(t).unwrap().pixels.clone();
+        let y = b.frame_at(t).unwrap().pixels.clone();
+        let mse: f64 = x
+            .iter()
+            .zip(&y)
+            .map(|(p, q)| {
+                let d = |u: f32, v: f32| f64::from(u - v).powi(2);
+                (d(p.r, q.r) + d(p.g, q.g) + d(p.b, q.b)) / 3.0
+            })
+            .sum::<f64>()
+            / x.len() as f64;
+        let psnr = 10.0 * (1.0 / mse.max(1e-12)).log10();
+        assert!(
+            psnr > 40.0,
+            "frame {n}: {psnr:.1} dB between single and chunked"
+        );
+    }
+}

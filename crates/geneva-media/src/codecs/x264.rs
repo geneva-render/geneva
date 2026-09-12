@@ -308,6 +308,8 @@ pub struct X264Settings<'a> {
     pub tune: Option<&'a str>,
     /// Keyframes at the interval only: scene-cut detection off.
     pub fixed_keyframes: bool,
+    /// Encoder threads; x264's own choice when `None`.
+    pub threads: Option<u32>,
 }
 
 /// An open x264 encoder taking 8-bit 4:2:0 pictures.
@@ -405,6 +407,9 @@ impl X264Encoder {
         }
         if settings.fixed_keyframes {
             extra.push(("scenecut", "0".to_owned()));
+        }
+        if let Some(threads) = settings.threads {
+            extra.push(("threads", threads.max(1).to_string()));
         }
         if let Some(id) = settings.sps_id {
             extra.push(("sps-id", id.to_string()));

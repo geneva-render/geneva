@@ -219,6 +219,29 @@ pub struct VideoEncode {
     /// streaming platforms and segmenters want. Needs `keyframe_interval`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fixed_keyframes: Option<bool>,
+    /// How many stretches the output is encoded in at once, each on its
+    /// own cores, joined afterwards: `"auto"` (the default) decides from
+    /// the encoder and the machine, a number forces it, `1` turns it off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunks: Option<Chunks>,
+}
+
+/// How many stretches to encode at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum Chunks {
+    /// Decided from the encoder's scaling and the machine's cores.
+    Auto(AutoChunks),
+    /// This many; `1` encodes in one run.
+    Count(u32),
+}
+
+/// The word `"auto"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum AutoChunks {
+    /// Decided at run time.
+    Auto,
 }
 
 /// What the picture is like, in x264's tune names.

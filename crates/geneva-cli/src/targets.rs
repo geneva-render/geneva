@@ -524,6 +524,7 @@ pub fn apply(tl: &mut Timeline, facts: &Facts, opts: &Options<'_>) -> Vec<Diagno
         level: None,
         tune: None,
         fixed_keyframes: None,
+        chunks: None,
     });
     video.codec = Some(codec);
     video.crf = Some(crf);

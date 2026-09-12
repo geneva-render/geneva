@@ -11,9 +11,9 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use geneva_color::{ColorTags, ResolvedTags};
 use geneva_timeline::schema::{
-    Asset, AudioClip, AudioTrack, Clip, Crop, Encode, Fit, Layer, Output, Source, SubtitleTrack,
-    TextSource, Timeline, Transform, Transition, TransitionKind, VideoCodec, VideoEncode,
-    VideoProfile, VideoTune,
+    Asset, AudioClip, AudioTrack, AutoChunks, Chunks, Clip, Crop, Encode, Fit, Layer, Output,
+    Source, SubtitleTrack, TextSource, Timeline, Transform, Transition, TransitionKind, VideoCodec,
+    VideoEncode, VideoProfile, VideoTune,
 };
 use geneva_timeline::{Animated, Diagnostic, Fps, Length, Point, Ratio, Scale, Time};
 
@@ -140,6 +140,11 @@ pub struct EncodeArgs {
     /// Without it, HDR sources are tone-mapped to SDR.
     #[arg(long)]
     pub keep_hdr: bool,
+    /// Encode the output in this many stretches at once, on separate
+    /// cores, joined afterwards: "auto" (the default) decides from the
+    /// encoder and the machine, 1 turns it off.
+    #[arg(long, value_name = "N|auto", value_parser = parse_chunks)]
+    pub chunks: Option<Chunks>,
     /// Write no audio track.
     #[arg(long)]
     pub no_audio: bool,
@@ -256,6 +261,17 @@ impl From<CodecArg> for VideoCodec {
             CodecArg::Png => Self::Png,
             CodecArg::Mjpeg => Self::Mjpeg,
         }
+    }
+}
+
+/// Parses `--chunks`: a count or the word `auto`.
+fn parse_chunks(text: &str) -> Result<Chunks, String> {
+    if text.eq_ignore_ascii_case("auto") {
+        return Ok(Chunks::Auto(AutoChunks::Auto));
+    }
+    match text.parse::<u32>() {
+        Ok(n) if n >= 1 => Ok(Chunks::Count(n)),
+        _ => Err("a count of at least 1, or \"auto\"".to_owned()),
     }
 }
 
@@ -422,6 +438,7 @@ fn encode_block(args: &EncodeArgs) -> Option<Encode> {
         && args.keyframe_interval.is_none()
         && !args.fixed_keyframes
         && !args.keep_hdr
+        && args.chunks.is_none()
     {
         return None;
     }
@@ -448,6 +465,7 @@ fn encode_block(args: &EncodeArgs) -> Option<Encode> {
             level: None,
             tune: args.tune.map(Into::into),
             fixed_keyframes: args.fixed_keyframes.then_some(true),
+            chunks: args.chunks,
         }),
         audio: None,
         fast_start: None,

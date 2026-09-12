@@ -135,6 +135,11 @@ run "audio extract, copied (m4a)" "$work/sound.m4a" "$geneva" audio "$input" -o 
 ff -i "$input" -vn -c:a copy "$work/ff-sound.m4a"
 run "audio extract to WAV" "$work/sound.wav" "$geneva" audio "$input" -o "$work/sound.wav" --extract
 ff -i "$input" -vn "$work/ff-sound.wav"
+# Chunked encoding: the same re-encode in one run and in stretches at
+# once (auto decides from the encoder and this machine's cores; the
+# report says how many ran). Compare the two times.
+run "re-encode, chunks off" "$work/one-run.mp4" "$geneva" convert "$input" -o "$work/one-run.mp4" --crf 23 --chunks 1; noff
+run "re-encode, chunks auto" "$work/chunked.mp4" "$geneva" convert "$input" -o "$work/chunked.mp4" --crf 23 --chunks auto; noff
 run "concat two copies, copied" "$work/joined.mp4" "$geneva" concat "$work/trim-copy.mp4" "$work/trim-copy.mp4" -o "$work/joined.mp4"; noff
 run "concat with crossfade (rendered)" "$work/faded.mp4" "$geneva" concat "$work/trim-exact.mp4" "$work/trim-exact.mp4" -o "$work/faded.mp4" --crossfade 0.5s; noff
 run "overlay a PNG" "$work/branded.mp4" "$geneva" overlay "$work/trim-exact.mp4" "$work/logo.png" -o "$work/branded.mp4" --at bottom-right --scale 0.5 --opacity 0.9; noff

@@ -556,6 +556,17 @@
             "null"
           ],
           "description": "Place keyframes at the interval only, never at scene changes, as\nstreaming platforms and segmenters want. Needs `keyframe_interval`."
+        },
+        "chunks": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Chunks"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How many stretches the output is encoded in at once, each on its\nown cores, joined afterwards: `\"auto\"` (the default) decides from\nthe encoder and the machine, a number forces it, `1` turns it off."
         }
       },
       "description": "Video encoder settings."
@@ -719,6 +730,31 @@
         }
       ],
       "description": "What the picture is like, in x264's tune names."
+    },
+    "Chunks": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AutoChunks",
+          "description": "Decided from the encoder's scaling and the machine's cores."
+        },
+        {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "This many; `1` encodes in one run."
+        }
+      ],
+      "description": "How many stretches to encode at once."
+    },
+    "AutoChunks": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "auto",
+          "description": "Decided at run time."
+        }
+      ],
+      "description": "The word `\"auto\"`."
     },
     "AudioEncode": {
       "type": "object",

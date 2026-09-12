@@ -195,6 +195,30 @@ a second at a time: every voice is read forward on its own decoder and
 resampler as the blocks advance, so a long timeline never holds its mix
 whole, and the mix is the same whatever the block size.
 
+## Chunked encoding
+
+An encode that would leave cores idle is cut into stretches encoded at
+the same time (`geneva-media::chunks`): each stretch gets its own
+decoders, compositor and encoder on a share of the cores, writing a
+video-only file next to the output; the first stretch also mixes and
+encodes the audio for the whole timeline; then the stream-copy join used
+by `concat` puts the stretches in order into the output with the audio
+and subtitles. Boundaries are the composition's own cuts (clip starts) or
+the keyframe grid when one is within a quarter of a stretch, so a stretch
+starts where a keyframe was due; otherwise the boundary is one extra
+keyframe. The count is `encode.video.chunks`: `auto` divides the machine's
+cores by the encoder's measured scaling ceiling, a number forces it. Not
+with a bitrate ceiling (its buffer cannot restart at a boundary), a smart
+cut, or an image sequence. The same plan is what a fleet would hand to
+several machines.
+
+Measured on four cores with 1080p sources: VP9 gains a fifth from two
+stretches, OpenH264 a tenth, AV1 nothing, and DNxHD and x264 lose, since
+one pipeline already fills the machine; the ceilings encode that. A
+hardware encoder uses no cores, so what chunking parallelizes for it is
+the decoding and compositing in front of it. `scripts/check.sh` runs one
+encode with chunks off and on `auto` and prints both times.
+
 ## Verbs
 
 `trim`, `concat`, `convert`, `resize`, `overlay` and `audio` do not have

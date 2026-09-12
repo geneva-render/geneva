@@ -78,6 +78,9 @@ pub struct VideoSettings {
     /// Static HDR10 metadata to write with a PQ output: the source's,
     /// or standard defaults. Ignored for SDR and HLG outputs.
     pub hdr_metadata: Option<ffi::HdrMetadata>,
+    /// Threads for the encoder; all the machine's when `None`. Set when
+    /// several encoders share the machine.
+    pub threads: Option<u32>,
 }
 
 /// A level string such as "4.1" as the integer code encoders use (41).
@@ -468,9 +471,9 @@ fn open_video_encoder(
     if global_header {
         vctx.set_flags(codec::Flags::GLOBAL_HEADER);
     }
-    // Software encoders spread work over all cores; the count is theirs to
-    // pick from the machine.
-    ffi::use_all_threads(&mut vctx);
+    // Software encoders spread work over all cores unless told a share;
+    // the count is theirs to pick from the machine.
+    ffi::set_threads(&mut vctx, settings.threads.unwrap_or(0));
     let mut venc = vctx
         .encoder()
         .video()
@@ -745,6 +748,7 @@ fn open_video_track(
                 bframes: None,
                 tune: settings.tune.map(VideoTune::as_str),
                 fixed_keyframes: settings.fixed_keyframes,
+                threads: settings.threads,
             };
             match X264Encoder::open(&x264) {
                 Ok(enc) => {
@@ -866,6 +870,7 @@ impl StitchX264 {
             bframes: Some(STITCH_BFRAMES),
             tune: None,
             fixed_keyframes: false,
+            threads: None,
         }
     }
 }

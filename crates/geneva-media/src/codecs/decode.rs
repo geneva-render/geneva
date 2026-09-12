@@ -69,7 +69,7 @@ impl StreamDecoder {
         };
         let mut ctx = codec::context::Context::from_parameters(stream.parameters())
             .map_err(|e| codec_error(format!("{}: decoder setup", path.display()), e))?;
-        ffi::use_all_threads(&mut ctx);
+        ffi::set_threads(&mut ctx, DECODER_THREADS.with(std::cell::Cell::get));
         Ok((
             Self {
                 path: path.to_owned(),
@@ -150,6 +150,19 @@ impl StreamDecoder {
             }
         }
     }
+}
+
+thread_local! {
+    /// Threads for decoders opened on this thread; all the machine's by
+    /// default.
+    static DECODER_THREADS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Limits the decoders opened on the calling thread from now on to
+/// `count` threads (`0` for all the machine's), so that several
+/// pipelines sharing a machine do not each take all of it.
+pub fn set_decoder_threads_for_this_thread(count: u32) {
+    DECODER_THREADS.with(|c| c.set(count));
 }
 
 /// Sequential access to the frames of a video stream, with random access

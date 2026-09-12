@@ -136,9 +136,343 @@ mod imp {
         AudioSettings, EncodeSettings, Encoder, MediaAssets, MediaInfo, VideoSettings,
     };
     use geneva_render::{CpuRenderer, RenderError, Renderer};
-    use geneva_timeline::Composition;
+    use geneva_timeline::{Composition, Ratio};
 
     use super::{RenderMode, RenderOverrides, RenderStats};
+
+    /// Encodes the output in the plan's stretches at once, one worker
+    /// each with its own decoders, compositor and encoder writing a
+    /// stretch file, the first also mixing the audio; then joins the
+    /// stretch files by stream copy into the output.
+    fn render_chunked(
+        comp: &Composition,
+        root: &Path,
+        output: &Path,
+        settings: EncodeSettings,
+        plan: &geneva_media::chunks::ChunkPlan,
+        progress: bool,
+        started: Instant,
+    ) -> Result<RenderStats, RenderError> {
+        let media_err = |e: geneva_media::MediaError| RenderError::Asset {
+            id: output.display().to_string(),
+            reason: e.to_string(),
+        };
+        let name = output
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "output".to_owned());
+        let dir = output
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default()
+            .join(format!(".{name}.chunks-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).map_err(|e| RenderError::Asset {
+            id: dir.display().to_string(),
+            reason: e.to_string(),
+        })?;
+        let ext = output
+            .extension()
+            .map(|e| e.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "mkv".to_owned());
+        let paths: Vec<std::path::PathBuf> = (0..plan.ranges.len())
+            .map(|i| dir.join(format!("chunk-{i:03}.{ext}")))
+            .collect();
+        let total = comp.frame_count();
+        let done = std::sync::atomic::AtomicU64::new(0);
+        let subtitles = settings.subtitles.clone();
+        let fast_start = settings.fast_start;
+        let has_audio = settings.audio.is_some();
+        let mut direct_reason = None;
+        let encoding_started = Instant::now();
+        let results: Vec<Result<Option<String>, geneva_media::MediaError>> =
+            std::thread::scope(|scope| {
+                let workers: Vec<_> = plan
+                    .ranges
+                    .iter()
+                    .zip(&paths)
+                    .enumerate()
+                    .map(|(i, (range, path))| {
+                        let mut own = settings.clone();
+                        own.subtitles.clear();
+                        own.copied_audio = None;
+                        own.fast_start = false;
+                        if i > 0 {
+                            own.audio = None;
+                        }
+                        if let Some(v) = own.video.as_mut() {
+                            v.threads = Some(plan.threads_each);
+                        }
+                        let done = &done;
+                        let threads = plan.threads_each;
+                        scope.spawn(move || {
+                            encode_chunk(comp, root, path, own, range.clone(), threads, done)
+                        })
+                    })
+                    .collect();
+                // Progress from the workers' shared count.
+                if progress {
+                    let mut last = 0;
+                    while workers.iter().any(|w| !w.is_finished()) {
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                        let n = done.load(std::sync::atomic::Ordering::Relaxed);
+                        if n != last {
+                            eprint!("\rframe {n}/{total}");
+                            last = n;
+                        }
+                    }
+                }
+                workers
+                    .into_iter()
+                    .map(|w| {
+                        w.join()
+                            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                    })
+                    .collect()
+            });
+        let mut first_error = None;
+        for r in results {
+            match r {
+                Ok(reason) => {
+                    if direct_reason.is_none() {
+                        direct_reason = reason;
+                    }
+                }
+                Err(e) => {
+                    if first_error.is_none() {
+                        first_error = Some(e);
+                    }
+                }
+            }
+        }
+        if let Some(e) = first_error {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(media_err(e));
+        }
+        if progress {
+            eprintln!("\rframe {total}/{total}");
+        }
+        // Join: the stretches' video in order, the audio from the first.
+        let segment = |path: &std::path::PathBuf| geneva_media::CopySegment {
+            path: path.clone(),
+            from: Ratio::ZERO,
+            to: None,
+        };
+        let copy_plan = geneva_media::CopyPlan {
+            segments: paths.iter().map(segment).collect(),
+            audio: if has_audio {
+                vec![segment(&paths[0])]
+            } else {
+                Vec::new()
+            },
+            reason: String::new(),
+        };
+        let encoding_secs = encoding_started.elapsed().as_secs_f64();
+        let join_started = Instant::now();
+        let report = geneva_media::stream_copy(&copy_plan, output, &subtitles, fast_start);
+        let join_secs = join_started.elapsed().as_secs_f64();
+        let _ = std::fs::remove_dir_all(&dir);
+        let report = report.map_err(media_err)?;
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let mut notes = Vec::new();
+        if let Some(reason) = direct_reason {
+            notes.push(reason);
+        }
+        notes.push(format!(
+            "encoded in {} stretches at once on {cores} cores ({} threads each) in {encoding_secs:.1}s, joined without re-encoding in {join_secs:.1}s",
+            plan.ranges.len(),
+            plan.threads_each
+        ));
+        Ok(RenderStats {
+            frames: total,
+            duration: report.duration,
+            mode: if direct_reason_is_direct(&notes) {
+                RenderMode::Direct
+            } else {
+                RenderMode::Render
+            },
+            notes,
+            seconds: started.elapsed().as_secs_f64(),
+        })
+    }
+
+    /// Whether the notes say the frames came straight from the decoder.
+    fn direct_reason_is_direct(notes: &[String]) -> bool {
+        notes
+            .iter()
+            .any(|n| n.contains("used as it is") || n.contains("used as they are"))
+    }
+
+    /// Encodes output frames `range` of `comp` into `path` with `settings`
+    /// (video-only past the first stretch), by the direct path where the
+    /// picture is a source's own and the compositor otherwise, counting
+    /// finished frames in `done`. Returns the direct path's reason when it
+    /// applied.
+    fn encode_chunk(
+        comp: &Composition,
+        root: &Path,
+        path: &Path,
+        settings: EncodeSettings,
+        range: std::ops::Range<u64>,
+        threads: u32,
+        done: &std::sync::atomic::AtomicU64,
+    ) -> Result<Option<String>, geneva_media::MediaError> {
+        // This stretch's decoders take its share of the cores.
+        geneva_media::set_decoder_threads_for_this_thread(threads);
+        let v = settings.video.as_ref().expect("chunks carry video");
+        let format = geneva_media::plane_format_for(v.codec, v.profile, v.color.is_hdr());
+        let tags = geneva_media::output_tags_for(v.codec, v.color);
+        let output_tags = tags;
+        let mut direct = geneva_media::DirectSource::open(comp, root, format, tags)?;
+        let mut base = if direct.is_none()
+            && geneva_render::CpuRenderer::<MediaAssets>::overlays_are_plain(comp)
+        {
+            geneva_media::DirectSource::open_base(comp, root, format, tags)?
+        } else {
+            None
+        };
+        let reason = direct.as_ref().or(base.as_ref()).map(|d| d.reason());
+        let sample_rate = settings.audio.as_ref().map(|a| a.sample_rate);
+        let mut encoder = Encoder::new(path, settings)?;
+        let (color, format) = encoder.video_format()?;
+        let audio_encoder = encoder.take_audio_encoder().zip(sample_rate);
+        let render_err = |e: RenderError| geneva_media::MediaError::Codec {
+            context: "rendering".to_owned(),
+            reason: e.to_string(),
+        };
+        // As in the single run: frames are produced here while the
+        // encoder runs on its own thread a few frames behind, and buffers
+        // come back to be filled again.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Msg>(8);
+        let (spare_tx, spare_rx) = std::sync::mpsc::channel::<geneva_media::convert::Planes>();
+        let mut pool = geneva_media::convert::PlanePool::default();
+        std::thread::scope(|scope| -> Result<(), geneva_media::MediaError> {
+            let worker = scope.spawn(move || -> Result<Encoder, geneva_media::MediaError> {
+                let mut encoder = encoder;
+                for msg in rx {
+                    match msg {
+                        Msg::Planes(planes) => {
+                            encoder.push_planes(&planes)?;
+                            let _ = spare_tx.send(planes);
+                        }
+                        Msg::Audio(packets, time) => encoder.write_audio_packets(packets, time)?,
+                        Msg::Copied(_) | Msg::EndSegment | Msg::CopiedAudio(_) => {}
+                    }
+                }
+                Ok(encoder)
+            });
+            let mut audio = audio_encoder
+                .map(|(enc, rate)| (enc, rate, geneva_media::mix::Mixer::new(comp, root, rate)));
+            let mut renderer =
+                CpuRenderer::new(MediaAssets::new(root).keep_hdr(comp.color.is_hdr()));
+            let mut frame = geneva_render::Frame::new(0, 0, geneva_color::Color::BLACK);
+            let mut failed = None;
+            for n in range {
+                let t = comp.frame_time(n);
+                while let Ok(spare) = spare_rx.try_recv() {
+                    pool.give(spare);
+                }
+                let produced = if let Some(d) = direct.as_mut() {
+                    d.frame_with(t, &mut pool)
+                } else if let Some(b) = base.as_mut() {
+                    b.frame_with(t, &mut pool).and_then(|mut planes| {
+                        if let Some((overlay, rect)) =
+                            renderer.render_overlays(comp, t).map_err(render_err)?
+                        {
+                            geneva_media::convert::blend_overlay(
+                                &mut planes,
+                                &overlay,
+                                rect,
+                                output_tags,
+                            );
+                        }
+                        Ok(planes)
+                    })
+                } else {
+                    renderer
+                        .render_into(comp, t, &mut frame)
+                        .map_err(render_err)
+                        .map(|()| {
+                            let mut planes = pool.take(format, frame.width(), frame.height());
+                            geneva_media::convert::frame_to_planes_into(
+                                &frame,
+                                color,
+                                format,
+                                &mut planes,
+                            );
+                            planes
+                        })
+                };
+                let planes = match produced {
+                    Ok(p) => p,
+                    Err(e) => {
+                        failed = Some(e);
+                        break;
+                    }
+                };
+                if tx.send(Msg::Planes(planes)).is_err() {
+                    break;
+                }
+                done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // The audio keeps a second ahead of the picture, so the
+                // file interleaves.
+                if let Some((enc, rate, mixer)) = audio.as_mut() {
+                    let ahead = t + Ratio::from_int(1);
+                    while enc.time() < ahead {
+                        match mixer.next_block(*rate as usize) {
+                            Ok(Some(block)) => {
+                                let packets = match enc.push(&block) {
+                                    Ok(p) => p,
+                                    Err(e) => {
+                                        failed = Some(e);
+                                        break;
+                                    }
+                                };
+                                if tx.send(Msg::Audio(packets, enc.time())).is_err() {
+                                    break;
+                                }
+                            }
+                            Ok(None) => break,
+                            Err(e) => {
+                                failed = Some(e);
+                                break;
+                            }
+                        }
+                    }
+                    if failed.is_some() {
+                        break;
+                    }
+                }
+            }
+            if failed.is_none() {
+                if let Some((mut enc, rate, mut mixer)) = audio.take() {
+                    let rest = (|| -> Result<(), geneva_media::MediaError> {
+                        while let Some(block) = mixer.next_block(rate as usize)? {
+                            let packets = enc.push(&block)?;
+                            if tx.send(Msg::Audio(packets, enc.time())).is_err() {
+                                break;
+                            }
+                        }
+                        let time = enc.time();
+                        let packets = enc.finish()?;
+                        let _ = tx.send(Msg::Audio(packets, time));
+                        Ok(())
+                    })();
+                    if let Err(e) = rest {
+                        failed = Some(e);
+                    }
+                }
+            }
+            drop(tx);
+            let joined = worker
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+            if let Some(e) = failed {
+                return Err(e);
+            }
+            joined?.finish()
+        })?;
+        Ok(reason)
+    }
 
     /// The static HDR10 metadata for a PQ output: the first HDR video
     /// asset's, or standard defaults. `None` for SDR and HLG outputs.
@@ -347,6 +681,7 @@ mod imp {
                 tune: video.and_then(|v| v.tune),
                 fixed_keyframes: video.and_then(|v| v.fixed_keyframes).unwrap_or(false),
                 hdr_metadata: hdr_metadata_for(comp, root),
+                threads: None,
                 stitch: None,
             })
         };
@@ -472,6 +807,31 @@ mod imp {
         if let Some(copy) = &copied_audio {
             settings.audio = None;
             settings.copied_audio = Some(copy.template.clone());
+        }
+        // Chunked encoding: the output cut into stretches encoded at the
+        // same time and joined afterwards, when the encoder would leave
+        // cores idle. Not with a bitrate ceiling (its buffer cannot
+        // restart at a boundary), a smart cut, or an image sequence.
+        let chunk_plan = match (&settings.video, &smart) {
+            (Some(v), None)
+                if v.max_bitrate_kbps.is_none()
+                    && v.bitrate_kbps.is_none()
+                    && container != geneva_timeline::schema::Container::ImageSequence =>
+            {
+                let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as u32);
+                geneva_media::chunks::plan_chunks(
+                    comp,
+                    v.codec,
+                    v.hardware,
+                    v.keyframe_interval,
+                    video.and_then(|e| e.chunks),
+                    cores,
+                )
+            }
+            _ => geneva_media::chunks::ChunkPlan::single(comp.frame_count()),
+        };
+        if chunk_plan.is_chunked() {
+            return render_chunked(comp, root, output, settings, &chunk_plan, progress, started);
         }
         let has_video = settings.video.is_some();
         // When the picture is the source's own, decoded frames skip the
