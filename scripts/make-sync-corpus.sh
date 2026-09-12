@@ -64,6 +64,17 @@ for ext in mp4 mkv; do
      "${x264[@]}" -bf 3 -g 12 -c:a aac -b:a 96k "$out/audio-late.$ext"
 done
 
+# A phone recording: NTSC rate in a 600-tick timebase with every
+# timestamp jittered by up to 4 ms either way, so the average rate the
+# file reports (frames over duration) is not the rate any frame has.
+# Not in the sync table: the direct path samples such a file on its grid
+# and a frame that lands late moves to the next slot, which the marks
+# would report as a slip. Here for the copy planner, which must still
+# read the file as 30000/1001.
+ff -f lavfi -i "$(video 30000/1001 3)" -f lavfi -i "$(audio 48000 3)" \
+   -vf "$(flash 30000/1001),setpts='(N/(30000/1001)+0.004+(random(1)-0.5)*0.008)/TB'" -fps_mode passthrough \
+   -af "$tone" "${x264[@]}" -bf 0 -g 15 -c:a aac -b:a 96k -video_track_timescale 600 "$out/jitter-2997.mov"
+
 # NTSC rates.
 ff -f lavfi -i "$(video 30000/1001 3)" -f lavfi -i "$(audio 48000 3)" -vf "$(flash 30000/1001)" -af "$tone" \
    "${x264[@]}" -bf 3 -g 15 -c:a aac -b:a 96k "$out/ntsc-2997.mp4"

@@ -1110,3 +1110,50 @@ fn exact_cuts_copy_the_untouched_stretches() {
     assert_eq!(doc["frames"], 50);
     assert!(doc.to_string().contains("39 of 50 frames copied"), "{doc}");
 }
+
+/// A phone recording reports an average frame rate (frames over the
+/// file's duration) that no frame has, since its timestamps jitter; the
+/// copy planner must read it at the same rate the probe does, or every
+/// trim of it re-encodes.
+#[cfg(feature = "media")]
+#[test]
+fn trim_copies_a_file_whose_timestamps_jitter() {
+    let dir = tempfile::tempdir().unwrap();
+    let clip = media_dir().join("sync").join("jitter-2997.mov");
+    let out = dir.path().join("cut.mp4");
+    let doc = run_json(
+        &["trim", "--from", "1", "--duration", "1", "-o"],
+        &[&out, &clip],
+    );
+    assert_eq!(doc["mode"], "copy", "{doc:#}");
+    let info = run_json(&["probe"], &[&out]);
+    let fps = info["video"]["fps"].as_f64().unwrap();
+    assert!((fps - 30000.0 / 1001.0).abs() < 1e-3, "{info:#}");
+}
+
+/// When the streams could have been copied but the output cannot take
+/// them, the render says why.
+#[cfg(feature = "media")]
+#[test]
+fn a_refused_copy_says_why_in_the_notes() {
+    let dir = tempfile::tempdir().unwrap();
+    let clip = media_dir().join("clip.mp4");
+    let out = dir.path().join("cut.webm");
+    let doc = run_json(
+        &["trim", "--from", "0", "--duration", "0.5", "-o"],
+        &[&out, &clip],
+    );
+    assert_ne!(doc["mode"], "copy");
+    let notes: Vec<&str> = doc["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|d| d["message"].as_str())
+        .collect();
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.starts_with("not copied without re-encoding: clip.mp4 is h264")),
+        "{notes:#?}"
+    );
+}

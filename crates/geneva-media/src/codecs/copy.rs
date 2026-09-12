@@ -85,43 +85,93 @@ pub fn plan_stream_copy(
     container: Container,
     requested_codec: Option<VideoCodec>,
 ) -> Result<Option<CopyPlan>, MediaError> {
+    Ok(plan_stream_copy_explained(comp, root, container, requested_codec)?.ok())
+}
+
+/// Why the sources' streams cannot be copied into the output, when the
+/// composition itself shows them as they are: a human-readable sentence
+/// for the render's notes. `None` when the composition changes the
+/// picture or the sound, which needs no explanation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopyRefusal(pub Option<String>);
+
+impl CopyRefusal {
+    fn because(reason: impl Into<String>) -> Self {
+        Self(Some(reason.into()))
+    }
+}
+
+/// The JSON spelling of a container or codec name, for a note.
+fn lowercase(v: impl std::fmt::Debug) -> String {
+    format!("{v:?}").to_lowercase()
+}
+
+/// [`plan_stream_copy`], saying why when the streams cannot be copied.
+pub fn plan_stream_copy_explained(
+    comp: &Composition,
+    root: &Path,
+    container: Container,
+    requested_codec: Option<VideoCodec>,
+) -> Result<Result<CopyPlan, CopyRefusal>, MediaError> {
     init();
+    let refuse = |reason: String| Ok(Err(CopyRefusal::because(reason)));
     if comp.audio.len() > 1 {
-        return Ok(None);
+        return Ok(Err(CopyRefusal(None)));
     }
     let Some(untouched) = untouched_video_clips(comp, root)? else {
-        return Ok(None);
+        return Ok(Err(CopyRefusal(None)));
     };
     if !untouched.is_empty() && container.is_audio_only() {
-        return Ok(None);
+        return Ok(Err(CopyRefusal(None)));
     }
     let mut video_segments = Vec::new();
     let mut own_audio: Option<bool> = None;
-    let mut reference: Option<StreamShape> = None;
+    let mut reference: Option<(StreamShape, PathBuf)> = None;
     for clip in &untouched {
         own_audio = Some(clip.audio);
         let shape = StreamShape::read(&clip.path)?;
+        let name = clip.path.file_name().map_or_else(
+            || clip.path.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        let coded = shape.codec_id.name();
+        let holder = lowercase(container);
         if let Some(code) = requested_codec {
             if shape.codec != Some(code) {
-                return Ok(None);
+                return refuse(format!(
+                    "{name} is {coded}, and the output asks for {}",
+                    lowercase(code)
+                ));
             }
         }
         if !container_accepts(container, shape.codec) {
-            return Ok(None);
+            return refuse(format!("{name} is {coded}, which {holder} cannot hold"));
         }
         if clip.audio && !shape.has_audio {
-            return Ok(None);
+            return refuse(format!("{name} has no audio stream to copy"));
         }
-        if clip.audio
-            && shape
-                .audio_id
-                .is_some_and(|id| !container_accepts_audio(container, id))
-        {
-            return Ok(None);
+        if clip.audio {
+            if let Some(id) = shape.audio_id {
+                if !container_accepts_audio(container, id) {
+                    return refuse(format!(
+                        "the audio of {name} is {}, which {holder} cannot hold",
+                        id.name()
+                    ));
+                }
+            }
         }
         match &reference {
-            None => reference = Some(shape),
-            Some(r) if !r.compatible(&shape) => return Ok(None),
+            None => reference = Some((shape, clip.path.clone())),
+            Some((r, first)) if !r.compatible(&shape) => {
+                let first = first.file_name().map_or_else(
+                    || first.display().to_string(),
+                    |n| n.to_string_lossy().into_owned(),
+                );
+                return refuse(format!(
+                    "{first} and {name} differ in {}, so they cannot be joined as they are",
+                    r.difference(&shape)
+                ));
+            }
             _ => {}
         }
         video_segments.push(CopySegment {
@@ -137,10 +187,10 @@ pub fn plan_stream_copy(
         (Some(true), None) => {
             audio_segments.clone_from(&video_segments);
         }
-        (Some(true), Some(_)) => return Ok(None),
+        (Some(true), Some(_)) => return Ok(Err(CopyRefusal(None))),
         (own, Some(track)) => {
             if own == Some(true) || track.clips.len() != 1 {
-                return Ok(None);
+                return Ok(Err(CopyRefusal(None)));
             }
             let clip = &track.clips[0];
             let untouched = clip.gain_db.is_constant()
@@ -151,15 +201,23 @@ pub fn plan_stream_copy(
                 && clip.start.is_zero()
                 && about_equal(clip.end, comp.duration);
             if !untouched {
-                return Ok(None);
+                return Ok(Err(CopyRefusal(None)));
             }
             let Some(asset_info) = comp.assets.get(&clip.asset) else {
-                return Ok(None);
+                return Ok(Err(CopyRefusal(None)));
             };
             let path = root.join(&asset_info.src);
             let audio_shape = AudioShape::read(&path)?;
             if !container_accepts_audio(container, audio_shape.codec_id) {
-                return Ok(None);
+                return refuse(format!(
+                    "the audio of {} is {}, which {} cannot hold",
+                    path.file_name().map_or_else(
+                        || path.display().to_string(),
+                        |n| n.to_string_lossy().into_owned()
+                    ),
+                    audio_shape.codec_id.name(),
+                    lowercase(container)
+                ));
             }
             audio_segments.push(CopySegment {
                 path,
@@ -170,7 +228,7 @@ pub fn plan_stream_copy(
         (Some(false) | None, None) => {}
     }
     if video_segments.is_empty() && audio_segments.is_empty() {
-        return Ok(None);
+        return Ok(Err(CopyRefusal(None)));
     }
     let reason = match (video_segments.len(), audio_segments.is_empty()) {
         (0, _) => "the audio stream is used as is, so it is copied without re-encoding".to_owned(),
@@ -179,7 +237,7 @@ pub fn plan_stream_copy(
             "all {n} sources share the same stream parameters, so they are joined without re-encoding"
         ),
     };
-    Ok(Some(CopyPlan {
+    Ok(Ok(CopyPlan {
         segments: video_segments,
         audio: audio_segments,
         reason,
@@ -557,9 +615,14 @@ impl StreamShape {
         let decoder = ctx.decoder().video().map_err(|e| {
             super::codec_error(format!("{}: reading stream parameters", path.display()), e)
         })?;
-        let fps = super::probe::ratio(video.avg_frame_rate())
-            .or_else(|| super::probe::ratio(video.rate()))
-            .unwrap_or(Ratio::from_int(25));
+        // The same reconciliation as the probe, so that a file whose
+        // timestamps jitter (a phone recording) compares equal to the
+        // rate the composition was built at.
+        let fps = super::probe::frame_rate(
+            super::probe::ratio(video.avg_frame_rate()),
+            super::probe::ratio(video.rate()),
+        )
+        .unwrap_or(Ratio::from_int(25));
         let audio = ictx.streams().best(Type::Audio);
         Ok(Self {
             codec: match params.id() {
@@ -596,6 +659,23 @@ impl StreamShape {
             && self.extradata == other.extradata
             && self.audio_id == other.audio_id
             && self.audio_extradata == other.audio_extradata
+    }
+
+    /// The first thing [`Self::compatible`] finds different, named.
+    fn difference(&self, other: &Self) -> &'static str {
+        if self.codec_id != other.codec_id {
+            "video codec"
+        } else if self.width != other.width || self.height != other.height {
+            "picture size"
+        } else if self.format != other.format {
+            "pixel format"
+        } else if self.extradata != other.extradata {
+            "encoder settings (the coded parameter sets)"
+        } else if self.audio_id != other.audio_id {
+            "audio codec"
+        } else {
+            "audio settings"
+        }
     }
 }
 

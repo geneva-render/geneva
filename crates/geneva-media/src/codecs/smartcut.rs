@@ -423,7 +423,7 @@ fn index_source(
             video.index(),
             video.time_base(),
             video.parameters(),
-            ratio(video.avg_frame_rate()).or_else(|| ratio(video.rate())),
+            super::probe::frame_rate(ratio(video.avg_frame_rate()), ratio(video.rate())),
         )
     };
     if params.id() != codec::Id::H264 || stream_fps != Some(fps) {

@@ -743,15 +743,25 @@ mod imp {
                     || v.fixed_keyframes == Some(true)
             });
         let copyable = !overrides.exact && !wants_encode;
+        // Why the streams were not copied although nothing in the
+        // composition changes them: said in the notes of the render.
+        let mut copy_refusal: Option<String> = None;
         if copyable {
             let requested = video.and_then(|v| v.codec);
-            let mut plan = geneva_media::plan_stream_copy(comp, root, container, requested)
+            let plan = geneva_media::plan_stream_copy_explained(comp, root, container, requested)
                 .map_err(media_err)?;
-            if let Some(p) = plan.as_mut() {
-                if overrides.no_audio {
-                    p.audio.clear();
+            let plan = match plan {
+                Ok(mut p) => {
+                    if overrides.no_audio {
+                        p.audio.clear();
+                    }
+                    Some(p)
                 }
-            }
+                Err(geneva_media::CopyRefusal(reason)) => {
+                    copy_refusal = reason;
+                    None
+                }
+            };
             if let Some(plan) = plan {
                 let report = geneva_media::stream_copy(
                     &plan,
@@ -872,6 +882,9 @@ mod imp {
             .as_ref()
             .map(|v| geneva_media::output_tags_for(v.codec, v.color));
         let mut notes = Vec::new();
+        if let Some(reason) = copy_refusal {
+            notes.push(format!("not copied without re-encoding: {reason}"));
+        }
         match (&smart, direct.as_ref().or(base.as_ref())) {
             (Some(plan), _) => notes.push(plan.reason()),
             (None, Some(d)) => notes.push(d.reason()),

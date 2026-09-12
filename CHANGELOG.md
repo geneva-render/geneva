@@ -5,6 +5,20 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## 0.3.2 — 2026-09-12
+
+### Fixes
+
+- Trims and joins of phone recordings re-encoded instead of copying.
+  Such a file reports an average frame rate (frames over its duration)
+  that no frame has, since its timestamps jitter, and the copy planner
+  compared that figure to the rate the probe had settled on. The planner
+  now reads the rate the same way. An iPhone HEVC clip trimmed with
+  `--keep-hdr` is copied, as ffmpeg's `-c copy` does.
+- When the streams could have been copied but the output cannot take
+  them (a codec the container cannot hold, a source with no audio,
+  sources that differ), the render's notes now say which.
+
 ## 0.3.1 — 2026-09-12
 
 Fixes from the first Mac run of 0.3.0.
