@@ -75,6 +75,8 @@ the format version it was written for.
 - When a copied cut moved to a keyframe, the clips' own audio was still
   cut at the time asked for, a few milliseconds off the picture. It now
   moves with the cut.
+- The test suite without the media feature (CI's second job) failed on
+  a test that needs media; it is gated now.
 
 ## 0.2.0 — 2026-09-11
 

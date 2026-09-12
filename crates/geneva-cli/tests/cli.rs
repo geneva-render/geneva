@@ -374,6 +374,7 @@ fn render_copies_plain_cuts_and_reencodes_with_exact() {
     assert_eq!(doc["frames"], 23);
 }
 
+#[cfg(feature = "media")]
 fn run_json(args: &[&str], extra: &[&std::path::Path]) -> serde_json::Value {
     let mut cmd = geneva();
     cmd.args(["--format", "json"]).args(args);
@@ -1026,6 +1027,7 @@ fn a_container_that_rejects_the_source_audio_is_rendered_not_copied() {
 }
 
 #[test]
+#[cfg(feature = "media")]
 fn verbs_keep_the_source_color_encoding() {
     let dir = tempfile::tempdir().unwrap();
     // A BT.601-tagged SD clip, as a camera or an old encoder would write.
