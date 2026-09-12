@@ -95,6 +95,17 @@ picture behind it on a canvas it does not cover). A clip using any of
 these is composited; the copy, smart-cut and direct paths do not apply
 to it, so the report's mode will be `render`.
 
+Version 0.3.0 kept the format at 0.2 and added optional encode fields:
+`encode.video.tune` (x264's names: `film`, `animation`, `grain`,
+`stillimage`, `fastdecode`, `zerolatency`), `encode.video.fixed_keyframes`
+(keyframes at `keyframe_interval` only; needs the interval, E422) and
+`encode.video.chunks` (`auto`, a number, or `1` to encode in one run).
+`output.color` may now be `pq` or `hlg` with BT.2020 on a ten-bit codec
+(`h265`, `av1`, `vp9`, `prores`; E420 otherwise); HDR sources are
+tone-mapped to SDR unless the output is HDR, and the verbs take
+`--keep-hdr`. Time zero of a file is its first video frame, so an audio
+track that starts later keeps its offset.
+
 ## Things that trip programs up
 
 - **Asset paths are relative to a root**, the timeline's directory by

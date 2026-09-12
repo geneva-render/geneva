@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
@@ -21,13 +21,13 @@ homepage = "https://github.com/geneva-render/geneva"
 authors = ["Francesco Benetti <francesco@benetti.dev>"]
 
 [workspace.dependencies]
-geneva-anim = { path = "crates/geneva-anim", version = "0.2.0" }
-geneva-color = { path = "crates/geneva-color", version = "0.2.0" }
-geneva-timeline = { path = "crates/geneva-timeline", version = "0.2.0" }
-geneva-render = { path = "crates/geneva-render", version = "0.2.0" }
-geneva-golden = { path = "crates/geneva-golden", version = "0.2.0" }
-geneva-media = { path = "crates/geneva-media", version = "0.2.0", default-features = false }
-geneva-media-link = { path = "crates/geneva-media-link", version = "0.2.0" }
+geneva-anim = { path = "crates/geneva-anim", version = "0.3.0" }
+geneva-color = { path = "crates/geneva-color", version = "0.3.0" }
+geneva-timeline = { path = "crates/geneva-timeline", version = "0.3.0" }
+geneva-render = { path = "crates/geneva-render", version = "0.3.0" }
+geneva-golden = { path = "crates/geneva-golden", version = "0.3.0" }
+geneva-media = { path = "crates/geneva-media", version = "0.3.0", default-features = false }
+geneva-media-link = { path = "crates/geneva-media-link", version = "0.3.0" }
 
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }

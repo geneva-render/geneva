@@ -5,7 +5,12 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
-## Unreleased
+## 0.3.0 — 2026-09-12
+
+HDR in and out, an A/V sync corpus that found eight timing bugs, chunked
+encoding across cores, and two encode fields: `tune` and
+`fixed_keyframes`. The timeline format stays 0.2; every new field is
+optional.
 
 ### Added
 
