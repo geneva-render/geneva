@@ -41,6 +41,12 @@ the format version it was written for.
 - Sources with other primaries than BT.709 (the BT.601 sets, BT.2020
   SDR) are converted into the working space; they used to be taken as
   BT.709.
+- HDR output: `output.color` may be `pq` or `hlg` with BT.2020 on a
+  ten-bit codec (`h265` on a hardware encoder, `av1`, `vp9`, `prores`);
+  E420 now says which codecs carry it. HDR sources keep their range in
+  an HDR composition, graphics land at reference white, and PQ outputs
+  carry static HDR10 metadata, the first source's or standard defaults.
+  `--keep-hdr` on the verbs keeps HDR sources HDR.
 
 ### Fixes
 

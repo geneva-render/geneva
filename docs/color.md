@@ -93,10 +93,20 @@ Y'CbCr with the output matrix and range, and the file is tagged with what
 was actually written. The default is BT.709 SDR, limited range. PNG frames
 from `geneva frame` are sRGB with straight alpha.
 
-HDR output (`pq` or `hlg` transfer) is rejected with E420 in this version.
-HDR input is decoded to linear values above 1.0 and will be tone-mapped once
-that path is implemented; it is never silently clipped by the color
-conversion itself.
+### HDR output
+
+`output.color` may be `pq` or `hlg` with BT.2020 primaries, on a codec
+that carries ten bits: `h265` (a hardware encoder, VideoToolbox or NVENC),
+`av1`, `vp9` (profile 2) or `prores`. H.264 through x264 is eight bits and
+is refused (E420). In an HDR composition the working space still has
+BT.709 primaries and `1.0` is reference white (203 nits): graphics and
+text land there, as BT.2408 recommends, and HDR sources keep their range
+instead of being tone-mapped, so their highlights pass through. On the way
+out the frame is converted to BT.2020 and encoded with the output curve.
+PQ outputs carry static HDR10 metadata: the first HDR source's, or
+standard defaults (a P3-D65 mastering display of 1000 nits, MaxCLL 1000,
+MaxFALL 400), in the container and in the stream where the encoder writes
+it. HLG needs none. The verbs take `--keep-hdr` to keep HDR sources HDR.
 
 ## Verification
 

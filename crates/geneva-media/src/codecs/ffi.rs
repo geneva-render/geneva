@@ -296,48 +296,176 @@ pub fn make_writable(
     Ok(())
 }
 
-/// The peak luminance in nits a stream's HDR metadata declares: the
-/// content light level's MaxCLL, else the mastering display's maximum.
-/// `None` without either.
-#[allow(unsafe_code)]
-pub fn hdr_peak_nits(params: &Parameters) -> Option<f64> {
-    use ffmpeg_next::ffi::{AVPacketSideDataType, av_packet_side_data_get};
-    // SAFETY: the parameters are valid for the borrow; the side data
-    // array and count come from the same struct, and each entry's bytes
-    // are read only within its declared size.
-    unsafe {
-        let raw = &*params.as_ptr();
-        let get = |kind: AVPacketSideDataType| {
-            let sd = av_packet_side_data_get(raw.coded_side_data, raw.nb_coded_side_data, kind);
-            if sd.is_null() {
-                None
-            } else {
-                Some(std::slice::from_raw_parts((*sd).data, (*sd).size))
-            }
+/// Static HDR10 metadata as the libraries lay it out: the mastering
+/// display block (`AVMasteringDisplayMetadata`) and the content light
+/// level block (`AVContentLightMetadata`), kept as bytes so a source's
+/// can be carried to the output as it was.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HdrMetadata {
+    mastering: Option<Vec<u8>>,
+    light: Option<Vec<u8>>,
+}
+
+impl HdrMetadata {
+    /// Standard defaults for a PQ output without a source to copy from: a
+    /// P3-D65 mastering display of 1000 nits (0.0001 nits black), MaxCLL
+    /// 1000 and MaxFALL 400.
+    pub fn defaults() -> Self {
+        let rational = |num: i32, den: i32| {
+            let mut v = num.to_ne_bytes().to_vec();
+            v.extend_from_slice(&den.to_ne_bytes());
+            v
         };
-        // AVContentLightMetadata: two unsigned ints, MaxCLL then MaxFALL.
-        if let Some(bytes) = get(AVPacketSideDataType::AV_PKT_DATA_CONTENT_LIGHT_LEVEL) {
-            if bytes.len() >= 4 {
-                let max_cll = u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        let mut mastering = Vec::with_capacity(88);
+        // Display primaries R, G, B and the white point, as x then y,
+        // in fifty-thousandths (the SEI's unit).
+        for (x, y) in [
+            (34_000, 16_000),
+            (13_250, 34_500),
+            (7_500, 3_000),
+            (15_635, 16_450),
+        ] {
+            mastering.extend(rational(x, 50_000));
+            mastering.extend(rational(y, 50_000));
+        }
+        mastering.extend(rational(1, 10_000));
+        mastering.extend(rational(1000, 1));
+        mastering.extend(1i32.to_ne_bytes());
+        mastering.extend(1i32.to_ne_bytes());
+        let mut light = Vec::with_capacity(8);
+        light.extend(1000u32.to_ne_bytes());
+        light.extend(400u32.to_ne_bytes());
+        Self {
+            mastering: Some(mastering),
+            light: Some(light),
+        }
+    }
+
+    /// The peak the metadata declares: MaxCLL, else the mastering
+    /// display's maximum luminance.
+    pub fn peak_nits(&self) -> Option<f64> {
+        if let Some(light) = &self.light {
+            if light.len() >= 4 {
+                let max_cll = u32::from_ne_bytes([light[0], light[1], light[2], light[3]]);
                 if max_cll > 0 {
                     return Some(f64::from(max_cll));
                 }
             }
         }
-        // AVMasteringDisplayMetadata: three primaries and the white point
-        // as pairs of rationals (64 bytes), then min and max luminance as
-        // rationals, then two flags.
-        if let Some(bytes) = get(AVPacketSideDataType::AV_PKT_DATA_MASTERING_DISPLAY_METADATA) {
-            if bytes.len() >= 88 {
-                let int = |at: usize| {
-                    i32::from_ne_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
-                };
-                let (num, den, has_luminance) = (int(72), int(76), int(84));
-                if has_luminance != 0 && den != 0 && num > 0 {
-                    return Some(f64::from(num) / f64::from(den));
-                }
+        let bytes = self.mastering.as_ref()?;
+        if bytes.len() < 88 {
+            return None;
+        }
+        let int = |at: usize| {
+            i32::from_ne_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
+        };
+        let (num, den, has_luminance) = (int(72), int(76), int(84));
+        (has_luminance != 0 && den != 0 && num > 0).then(|| f64::from(num) / f64::from(den))
+    }
+}
+
+/// The static HDR metadata a stream carries, if any block is present.
+#[allow(unsafe_code)]
+pub fn hdr_metadata(params: &Parameters) -> Option<HdrMetadata> {
+    use ffmpeg_next::ffi::{AVPacketSideDataType, av_packet_side_data_get};
+    // SAFETY: the parameters are valid for the borrow; the side data
+    // array and count come from the same struct, and each entry's bytes
+    // are read only within its declared size.
+    let get = |kind: AVPacketSideDataType| unsafe {
+        let raw = &*params.as_ptr();
+        let sd = av_packet_side_data_get(raw.coded_side_data, raw.nb_coded_side_data, kind);
+        if sd.is_null() {
+            None
+        } else {
+            Some(std::slice::from_raw_parts((*sd).data, (*sd).size).to_vec())
+        }
+    };
+    let meta = HdrMetadata {
+        mastering: get(AVPacketSideDataType::AV_PKT_DATA_MASTERING_DISPLAY_METADATA),
+        light: get(AVPacketSideDataType::AV_PKT_DATA_CONTENT_LIGHT_LEVEL),
+    };
+    (meta.mastering.is_some() || meta.light.is_some()).then_some(meta)
+}
+
+/// The peak luminance in nits a stream's HDR metadata declares.
+pub fn hdr_peak_nits(params: &Parameters) -> Option<f64> {
+    hdr_metadata(params).and_then(|m| m.peak_nits())
+}
+
+/// Attaches the metadata to an output stream's parameters, for the
+/// container to write (MP4's `mdcv` and `clli`, Matroska's mastering
+/// element).
+#[allow(unsafe_code)]
+pub fn attach_hdr_metadata_to_stream(
+    stream: &mut ffmpeg_next::format::stream::StreamMut,
+    meta: &HdrMetadata,
+) {
+    use ffmpeg_next::ffi::{AVPacketSideDataType, av_malloc, av_packet_side_data_add};
+    let blocks = [
+        (
+            AVPacketSideDataType::AV_PKT_DATA_MASTERING_DISPLAY_METADATA,
+            &meta.mastering,
+        ),
+        (
+            AVPacketSideDataType::AV_PKT_DATA_CONTENT_LIGHT_LEVEL,
+            &meta.light,
+        ),
+    ];
+    for (kind, bytes) in blocks {
+        let Some(bytes) = bytes else { continue };
+        // SAFETY: the stream is valid for the borrow; the buffer is
+        // allocated with the library's allocator and handed to it, which
+        // owns it from then on.
+        unsafe {
+            let par = (*stream.as_mut_ptr()).codecpar;
+            let buf = av_malloc(bytes.len()).cast::<u8>();
+            if buf.is_null() {
+                continue;
+            }
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
+            let added = av_packet_side_data_add(
+                &raw mut (*par).coded_side_data,
+                &raw mut (*par).nb_coded_side_data,
+                kind,
+                buf.cast(),
+                bytes.len(),
+                0,
+            );
+            if added.is_null() {
+                ffmpeg_next::ffi::av_free(buf.cast());
             }
         }
     }
-    None
+}
+
+/// Attaches the metadata to a frame, for encoders that write it into
+/// the stream (HEVC's SEI messages, AV1's metadata OBUs).
+#[allow(unsafe_code)]
+pub fn attach_hdr_metadata_to_frame(
+    frame: &mut ffmpeg_next::util::frame::Video,
+    meta: &HdrMetadata,
+) {
+    use ffmpeg_next::ffi::{AVFrameSideDataType, av_frame_new_side_data};
+    let blocks = [
+        (
+            AVFrameSideDataType::AV_FRAME_DATA_MASTERING_DISPLAY_METADATA,
+            &meta.mastering,
+        ),
+        (
+            AVFrameSideDataType::AV_FRAME_DATA_CONTENT_LIGHT_LEVEL,
+            &meta.light,
+        ),
+    ];
+    for (kind, bytes) in blocks {
+        let Some(bytes) = bytes else { continue };
+        // SAFETY: the frame is valid for the borrow; the library allocates
+        // the side data buffer at the size asked for, and it is filled
+        // within that size.
+        unsafe {
+            let sd = av_frame_new_side_data(frame.as_mut_ptr(), kind, bytes.len());
+            if !sd.is_null() {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), (*sd).data, bytes.len());
+            }
+        }
+    }
 }

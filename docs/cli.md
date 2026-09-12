@@ -130,6 +130,7 @@ otherwise. The printed timeline (`--show-timeline`) shows the choice.
 | `--tune NAME` | What the picture is like, in x264's names: `film`, `animation`, `grain`, `stillimage`, `fastdecode`, `zerolatency`. Encoders without an equivalent say so in the report. Forces a re-encode. |
 | `--keyframe-interval SECONDS` | Seconds between keyframes. `--for` sets its own. Forces a re-encode. |
 | `--fixed-keyframes` | Keyframes at the interval only, never at scene changes, for streaming platforms and segmenters. Needs `--keyframe-interval` or `--for`. Forces a re-encode. |
+| `--keep-hdr` | Keep HDR sources HDR: the output takes their tags (PQ or HLG, BT.2020) and a ten-bit codec, `h265` unless `--codec` says otherwise (`h265` needs a hardware encoder; `av1` and `vp9` are software). Without it, HDR sources are tone-mapped to SDR. |
 | `--no-audio` | Write no audio track. |
 | `--exact` | Cut on the exact frame; a [smart cut](#smart-cut) when the source allows. |
 | `--show-timeline` | Print the timeline the verb built instead of rendering it. Asset paths in it are relative to the directory printed on stderr. |

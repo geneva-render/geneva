@@ -184,8 +184,19 @@ struct Current {
 
 impl VideoReader {
     /// Opens the first video stream of `path`. `overrides` are color tags
-    /// from the timeline that win over what the file declares.
+    /// from the timeline that win over what the file declares. HDR
+    /// material is tone-mapped into the SDR working space.
     pub fn open(path: &Path, overrides: ColorTags) -> Result<Self, MediaError> {
+        Self::open_with(path, overrides, true)
+    }
+
+    /// As [`open`](Self::open); with `tone_map` false, HDR material keeps
+    /// its range (light past reference white), for an HDR output.
+    pub fn open_with(
+        path: &Path,
+        overrides: ColorTags,
+        tone_map: bool,
+    ) -> Result<Self, MediaError> {
         let (inner, ctx) = StreamDecoder::open(path, Type::Video)?;
         let mut decoder = ctx.decoder();
         // With the packets' time base known, the decoder times its frames
@@ -247,7 +258,11 @@ impl VideoReader {
                 .expect("stream exists");
             ffi::hdr_peak_nits(&stream.parameters())
         };
-        let hdr = HdrToSdr::new(tags, peak);
+        let hdr = if tone_map {
+            HdrToSdr::new(tags, peak)
+        } else {
+            None
+        };
         Ok(Self {
             inner,
             decoder,

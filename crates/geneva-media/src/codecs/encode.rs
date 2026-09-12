@@ -75,6 +75,9 @@ pub struct VideoSettings {
     pub tune: Option<VideoTune>,
     /// Keyframes at the interval only, never at scene changes.
     pub fixed_keyframes: bool,
+    /// Static HDR10 metadata to write with a PQ output: the source's,
+    /// or standard defaults. Ignored for SDR and HLG outputs.
+    pub hdr_metadata: Option<ffi::HdrMetadata>,
 }
 
 /// A level string such as "4.1" as the integer code encoders use (41).
@@ -241,12 +244,20 @@ pub fn audio_sample_rate_for(codec: AudioCodec, container: Option<Container>, wa
 }
 
 /// The sample layout a codec (and profile) takes.
-pub fn plane_format_for(codec: VideoCodec, profile: Option<VideoProfile>) -> PlaneFormat {
+pub fn plane_format_for(
+    codec: VideoCodec,
+    profile: Option<VideoProfile>,
+    hdr: bool,
+) -> PlaneFormat {
     match codec {
-        VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Vp9 | VideoCodec::Av1 => {
-            PlaneFormat::Yuv420p8
-        }
-        VideoCodec::Mjpeg => PlaneFormat::Yuv420p8,
+        // H.264 through x264 is eight bits; HEVC, VP9 and AV1 carry ten
+        // for an HDR output.
+        VideoCodec::H265 | VideoCodec::Vp9 | VideoCodec::Av1 if hdr => PlaneFormat::Yuv420p10,
+        VideoCodec::H264
+        | VideoCodec::H265
+        | VideoCodec::Vp9
+        | VideoCodec::Av1
+        | VideoCodec::Mjpeg => PlaneFormat::Yuv420p8,
         VideoCodec::Png => PlaneFormat::Rgba8,
         VideoCodec::Prores => match profile.unwrap_or(VideoProfile::Hq) {
             VideoProfile::P4444 | VideoProfile::P4444Xq => PlaneFormat::Yuv444p10,
@@ -285,6 +296,7 @@ pub fn output_tags_for(codec: VideoCodec, tags: ResolvedTags) -> ResolvedTags {
 pub(super) fn pixel_of(format: PlaneFormat) -> Pixel {
     match format {
         PlaneFormat::Yuv420p8 => Pixel::YUV420P,
+        PlaneFormat::Yuv420p10 => Pixel::YUV420P10LE,
         PlaneFormat::Yuv422p8 => Pixel::YUV422P,
         PlaneFormat::Yuv422p10 => Pixel::YUV422P10LE,
         PlaneFormat::Yuv444p10 => Pixel::YUV444P10LE,
@@ -296,6 +308,7 @@ pub(super) fn pixel_of(format: PlaneFormat) -> Pixel {
 pub(super) fn format_of(pixel: Pixel) -> Option<PlaneFormat> {
     match pixel {
         Pixel::YUV420P => Some(PlaneFormat::Yuv420p8),
+        Pixel::YUV420P10LE => Some(PlaneFormat::Yuv420p10),
         Pixel::YUV422P => Some(PlaneFormat::Yuv422p8),
         Pixel::YUV422P10LE => Some(PlaneFormat::Yuv422p10),
         Pixel::YUV444P10LE => Some(PlaneFormat::Yuv444p10),
@@ -464,7 +477,16 @@ fn open_video_encoder(
         .map_err(|e| codec_error(format!("{name}: encoder setup"), e))?;
     venc.set_width(settings.width);
     venc.set_height(settings.height);
-    venc.set_format(pixel_of(plane_format_for(settings.codec, settings.profile)));
+    let format = plane_format_for(settings.codec, settings.profile, settings.color.is_hdr());
+    // Hardware encoders take 10-bit 4:2:0 as P010 (chroma interleaved,
+    // samples in the high bits); the planes are packed so on the way in.
+    let hardware_10bit = format == PlaneFormat::Yuv420p10
+        && (name.ends_with("_videotoolbox") || name.ends_with("_nvenc"));
+    venc.set_format(if hardware_10bit {
+        Pixel::P010LE
+    } else {
+        pixel_of(format)
+    });
     venc.set_time_base(video_time_base);
     venc.set_frame_rate(Some(fps));
     let (space, range, primaries, transfer) = tags::to_codec_tags(settings.color);
@@ -493,6 +515,10 @@ fn open_video_encoder(
             opts.set("crf", &settings.crf.unwrap_or(31).to_string());
             opts.set("b", "0");
             opts.set("row-mt", "1");
+            if format.bits() > 8 {
+                // Profile 2 carries 10-bit 4:2:0.
+                opts.set("profile", "2");
+            }
             match tune {
                 Some(VideoTune::Film) => opts.set("tune-content", "film"),
                 Some(_) => no_tune(&mut notes),
@@ -616,6 +642,41 @@ fn open_video_encoder(
     Ok((venc, notes))
 }
 
+/// Packs 10-bit 4:2:0 planes into a P010 frame: 16-bit words with the
+/// ten bits at the top, chroma interleaved Cb, Cr.
+fn pack_p010(planes: &Planes, out: &mut frame::Video) {
+    let [y, cb, cr] = &planes.planes[..] else {
+        unreachable!("4:2:0 has three planes");
+    };
+    let stride = out.stride(0);
+    let dst = out.data_mut(0);
+    for row in 0..y.height {
+        let src = &y.data[row * y.stride..row * y.stride + y.width * 2];
+        let line = &mut dst[row * stride..row * stride + y.width * 2];
+        for (d, s) in line.chunks_exact_mut(2).zip(src.chunks_exact(2)) {
+            let v = u16::from_le_bytes([s[0], s[1]]) << 6;
+            d.copy_from_slice(&v.to_le_bytes());
+        }
+    }
+    let stride = out.stride(1);
+    let dst = out.data_mut(1);
+    for row in 0..cb.height {
+        let b = &cb.data[row * cb.stride..row * cb.stride + cb.width * 2];
+        let r = &cr.data[row * cr.stride..row * cr.stride + cr.width * 2];
+        let line = &mut dst[row * stride..row * stride + cb.width * 4];
+        for ((d, b), r) in line
+            .chunks_exact_mut(4)
+            .zip(b.chunks_exact(2))
+            .zip(r.chunks_exact(2))
+        {
+            let cb = u16::from_le_bytes([b[0], b[1]]) << 6;
+            let cr = u16::from_le_bytes([r[0], r[1]]) << 6;
+            d[..2].copy_from_slice(&cb.to_le_bytes());
+            d[2..].copy_from_slice(&cr.to_le_bytes());
+        }
+    }
+}
+
 /// Opens the first video encoder candidate that accepts the settings and
 /// adds its stream to the output.
 fn open_video_track(
@@ -634,7 +695,16 @@ fn open_video_track(
             ),
         });
     }
-    let format = plane_format_for(settings.codec, settings.profile);
+    let format = plane_format_for(settings.codec, settings.profile, settings.color.is_hdr());
+    if settings.color.is_hdr() && format.bits() < 10 {
+        return Err(MediaError::Codec {
+            context: "encoder setup".to_owned(),
+            reason: format!(
+                "an HDR output needs a ten-bit codec (h265, av1, vp9 or prores), not {:?}",
+                settings.codec
+            ),
+        });
+    }
     let fps = Rational::new(settings.fps.numer() as i32, settings.fps.denom() as i32);
     let time_base = Rational::new(fps.denominator(), fps.numerator());
     if let Some(stitch) = settings.stitch.clone() {
@@ -709,6 +779,17 @@ fn open_video_track(
     }
     let (backend, name, notes) = match (opened, last_error) {
         (Some(v), _) => v,
+        // A codec with hardware encoders only: say so, rather than the
+        // last driver's complaint.
+        (None, Some(e)) if software_encoder_names(settings.codec).is_empty() => {
+            return Err(MediaError::Codec {
+                context: "encoder setup".to_owned(),
+                reason: format!(
+                    "{:?} needs a hardware encoder (VideoToolbox or NVENC) and none could be opened here ({e}); for ten bits without one, use av1 or vp9",
+                    settings.codec
+                ),
+            });
+        }
         (None, Some(e)) => return Err(e),
         (None, None) => {
             return Err(MediaError::MissingEncoder {
@@ -739,6 +820,11 @@ fn open_video_track(
     stream.set_time_base(time_base);
     stream.set_avg_frame_rate(fps);
     stream.set_rate(fps);
+    if let Some(meta) = &settings.hdr_metadata {
+        if settings.color.transfer == geneva_color::Transfer::Pq {
+            ffi::attach_hdr_metadata_to_stream(&mut stream, meta);
+        }
+    }
     Ok(VideoTrack {
         backend,
         scratch: frame::Video::empty(),
@@ -1231,14 +1317,23 @@ impl Encoder {
                     // same storage is written again.
                     ffi::make_writable(out).map_err(|e| codec_error("encoding video", e))?;
                 }
-                for (i, plane) in planes.planes.iter().enumerate() {
-                    let stride = out.stride(i);
-                    let row_bytes = plane.width * planes.format.bytes_per_sample();
-                    let dst = out.data_mut(i);
-                    for row in 0..plane.height {
-                        dst[row * stride..row * stride + row_bytes].copy_from_slice(
-                            &plane.data[row * plane.stride..row * plane.stride + row_bytes],
-                        );
+                if out.format() == Pixel::P010LE {
+                    pack_p010(planes, out);
+                } else {
+                    for (i, plane) in planes.planes.iter().enumerate() {
+                        let stride = out.stride(i);
+                        let row_bytes = plane.width * planes.format.bytes_per_sample();
+                        let dst = out.data_mut(i);
+                        for row in 0..plane.height {
+                            dst[row * stride..row * stride + row_bytes].copy_from_slice(
+                                &plane.data[row * plane.stride..row * plane.stride + row_bytes],
+                            );
+                        }
+                    }
+                }
+                if let Some(meta) = &track.settings.hdr_metadata {
+                    if track.settings.color.transfer == geneva_color::Transfer::Pq {
+                        ffi::attach_hdr_metadata_to_frame(out, meta);
                     }
                 }
                 let (space, range, primaries, transfer) = tags::to_codec_tags(track.settings.color);

@@ -29,12 +29,13 @@ pub use assets::MediaAssets;
 #[cfg(feature = "media")]
 pub use codecs::{
     AudioCopy, AudioEncoder, AudioGrid, AudioReader, AudioSegment, AudioSettings, CopiedPacket,
-    CopyPlan, CopyReport, CopySegment, DirectSource, EncodeSettings, Encoder, Packet, Segment,
-    SmartPlan, SourceStream, StitchSettings, SubtitleSettings, SubtitleStreamInfo, VideoReader,
-    VideoSettings, audio_sample_rate_for, container_accepts_audio, container_accepts_video,
-    container_for, default_codecs, default_image_codec, output_tags_for, plan_smart_cut,
-    plan_stream_copy, plane_format_for, probe, read_copied, read_copied_audio, read_subtitles,
-    stream_copy, subtitle_streams, system_x264, system_x264_error,
+    CopyPlan, CopyReport, CopySegment, DirectSource, EncodeSettings, Encoder, HdrMetadata, Packet,
+    Segment, SmartPlan, SourceStream, StitchSettings, SubtitleSettings, SubtitleStreamInfo,
+    VideoReader, VideoSettings, audio_sample_rate_for, container_accepts_audio,
+    container_accepts_video, container_for, default_codecs, default_image_codec, hdr_metadata_of,
+    output_tags_for, plan_smart_cut, plan_stream_copy, plane_format_for, probe, read_copied,
+    read_copied_audio, read_subtitles, stream_copy, subtitle_streams, system_x264,
+    system_x264_error,
 };
 pub use info::{AudioInfo, MediaInfo, SubtitleInfo, VideoInfo};
 

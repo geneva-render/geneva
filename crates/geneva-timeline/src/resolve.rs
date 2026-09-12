@@ -19,7 +19,7 @@ use crate::ratio::Ratio;
 use crate::schema::{
     ACCEPTED_VERSIONS, Asset, AssetKind, AudioOutput, AudioTrack, BlendMode, CompositionDef, Crop,
     Effect, Encode, FORMAT_VERSION, Fit, Layer, Mask, ShapeKind, Source, TextSource, Timeline,
-    Transform, TransitionKind,
+    Transform, TransitionKind, VideoCodec,
 };
 use crate::time::Time;
 
@@ -581,14 +581,30 @@ impl Resolver<'_> {
             range: requested.range.unwrap_or(ResolvedTags::SDR_VIDEO.range),
         };
         if color.is_hdr() {
-            self.push(
-                Diagnostic::error(
-                    "E420",
-                    out_path.key("color").key("transfer"),
-                    "HDR output is not supported",
-                )
-                .with_help("remove output.color.transfer or set it to \"bt709\""),
+            // HDR needs ten bits, which only some codecs carry; the
+            // default codec (H.264) does not.
+            let codec = out
+                .encode
+                .as_ref()
+                .and_then(|e| e.video.as_ref())
+                .and_then(|v| v.codec);
+            let ten_bit = matches!(
+                codec,
+                Some(VideoCodec::H265 | VideoCodec::Av1 | VideoCodec::Vp9 | VideoCodec::Prores)
             );
+            if !ten_bit {
+                self.push(
+                    Diagnostic::error(
+                        "E420",
+                        out_path.key("color").key("transfer"),
+                        match codec {
+                            Some(c) => format!("an HDR output needs a ten-bit codec; {c:?} carries eight bits"),
+                            None => "an HDR output needs a ten-bit codec, and the default is H.264".to_owned(),
+                        },
+                    )
+                    .with_help("set encode.video.codec to \"h265\", \"av1\", \"vp9\" or \"prores\", or the transfer to \"bt709\""),
+                );
+            }
         }
         if let Some(video) = out.encode.as_ref().and_then(|e| e.video.as_ref()) {
             let vpath = out_path.key("encode").key("video");

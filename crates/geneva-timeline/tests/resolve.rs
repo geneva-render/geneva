@@ -286,9 +286,18 @@ fn tune_names_are_x264s() {
 }
 
 #[test]
-fn hdr_output_is_refused() {
-    let text = r#"{"geneva":"0.1","output":{"width":640,"height":360,"fps":30,"duration":1,"color":{"transfer":"pq"}}}"#;
+fn hdr_output_needs_a_ten_bit_codec() {
+    // No codec: the default is H.264, eight bits.
+    let text = r#"{"geneva":"0.2","output":{"width":640,"height":360,"fps":30,"duration":1,"color":{"transfer":"pq"}}}"#;
     assert!(errors(text).iter().any(|(c, _)| *c == "E420"));
+    let text = r#"{"geneva":"0.2","output":{"width":640,"height":360,"fps":30,"duration":1,"color":{"transfer":"hlg"},"encode":{"video":{"codec":"h264"}}}}"#;
+    assert!(errors(text).iter().any(|(c, _)| *c == "E420"));
+    for codec in ["h265", "av1", "vp9", "prores"] {
+        let text = format!(
+            r#"{{"geneva":"0.2","output":{{"width":640,"height":360,"fps":30,"duration":1,"color":{{"primaries":"bt2020","transfer":"pq","matrix":"bt2020-ncl"}},"encode":{{"video":{{"codec":"{codec}"}}}}}}}}"#
+        );
+        assert!(errors(&text).is_empty(), "{codec}: {:?}", errors(&text));
+    }
 }
 
 #[test]

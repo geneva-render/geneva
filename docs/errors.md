@@ -76,7 +76,7 @@ result is not what was intended. Notes are informational.
 | E402 | A value is out of range: opacity outside 0..=1, non-positive sizes or durations, negative stroke widths or radii, font weight outside 100..=900. |
 | E405 | A text source has neither `text` nor `words`. |
 | E411 | Words are out of order, overlapping, or have an end not after their start. |
-| E420 | The output color tags describe HDR, which is not supported. |
+| E420 | The output color tags describe HDR (`pq` or `hlg`) but `encode.video.codec` carries eight bits or is unset (the default, H.264); set it to `h265`, `av1`, `vp9` or `prores`. |
 | E421 | `encode.video.profile` names a profile of another codec, or is set without a codec. |
 | E422 | `encode.video.fixed_keyframes` is set without `encode.video.keyframe_interval`. |
 | W401 | Output width or height is odd; most codecs need even dimensions. |

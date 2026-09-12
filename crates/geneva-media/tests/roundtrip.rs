@@ -150,6 +150,7 @@ fn encoded_solid_color_survives_the_round_trip() {
             level: None,
             tune: None,
             fixed_keyframes: false,
+            hdr_metadata: None,
             stitch: None,
         }),
         container: None,
@@ -303,6 +304,7 @@ fn audio_lands_at_its_timeline_position_in_the_output_file() {
             level: None,
             tune: None,
             fixed_keyframes: false,
+            hdr_metadata: None,
             stitch: None,
         }),
         container: None,
@@ -846,6 +848,7 @@ fn solid_settings(
             level: None,
             tune: None,
             fixed_keyframes: false,
+            hdr_metadata: None,
             stitch: None,
         }),
         container: None,
@@ -1404,4 +1407,100 @@ fn corpus_audio_starts_where_it_should_through_both_readers() {
         }
     }
     assert!(problems.is_empty(), "\n{}", problems.join("\n"));
+}
+
+/// HDR output settings: PQ or HLG with BT.2020, through the ten-bit
+/// software VP9 encoder.
+fn hdr_settings(transfer: Transfer) -> EncodeSettings {
+    let mut settings = solid_settings(VideoCodec::Vp9, None, 64, 64);
+    let v = settings.video.as_mut().unwrap();
+    v.color = ResolvedTags {
+        primaries: Primaries::Bt2020,
+        transfer,
+        matrix: Matrix::Bt2020Ncl,
+        range: Range::Limited,
+    };
+    v.crf = Some(4);
+    v.hdr_metadata = (transfer == Transfer::Pq).then(geneva_media::HdrMetadata::defaults);
+    settings
+}
+
+/// A frame of one linear gray, possibly brighter than reference white.
+fn gray_frame(level: f32) -> Frame {
+    let mut frame = Frame::new(64, 64, Color::BLACK);
+    for px in frame.pixels_mut() {
+        *px = geneva_color::LinearRgba {
+            r: level,
+            g: level,
+            b: level,
+            a: 1.0,
+        };
+    }
+    frame
+}
+
+/// The luma code at the center of the frame shown at `t`, read without
+/// tone-mapping, from a ten-bit 4:2:0 stream.
+fn luma_code_at(path: &Path, t: Ratio) -> u16 {
+    let mut reader = VideoReader::open_with(path, ColorTags::default(), false).unwrap();
+    let raw = reader.raw_frame_at(t).unwrap();
+    assert_eq!(raw.format(), ffmpeg_next::format::Pixel::YUV420P10LE);
+    let at = 32 * raw.stride(0) + 32 * 2;
+    u16::from_le_bytes([raw.data(0)[at], raw.data(0)[at + 1]])
+}
+
+#[test]
+fn hdr_output_writes_ten_bit_pq_and_hlg_with_their_tags() {
+    let dir = tempfile::tempdir().unwrap();
+    // Reference white and a 1000-nit gray, in units of reference white.
+    let white = gray_frame(1.0);
+    let bright = gray_frame((1000.0 / geneva_color::hdr::REFERENCE_WHITE_NITS) as f32);
+    for (transfer, code_white, code_bright) in [
+        // Limited-range ten-bit codes: 64 + 876 × the signal.
+        (Transfer::Pq, 64.0 + 876.0 * 0.5807, 64.0 + 876.0 * 0.7518),
+        (Transfer::Hlg, 64.0 + 876.0 * 0.75, 64.0 + 876.0 * 1.0),
+    ] {
+        let out = dir.path().join(format!("{transfer:?}.mkv"));
+        let mut enc = Encoder::new(&out, hdr_settings(transfer)).unwrap();
+        for _ in 0..25 {
+            enc.push_frame(&white).unwrap();
+        }
+        for _ in 0..25 {
+            enc.push_frame(&bright).unwrap();
+        }
+        enc.finish().unwrap();
+        let info = probe(&out).unwrap();
+        let v = info.video.unwrap();
+        assert_eq!(v.color.transfer, Some(transfer), "{transfer:?}");
+        assert_eq!(v.color.primaries, Some(Primaries::Bt2020), "{transfer:?}");
+        assert_eq!(v.pixel_format, "yuv420p10le", "{transfer:?}");
+        let got_white = f64::from(luma_code_at(&out, Ratio::new(12, 25)));
+        let got_bright = f64::from(luma_code_at(&out, Ratio::new(37, 25)));
+        assert!(
+            (got_white - code_white).abs() <= 4.0,
+            "{transfer:?} white: code {got_white}, wanted {code_white:.0}"
+        );
+        assert!(
+            (got_bright - code_bright).abs() <= 4.0,
+            "{transfer:?} 1000 nits: code {got_bright}, wanted {code_bright:.0}"
+        );
+        let meta = geneva_media::hdr_metadata_of(&out).unwrap();
+        if transfer == Transfer::Pq {
+            let meta = meta.expect("PQ output carries static metadata");
+            assert_eq!(meta.peak_nits(), Some(1000.0));
+        } else {
+            assert!(meta.is_none(), "HLG carries no static metadata");
+        }
+    }
+}
+
+#[test]
+fn an_hdr_output_refuses_an_eight_bit_codec() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut settings = hdr_settings(Transfer::Pq);
+    settings.video.as_mut().unwrap().codec = VideoCodec::H264;
+    let err = Encoder::new(&dir.path().join("x.mp4"), settings)
+        .err()
+        .expect("H.264 cannot carry HDR");
+    assert!(err.to_string().contains("ten-bit"), "{err}");
 }

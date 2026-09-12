@@ -140,6 +140,30 @@ mod imp {
 
     use super::{RenderMode, RenderOverrides, RenderStats};
 
+    /// The static HDR10 metadata for a PQ output: the first HDR video
+    /// asset's, or standard defaults. `None` for SDR and HLG outputs.
+    fn hdr_metadata_for(comp: &Composition, root: &Path) -> Option<geneva_media::HdrMetadata> {
+        if comp.color.transfer != geneva_color::Transfer::Pq {
+            return None;
+        }
+        let mut ids: Vec<&String> = comp.assets.keys().collect();
+        ids.sort();
+        for id in ids {
+            let asset = &comp.assets[id];
+            if asset
+                .color
+                .transfer
+                .is_some_and(|t| t != geneva_color::Transfer::Pq)
+            {
+                continue;
+            }
+            if let Ok(Some(meta)) = geneva_media::hdr_metadata_of(&root.join(&asset.src)) {
+                return Some(meta);
+            }
+        }
+        Some(geneva_media::HdrMetadata::defaults())
+    }
+
     pub fn probe(path: &Path) -> Result<MediaInfo> {
         geneva_media::probe(path).with_context(|| format!("probing {}", path.display()))
     }
@@ -322,6 +346,7 @@ mod imp {
                 level: video.and_then(|v| v.level.clone()),
                 tune: video.and_then(|v| v.tune),
                 fixed_keyframes: video.and_then(|v| v.fixed_keyframes).unwrap_or(false),
+                hdr_metadata: hdr_metadata_for(comp, root),
                 stitch: None,
             })
         };
@@ -453,7 +478,7 @@ mod imp {
         // compositing pipeline.
         let mut direct = match &settings.video {
             Some(v) => {
-                let format = geneva_media::plane_format_for(v.codec, v.profile);
+                let format = geneva_media::plane_format_for(v.codec, v.profile, v.color.is_hdr());
                 let tags = geneva_media::output_tags_for(v.codec, v.color);
                 geneva_media::DirectSource::open(comp, root, format, tags).map_err(media_err)?
             }
@@ -466,7 +491,7 @@ mod imp {
             (None, Some(v))
                 if geneva_render::CpuRenderer::<MediaAssets>::overlays_are_plain(comp) =>
             {
-                let format = geneva_media::plane_format_for(v.codec, v.profile);
+                let format = geneva_media::plane_format_for(v.codec, v.profile, v.color.is_hdr());
                 let tags = geneva_media::output_tags_for(v.codec, v.color);
                 geneva_media::DirectSource::open_base(comp, root, format, tags)
                     .map_err(media_err)?
@@ -488,7 +513,7 @@ mod imp {
             notes.push(note);
         }
         notes.extend(encoder.video_setting_notes());
-        let mut renderer = CpuRenderer::new(MediaAssets::new(root));
+        let mut renderer = CpuRenderer::new(MediaAssets::new(root).keep_hdr(comp.color.is_hdr()));
         let total = if has_video { comp.frame_count() } else { 0 };
         let video_format = if has_video {
             Some(encoder.video_format().map_err(media_err)?)

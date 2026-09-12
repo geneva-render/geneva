@@ -106,7 +106,7 @@ object with a `keyframes` array:
 | `fps` | yes | | Frame rate. |
 | `duration` | no | end of the last clip | Total length. Clips running past it are cut (W301). |
 | `background` | no | `"black"` | Clear color. Use `"transparent"` for alpha output. |
-| `color` | no | BT.709 SDR, limited range | Color tags for the output; see [color.md](color.md). HDR transfers are rejected (E420). |
+| `color` | no | BT.709 SDR, limited range | Color tags for the output; see [color.md](color.md). `pq` and `hlg` need a ten-bit codec, `h265`, `av1`, `vp9` or `prores` (E420). |
 | `audio.sample_rate` | no | 48000 | Output sample rate. |
 | `audio.channels` | no | 2 | 1 or 2. |
 | `encode.container` | no | from the output file extension | `mp4`, `mov`, `mkv`, `webm`, `mxf`; audio only: `m4a`, `ogg`, `flac`, `wav`, `mp3`; `image-sequence` (one PNG or JPEG file per frame, the output path being a pattern such as `frames/%04d.png`). Audio-only containers write no video; image sequences write no audio. |

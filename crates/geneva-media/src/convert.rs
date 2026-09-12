@@ -52,6 +52,26 @@ fn from_linear_lut(transfer: Transfer) -> &'static Lut {
     build_lut(&LUTS, transfer, |x| transfer.from_linear(x) as f32)
 }
 
+/// Per-transfer lookup from linear light over `[0, peak]`, indexed by
+/// the fourth root of the fraction of the peak, to the non-linear value:
+/// for HDR outputs, whose light runs far past reference white.
+fn from_linear_hdr_lut(transfer: Transfer) -> &'static Lut {
+    static LUTS: LutCache = OnceLock::new();
+    let peak = hdr_peak(transfer);
+    build_lut(&LUTS, transfer, move |t| {
+        transfer.from_linear(t.powi(4) * peak) as f32
+    })
+}
+
+/// The light an HDR transfer can carry, in units of reference white.
+fn hdr_peak(transfer: Transfer) -> f64 {
+    match transfer {
+        Transfer::Pq => 10_000.0 / geneva_color::hdr::REFERENCE_WHITE_NITS,
+        Transfer::Hlg => 1000.0 / geneva_color::hdr::REFERENCE_WHITE_NITS,
+        _ => 1.0,
+    }
+}
+
 /// Table index for a value nominally in `[0, 1]`. The float-to-integer
 /// cast saturates and maps NaN to zero, and the index is narrowed to the
 /// table's range, so no bounds check is needed at the lookup.
@@ -324,6 +344,8 @@ pub fn rgba8_into(
 pub enum PlaneFormat {
     /// 8-bit Y'CbCr with chroma halved both ways.
     Yuv420p8,
+    /// 10-bit Y'CbCr with chroma halved both ways, little-endian words.
+    Yuv420p10,
     /// 8-bit Y'CbCr with chroma halved horizontally.
     Yuv422p8,
     /// 10-bit Y'CbCr with chroma halved horizontally, little-endian words.
@@ -339,7 +361,7 @@ impl PlaneFormat {
     pub fn bits(self) -> u32 {
         match self {
             Self::Yuv420p8 | Self::Yuv422p8 | Self::Rgba8 => 8,
-            Self::Yuv422p10 | Self::Yuv444p10 => 10,
+            Self::Yuv420p10 | Self::Yuv422p10 | Self::Yuv444p10 => 10,
         }
     }
 
@@ -351,7 +373,7 @@ impl PlaneFormat {
     /// Chroma subsampling as the horizontal and vertical divisors.
     pub fn chroma_divisors(self) -> (usize, usize) {
         match self {
-            Self::Yuv420p8 => (2, 2),
+            Self::Yuv420p8 | Self::Yuv420p10 => (2, 2),
             Self::Yuv422p8 | Self::Yuv422p10 => (2, 1),
             Self::Yuv444p10 | Self::Rgba8 => (1, 1),
         }
@@ -366,6 +388,7 @@ impl PlaneFormat {
     pub fn name(self) -> &'static str {
         match self {
             Self::Yuv420p8 => "yuv420p",
+            Self::Yuv420p10 => "yuv420p10le",
             Self::Yuv422p8 => "yuv422p",
             Self::Yuv422p10 => "yuv422p10le",
             Self::Yuv444p10 => "yuv444p10le",
@@ -526,6 +549,12 @@ pub fn frame_to_planes_into(
     }
 
     let lut = from_linear_lut(tags.transfer);
+    // HDR outputs encode light past reference white; the working space
+    // is BT.709, so wide-gamut outputs get their primaries on the way out.
+    let hdr_lut = tags.is_hdr().then(|| from_linear_hdr_lut(tags.transfer));
+    let hdr_peak = hdr_peak(tags.transfer) as f32;
+    let to_output = primaries::conversion(Primaries::Bt709, tags.primaries)
+        .map(|m| m.map(|row| row.map(|v| v as f32)));
     let (kr, kb) = matrix::luma_coefficients(tags.matrix).unwrap_or((0.2126, 0.0722));
     let kg = 1.0 - kr - kb;
     let bits = format.bits();
@@ -543,10 +572,17 @@ pub fn frame_to_planes_into(
     let wide = format.bytes_per_sample() == 2;
     let (dx, dy) = format.chroma_divisors();
     let cw = w.div_ceil(dx);
-    let enc = |v: f32| lut[lut_index(v)];
+    let enc = |v: f32| match hdr_lut {
+        Some(h) => h[lut_index((v.max(0.0) / hdr_peak).sqrt().sqrt())],
+        None => lut[lut_index(v)],
+    };
     let to_ycc = |p: &LinearRgba| {
         // Premultiplied over opaque black is just the premultiplied value.
-        let (r, g, b) = (enc(p.r), enc(p.g), enc(p.b));
+        let [r, g, b] = match &to_output {
+            Some(m) => apply3(m, [p.r, p.g, p.b]),
+            None => [p.r, p.g, p.b],
+        };
+        let (r, g, b) = (enc(r), enc(g), enc(b));
         let y = kr as f32 * r + kg as f32 * g + kb as f32 * b;
         let cb = (b - y) / (2.0 * (1.0 - kb as f32));
         let cr = (r - y) / (2.0 * (1.0 - kr as f32));
@@ -560,7 +596,12 @@ pub fn frame_to_planes_into(
     // The common layout, 8-bit 4:2:0 at an even size, has its own loop:
     // one pass per pair of rows over 2×2 blocks with no per-sample
     // branching, which is what the generic loop below costs most on.
-    if format == PlaneFormat::Yuv420p8 && w % 2 == 0 && height % 2 == 0 {
+    if format == PlaneFormat::Yuv420p8
+        && w % 2 == 0
+        && height % 2 == 0
+        && hdr_lut.is_none()
+        && to_output.is_none()
+    {
         let (ys, yo, cs) = (y_scale, y_off, c_scale);
         let code8 = |v: f32, scale: f32, off: f32| (v * scale + off + 0.5).clamp(0.0, 255.0) as u8;
         frame

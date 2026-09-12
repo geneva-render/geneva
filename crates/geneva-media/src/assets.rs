@@ -14,6 +14,9 @@ pub struct MediaAssets {
     root: PathBuf,
     images: FileAssets,
     videos: HashMap<String, VideoReader>,
+    /// Whether HDR video keeps its range (an HDR output) rather than
+    /// being tone-mapped to SDR.
+    keep_hdr: bool,
 }
 
 impl MediaAssets {
@@ -23,8 +26,16 @@ impl MediaAssets {
         Self {
             images: FileAssets::new(root.clone()),
             root,
+            keep_hdr: false,
             videos: HashMap::new(),
         }
+    }
+
+    /// Keeps HDR video at its own range instead of tone-mapping it, for
+    /// compositions whose output is HDR.
+    pub fn keep_hdr(mut self, keep: bool) -> Self {
+        self.keep_hdr = keep;
+        self
     }
 
     /// The asset root.
@@ -40,12 +51,11 @@ impl MediaAssets {
                 reason: "not declared in the composition".to_owned(),
             })?;
             let reader =
-                VideoReader::open(&self.root.join(&asset.src), asset.color).map_err(|e| {
-                    RenderError::Asset {
+                VideoReader::open_with(&self.root.join(&asset.src), asset.color, !self.keep_hdr)
+                    .map_err(|e| RenderError::Asset {
                         id: id.to_owned(),
                         reason: e.to_string(),
-                    }
-                })?;
+                    })?;
             self.videos.insert(id.to_owned(), reader);
         }
         Ok(self.videos.get_mut(id).expect("inserted above"))

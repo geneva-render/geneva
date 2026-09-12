@@ -24,9 +24,10 @@ pub use encode::{
     audio_sample_rate_for, container_accepts_audio, container_accepts_video, container_for,
     default_codecs, default_image_codec, output_tags_for, plane_format_for,
 };
+pub use ffi::HdrMetadata;
 /// An encoded packet on its way to the muxer.
 pub use ffmpeg_next::Packet;
-pub use probe::probe;
+pub use probe::{hdr_metadata_of, probe};
 pub use smartcut::{
     AudioCopy, AudioGrid, AudioSegment, CopiedPacket, Segment, SmartPlan, SourceStream,
     plan_smart_cut, read_copied, read_copied_audio,

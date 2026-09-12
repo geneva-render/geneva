@@ -185,3 +185,13 @@ pub(super) fn seek_before(
     };
     ictx.seek(micros(again), ..micros(again))
 }
+
+/// The static HDR metadata of a file's video stream, if it carries any.
+pub fn hdr_metadata_of(path: &Path) -> Result<Option<super::ffi::HdrMetadata>, MediaError> {
+    super::init();
+    let ictx = ffmpeg_next::format::input(path).map_err(|e| super::open_error(path, e))?;
+    Ok(ictx
+        .streams()
+        .best(Type::Video)
+        .and_then(|s| super::ffi::hdr_metadata(&s.parameters())))
+}

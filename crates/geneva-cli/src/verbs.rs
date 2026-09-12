@@ -91,7 +91,7 @@ fn shared_audio(inputs: &[&Input]) -> Option<geneva_timeline::schema::AudioOutpu
 /// picture then keeps its encoding (SD material stays BT.601), the tags
 /// travel into the file, and nothing is converted on the way. HDR sources
 /// fall back to the SDR default, which the renderer maps down to.
-fn shared_color(inputs: &[&Input]) -> Option<ColorTags> {
+fn shared_color(inputs: &[&Input], keep_hdr: bool) -> Option<ColorTags> {
     let mut found: Option<ResolvedTags> = None;
     for input in inputs {
         let Some(color) = input.color else {
@@ -103,7 +103,9 @@ fn shared_color(inputs: &[&Input]) -> Option<ColorTags> {
             _ => {}
         }
     }
-    found.filter(|c| !c.is_hdr()).map(ColorTags::from)
+    found
+        .filter(|c| keep_hdr || !c.is_hdr())
+        .map(ColorTags::from)
 }
 
 /// Encoder options shared by every verb.
@@ -133,6 +135,11 @@ pub struct EncodeArgs {
     /// Keyframes at the interval only, never at scene changes.
     #[arg(long, requires = "keyframe_interval")]
     pub fixed_keyframes: bool,
+    /// Keep HDR sources HDR: the output takes their tags (PQ or HLG,
+    /// BT.2020) and a ten-bit codec, h265 unless --codec says otherwise.
+    /// Without it, HDR sources are tone-mapped to SDR.
+    #[arg(long)]
+    pub keep_hdr: bool,
     /// Write no audio track.
     #[arg(long)]
     pub no_audio: bool,
@@ -414,6 +421,7 @@ fn encode_block(args: &EncodeArgs) -> Option<Encode> {
         && args.tune.is_none()
         && args.keyframe_interval.is_none()
         && !args.fixed_keyframes
+        && !args.keep_hdr
     {
         return None;
     }
@@ -423,7 +431,9 @@ fn encode_block(args: &EncodeArgs) -> Option<Encode> {
     let codec = args
         .codec
         .map(Into::into)
-        .or_else(|| profile.map(VideoProfile::codec));
+        .or_else(|| profile.map(VideoProfile::codec))
+        // HDR needs ten bits: H.265 unless told otherwise.
+        .or(args.keep_hdr.then_some(VideoCodec::H265));
     Some(Encode {
         container: None,
         video: Some(VideoEncode {
@@ -611,7 +621,7 @@ pub fn convert(
     let (w, h) = output_size(pic_w, pic_h, width, height);
     let (root, rel) = common_root(&[input.to_owned()])?;
     let mut tl = base_timeline(w, h, fps.map_or(src.fps, |f| f.0), encode_block(args));
-    tl.output.color = shared_color(&[&src]);
+    tl.output.color = shared_color(&[&src], args.keep_hdr);
     tl.output.audio = shared_audio(&[&src]);
     tl.assets.insert(
         "in".to_owned(),
@@ -679,7 +689,7 @@ pub fn trim(
         (None, None) => None,
     };
     let mut tl = base_timeline(even(pic_w), even(pic_h), src.fps, encode_block(args));
-    tl.output.color = shared_color(&[&src]);
+    tl.output.color = shared_color(&[&src], args.keep_hdr);
     tl.output.audio = shared_audio(&[&src]);
     tl.assets.insert(
         "in".to_owned(),
@@ -727,7 +737,7 @@ pub fn concat(inputs: &[PathBuf], crossfade: Option<Time>, args: &EncodeArgs) ->
         first.fps,
         encode_block(args),
     );
-    tl.output.color = shared_color(&probed.iter().collect::<Vec<_>>());
+    tl.output.color = shared_color(&probed.iter().collect::<Vec<_>>(), args.keep_hdr);
     tl.output.audio = shared_audio(&probed.iter().collect::<Vec<_>>());
     let mut clips = Vec::new();
     for (i, (src, path)) in probed.iter().zip(rel.iter()).enumerate() {
@@ -816,7 +826,7 @@ pub fn overlay(
         src.fps,
         encode_block(args),
     );
-    tl.output.color = shared_color(&[&src]);
+    tl.output.color = shared_color(&[&src], args.keep_hdr);
     tl.output.audio = shared_audio(&[&src]);
     // The overlay is open-ended by default, so the output length comes
     // from the input rather than from the clips.
@@ -979,7 +989,7 @@ pub fn audio(input: &Path, op: &AudioOp, args: &EncodeArgs) -> Result<Compiled> 
         (2, 2)
     };
     let mut tl = base_timeline(w, h, src.fps, encode_block(args));
-    tl.output.color = shared_color(&[&src]);
+    tl.output.color = shared_color(&[&src], args.keep_hdr);
     tl.output.audio = shared_audio(&[&src]);
     tl.assets.insert(
         "in".to_owned(),
@@ -1088,7 +1098,7 @@ pub fn add_subtitles(input: &Path, files: &[SubtitleFile], args: &EncodeArgs) ->
         (2, 2)
     };
     let mut tl = base_timeline(w, h, src.fps, encode_block(args));
-    tl.output.color = shared_color(&[&src]);
+    tl.output.color = shared_color(&[&src], args.keep_hdr);
     tl.output.audio = shared_audio(&[&src]);
     tl.assets.insert(
         "in".to_owned(),
@@ -1226,7 +1236,7 @@ pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Re
     let (root, rel) = common_root(&[input.to_owned()])?;
     let (w, h) = (even(src.width), even(src.height));
     let mut tl = base_timeline(w, h, src.fps, encode_block(args));
-    tl.output.color = shared_color(&[&src]);
+    tl.output.color = shared_color(&[&src], args.keep_hdr);
     tl.output.audio = shared_audio(&[&src]);
     tl.output.duration = src.duration.map(seconds);
     tl.assets.insert(
