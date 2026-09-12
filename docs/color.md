@@ -68,22 +68,29 @@ highlights roll off instead of clipping at white:
    relative to HDR reference white, 203 nits (BT.2408), which is `1.0`
    in the working space. HLG is scene-referred; the OOTF of a 1000-nit
    display (system gamma 1.2 on luminance) makes it display light first.
-2. Luminance goes through the BT.2390 EETF from the source's peak (the
-   file's mastering metadata, MaxCLL or the mastering display's maximum;
-   1000 nits when the file has none) down to reference white: a
-   Hermite-spline knee in the PQ domain. The three channels are scaled
-   by the same ratio, so hue holds.
-3. Primaries are converted to BT.709.
-4. What still leaves the SDR cube is pulled toward its own luminance
+2. A PQ source mastered above 1000 nits (per the file's metadata,
+   MaxCLL or the mastering display's maximum) is first brought down to
+   1000 nits with the BT.2390 EETF on luminance, a Hermite-spline knee
+   in the PQ domain, so that the next step sees the range it is
+   specified for.
+3. ITU-R BT.2446 method A, the conversion specified for 1000-nit HDR to
+   SDR: luminance is encoded with a gamma of 2.4, compressed through a
+   log curve and a three-piece knee, and decoded for a 100-nit display;
+   the chroma follows with the same scale, slightly reduced, and a small
+   luminance correction keeps saturated reds from darkening.
+4. Primaries are converted to BT.709.
+5. What still leaves the SDR cube is pulled toward its own luminance
    until it fits, so a bright saturated highlight desaturates rather
    than shifting hue.
 
-The curve is the broadcast reference and what ffmpeg's tone-mapper
-calls `bt2390`. It is deterministic and looks at no other pixel. Its
-character: the source's peak lands on SDR white, and a 1000-nit source's
-reference white lands at about 78% of it, so an HDR frame tone-mapped
-this way reads slightly darker than an SDR grade of the same scene, as
-the standard prescribes. Still images tagged `pq` or `hlg` on their
+The curve is the broadcast reference for footage (libplacebo calls it
+`bt.2446a`). It is deterministic and looks at no other pixel. Its
+character: the source's 1000 nits land on SDR white, reference white
+(203 nits) at 0.41 of it in linear light, and the range between keeps
+its texture: sunlit sand, skies and skin stay graded rather than
+clipping to white. An HDR frame converted this way reads a little
+darker in the mid-tones than the HDR original on an HDR screen, as the
+recommendation intends. Still images tagged `pq` or `hlg` on their
 asset (16-bit PNGs, for instance) take the same path.
 
 ## Output

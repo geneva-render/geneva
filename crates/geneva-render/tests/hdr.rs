@@ -46,12 +46,13 @@ fn close(got: f32, want: f32, eps: f32, what: &str) {
 /// The gray patches are 0, 10, 50, 100, 203, 500, 1000 and 4000 nits.
 fn check_grays(steps: &[f32], what: &str) {
     close(steps[0], 0.0, 0.002, &format!("{what} black"));
-    close(steps[1], 10.0 / 203.0, 0.006, &format!("{what} 10 nits"));
-    close(steps[2], 50.0 / 203.0, 0.01, &format!("{what} 50 nits"));
-    // 100 nits sits just above the knee: barely compressed.
-    close(steps[3], 0.475, 0.025, &format!("{what} 100 nits"));
-    // Reference white lands at about 78% of SDR white (BT.2390).
-    close(steps[4], 0.78, 0.03, &format!("{what} 203 nits"));
+    // BT.2446 method A, worked out from its equations.
+    close(steps[1], 0.0313, 0.006, &format!("{what} 10 nits"));
+    close(steps[2], 0.1265, 0.01, &format!("{what} 50 nits"));
+    close(steps[3], 0.2266, 0.015, &format!("{what} 100 nits"));
+    // Reference white lands at 0.41 of SDR white.
+    close(steps[4], 0.406, 0.03, &format!("{what} 203 nits"));
+    close(steps[5], 0.7315, 0.03, &format!("{what} 500 nits"));
     // The source peak lands on SDR white; beyond it stays there.
     close(steps[6], 1.0, 0.01, &format!("{what} 1000 nits"));
     close(steps[7], 1.0, 0.01, &format!("{what} 4000 nits"));
@@ -127,7 +128,7 @@ fn bt2020_primaries_land_inside_the_cube_with_their_hue() {
         );
         // Reference white and black patches on the same row.
         let white = patch(&frame, 6, 48);
-        close(white.g, 0.78, 0.03, &format!("{name} white patch"));
+        close(white.g, 0.406, 0.03, &format!("{name} white patch"));
         close(
             white.r,
             white.g,

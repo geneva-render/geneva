@@ -7,12 +7,18 @@
 //!    relative to reference white ([`REFERENCE_WHITE_NITS`]). HLG is
 //!    scene-referred: its OOTF (system gamma 1.2 on luminance, for a
 //!    1000-nit display) makes it display light first.
-//! 2. Tone mapping: the BT.2390 EETF on luminance, from the source's
-//!    peak (the mastering metadata's, 1000 nits otherwise) down to
-//!    reference white, a Hermite-spline knee in the PQ domain; the three
-//!    channels are scaled by the same ratio so hue holds.
-//! 3. Primaries: the source's (BT.2020, as a rule) to BT.709.
-//! 4. What still leaves the SDR cube is pulled toward its own luminance
+//! 2. A PQ source mastered above 1000 nits (per its metadata) is first
+//!    brought down to 1000 with the BT.2390 EETF on luminance, so that
+//!    the next step sees the range it was designed for.
+//! 3. Tone mapping: ITU-R BT.2446 method A, the conversion specified for
+//!    1000-nit HDR to SDR. Luminance is encoded with a gamma of 2.4,
+//!    compressed through a log curve and a three-piece knee, and decoded
+//!    for a 100-nit display; the chroma follows with the same scale, a
+//!    touch reduced (the 1.1 factor), and a small luminance correction
+//!    for saturated reds. Reference white (203 nits) lands at 0.41 of
+//!    SDR white in linear light, 1000 nits on SDR white.
+//! 4. Primaries: the source's (BT.2020, as a rule) to BT.709.
+//! 5. What still leaves the SDR cube is pulled toward its own luminance
 //!    until it fits, so a bright saturated highlight desaturates rather
 //!    than shifting hue.
 
@@ -31,8 +37,17 @@ pub const DEFAULT_PEAK_NITS: f64 = 1000.0;
 /// Nominal peak of an HLG display, which sets its OOTF.
 const HLG_DISPLAY_NITS: f64 = 1000.0;
 
-/// Entries of the tone curve table, over the fourth root of luminance.
+/// Entries of the tone curve tables.
 const CURVE_SIZE: usize = 4096;
+
+/// The luminance BT.2446 method A is specified for, in nits.
+const BT2446_HDR_NITS: f64 = 1000.0;
+
+/// The SDR display BT.2446 method A targets, in nits.
+const BT2446_SDR_NITS: f64 = 100.0;
+
+/// The gamma the method encodes luminance and channels with.
+const BT2446_GAMMA: f64 = 2.4;
 
 /// The conversion for one source: its transfer, primaries and peak.
 #[derive(Debug, Clone)]
@@ -43,12 +58,36 @@ pub struct HdrToSdr {
     to_light: Box<[f32]>,
     /// Luminance coefficients of the source primaries.
     luma: [f32; 3],
-    /// Source peak in units of reference white.
-    peak: f32,
-    /// `eetf(y) / y` over `(y / peak)^(1/4)`.
+    /// For a source brighter than 1000 nits: its peak in units of
+    /// reference white, and `eetf(y) / y` over `(y / peak)^(1/4)`,
+    /// bringing it down to 1000 nits.
+    reduce: Option<(f32, Box<[f32]>)>,
+    /// `v^(1/2.4)` over `v^(1/4)`, for `v` in `[0, 1]`.
+    encode: Box<[f32]>,
+    /// `v^2.4` over `v` in `[0, 1]`.
+    decode: Box<[f32]>,
+    /// The method's luminance curve: encoded SDR luminance over encoded
+    /// HDR luminance, both in `[0, 1]`.
     curve: Box<[f32]>,
     /// Source primaries to BT.709, when they differ.
     to_bt709: Option<[[f32; 3]; 3]>,
+}
+
+/// BT.2446 method A on encoded luminance: `yp` is `(Y / 1000 nits)^(1/2.4)`
+/// and the result is `(Y_sdr / 100 nits)^(1/2.4)`.
+fn bt2446a_luminance(yp: f64) -> f64 {
+    let rho = 1.0 + 32.0 * (BT2446_HDR_NITS / 10_000.0).powf(1.0 / BT2446_GAMMA);
+    let rho_sdr = 1.0 + 32.0 * (BT2446_SDR_NITS / 10_000.0).powf(1.0 / BT2446_GAMMA);
+    let yp = yp.clamp(0.0, 1.0);
+    let ypp = (1.0 + (rho - 1.0) * yp).ln() / rho.ln();
+    let yc = if ypp <= 0.7399 {
+        1.0770 * ypp
+    } else if ypp < 0.9909 {
+        -1.1510 * ypp * ypp + 2.7811 * ypp - 0.6302
+    } else {
+        0.5 * ypp + 0.5
+    };
+    ((rho_sdr.powf(yc) - 1.0) / (rho_sdr - 1.0)).clamp(0.0, 1.0)
 }
 
 impl HdrToSdr {
@@ -67,7 +106,6 @@ impl HdrToSdr {
                 .filter(|p| *p > REFERENCE_WHITE_NITS)
                 .unwrap_or(DEFAULT_PEAK_NITS)
         };
-        let peak = peak_nits / REFERENCE_WHITE_NITS;
         let to_light: Vec<f32> = (0..=u16::MAX)
             .map(|code| {
                 let v = f64::from(code) / f64::from(u16::MAX);
@@ -79,18 +117,30 @@ impl HdrToSdr {
                 light as f32
             })
             .collect();
-        let eetf = Eetf::new(peak_nits, REFERENCE_WHITE_NITS);
-        let curve: Vec<f32> = (0..CURVE_SIZE)
-            .map(|i| {
-                let t = i as f64 / (CURVE_SIZE - 1) as f64;
-                let y = t.powi(4) * peak;
-                if y <= 0.0 {
-                    1.0
-                } else {
-                    (eetf.map(y * REFERENCE_WHITE_NITS) / REFERENCE_WHITE_NITS / y) as f32
-                }
-            })
-            .collect();
+        let reduce = (peak_nits > BT2446_HDR_NITS).then(|| {
+            let peak = peak_nits / REFERENCE_WHITE_NITS;
+            let eetf = Eetf::new(peak_nits, BT2446_HDR_NITS);
+            let curve: Vec<f32> = (0..CURVE_SIZE)
+                .map(|i| {
+                    let t = i as f64 / (CURVE_SIZE - 1) as f64;
+                    let y = t.powi(4) * peak;
+                    if y <= 0.0 {
+                        1.0
+                    } else {
+                        (eetf.map(y * REFERENCE_WHITE_NITS) / REFERENCE_WHITE_NITS / y) as f32
+                    }
+                })
+                .collect();
+            (peak as f32, curve.into_boxed_slice())
+        });
+        let steps = |f: fn(f64) -> f64| -> Box<[f32]> {
+            (0..CURVE_SIZE)
+                .map(|i| f(i as f64 / (CURVE_SIZE - 1) as f64) as f32)
+                .collect()
+        };
+        let encode = steps(|t| t.powi(4).powf(1.0 / BT2446_GAMMA));
+        let decode = steps(|v| v.powf(BT2446_GAMMA));
+        let curve = steps(bt2446a_luminance);
         let luma = primaries::luminance(tags.primaries).map(|v| v as f32);
         let to_bt709 = primaries::conversion(tags.primaries, Primaries::Bt709)
             .map(|m| m.map(|row| row.map(|v| v as f32)));
@@ -98,8 +148,10 @@ impl HdrToSdr {
             hlg,
             to_light: to_light.into_boxed_slice(),
             luma,
-            peak: peak as f32,
-            curve: curve.into_boxed_slice(),
+            reduce,
+            encode,
+            decode,
+            curve,
             to_bt709,
         })
     }
@@ -122,12 +174,31 @@ impl HdrToSdr {
             let gain = ys.powf(0.2) * (HLG_DISPLAY_NITS / REFERENCE_WHITE_NITS) as f32;
             rgb = rgb.map(|c| c * gain);
         }
+        if let Some((peak, curve)) = &self.reduce {
+            let y = dot(rgb).max(0.0);
+            let t = (y / peak).clamp(0.0, 1.0).sqrt().sqrt();
+            let i = (t * (CURVE_SIZE - 1) as f32 + 0.5) as usize;
+            let ratio = curve[i.min(CURVE_SIZE - 1)];
+            rgb = rgb.map(|c| c * ratio);
+        }
+        // BT.2446 method A, in units of its 1000-nit source: encoded
+        // luminance through the curve, the chroma scaled along.
+        let last = (CURVE_SIZE - 1) as f32;
+        let encode = |v: f32| {
+            let t = v.clamp(0.0, 1.0).sqrt().sqrt();
+            self.encode[(t * last + 0.5) as usize]
+        };
+        let lookup = |table: &[f32], v: f32| table[(v.clamp(0.0, 1.0) * last + 0.5) as usize];
+        let scale = (REFERENCE_WHITE_NITS / BT2446_HDR_NITS) as f32;
+        let n = rgb.map(|c| (c * scale).max(0.0));
+        let yp = encode(dot(n));
+        let ys = lookup(&self.curve, yp);
+        let s = if yp > 1e-4 { ys / (1.1 * yp) } else { 0.0 };
+        let d = n.map(|c| encode(c) - yp);
+        let cr = s * d[0] / 1.4746;
+        let yt = ys - (0.1 * cr).max(0.0);
+        let mut rgb = d.map(|dv| lookup(&self.decode, yt + s * dv));
         let y = dot(rgb).max(0.0);
-        let t = (y / self.peak).clamp(0.0, 1.0).sqrt().sqrt();
-        let i = (t * (CURVE_SIZE - 1) as f32 + 0.5) as usize;
-        let ratio = self.curve[i.min(CURVE_SIZE - 1)];
-        let mut rgb = rgb.map(|c| c * ratio);
-        let y = y * ratio;
         if let Some(m) = &self.to_bt709 {
             rgb = [
                 m[0][0] * rgb[0] + m[0][1] * rgb[1] + m[0][2] * rgb[2],
@@ -251,11 +322,13 @@ mod tests {
         let peak = gray(1000.0);
         close(peak[0], 1.0, 0.01);
         close(peak[1], 1.0, 0.01);
+        // BT.2446 method A: reference white at 0.41 of SDR white,
+        // 20 nits at 0.058.
         let white = gray(203.0);
-        close(white[0], 0.78, 0.02);
-        close(white[1], white[0], 1e-4);
+        close(white[0], 0.406, 0.01);
+        close(white[1], white[0], 1e-3);
         let low = gray(20.3);
-        close(low[0], 0.1, 0.005);
+        close(low[0], 0.058, 0.005);
         // Beyond the peak nothing exceeds SDR white.
         assert!(gray(4000.0).iter().all(|&c| c <= 1.0));
     }
@@ -264,7 +337,9 @@ mod tests {
     fn a_higher_source_peak_from_metadata_compresses_more() {
         let default = HdrToSdr::new(PQ_2020, None).unwrap();
         let bright = HdrToSdr::new(PQ_2020, Some(4000.0)).unwrap();
-        let code = linear_to_pq(500.0 / REFERENCE_WHITE_NITS) as f32;
+        // 900 nits: above the knee of the 4000-to-1000 reduction, so the
+        // brighter source's picture is compressed there.
+        let code = linear_to_pq(900.0 / REFERENCE_WHITE_NITS) as f32;
         assert!(bright.convert([code; 3])[0] < default.convert([code; 3])[0]);
     }
 
@@ -286,7 +361,8 @@ mod tests {
         let red = conv.convert([code, 0.0, 0.0]);
         assert!(red.iter().all(|&c| (0.0..=1.0).contains(&c)), "{red:?}");
         assert!(red[0] > red[1] && red[0] > red[2], "{red:?}");
-        assert!(red[0] > 0.3, "{red:?}");
+        // A 100-nit red is a dim red in SDR, but a red.
+        assert!(red[0] > 0.25, "{red:?}");
     }
 
     #[test]
@@ -299,6 +375,27 @@ mod tests {
 mod pipeline_tests {
     use super::*;
     use crate::{Matrix, Range};
+
+    #[test]
+    fn the_luminance_curve_matches_the_recommendation() {
+        // Values worked out from the method's equations for a 1000-nit
+        // source and a 100-nit display, in linear light.
+        for (nits, want) in [
+            (10.0, 0.0313),
+            (50.0, 0.1265),
+            (100.0, 0.2266),
+            (203.0, 0.406),
+            (500.0, 0.7315),
+            (1000.0, 1.0),
+        ] {
+            let yp = (nits / BT2446_HDR_NITS).powf(1.0 / BT2446_GAMMA);
+            let got = bt2446a_luminance(yp).powf(BT2446_GAMMA);
+            assert!(
+                (got - want).abs() < 0.002,
+                "{nits} nits: {got} wanted {want}"
+            );
+        }
+    }
 
     #[test]
     fn a_bt709_green_at_reference_white_survives_the_round_trip() {
@@ -318,15 +415,25 @@ mod pipeline_tests {
             let in_2020 = primaries::mul(&to_2020, rgb709);
             let codes = in_2020.map(|c| linear_to_pq(c.max(0.0)) as f32);
             let out = conv.convert(codes);
-            let y = 0.2126 * rgb709[0] + 0.7152 * rgb709[1] + 0.0722 * rgb709[2];
-            let expected_ratio = Eetf::new(1000.0, 203.0).map(y * 203.0) / (y * 203.0);
+            // Inside the cube, and the hue of the BT.709 color it was.
+            assert!(
+                out.iter().all(|v| (0.0..=1.0).contains(v)),
+                "{name}: {out:?}"
+            );
+            let top = (0..3)
+                .max_by(|a, b| rgb709[*a].total_cmp(&rgb709[*b]))
+                .unwrap();
             for k in 0..3 {
-                let want = (rgb709[k] * expected_ratio) as f32;
-                assert!(
-                    (out[k] - want).abs() < 0.03,
-                    "{name}[{k}] = {} wanted {want}",
-                    out[k]
-                );
+                if k != top {
+                    assert!(
+                        rgb709[k] == rgb709[top] || out[k] < out[top] - 0.05,
+                        "{name}: {out:?}"
+                    );
+                }
+            }
+            if name == "gray" {
+                // Half of reference white is about 100 nits: 0.23 of SDR white.
+                assert!((out[0] - 0.2266).abs() < 0.01, "{name}: {out:?}");
             }
         }
     }

@@ -5,6 +5,21 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## 0.3.4 — 2026-09-12
+
+### Changes
+
+- HDR to SDR now follows ITU-R BT.2446 method A, the conversion
+  specified for 1000-nit HDR to SDR, in place of the BT.2390 EETF. The
+  EETF squeezed everything from 200 to 1000 nits into the top fifth of
+  the SDR range, so on a sunlit iPhone clip the sand and the sky went to
+  white while the mid-tones stayed bright. Method A keeps the texture of
+  the highlights, puts reference white (203 nits) at 0.41 of SDR white
+  in linear light, and lands 1000 nits on SDR white; mid-tones read a
+  little darker than before, as the recommendation intends. PQ sources
+  mastered above 1000 nits are first brought down to 1000 with the EETF.
+  The `hdr-to-sdr` golden is regenerated.
+
 ## 0.3.3 — 2026-09-12
 
 ### Fixes
