@@ -5,6 +5,22 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## 0.3.5 — 2026-09-13
+
+### Fixes
+
+- Rotated clips. Phones store portrait video as a landscape stream with a
+  rotation flag, which geneva ignored: a portrait clip came out sideways
+  from every verb, and a copy dropped the flag. Now the probe reports the
+  picture as displayed (with `rotation` and the stored size), the reader
+  turns frames upright for rendering, the copy planner compares the
+  displayed size and keeps the flag on the copied stream, and the direct
+  and smart-cut paths hand rotated sources to the compositor. Found by a
+  survey of how open-source products use ffmpeg: 21 of 41 handle this flag
+  explicitly.
+- A silent video (no audio stream) is now copied without audio rather than
+  re-encoded; only joining a silent source with a sounding one refuses.
+
 ## 0.3.4 — 2026-09-12
 
 ### Changes

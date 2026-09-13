@@ -517,13 +517,19 @@ mod imp {
         if let Some(v) = &info.video {
             let _ = writeln!(
                 s,
-                "  video: {} {}×{} @ {} fps, {}{}",
+                "  video: {} {}×{} @ {} fps, {}{}{}",
                 v.codec,
                 v.width,
                 v.height,
                 geneva_timeline::Fps(v.fps),
                 v.pixel_format,
-                if v.has_alpha { " with alpha" } else { "" }
+                if v.has_alpha { " with alpha" } else { "" },
+                match v.rotation {
+                    0 => String::new(),
+                    r if r % 180 == 90 =>
+                        format!(", stored as {}×{} with a {r}° rotation", v.height, v.width),
+                    r => format!(", with a {r}° rotation"),
+                }
             );
             let tags = serde_json::to_value(v.color).unwrap_or_default();
             let tag = |name: &str| match tags.get(name).and_then(|t| t.as_str()) {

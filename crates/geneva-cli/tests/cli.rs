@@ -1157,3 +1157,34 @@ fn a_refused_copy_says_why_in_the_notes() {
         "{notes:#?}"
     );
 }
+
+/// A phone's portrait clip is a landscape stream with a rotation the
+/// player applies. The probe reports the picture as displayed, a copy
+/// keeps the rotation, and a re-encode writes the picture upright.
+#[cfg(feature = "media")]
+#[test]
+fn a_rotated_clip_is_shown_probed_copied_and_rendered_upright() {
+    let dir = tempfile::tempdir().unwrap();
+    let clip = media_dir().join("sync").join("rotated-90.mp4");
+    let info = run_json(&["probe"], &[&clip]);
+    assert_eq!(info["video"]["width"], 90, "{info:#}");
+    assert_eq!(info["video"]["height"], 160, "{info:#}");
+    assert_eq!(info["video"]["rotation"], 90, "{info:#}");
+
+    // Copied: the stream keeps its matrix, so a player still shows it upright.
+    let copied = dir.path().join("copied.mp4");
+    let doc = run_json(&["convert", "-o"], &[&copied, &clip]);
+    assert_eq!(doc["mode"], "copy", "{doc:#}");
+    let info = run_json(&["probe"], &[&copied]);
+    assert_eq!(info["video"]["rotation"], 90, "{info:#}");
+    assert_eq!(info["video"]["width"], 90, "{info:#}");
+
+    // Re-encoded: the picture is written upright, with no rotation to apply.
+    let upright = dir.path().join("upright.mp4");
+    let doc = run_json(&["resize", "--height", "320", "-o"], &[&upright, &clip]);
+    assert_ne!(doc["mode"], "copy", "{doc:#}");
+    let info = run_json(&["probe"], &[&upright]);
+    assert_eq!(info["video"]["rotation"], 0, "{info:#}");
+    assert_eq!(info["video"]["width"], 180, "{info:#}");
+    assert_eq!(info["video"]["height"], 320, "{info:#}");
+}

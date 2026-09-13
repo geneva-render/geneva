@@ -118,6 +118,10 @@ track that starts later keeps its offset.
   typos surface at validation rather than as a silently wrong render.
 - **Long renders print progress on stderr** only in human mode; with
   `--format json` stderr stays quiet apart from library messages.
+- **Rotated clips come out upright.** Phones store portrait video as a
+  landscape stream plus a rotation flag. `probe` reports the displayed
+  size, the renderer turns frames upright, and a copy keeps the flag, so
+  nothing needs to read it. Sizes in a timeline are displayed sizes.
 - **Containers reject codecs they cannot hold** with a plain error rather
   than a broken file; the table in [cli.md](cli.md#containers-and-codecs)
   says what goes where. Image sequences need a `%04d`-style pattern in the

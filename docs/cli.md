@@ -103,7 +103,11 @@ trim at all, in which case the whole trim is encoded as before.
 ### `geneva probe <file>`
 
 Shows the container, duration, streams, sizes, rates, and the color tags of
-a media file, including which tags had to be assumed.
+a media file, including which tags had to be assumed. Sizes are as
+displayed: a phone's portrait clip is stored as a landscape stream with a
+rotation, and the probe reports it as portrait, with the stored size and
+the rotation alongside (`rotation` in the JSON: 0, 90, 180 or 270 degrees
+clockwise).
 
 ### `geneva schema`
 

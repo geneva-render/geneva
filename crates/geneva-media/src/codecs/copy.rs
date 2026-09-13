@@ -142,8 +142,22 @@ pub fn plan_stream_copy_explained(
     let mut own_audio: Option<bool> = None;
     let mut reference: Option<(StreamShape, PathBuf)> = None;
     for clip in &untouched {
-        own_audio = Some(clip.audio);
         let shape = StreamShape::read(&clip.path)?;
+        let takes_audio = clip.audio && shape.has_audio;
+        match own_audio {
+            None => own_audio = Some(takes_audio),
+            Some(a) if a != takes_audio => {
+                return refuse(format!(
+                    "{} {} audio and the others do not, so they cannot be joined as they are",
+                    clip.path.file_name().map_or_else(
+                        || clip.path.display().to_string(),
+                        |n| n.to_string_lossy().into_owned()
+                    ),
+                    if takes_audio { "has" } else { "has no" }
+                ));
+            }
+            _ => {}
+        }
         let name = clip.path.file_name().map_or_else(
             || clip.path.display().to_string(),
             |n| n.to_string_lossy().into_owned(),
@@ -161,10 +175,9 @@ pub fn plan_stream_copy_explained(
         if !container_accepts(container, shape.codec) {
             return refuse(format!("{name} is {coded}, which {holder} cannot hold"));
         }
-        if clip.audio && !shape.has_audio {
-            return refuse(format!("{name} has no audio stream to copy"));
-        }
-        if clip.audio {
+        // A silent source is copied without audio; the clip's `audio`
+        // only says to take what the file has.
+        if clip.audio && shape.has_audio {
             if let Some(id) = shape.audio_id {
                 if !container_accepts_audio(container, id) {
                     return refuse(format!(
@@ -653,6 +666,14 @@ impl StreamShape {
             super::probe::ratio(video.rate()),
         )
         .unwrap_or(Ratio::from_int(25));
+        // The picture as displayed: a rotated source is compared to the
+        // composition at its upright size, and copied with its matrix.
+        let rotation = ffi::display_rotation(&params);
+        let (width, height) = if rotation % 180 == 90 {
+            (decoder.height(), decoder.width())
+        } else {
+            (decoder.width(), decoder.height())
+        };
         let audio = ictx.streams().best(Type::Audio);
         Ok(Self {
             codec: match params.id() {
@@ -667,8 +688,8 @@ impl StreamShape {
                 _ => None,
             },
             codec_id: params.id(),
-            width: decoder.width(),
-            height: decoder.height(),
+            width,
+            height,
             fps,
             format: decoder.format(),
             extradata: ffi::extradata(&params),
@@ -1098,6 +1119,12 @@ pub(super) fn add_copied_stream(
     if input.parameters().medium() == Type::Video {
         stream.set_avg_frame_rate(input.avg_frame_rate());
         stream.set_rate(input.rate());
+        let params = input.parameters();
+        if ffi::display_matrix(&stream.parameters()).is_none() {
+            if let Some(matrix) = ffi::display_matrix(&params) {
+                ffi::attach_display_matrix(&mut stream, &matrix);
+            }
+        }
     }
     Ok(stream.index())
 }

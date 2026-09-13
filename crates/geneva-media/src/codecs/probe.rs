@@ -49,14 +49,21 @@ pub fn probe(path: &Path) -> Result<MediaInfo, MediaError> {
         let fmt = decoder.format();
         let fps = frame_rate(ratio(stream.avg_frame_rate()), ratio(stream.rate()))
             .unwrap_or(Ratio::from_int(25));
+        let rotation = super::ffi::display_rotation(&stream.parameters());
+        let (width, height) = if rotation % 180 == 90 {
+            (decoder.height(), decoder.width())
+        } else {
+            (decoder.width(), decoder.height())
+        };
         Some(VideoInfo {
             index: stream.index(),
             codec: decoder
                 .codec()
                 .map(|c| c.name().to_owned())
                 .unwrap_or_default(),
-            width: decoder.width(),
-            height: decoder.height(),
+            width,
+            height,
+            rotation,
             fps,
             duration: (stream.duration() > 0)
                 .then(|| ts_to_secs(stream.duration(), stream.time_base())),

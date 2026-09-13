@@ -386,6 +386,81 @@ pub fn hdr_metadata(params: &Parameters) -> Option<HdrMetadata> {
     (meta.mastering.is_some() || meta.light.is_some()).then_some(meta)
 }
 
+/// The display matrix a stream carries, as its 36 bytes, if any.
+#[allow(unsafe_code)]
+pub fn display_matrix(params: &Parameters) -> Option<Vec<u8>> {
+    use ffmpeg_next::ffi::{AVPacketSideDataType, av_packet_side_data_get};
+    // SAFETY: as in `hdr_metadata`: the side data array and count come
+    // from the same valid struct, and the entry is read within its size.
+    unsafe {
+        let raw = &*params.as_ptr();
+        let sd = av_packet_side_data_get(
+            raw.coded_side_data,
+            raw.nb_coded_side_data,
+            AVPacketSideDataType::AV_PKT_DATA_DISPLAYMATRIX,
+        );
+        if sd.is_null() || (*sd).size < 36 {
+            None
+        } else {
+            Some(std::slice::from_raw_parts((*sd).data, 36).to_vec())
+        }
+    }
+}
+
+/// The rotation a stream asks its player for, in degrees clockwise:
+/// 0, 90, 180 or 270. Phones record portrait video as a landscape stream
+/// with a 90 or 270 here. Read from the display matrix the way ffmpeg's
+/// own tools do (`av_display_rotation_get`, negated and brought into
+/// `[0, 360)`), and rounded to the nearest right angle.
+pub fn display_rotation(params: &Parameters) -> u16 {
+    let Some(bytes) = display_matrix(params) else {
+        return 0;
+    };
+    let m: Vec<f64> = bytes
+        .chunks_exact(4)
+        .map(|c| f64::from(i32::from_ne_bytes([c[0], c[1], c[2], c[3]])) / 65536.0)
+        .collect();
+    let scale0 = m[0].hypot(m[3]);
+    let scale1 = m[1].hypot(m[4]);
+    if scale0 == 0.0 || scale1 == 0.0 {
+        return 0;
+    }
+    // `av_display_rotation_get` returns the negation of this angle (the
+    // counterclockwise rotation), and ffmpeg's tools negate it again to
+    // get the clockwise rotation to apply for display.
+    let theta = (m[1] / scale1).atan2(m[0] / scale0).to_degrees();
+    let theta = theta - 360.0 * (theta / 360.0 + 0.9 / 360.0).floor();
+    let quarter = (theta / 90.0).round() as i64;
+    ((quarter.rem_euclid(4)) * 90) as u16
+}
+
+/// Attaches a display matrix to an output stream's parameters, so that
+/// a copied stream keeps the rotation its source asked for.
+#[allow(unsafe_code)]
+pub fn attach_display_matrix(stream: &mut ffmpeg_next::format::stream::StreamMut, bytes: &[u8]) {
+    use ffmpeg_next::ffi::{AVPacketSideDataType, av_malloc, av_packet_side_data_add};
+    // SAFETY: as in `attach_hdr_metadata_to_stream`.
+    unsafe {
+        let par = (*stream.as_mut_ptr()).codecpar;
+        let buf = av_malloc(bytes.len()).cast::<u8>();
+        if buf.is_null() {
+            return;
+        }
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
+        let added = av_packet_side_data_add(
+            &raw mut (*par).coded_side_data,
+            &raw mut (*par).nb_coded_side_data,
+            AVPacketSideDataType::AV_PKT_DATA_DISPLAYMATRIX,
+            buf.cast(),
+            bytes.len(),
+            0,
+        );
+        if added.is_null() {
+            ffmpeg_next::ffi::av_free(buf.cast());
+        }
+    }
+}
+
 /// The peak luminance in nits a stream's HDR metadata declares.
 pub fn hdr_peak_nits(params: &Parameters) -> Option<f64> {
     hdr_metadata(params).and_then(|m| m.peak_nits())

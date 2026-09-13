@@ -36,10 +36,15 @@ pub struct VideoInfo {
     pub index: usize,
     /// Codec name.
     pub codec: String,
-    /// Width in pixels.
+    /// Width in pixels, as displayed: after the rotation the file asks
+    /// for, so a portrait phone clip reads taller than wide.
     pub width: u32,
-    /// Height in pixels.
+    /// Height in pixels, as displayed.
     pub height: u32,
+    /// Rotation the file asks its player for, in degrees clockwise: 0,
+    /// 90, 180 or 270. The coded picture is `height`×`width` when it is
+    /// 90 or 270.
+    pub rotation: u16,
     /// Frame rate, from the stream's average rate.
     pub fps: Ratio,
     /// Duration in seconds, if declared.

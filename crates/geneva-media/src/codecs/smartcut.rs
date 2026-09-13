@@ -429,6 +429,11 @@ fn index_source(
     if params.id() != codec::Id::H264 || stream_fps != Some(fps) {
         return Ok(None);
     }
+    // Copied packets keep the coded orientation while encoded runs would
+    // be upright: a rotated source is re-encoded whole instead.
+    if super::ffi::display_rotation(&params) != 0 {
+        return Ok(None);
+    }
     let decoder = codec::context::Context::from_parameters(params.clone())
         .and_then(|c| c.decoder().video())
         .map_err(|e| codec_error(format!("{}: reading stream parameters", path.display()), e))?;

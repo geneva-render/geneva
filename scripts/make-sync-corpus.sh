@@ -75,6 +75,15 @@ ff -f lavfi -i "$(video 30000/1001 3)" -f lavfi -i "$(audio 48000 3)" \
    -vf "$(flash 30000/1001),setpts='(N/(30000/1001)+0.004+(random(1)-0.5)*0.008)/TB'" -fps_mode passthrough \
    -af "$tone" "${x264[@]}" -bf 0 -g 15 -c:a aac -b:a 96k -video_track_timescale 600 "$out/jitter-2997.mov"
 
+# A portrait phone clip: the stream is landscape 160x90, red on the
+# left and blue on the right, and the file asks for a 90 degree
+# clockwise rotation, so it displays as 90x160 with red on top. Silent,
+# so that a copy of it has no audio to carry.
+ff -f lavfi -i "color=red:size=80x90:rate=24:duration=2" -f lavfi -i "color=blue:size=80x90:rate=24:duration=2" \
+   -filter_complex "[0][1]hstack,format=rgb24,scale=out_color_matrix=bt709:out_range=tv,format=yuv420p[v]" -map "[v]" \
+   "${x264[@]}" -bf 0 -g 12 -color_primaries bt709 -color_trc bt709 -colorspace bt709 "$work/flat.mp4"
+ff -display_rotation -90 -i "$work/flat.mp4" -c copy "$out/rotated-90.mp4"
+
 # NTSC rates.
 ff -f lavfi -i "$(video 30000/1001 3)" -f lavfi -i "$(audio 48000 3)" -vf "$(flash 30000/1001)" -af "$tone" \
    "${x264[@]}" -bf 3 -g 15 -c:a aac -b:a 96k "$out/ntsc-2997.mp4"

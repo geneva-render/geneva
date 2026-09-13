@@ -161,6 +161,10 @@ impl DirectSource {
                 .map(|a| a.color)
                 .unwrap_or_default();
             let reader = VideoReader::open(&clip.path, overrides)?;
+            // A rotated source is turned upright by the compositor.
+            if reader.rotation() != 0 {
+                return Ok(None);
+            }
             let source = reader.tags();
             let pixel = reader.pixel_format();
             let transfer_lut = if to_rgb {

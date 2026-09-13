@@ -185,6 +185,11 @@ pub struct VideoReader {
     position: Option<Ratio>,
     /// An image buffer kept for the next conversion.
     spare: Option<Image>,
+    /// Rotation the file asks for, in degrees clockwise, applied to the
+    /// converted frames; raw frames keep the coded orientation.
+    rotation: u16,
+    /// A buffer for the unrotated conversion when a rotation applies.
+    unrotated: Option<Image>,
 }
 
 /// A decoded frame, converted to the compositing format on first use.
@@ -264,12 +269,15 @@ impl VideoReader {
         .map_err(|e| codec_error(format!("{}: pixel format conversion", path.display()), e))?;
         // HDR material is tone-mapped on the way in, from the peak its
         // metadata declares.
-        let peak = {
+        let (peak, rotation) = {
             let stream = inner
                 .ictx
                 .stream(inner.stream_index)
                 .expect("stream exists");
-            ffi::hdr_peak_nits(&stream.parameters())
+            (
+                ffi::hdr_peak_nits(&stream.parameters()),
+                ffi::display_rotation(&stream.parameters()),
+            )
         };
         let hdr = if tone_map {
             HdrToSdr::new(tags, peak)
@@ -288,6 +296,8 @@ impl VideoReader {
             current: None,
             pending: None,
             position: None,
+            rotation,
+            unrotated: None,
             spare: None,
         })
     }
@@ -302,14 +312,30 @@ impl VideoReader {
         self.tags
     }
 
-    /// Width in pixels.
+    /// Width in pixels of the frames [`frame_at`](Self::frame_at) returns:
+    /// as displayed, after the file's rotation.
     pub fn width(&self) -> u32 {
-        self.decoder.width()
+        if self.rotation % 180 == 90 {
+            self.decoder.height()
+        } else {
+            self.decoder.width()
+        }
     }
 
-    /// Height in pixels.
+    /// Height in pixels of the displayed frames.
     pub fn height(&self) -> u32 {
-        self.decoder.height()
+        if self.rotation % 180 == 90 {
+            self.decoder.width()
+        } else {
+            self.decoder.height()
+        }
+    }
+
+    /// Rotation the file asks for, in degrees clockwise (0, 90, 180 or
+    /// 270). [`frame_at`](Self::frame_at) applies it;
+    /// [`raw_frame_at`](Self::raw_frame_at) does not.
+    pub fn rotation(&self) -> u16 {
+        self.rotation
     }
 
     /// Returns the frame displayed at source time `t`: the last frame whose
@@ -423,6 +449,21 @@ impl VideoReader {
     }
 
     fn convert(&mut self, raw: &frame::Video, into: &mut Image) -> Result<(), MediaError> {
+        if self.rotation == 0 {
+            return self.convert_unrotated(raw, into);
+        }
+        let mut flat = self.unrotated.take().unwrap_or_default();
+        self.convert_unrotated(raw, &mut flat)?;
+        rotate_into(&flat, self.rotation, into);
+        self.unrotated = Some(flat);
+        Ok(())
+    }
+
+    fn convert_unrotated(
+        &mut self,
+        raw: &frame::Video,
+        into: &mut Image,
+    ) -> Result<(), MediaError> {
         // The common layout goes straight to linear light, without the
         // widening pass; a full-range JPEG layout keeps its range here
         // since nothing compresses it on the way.
@@ -481,6 +522,35 @@ impl VideoReader {
             );
         }
         Ok(())
+    }
+}
+
+/// Writes `src` rotated clockwise by `degrees` (90, 180 or 270) into
+/// `dst`, which takes the rotated size.
+fn rotate_into(src: &Image, degrees: u16, dst: &mut Image) {
+    let (w, h) = (src.width as usize, src.height as usize);
+    let (dw, dh) = if degrees % 180 == 90 { (h, w) } else { (w, h) };
+    dst.width = dw as u32;
+    dst.height = dh as u32;
+    dst.pixels.clear();
+    dst.pixels.reserve(dw * dh);
+    match degrees {
+        90 => {
+            for y in 0..dh {
+                for x in 0..dw {
+                    dst.pixels.push(src.pixels[(h - 1 - x) * w + y]);
+                }
+            }
+        }
+        180 => dst.pixels.extend(src.pixels.iter().rev().copied()),
+        270 => {
+            for y in 0..dh {
+                for x in 0..dw {
+                    dst.pixels.push(src.pixels[x * w + (w - 1 - y)]);
+                }
+            }
+        }
+        _ => dst.pixels.extend_from_slice(&src.pixels),
     }
 }
 

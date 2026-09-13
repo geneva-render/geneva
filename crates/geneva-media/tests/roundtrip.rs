@@ -1555,3 +1555,27 @@ fn stream_copy_refuses_an_hdr_source_for_an_sdr_output() {
         "into a matching HDR output the stream is copied"
     );
 }
+
+/// The corpus clip `rotated-90.mp4` is a landscape stream, red on the
+/// left and blue on the right, with a 90 degree clockwise rotation: the
+/// reader turns it upright, red on top.
+#[test]
+fn the_reader_applies_the_rotation_a_file_asks_for() {
+    let path = clip().parent().unwrap().join("sync/rotated-90.mp4");
+    let mut reader = VideoReader::open(&path, ColorTags::default()).unwrap();
+    assert_eq!(reader.rotation(), 90);
+    assert_eq!((reader.width(), reader.height()), (90, 160));
+    let img = reader.frame_at(Ratio::new(1, 2)).unwrap();
+    assert_eq!((img.width, img.height), (90, 160));
+    let at = |x: u32, y: u32| img.pixels[(y * img.width + x) as usize];
+    let top = at(45, 20);
+    let bottom = at(45, 140);
+    assert!(top.r > 0.5 && top.b < 0.1, "top is not red: {top:?}");
+    assert!(
+        bottom.b > 0.5 && bottom.r < 0.1,
+        "bottom is not blue: {bottom:?}"
+    );
+    // The raw frame keeps the coded orientation.
+    let raw = reader.raw_frame_at(Ratio::new(1, 2)).unwrap();
+    assert_eq!((raw.width(), raw.height()), (160, 90));
+}
