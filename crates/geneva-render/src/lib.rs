@@ -15,6 +15,7 @@ mod assets;
 mod blur;
 mod cpu;
 mod frame;
+mod html;
 mod text;
 
 use geneva_color::Color;

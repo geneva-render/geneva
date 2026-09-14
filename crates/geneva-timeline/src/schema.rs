@@ -517,6 +517,8 @@ pub enum AssetKind {
     Font,
     /// A subtitle file (SubRip `.srt` or WebVTT `.vtt`).
     Subtitle,
+    /// A markup file drawn by the HTML source.
+    Html,
 }
 
 impl AssetKind {
@@ -527,6 +529,7 @@ impl AssetKind {
             "png" | "jpg" | "jpeg" | "webp" | "bmp" | "gif" => Some(Self::Image),
             "wav" | "mp3" | "aac" | "m4a" | "flac" | "ogg" | "opus" | "oga" => Some(Self::Audio),
             "ttf" | "otf" | "ttc" => Some(Self::Font),
+            "html" | "htm" => Some(Self::Html),
             "srt" | "vtt" => Some(Self::Subtitle),
             _ => None,
         }
@@ -540,6 +543,7 @@ impl AssetKind {
             Self::Audio => "audio",
             Self::Font => "font",
             Self::Subtitle => "subtitle",
+            Self::Html => "html",
         }
     }
 }
@@ -842,6 +846,30 @@ pub enum Source {
     },
     /// Styled text, optionally with per-word timing.
     Text(Box<TextSource>),
+    /// A box of markup: HTML and CSS laid out with flexbox and drawn.
+    ///
+    /// The markup comes from `html` or from an asset of kind "html", and
+    /// the styles from a `<style>` element inside it, from `css`, or
+    /// both. There is no inline layout: an element's text is one
+    /// paragraph and a child element is a box of its own.
+    Html {
+        /// Markup written in the document.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        html: Option<String>,
+        /// Id of an asset of kind "html", read as the markup.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        asset: Option<String>,
+        /// A stylesheet applied after any `<style>` in the markup.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        css: Option<String>,
+        /// Box width. Defaults to the frame width.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<Length>,
+        /// Box height. Without one the box is as tall as its content,
+        /// so a card fits the text inside it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height: Option<Length>,
+    },
     /// A reusable composition declared under "compositions".
     Composition {
         /// Name of the composition.

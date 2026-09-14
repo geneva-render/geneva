@@ -633,6 +633,7 @@ version = "0.4.3"
 dependencies = [
  "cosmic-text",
  "geneva-color",
+ "geneva-html",
  "geneva-timeline",
  "image",
  "rayon",
@@ -646,6 +647,7 @@ version = "0.4.3"
 dependencies = [
  "geneva-anim",
  "geneva-color",
+ "geneva-html",
  "jsonschema",
  "schemars",
  "serde",

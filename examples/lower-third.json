@@ -2,7 +2,10 @@
   "geneva": "0.3",
   "output": { "width": 1280, "height": 720, "fps": 30 },
 
-  "assets": { "iss": { "src": "iss.mp4" } },
+  "assets": {
+    "iss":  { "src": "iss.mp4" },
+    "card": { "src": "card.html" }
+  },
 
   "keyframes": {
     "slide-in": { "from": "translate: -656px", "to": "translate: 0" },
@@ -10,33 +13,11 @@
     "fade-out": { "from": "opacity: 1", "to": "opacity: 0" }
   },
 
-  "compositions": {
-    "card": {
-      "width": 560, "height": 96,
-      "layers": [
-        { "clips": [ { "source": { "kind": "shape", "shape": "rect", "width": "100%",
-            "height": "100%", "fill": "#0b1016d9", "radius": 8 } } ] },
-
-        { "clips": [ { "source": { "kind": "shape", "shape": "rect", "width": 5,
-            "height": "100%", "fill": "#4ade80" },
-            "transform": { "anchor": "top left", "position": "0 0" } } ] },
-
-        { "clips": [ { "source": { "kind": "text", "text": "Dragon CRS-17",
-            "font": "700 32px Liberation Sans", "color": "#ffffff", "align": "left" },
-            "transform": { "anchor": "left", "position": "30 36" } } ] },
-
-        { "clips": [ { "source": { "kind": "text", "text": "Berthing at the ISS  ·  NASA",
-            "font": "400 20px Liberation Sans", "color": "#9fb0bf", "align": "left" },
-            "transform": { "anchor": "left", "position": "30 68" } } ] }
-      ]
-    }
-  },
-
   "layers": [
     { "id": "footage", "clips": [ { "source": { "kind": "video", "asset": "iss" } } ] },
 
     { "id": "lower-third", "clips": [ {
-        "source": { "kind": "composition", "composition": "card" },
+        "source": { "kind": "html", "asset": "card", "width": 560 },
         "start": "2s", "duration": "4s",
         "transform": { "anchor": "bottom left", "position": "56 648" },
         "animation": "slide-in 0.5s ease-out, fade-in 0.3s, fade-out 0.3s 3.7s" } ] }

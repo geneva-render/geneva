@@ -1030,6 +1030,11 @@
           "type": "string",
           "const": "subtitle",
           "description": "A subtitle file (SubRip `.srt` or WebVTT `.vtt`)."
+        },
+        {
+          "type": "string",
+          "const": "html",
+          "description": "A markup file drawn by the HTML source."
         }
       ],
       "description": "The kind of content in an asset."
@@ -1569,6 +1574,63 @@
           "required": [
             "kind"
           ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "html": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Markup written in the document."
+            },
+            "asset": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Id of an asset of kind \"html\", read as the markup."
+            },
+            "css": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "A stylesheet applied after any `<style>` in the markup."
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Length"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Box width. Defaults to the frame width."
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Length"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Box height. Without one the box is as tall as its content,\nso a card fits the text inside it."
+            },
+            "kind": {
+              "type": "string",
+              "const": "html"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "description": "A box of markup: HTML and CSS laid out with flexbox and drawn.\n\nThe markup comes from `html` or from an asset of kind \"html\", and\nthe styles from a `<style>` element inside it, from `css`, or\nboth. There is no inline layout: an element's text is one\nparagraph and a child element is a box of its own."
         },
         {
           "type": "object",

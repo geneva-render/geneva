@@ -438,6 +438,16 @@ Every source has a `kind`.
 | --- | --- | --- |
 | `composition` | yes | Name of an entry under `compositions`. The box is the composition's frame. |
 
+`html` — see [Markup](#markup).
+
+| Field | Required | Default | Description |
+| --- | --- | --- | --- |
+| `html` | unless `asset` | | The markup, written in the document. |
+| `asset` | unless `html` | | Id of an asset of kind `html`, read as the markup. Give one of `html` and `asset`, not both (E450). |
+| `css` | no | | A stylesheet applied after any `<style>` in the markup, so it wins ties. |
+| `width` | no | the frame width | Box width. |
+| `height` | no | fits the content | Box height. Without one the box is as tall as what is inside it, so a card sizes itself to its text. |
+
 `text`
 
 | Field | Required | Default | Description |
@@ -479,6 +489,96 @@ expanded into its fields when the document is resolved. There is no
 cascade, box model or selector; each value belongs to one text source.
 A string that does not parse is an `E103` at the field, with the form
 expected.
+
+## Markup
+
+A clip with a source of kind `html` draws a box of HTML and CSS. It is not
+a browser: there is a strict HTML parser, a CSS subset, and flexbox and
+block layout from
+[taffy](https://github.com/DioxusLabs/taffy). Everything it cannot do it
+refuses by name, so a document that would look different in a browser says
+so rather than drawing something else.
+
+```json
+{ "kind": "html", "asset": "card", "width": 560 }
+```
+
+```html
+<style>
+  .card {
+    display: flex; flex-direction: column; gap: 2px;
+    padding: 16px 28px;
+    background: #0b1016d9;
+    border-radius: 8px;
+    border-left: 5px solid #4ade80;
+  }
+  .card h1 { margin: 0; font: 700 32px Liberation Sans; color: #ffffff }
+  .card p  { margin: 0; font: 400 20px Liberation Sans; color: #9fb0bf }
+</style>
+
+<div class="card">
+  <h1>Dragon CRS-17</h1>
+  <p>Berthing at the ISS &middot; NASA</p>
+</div>
+```
+
+The box the markup is drawn into is the drawing surface, the way `<body>`
+is the page: block layout, `width` wide and, without a `height`, as tall
+as its content. A child fills the height with `height: 100%`, as in a
+browser.
+
+### What it parses
+
+Markup must be well formed: every element that is not void
+(`br`, `hr`, `img`, `input`, `link`, `meta` and the rest) is closed, or
+closes itself with `/>`. There is no tag inference and no error recovery;
+a mismatch is E451 with a line and column. `<style>` is collected,
+comments and doctypes are skipped, `<script>` is an error. Named entities
+cover the common set (`&amp;`, `&nbsp;`, `&middot;`, `&mdash;`, …) along
+with `&#39;` and `&#x41;`.
+
+Selectors are type, class, id and `*`, joined by the descendant and child
+(`>`) combinators, in a comma-separated list. There are no pseudo-classes,
+no attribute selectors, no sibling combinators and no at-rules; each is
+E451 by name. The cascade is the usual one: specificity as
+(ids, classes, types), source order to break ties, `!important` above
+both, a `style` attribute above every selector, and the text properties
+inherited by children. A handful of tags carry a user-agent style that an
+author overrides freely: `h1`, `h2`, `h3`, `b`, `strong`, `i`, `em`,
+`small`.
+
+### What it draws
+
+| Group | Properties |
+| --- | --- |
+| Box | `display` (`flex`, `block`, `none`), `position` (`relative`, `absolute`), `top`, `right`, `bottom`, `left`, `inset`, `width`, `height`, `min-width`, `min-height`, `max-width`, `max-height`, `aspect-ratio`, `box-sizing`, `overflow` (and `-x`, `-y`) |
+| Spacing | `margin`, `padding` and their per-side forms and one-to-four-value shorthands |
+| Flex | `flex-direction`, `flex-wrap`, `justify-content`, `align-items`, `align-self`, `align-content`, `gap`, `row-gap`, `column-gap`, `flex-grow`, `flex-shrink`, `flex-basis`, `flex` |
+| Border | `border`, `border-top`, `border-right`, `border-bottom`, `border-left`, `border-width`, `border-color`, `border-style` (`solid`, `none`), `border-radius` |
+| Paint | `background`, `background-color`, `opacity`, `box-shadow` (one, not inset) |
+| Text | `color`, `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space` |
+
+Lengths are `px`, `em`, `rem` and `%`; `em` is the element's own font
+size, settled before anything else uses it. Colours are the ones the rest
+of the format takes. Anything else is W450: the declaration is skipped and
+the message names it, so the rest of the document still draws.
+
+### What it does not do
+
+- **No inline layout.** An element's text is one paragraph, and a child
+  element is a box of its own, so a `<span>` inside a sentence becomes a
+  block rather than flowing with the words around it.
+- **`<img>` names an asset**, not a path: `<img src="logo">` draws the
+  asset whose id is `logo`, the way every other reference in the format
+  works. Layers never carry file paths.
+- **`opacity` does not group.** It multiplies down the tree rather than
+  compositing the subtree off-screen first, so overlapping children of a
+  half-transparent box show through each other.
+- There is no `float`, no `z-index`, no grid, no transition and no media
+  query. The clip's own `transform` and `animation` move the whole box.
+
+Layout and painting do not depend on time, so a markup box is drawn once
+per clip and reused for every frame it is on screen.
 
 ### `audio[]` and `audio[].clips[]`
 

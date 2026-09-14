@@ -249,6 +249,9 @@ pub enum ResolvedSource {
     },
     /// Text.
     Text(Box<ResolvedText>),
+    /// A box of markup, already parsed and styled; only layout and paint
+    /// are left, and neither depends on time.
+    Html(Box<ResolvedHtml>),
     /// A nested composition, rendered as a unit.
     Composition(Box<ResolvedComposition>),
 }
@@ -280,6 +283,20 @@ pub struct ResolvedText {
     pub max_width: f64,
     /// The style block as written.
     pub spec: TextSource,
+}
+
+/// Markup after parsing and styling. Layout and painting are left to the
+/// renderer, which is where text can be measured.
+#[derive(Debug, Clone)]
+pub struct ResolvedHtml {
+    /// The markup, for a renderer that has to prepare it again.
+    pub html: String,
+    /// The stylesheet applied after any `<style>` in the markup.
+    pub css: String,
+    /// Box width in pixels.
+    pub width: f64,
+    /// Box height in pixels, or `None` to fit the content.
+    pub height: Option<f64>,
 }
 
 /// A subtitle track with its timing offset resolved.
@@ -336,6 +353,14 @@ type ResolvedTransform = (Point, Track<[f64; 2]>, Track<[f64; 2]>, Track<f64>);
 pub trait AssetInfo {
     /// Duration of a media asset in seconds, if known.
     fn duration(&self, asset_id: &str, src: &str) -> Option<Ratio>;
+
+    /// The contents of a text asset, for the markup an HTML source draws.
+    /// Returning `None` leaves the source to be read at render time, so
+    /// validation without files still works.
+    fn text(&self, asset_id: &str, src: &str) -> Option<String> {
+        let _ = (asset_id, src);
+        None
+    }
 }
 
 /// An [`AssetInfo`] that knows nothing, for validation without files.
@@ -1643,6 +1668,25 @@ impl Resolver<'_> {
                 let resolved = self.resolve_text(text, &spath, assets, frame);
                 (ResolvedSource::Text(Box::new(resolved)), ClipLength::Open)
             }
+            Source::Html {
+                html,
+                asset,
+                css,
+                width,
+                height,
+            } => (
+                self.resolve_html(
+                    html.as_deref(),
+                    asset.as_deref(),
+                    css.as_deref(),
+                    *width,
+                    *height,
+                    &spath,
+                    assets,
+                    frame,
+                ),
+                ClipLength::Open,
+            ),
             Source::Composition { composition } => {
                 self.resolve_composition(composition, &spath, assets, open_hint)
             }
@@ -2260,6 +2304,115 @@ impl Resolver<'_> {
             })
             .collect();
         Track::new(keys).unwrap_or(base)
+    }
+
+    /// Reads, parses and styles an HTML source. Layout waits for the
+    /// renderer, which is the only thing that can measure text.
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_html(
+        &mut self,
+        html: Option<&str>,
+        asset: Option<&str>,
+        css: Option<&str>,
+        width: Option<Length>,
+        height: Option<Length>,
+        spath: &Path,
+        assets: &BTreeMap<String, ResolvedAsset>,
+        frame: FrameSize,
+    ) -> ResolvedSource {
+        let w = width.map_or(f64::from(frame.width), |l| {
+            self.positive_length(l, &spath.key("width"), f64::from(frame.width), "width")
+        });
+        let h = height.map(|l| {
+            self.positive_length(l, &spath.key("height"), f64::from(frame.height), "height")
+        });
+        let css = css.unwrap_or_default().to_owned();
+
+        let markup = match (html, asset) {
+            (Some(_), Some(_)) => {
+                self.push(
+                    Diagnostic::error(
+                        "E450",
+                        spath.clone(),
+                        "an html source has both \"html\" and \"asset\"",
+                    )
+                    .with_help("write the markup in the document or point at a file, not both"),
+                );
+                None
+            }
+            (Some(h), None) => Some(h.to_owned()),
+            (None, Some(id)) => {
+                let apath = spath.key("asset");
+                if self
+                    .asset_ref(id, &apath, assets, &[AssetKind::Html])
+                    .is_none()
+                {
+                    None
+                } else {
+                    // Without a reader the markup is checked at render
+                    // time; `validate --probe` supplies one.
+                    let src = assets.get(id).map_or("", |a| a.src.as_str());
+                    match self.info.text(id, src) {
+                        Some(t) => Some(t),
+                        None => {
+                            return ResolvedSource::Html(Box::new(ResolvedHtml {
+                                html: String::new(),
+                                css,
+                                width: w,
+                                height: h,
+                            }));
+                        }
+                    }
+                }
+            }
+            (None, None) => {
+                self.push(
+                    Diagnostic::error(
+                        "E450",
+                        spath.clone(),
+                        "an html source has neither \"html\" nor \"asset\"",
+                    )
+                    .with_help(
+                        "add \"html\": \"<div>...</div>\" or point \"asset\" at an html file",
+                    ),
+                );
+                None
+            }
+        };
+
+        // The parsed tree is checked here and thrown away: taffy's style
+        // is not Sync, and a resolved composition crosses threads. The
+        // renderer parses it again once per clip and caches the picture.
+        let markup = markup.unwrap_or_default();
+        match geneva_html::prepare(&markup, &css) {
+            Ok(p) => {
+                for problem in &p.problems {
+                    self.push(
+                        Diagnostic::warning("W450", spath.clone(), problem.clone()).with_help(
+                            "the declaration is skipped; the timeline reference lists what geneva draws",
+                        ),
+                    );
+                }
+            }
+            Err(e) => {
+                let field = match (html, asset) {
+                    (Some(_), _) => spath.key("html"),
+                    _ => spath.key("asset"),
+                };
+                let mut d = Diagnostic::error("E451", field, e.message().to_owned());
+                if e.line() > 0 {
+                    d = d.with_location(e.line(), e.column().unwrap_or(1));
+                }
+                self.push(d);
+            }
+        }
+
+        ResolvedSource::Html(Box::new(ResolvedHtml {
+            html: markup,
+            css,
+            width: w,
+            height: h,
+        }))
     }
 
     fn resolve_transform(

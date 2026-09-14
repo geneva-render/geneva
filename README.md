@@ -11,7 +11,9 @@ writes the same JSON under the hood, and `--show-timeline` prints it, so you
 can grab it and keep editing.
 
 Under the commands there's a real compositor: layers, keyframes, text that
-shapes properly, masks, blend modes. Colour is handled in linear light.
+shapes properly, masks, blend modes. Overlays can be written as HTML and
+CSS — flexbox, the box model, `@keyframes` — and geneva lays them out
+itself, with no browser anywhere. Colour is handled in linear light.
 
 One binary. It uses FFmpeg's libraries to read and write files, so it opens
 what ffmpeg opens.
@@ -31,14 +33,51 @@ MIT licensed. Linux and macOS. No services, no network access.
 ## A worked example
 
 Here's a lower third over ten seconds of footage from the space station.
-This is the whole of `examples/lower-third.json`:
+The card is an HTML file — open it in a browser and it looks the same:
+
+```html
+<!-- A lower third. Open this file in a browser: it looks the same there. -->
+<style>
+  .card {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    padding: 16px 28px;
+    background: #0b1016d9;
+    border-radius: 8px;
+    border-left: 5px solid #4ade80;
+    box-shadow: 0 6px 24px #00000066;
+  }
+  .card h1 {
+    margin: 0;
+    font: 700 32px Liberation Sans;
+    color: #ffffff;
+  }
+  .card p {
+    margin: 0;
+    font: 400 20px Liberation Sans;
+    color: #9fb0bf;
+  }
+</style>
+
+<div class="card">
+  <h1>Dragon CRS-17</h1>
+  <p>Berthing at the ISS &nbsp;&middot;&nbsp; NASA</p>
+</div>
+```
+
+and the document that puts it on the footage, in full:
 
 ```json
 {
   "geneva": "0.3",
   "output": { "width": 1280, "height": 720, "fps": 30 },
 
-  "assets": { "iss": { "src": "iss.mp4" } },
+  "assets": {
+    "iss":  { "src": "iss.mp4" },
+    "card": { "src": "card.html" }
+  },
 
   "keyframes": {
     "slide-in": { "from": "translate: -656px", "to": "translate: 0" },
@@ -46,33 +85,11 @@ This is the whole of `examples/lower-third.json`:
     "fade-out": { "from": "opacity: 1", "to": "opacity: 0" }
   },
 
-  "compositions": {
-    "card": {
-      "width": 560, "height": 96,
-      "layers": [
-        { "clips": [ { "source": { "kind": "shape", "shape": "rect", "width": "100%",
-            "height": "100%", "fill": "#0b1016d9", "radius": 8 } } ] },
-
-        { "clips": [ { "source": { "kind": "shape", "shape": "rect", "width": 5,
-            "height": "100%", "fill": "#4ade80" },
-            "transform": { "anchor": "top left", "position": "0 0" } } ] },
-
-        { "clips": [ { "source": { "kind": "text", "text": "Dragon CRS-17",
-            "font": "700 32px Liberation Sans", "color": "#ffffff", "align": "left" },
-            "transform": { "anchor": "left", "position": "30 36" } } ] },
-
-        { "clips": [ { "source": { "kind": "text", "text": "Berthing at the ISS  ·  NASA",
-            "font": "400 20px Liberation Sans", "color": "#9fb0bf", "align": "left" },
-            "transform": { "anchor": "left", "position": "30 68" } } ] }
-      ]
-    }
-  },
-
   "layers": [
     { "id": "footage", "clips": [ { "source": { "kind": "video", "asset": "iss" } } ] },
 
     { "id": "lower-third", "clips": [ {
-        "source": { "kind": "composition", "composition": "card" },
+        "source": { "kind": "html", "asset": "card", "width": 560 },
         "start": "2s", "duration": "4s",
         "transform": { "anchor": "bottom left", "position": "56 648" },
         "animation": "slide-in 0.5s ease-out, fade-in 0.3s, fade-out 0.3s 3.7s" } ] }
@@ -92,28 +109,28 @@ note[N600]: H.264 runs encoded with the system's x264 (build 164) at CRF 18
 wrote dragon.mp4 (300 frames, 10s of video, 3.5s elapsed)
 ```
 
-Reading it from the top: `assets` names the files you're working with, so
-`"asset": "iss"` further down means `iss.mp4`. `compositions` holds anything
-you want to build once and reuse — here a 560x96 card with a plate, a green
-bar and two lines of text. Then `layers` is the timeline itself: the footage
-at the bottom, the card on top of it from two seconds in.
+The card is real CSS. `display: flex` is flexbox, `padding` and
+`border-left` are the box model, `border-radius` and `box-shadow` draw what
+they say. Nothing measures the text for you: the plate is as tall as the two
+lines inside it because that's what a column of flex items does. Geneva
+parses the markup, cascades the styles and lays it out with
+[taffy](https://github.com/DioxusLabs/taffy), so the layout is an
+implementation of the spec rather than a guess at it.
 
-Values are spelled the way CSS spells them. `"700 32px Liberation Sans"` is
-the `font` shorthand, colours take the `#rrggbbaa` you already know, sizes
-take `%` or pixels, and a position takes `"left"`, `"bottom right"` or
-`"30 36"`. There are no selectors and no box model — you place things by
-giving an anchor and a position — but you don't have to learn a new way to
-write a colour or a font.
+It is not a browser, and it says so when it matters. There's no inline
+layout — an element's text is one paragraph and a child element is a box —
+and a property it can't draw is a warning that names the property, not a
+silent difference.
 
-The motion is written the way a stylesheet writes it. `keyframes` at the top
-is a set of `@keyframes` rules, and the card's `animation` plays three of
-them: a slide from 656 pixels to the left, a fade in over the first 0.3
-seconds, a fade out starting at 3.7. The shorthand takes what CSS takes —
-a duration, a delay, a timing function, `infinite`, `alternate` — and
-`spring(170, 26)` as well, which CSS doesn't have.
+The motion is CSS too. `keyframes` at the top is a set of `@keyframes`
+rules, and the card's `animation` plays three of them: a slide from 656
+pixels to the left, a fade in over the first 0.3 seconds, a fade out
+starting at 3.7. The shorthand takes what CSS takes — a duration, a delay,
+a timing function, `infinite`, `alternate` — plus `spring(170, 26)`, which
+CSS hasn't got.
 
-Underneath they're ordinary keyframes, so anything you can't say in CSS you
-can still say directly:
+Underneath it's all keyframes, so anything you can't say in CSS you can say
+directly:
 
 ```json
 "position": { "keyframes": [ [0, "-600 648", "ease-out"], ["0.5s", "56 648"] ] }

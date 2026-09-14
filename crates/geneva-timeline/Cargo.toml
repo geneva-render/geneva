@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 geneva-anim = { workspace = true }
 geneva-color = { workspace = true }
+geneva-html = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

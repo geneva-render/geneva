@@ -9,6 +9,39 @@ the format version it was written for.
 
 ### Added
 
+- **Overlays written as HTML and CSS.** A clip can take a source of kind
+  `html`, with the markup in the document or in an asset of kind `html`,
+  and draw it:
+
+  ```json
+  { "kind": "html", "asset": "card", "width": 560 }
+  ```
+  ```html
+  <div class="card"><h1>Dragon CRS-17</h1><p>Berthing at the ISS</p></div>
+  ```
+
+  A new crate, `geneva-html`, parses a strict HTML subset and a CSS subset
+  (type, class and id selectors, the descendant and child combinators, the
+  real cascade with specificity, source order, `!important` and
+  inheritance) and lays it out with
+  [taffy](https://github.com/DioxusLabs/taffy), so flexbox and block
+  layout are an implementation of the spec, not an approximation. It draws
+  `display`, `position`, the box model, the flex properties, borders and
+  `border-radius`, `box-shadow`, `opacity` and the text properties;
+  `em` and `rem` resolve against the element's own font size. The box is
+  as wide as `width` and, without a `height`, as tall as its content, the
+  way a card sizes itself to its text. Layout and paint do not depend on
+  time, so a box is drawn once per clip whatever its length.
+
+  It is not a browser, and it says which parts of one it is not: there is
+  no inline layout (an element's text is one paragraph, a child element is
+  a box), `<img src="logo">` names an asset rather than a path, and
+  `opacity` multiplies down the tree instead of grouping. Anything it
+  cannot draw it names rather than ignoring — E451 for markup or a
+  selector it cannot parse, with the line and column, and W450 for a
+  property it does not draw, with the element it was on. E450 covers an
+  `html` source with both `html` and `asset`, or neither.
+
 - **Motion written the way a stylesheet writes it.** A top-level
   `keyframes` map holds CSS `@keyframes` rules — an offset (`from`, `to`,
   `60%`) to a declaration block — and a clip's `animation` field plays
@@ -82,9 +115,10 @@ the format version it was written for.
 
 ### Examples
 
-- Every example that places or animates something is written with the
-  shorthands above, and `lower-third.json` animates its card with
-  `@keyframes`; each one renders byte for byte what it rendered before.
+- `lower-third.json` draws its card from `card.html` and animates it with
+  `@keyframes`, so the example is markup, a stylesheet and twenty lines of
+  JSON. Every other example that places or animates something is written
+  with the shorthands above and renders byte for byte what it did before.
 - `social-reframe.json`: a landscape clip reframed to 9:16 with a blurred
   backdrop and word-timed captions. `renditions.json`: three renditions, a
   poster, a sprite sheet and speech audio from one pass. `lower-third.json`

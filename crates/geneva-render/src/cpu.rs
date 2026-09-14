@@ -29,6 +29,9 @@ pub struct CpuRenderer<A: AssetSource> {
     /// Rendered text images that do not change with time, by a hash of
     /// the clip and its text, so a caption is laid out once per clip.
     text_cache: HashMap<u64, Image>,
+    /// Markup boxes drawn earlier, by a hash of the clip; an HTML source
+    /// is the same picture at every time.
+    html_cache: HashMap<u64, Image>,
     /// Pixel buffers of nested compositions drawn earlier, used again for
     /// the next ones so that a frame-sized buffer is not allocated and
     /// faulted in on every frame.
@@ -54,6 +57,7 @@ impl CpuRenderer<FileAssets> {
             assets: FileAssets::new(root),
             text: TextEngine::new(),
             text_cache: HashMap::new(),
+            html_cache: HashMap::new(),
             spare: Vec::new(),
             masks: HashMap::new(),
         }
@@ -67,6 +71,7 @@ impl<A: AssetSource> CpuRenderer<A> {
             assets,
             text: TextEngine::new(),
             text_cache: HashMap::new(),
+            html_cache: HashMap::new(),
             spare: Vec::new(),
             masks: HashMap::new(),
         }
@@ -196,6 +201,33 @@ impl<A: AssetSource> CpuRenderer<A> {
                     asset,
                     source_time,
                 )?))
+            }
+            ResolvedSource::Html(html) => {
+                // Neither layout nor paint depends on time, so the box is
+                // drawn once per clip and reused for every frame.
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                clip.path.hash(&mut hasher);
+                let key = hasher.finish();
+                if !self.html_cache.contains_key(&key) {
+                    let prepared =
+                        crate::html::prepare(html).map_err(|reason| RenderError::Asset {
+                            id: clip.path.clone(),
+                            reason,
+                        })?;
+                    let mut images = HashMap::new();
+                    for src in crate::html::image_sources(&prepared) {
+                        if let Ok(image) = self.assets.image(comp, &src) {
+                            images.insert(src, image.clone());
+                        }
+                    }
+                    let drawn = crate::html::render(html, &prepared, &mut self.text, &images)
+                        .map_err(|reason| RenderError::Asset {
+                            id: clip.path.clone(),
+                            reason,
+                        })?;
+                    self.html_cache.insert(key, drawn);
+                }
+                Paint::Image(Cow::Borrowed(&self.html_cache[&key]))
             }
             ResolvedSource::Text(text) => {
                 self.load_fonts(comp, text)?;

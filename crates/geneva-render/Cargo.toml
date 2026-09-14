@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 cosmic-text = { workspace = true }
 geneva-color = { workspace = true }
+geneva-html = { workspace = true }
 geneva-timeline = { workspace = true }
 image = { workspace = true }
 rayon = { workspace = true }

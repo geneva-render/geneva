@@ -165,6 +165,18 @@ opacity replaces the clip's, so the clip's value must be constant where
 a rule drives it (E443). Everything resolves to the same keyframe
 tracks, so neither spelling is faster or slower than the other.
 
+A clip can also draw a box of markup: a source of kind `html` with the
+markup in `html` or in an asset of kind `html`, plus optional `css`, a
+`width` (default: the frame) and a `height` (default: fits the content).
+It is a strict HTML parser, a CSS subset with type, class and id
+selectors and the descendant and child combinators, and flexbox and block
+layout from taffy. Refer to images by asset id, not by path
+(`<img src="logo">`). There is no inline layout: an element's text is one
+paragraph and a child element is a box. Anything geneva cannot draw is
+named rather than ignored: E451 for markup or a selector it cannot parse,
+W450 for a property it does not draw. See
+[timeline.md](timeline.md#markup) for the property list.
+
 ## Things that trip programs up
 
 - **Asset paths are relative to a root**, the timeline's directory by

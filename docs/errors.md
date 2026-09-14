@@ -90,6 +90,9 @@ result is not what was intended. Notes are informational.
 | E443 | A property is driven by the clip's own `keyframes` and by an animation at once. |
 | E444 | Two animations on one clip set the same property at the same time. |
 | W440 | An animation rule sets nothing at an offset, or has fewer than two offsets, so nothing interpolates. |
+| E450 | An `html` source has both `html` and `asset`, or neither. |
+| E451 | The markup or its styles did not parse. The message says what is wrong and the location points at it: a tag that closes the wrong element, an unclosed element, a selector or at-rule geneva does not support, a declaration block that is never closed. |
+| W450 | A declaration names something geneva does not draw. It is skipped and the rest of the document is drawn; the message names the property and the element. |
 | W401 | Output width or height is odd; most codecs need even dimensions. |
 | W402 | `subtitles --burn` found no cues in the file; the picture is written unchanged. |
 | W403 | A burned-in subtitle cue extends off-screen. The message gives the box size and by how much it leaves the frame; the path names the clip. |

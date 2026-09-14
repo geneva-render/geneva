@@ -317,6 +317,9 @@ pub fn scale_picture(rgba: &[u8], width: u32, height: u32, to: (u32, u32)) -> Ve
 #[derive(Default)]
 pub struct ProbedAssets {
     durations: std::collections::HashMap<String, Ratio>,
+    /// Markup read from html assets, so the resolver checks it before
+    /// anything is rendered.
+    texts: std::collections::HashMap<String, String>,
     problems: Vec<Diagnostic>,
 }
 
@@ -330,6 +333,10 @@ impl ProbedAssets {
 impl AssetInfo for ProbedAssets {
     fn duration(&self, asset_id: &str, _: &str) -> Option<Ratio> {
         self.durations.get(asset_id).copied()
+    }
+
+    fn text(&self, asset_id: &str, _: &str) -> Option<String> {
+        self.texts.get(asset_id).cloned()
     }
 }
 
@@ -347,6 +354,24 @@ pub fn probe_assets(text: &str, root: &Path) -> ProbedAssets {
                 .unwrap_or("");
             geneva_timeline::schema::AssetKind::from_extension(ext)
         });
+        let path = root.join(&asset.src);
+        if kind == Some(geneva_timeline::schema::AssetKind::Html) {
+            match std::fs::read_to_string(&path) {
+                Ok(markup) => {
+                    out.texts.insert(id.clone(), markup);
+                }
+                Err(e) => out.problems.push(
+                    Diagnostic::error(
+                        "E501",
+                        format!("/assets/{id}/src"),
+                        format!("asset {id:?} could not be read: {e}"),
+                    )
+                    .with_value(asset.src.clone())
+                    .with_help(format!("expected the file at {}", path.display())),
+                ),
+            }
+            continue;
+        }
         if !matches!(
             kind,
             Some(
@@ -356,7 +381,6 @@ pub fn probe_assets(text: &str, root: &Path) -> ProbedAssets {
         ) {
             continue;
         }
-        let path = root.join(&asset.src);
         match imp::probe(&path) {
             Ok(info) => {
                 let duration = info
