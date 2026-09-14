@@ -55,9 +55,9 @@ geneva convert talk.mp4 -o frames/%04d.png                           # image seq
 geneva subtitles talk.mp4 -o talk-subbed.mkv --add en.srt --language en
 geneva subtitles talk.mp4 -o talk-burned.mp4 --burn en.srt
 geneva convert master.mov -o reel.mp4 --for instagram     # size, codec, quality, caps from a table
-geneva publish talk.mp4 -o site/talk/                      # video for the web, poster, seek sprites, one pass
-geneva poster talk.mp4 -o thumb.jpg --at 12s
-geneva audio talk.mp4 -o talk.wav --extract --speech       # 16 kHz mono, for transcription
+geneva convert talk.mp4 -o web.mp4 --for web              # copied when a browser already plays it
+geneva frame talk.mp4 -o thumb.jpg                        # a clear frame past the opening; --at 12s for one
+geneva audio talk.mp4 -o talk.wav --extract --speech      # 16 kHz mono, for transcription
 ```
 
 Trims and joins that leave the picture untouched copy the source streams
@@ -75,9 +75,9 @@ texts; there is nothing else to install.
 
 ```sh
 # Pick the archive for your machine (adjust the version and the target)
-curl -fsSLO https://github.com/geneva-render/geneva/releases/download/v0.4.1/geneva-v0.4.1-aarch64-apple-darwin.tar.gz
-tar xzf geneva-v0.4.1-aarch64-apple-darwin.tar.gz
-sh geneva-v0.4.1-aarch64-apple-darwin/install.sh
+curl -fsSLO https://github.com/geneva-render/geneva/releases/download/v0.4.2/geneva-v0.4.2-aarch64-apple-darwin.tar.gz
+tar xzf geneva-v0.4.2-aarch64-apple-darwin.tar.gz
+sh geneva-v0.4.2-aarch64-apple-darwin/install.sh
 geneva --help
 ```
 
@@ -97,8 +97,8 @@ on a file you pass) and prints a table with the time each step took, next
 to the time ffmpeg takes for the same step when ffmpeg is installed:
 
 ```sh
-sh geneva-v0.4.1-aarch64-apple-darwin/check.sh            # built-in test clip
-sh geneva-v0.4.1-aarch64-apple-darwin/check.sh input.mp4  # your own file
+sh geneva-v0.4.2-aarch64-apple-darwin/check.sh            # built-in test clip
+sh geneva-v0.4.2-aarch64-apple-darwin/check.sh input.mp4  # your own file
 ```
 
 Linux binaries need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, RHEL 9

@@ -160,11 +160,10 @@ run "convert for tiktok, --fit cover (crop)" "$work/cover.mp4" "$geneva" convert
 ff -i "$work/trim-exact.mp4" -vf "crop=ih*9/16:ih" "${ffh264[@]}" -g 60 -movflags +faststart -c:a aac -b:a 128k "$work/ff-cover.mp4"
 run "convert for tiktok, --fill blur (rendered)" "$work/blurfill.mp4" "$geneva" convert "$work/trim-exact.mp4" -o "$work/blurfill.mp4" --for tiktok --fill blur; noff
 run "trim for email, --budget 2MB" "$work/email.mp4" "$geneva" trim "$input" -o "$work/email.mp4" --from 2s --duration 5s --for email --budget 2MB; noff
-run "poster, first clear frame" "$work/poster.jpg" "$geneva" poster "$input" -o "$work/poster.jpg"
-ff -i "$input" -vf "thumbnail=300" -frames:v 1 "$work/ff-poster.jpg"
-run "sprites every 5s (+ .vtt)" "$work/sprites.jpg" "$geneva" sprites "$input" -o "$work/sprites.jpg" --every 5s
-ff -i "$input" -vf "fps=1/5,scale=-2:90,tile=10x10" -frames:v 1 "$work/ff-sprites.jpg"
-run "publish for the web (video + poster + sprites, 5s)" "$work/site/video.mp4" "$geneva" publish "$work/trim-exact.mp4" -o "$work/site"; noff
+run "frame from a video, chosen" "$work/thumb.jpg" "$geneva" frame "$input" -o "$work/thumb.jpg"
+ff -i "$input" -vf "thumbnail=300" -frames:v 1 "$work/ff-thumb.jpg"
+run "convert for web, copied (source fits)" "$work/web.mp4" "$geneva" convert "$work/trim-exact.mp4" -o "$work/web.mp4" --for web
+ff -i "$work/trim-exact.mp4" -c copy -movflags +faststart "$work/ff-web.mp4"
 if [ "$quick" = 0 ]; then
   run "5s to VP9/Opus (webm)" "$work/short.webm" "$geneva" trim "$input" -o "$work/short.webm" --from 2s --duration 5s
   ff -ss 2 -i "$input" -t 5 -c:v libvpx-vp9 -crf 31 -b:v 0 -row-mt 1 -c:a libopus "$work/ff-short.webm"

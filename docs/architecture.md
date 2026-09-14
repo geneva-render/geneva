@@ -242,8 +242,8 @@ are composited, so a poster costs one frame.
 
 ## Verbs
 
-`trim`, `concat`, `convert`, `resize`, `overlay`, `audio`, `poster`,
-`sprites` and `publish` do not have code paths of their own. Each probes its inputs, builds a timeline
+`trim`, `concat`, `convert`, `resize`, `overlay`, `audio`, `subtitles`
+and `frame` on a video file do not have code paths of their own. Each probes its inputs, builds a timeline
 document (`crates/geneva-cli/src/verbs.rs`), and hands it to the same
 load, validate, plan and render sequence a timeline file goes through, so
 stream copy, diagnostics and the JSON report behave identically.

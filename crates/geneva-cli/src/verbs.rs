@@ -36,6 +36,8 @@ pub struct Input {
     pub codec: Option<String>,
     /// The video's pixel format name.
     pub pixel_format: Option<String>,
+    /// The audio codec's name, as the probe reports it.
+    pub audio_codec: Option<String>,
 }
 
 impl Input {
@@ -66,6 +68,7 @@ impl Input {
             audio: info.audio.as_ref().map(|a| (a.sample_rate, a.channels)),
             codec: info.video.as_ref().map(|v| v.codec.clone()),
             pixel_format: info.video.as_ref().map(|v| v.pixel_format.clone()),
+            audio_codec: info.audio.as_ref().map(|a| a.codec.clone()),
         })
     }
 }
@@ -372,10 +375,6 @@ pub struct Compiled {
     /// Findings from compiling the verb (for example subtitle cues that
     /// leave the frame), reported with the timeline's own diagnostics.
     pub diagnostics: Vec<Diagnostic>,
-    /// Whether to write `manifest.json` into the output directory: the
-    /// report's file list with paths relative to the directory, for
-    /// whatever uploads or serves the files later.
-    pub manifest: bool,
 }
 
 /// Rounds a dimension to the nearest even number, as most codecs need.
@@ -688,7 +687,6 @@ pub fn convert(
         timeline: tl,
         root,
         diagnostics: Vec::new(),
-        manifest: false,
     })
 }
 
@@ -747,7 +745,6 @@ pub fn trim(
         timeline: tl,
         root,
         diagnostics: Vec::new(),
-        manifest: false,
     })
 }
 
@@ -808,7 +805,6 @@ pub fn concat(inputs: &[PathBuf], crossfade: Option<Time>, args: &EncodeArgs) ->
         timeline: tl,
         root,
         diagnostics: Vec::new(),
-        manifest: false,
     })
 }
 
@@ -991,7 +987,6 @@ pub fn overlay(
         timeline: tl,
         root,
         diagnostics: Vec::new(),
-        manifest: false,
     })
 }
 
@@ -1113,7 +1108,6 @@ pub fn audio(input: &Path, op: &AudioOp, speech: bool, args: &EncodeArgs) -> Res
         timeline: tl,
         root,
         diagnostics: Vec::new(),
-        manifest: false,
     })
 }
 
@@ -1160,8 +1154,9 @@ fn whole_picture(input: &Path) -> Result<(Timeline, PathBuf, Input)> {
     Ok((tl, root, src))
 }
 
-/// `poster`: one still of the video, at a time or the first clear frame.
-pub fn poster(
+/// `frame` on a media file: one still, at a time or the first clear
+/// frame after the opening.
+pub fn still(
     input: &Path,
     at: Option<Time>,
     width: Option<u32>,
@@ -1172,131 +1167,12 @@ pub fn poster(
     spec.at = at;
     spec.width = width;
     spec.height = height;
-    tl.outputs.insert("poster".to_owned(), spec);
+    tl.outputs.insert("frame".to_owned(), spec);
     Ok(Compiled {
         timeline: tl,
         root,
         diagnostics: Vec::new(),
-        manifest: false,
     })
-}
-
-/// `sprites`: a sheet of thumbnails and the WebVTT file that maps times
-/// to tiles, for a player's seek preview.
-pub fn sprites(
-    input: &Path,
-    every: Option<Time>,
-    columns: Option<u32>,
-    width: Option<u32>,
-    height: Option<u32>,
-) -> Result<Compiled> {
-    let (mut tl, root, _) = whole_picture(input)?;
-    let mut spec = output_spec(OutputKind::Sprites);
-    spec.every = every;
-    spec.columns = columns;
-    spec.width = width;
-    spec.height = height;
-    tl.outputs.insert("sprites".to_owned(), spec);
-    Ok(Compiled {
-        timeline: tl,
-        root,
-        diagnostics: Vec::new(),
-        manifest: false,
-    })
-}
-
-/// What `publish` writes besides the video.
-#[derive(Debug, Clone, Default)]
-pub struct PublishOptions {
-    /// The poster's time; the first clear frame when unset.
-    pub poster_at: Option<Time>,
-    /// Seconds between sprite tiles.
-    pub every: Option<Time>,
-    /// Also write the audio alone, at 16 kHz mono, for transcription.
-    pub speech: bool,
-    /// Leave the poster out.
-    pub no_poster: bool,
-    /// Leave the sprites out.
-    pub no_sprites: bool,
-}
-
-/// `publish`: the set of files a video needs on a web page, from one
-/// pass over the source: the video fitted to a target (web unless
-/// `--for` says otherwise), a poster and seek-preview sprites. Returns
-/// the compiled document and the encode arguments to render it with:
-/// a source that already fits the target is copied, not re-encoded,
-/// so the target is dropped from them.
-pub fn publish(
-    input: &Path,
-    opts: &PublishOptions,
-    args: &EncodeArgs,
-) -> Result<(Compiled, EncodeArgs)> {
-    let (mut tl, root, src) = whole_picture(input)?;
-    let mut args = args.clone();
-    let target_name = args.for_.clone().unwrap_or_else(|| "web".to_owned());
-    let target = crate::targets::find(&target_name).ok_or_else(|| {
-        anyhow::anyhow!(
-            "unknown target {target_name:?}; the targets are {} (see `geneva targets`)",
-            crate::targets::names()
-        )
-    })?;
-    let mut diagnostics = Vec::new();
-    let asks_encode =
-        encode_block(&args).is_some() || args.quality.is_some() || args.budget.is_some();
-    let bytes = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
-    let fits = !asks_encode && !args.exact && fits_target(input, &src, bytes, target);
-    if fits {
-        // The planner copies the streams when the container agrees; the
-        // target would otherwise force a re-encode through its quality.
-        args.for_ = None;
-        diagnostics.push(Diagnostic::note(
-            "N600",
-            "",
-            format!(
-                "{} already fits {target_name} ({}×{} {}, {} kb/s): copied, not re-encoded",
-                input.display(),
-                src.width,
-                src.height,
-                src.codec.as_deref().unwrap_or("?"),
-                kbps(bytes, src.duration)
-            ),
-        ));
-    } else {
-        args.for_ = Some(target_name);
-    }
-    tl.outputs
-        .insert("video".to_owned(), output_spec(OutputKind::Video));
-    if !opts.no_poster {
-        let mut spec = output_spec(OutputKind::Poster);
-        spec.at = opts.poster_at;
-        tl.outputs.insert("poster".to_owned(), spec);
-    }
-    if !opts.no_sprites {
-        let mut spec = output_spec(OutputKind::Sprites);
-        spec.every = opts.every;
-        tl.outputs.insert("sprites".to_owned(), spec);
-    }
-    if opts.speech {
-        if !src.has_audio {
-            bail!("{} has no audio stream for --speech", input.display());
-        }
-        let mut spec = output_spec(OutputKind::Audio);
-        spec.path = Some("speech.wav".to_owned());
-        spec.audio = Some(geneva_timeline::schema::AudioOutput {
-            sample_rate: Some(16000),
-            channels: Some(1),
-        });
-        tl.outputs.insert("speech".to_owned(), spec);
-    }
-    Ok((
-        Compiled {
-            timeline: tl,
-            root,
-            diagnostics,
-            manifest: true,
-        },
-        args,
-    ))
 }
 
 /// Average bit rate of a file in kb/s, from its size and length.
@@ -1307,10 +1183,14 @@ fn kbps(bytes: u64, duration: Option<Ratio>) -> u64 {
     }
 }
 
-/// Whether a source already meets a target: H.264 4:2:0 in an MP4 or
-/// MOV, no larger than the target's ceiling, no faster than its frame
-/// rate, and no heavier than its bitrate cap for that size.
-fn fits_target(input: &Path, src: &Input, bytes: u64, target: &crate::targets::Target) -> bool {
+/// Whether a source already meets a `--for` target, so that copying its
+/// streams gives what the target would encode: H.264 4:2:0 SDR in an
+/// MP4 or MOV with AAC or no audio, no larger than the target's
+/// ceiling, no faster than its frame rate, and no heavier than its
+/// bitrate cap for that size. Returns what was checked, for the note.
+pub fn fits_target(input: &Path, target: &crate::targets::Target) -> Result<Option<String>> {
+    let src = Input::probe(input)?;
+    let bytes = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
     let ext = input
         .extension()
         .and_then(|e| e.to_str())
@@ -1319,6 +1199,7 @@ fn fits_target(input: &Path, src: &Input, bytes: u64, target: &crate::targets::T
     let h264 = src.codec.as_deref() == Some("h264");
     let sdr = src.color.is_none_or(|c| !c.is_hdr());
     let pixels = src.pixel_format.as_deref() == Some("yuv420p");
+    let audio_ok = src.audio_codec.as_deref().is_none_or(|a| a == "aac");
     let (long, short) = (src.width.max(src.height), src.width.min(src.height));
     let fits_size = long <= target.max_width.max(target.max_height)
         && short <= target.max_width.min(target.max_height)
@@ -1326,13 +1207,27 @@ fn fits_target(input: &Path, src: &Input, bytes: u64, target: &crate::targets::T
     let fps = src.fps.to_f64();
     let cap = crate::targets::cap_kbps(target, short, fps);
     let rate = kbps(bytes, src.duration);
-    matches!(ext.as_str(), "mp4" | "mov" | "m4v")
+    let fits = matches!(ext.as_str(), "mp4" | "mov" | "m4v")
         && h264
         && sdr
         && pixels
+        && audio_ok
         && fits_size
         && fps <= target.max_fps + 0.01
-        && (rate == 0 || cap.is_none_or(|c| rate <= u64::from(c)))
+        && (rate == 0 || cap.is_none_or(|c| rate <= u64::from(c)));
+    Ok(fits.then(|| {
+        format!(
+            "{}×{} H.264{} at {} kb/s",
+            src.width,
+            src.height,
+            if src.audio_codec.is_some() {
+                " with AAC"
+            } else {
+                ""
+            },
+            rate
+        )
+    }))
 }
 
 /// A subtitle file to attach, with its language.
@@ -1395,7 +1290,6 @@ pub fn add_subtitles(input: &Path, files: &[SubtitleFile], args: &EncodeArgs) ->
         timeline: tl,
         root,
         diagnostics: Vec::new(),
-        manifest: false,
     })
 }
 
@@ -1786,6 +1680,5 @@ pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Re
         timeline: tl,
         root,
         diagnostics,
-        manifest: false,
     })
 }

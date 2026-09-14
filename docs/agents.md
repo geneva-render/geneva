@@ -32,16 +32,15 @@ Every command that touches a timeline returns:
 
 `render` and the verbs add `output`, `content_type`, `mode`, `frames`,
 `duration` and `seconds`. A render of a document with an `outputs` map,
-and the `poster`, `sprites` and `publish` verbs, add `directory` and
-`outputs` instead of `output` and `mode`: one entry per file with
-`name`, `kind`, `path`, `bytes`, `content_type`, its own `mode`, and
-`width` and `height` for pictures and video (one tile, for a sprite
-sheet). Every file written is a row, the sprite map as `sprites-map`,
-so a program can hand the list to an uploader as it is. `publish` also
-writes the same list as `manifest.json` in the directory, with paths
-relative to it. The content types are the point: a `.vtt` or `.mp4`
-served as `application/octet-stream` breaks players, and the report
-names the right type for each file. `mode` is `"copy"` (source streams copied, no decoding),
+and `frame` on a video file, add `directory` and `outputs` instead of
+`output` and `mode`: one entry per file with `name`, `kind`, `path`,
+`bytes`, `content_type`, its own `mode`, and `width` and `height` for
+pictures and video (one tile, for a sprite sheet). Every file written
+is a row, the sprite map as `sprites-map`, so a program can hand the
+list to an uploader as it is; redirect the report to keep it as a
+manifest. The content types are the point: a `.vtt` or `.mp4` served as
+`application/octet-stream` breaks players, and the report names the
+right type for each file. `mode` is `"copy"` (source streams copied, no decoding),
 `"smart"` (packets copied where nothing changes, the frames around cuts
 and under overlays encoded into the same stream),
 `"direct"` (decoded frames handed straight to the encoder, scaled or
@@ -120,10 +119,12 @@ Format 0.3 adds the optional top-level `outputs` map: the files one
 render writes from the composition, each `{ "kind": "video" | "poster" |
 "sprites" | "audio", ... }` with a size, a time (`at` for a poster),
 an interval and column count (sprites) or encode and audio settings of
-its own. `geneva render -o DIR` writes them all in one pass. The
-`poster`, `sprites` and `publish` verbs build such documents;
-`publish` is the one to reach for when a page needs a video, a poster
-and seek previews, and it copies a source that already fits the web.
+its own. `geneva render -o DIR` writes them all in one pass; that is
+the way to get a rendition, a thumbnail and a speech track from one
+read of the source. `frame` on a video file builds a one-entry
+document of this kind. `--for` on a verb copies a source that already
+fits the target instead of re-encoding it, and the note says which
+branch it took.
 
 ## Things that trip programs up
 

@@ -884,10 +884,25 @@ fn targets_pick_size_codec_quality_and_caps_from_the_table() {
     let clip = media_dir().join("clip.mp4");
     let out = dir.path().join("phone.mp4");
 
-    // A device class: the small source is kept, the encode block is
-    // filled in and explained.
+    // A device class the small H.264 source already fits: used as it is,
+    // it is copied, so the printed timeline carries no encode block.
     let shown = run_json(
         &["convert", "--for", "phone", "--show-timeline", "-o"],
+        &[&out, &clip],
+    );
+    assert!(shown["output"]["encode"].is_null(), "{shown}");
+    // A quality ask applies the target: the source is kept at its size,
+    // the encode block is filled in and explained.
+    let shown = run_json(
+        &[
+            "convert",
+            "--for",
+            "phone",
+            "--quality",
+            "good",
+            "--show-timeline",
+            "-o",
+        ],
         &[&out, &clip],
     );
     assert_eq!(shown["output"]["width"], 192);
@@ -1265,89 +1280,59 @@ fn render_writes_every_output_of_a_document_in_one_pass() {
 
 #[test]
 #[cfg(feature = "media")]
-fn poster_sprites_and_publish_write_their_files() {
+fn frame_takes_a_still_from_a_video_file() {
     let dir = tempfile::tempdir().unwrap();
     let clip = media_dir().join("sync/cfr.mp4");
-    let poster = dir.path().join("still.jpg");
+    // An explicit time decodes one frame; the picture takes the video's size.
+    let still = dir.path().join("still.jpg");
     let report = run_json(
-        &["poster"],
-        &[
-            clip.as_path(),
-            std::path::Path::new("-o"),
-            poster.as_path(),
-            std::path::Path::new("--at"),
-            std::path::Path::new("0.5s"),
-        ],
+        &["frame", "--at", "0.5s"],
+        &[clip.as_path(), std::path::Path::new("-o"), still.as_path()],
     );
     assert_eq!(report["frames"], 1, "{report}");
-    assert!(poster.is_file());
-
-    let sheet = dir.path().join("seek.png");
-    let report = run_json(
-        &[
-            "sprites",
-            "--every",
-            "1s",
-            "--columns",
-            "3",
-            "--height",
-            "45",
-        ],
-        &[clip.as_path(), std::path::Path::new("-o"), sheet.as_path()],
-    );
-    assert_eq!(report["frames"], 3, "{report}");
-    let img = image::open(&sheet).unwrap();
-    assert_eq!((img.width(), img.height()), (240, 45));
-    let vtt = std::fs::read_to_string(dir.path().join("seek.vtt")).unwrap();
-    assert!(vtt.contains("seek.png#xywh=160,0,80,45"), "{vtt}");
-
-    // A small H.264 MP4 already fits the web target, so publish copies it.
-    let site = dir.path().join("site");
-    let report = run_json(
-        &["publish", "--speech"],
-        &[clip.as_path(), std::path::Path::new("-o"), site.as_path()],
-    );
-    let outputs = report["outputs"].as_array().unwrap();
-    let video = outputs.iter().find(|o| o["name"] == "video").unwrap();
-    assert_eq!(video["mode"], "copy", "{report}");
-    for file in [
-        "video.mp4",
-        "poster.jpg",
-        "sprites.jpg",
-        "sprites.vtt",
-        "speech.wav",
-        "manifest.json",
-    ] {
-        assert!(site.join(file).is_file(), "{file} missing");
-    }
-    // Every file is a row with its media type, the sprite map included,
-    // and the manifest repeats the rows with paths inside the directory.
-    let row = |kind: &str| outputs.iter().find(|o| o["kind"] == kind).unwrap();
-    assert_eq!(row("sprites-map")["content_type"], "text/vtt");
-    assert_eq!(row("video")["content_type"], "video/mp4");
-    assert_eq!(row("audio")["content_type"], "audio/wav");
-    assert_eq!(row("manifest")["content_type"], "application/json");
-    let manifest: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(site.join("manifest.json")).unwrap())
-            .unwrap();
-    assert_eq!(manifest["width"], 160);
-    assert_eq!(manifest["duration"], 3.0);
-    let listed: Vec<&str> = manifest["outputs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|o| o["path"].as_str().unwrap())
-        .collect();
+    let row = &report["outputs"][0];
+    assert_eq!(row["content_type"], "image/jpeg");
     assert_eq!(
-        listed,
-        [
-            "video.mp4",
-            "speech.wav",
-            "poster.jpg",
-            "sprites.jpg",
-            "sprites.vtt"
-        ]
+        (row["width"].as_u64(), row["height"].as_u64()),
+        (Some(160), Some(90))
     );
+    assert!(still.is_file());
+    // Without a time the frame is chosen; a width keeps the aspect.
+    let chosen = dir.path().join("chosen.png");
+    let report = run_json(
+        &["frame", "--width", "80"],
+        &[clip.as_path(), std::path::Path::new("-o"), chosen.as_path()],
+    );
+    assert!(report["frames"].as_u64().unwrap() >= 1, "{report}");
+    let img = image::open(&chosen).unwrap();
+    assert_eq!((img.width(), img.height()), (80, 45));
+    // A timeline still goes through the renderer, and takes a size too.
+    let tl = dir.path().join("tl.jpg");
+    let report = run_json(
+        &["frame", "--at", "1s", "--height", "90"],
+        &[
+            examples().join("shapes.json").as_path(),
+            std::path::Path::new("-o"),
+            tl.as_path(),
+        ],
+    );
+    assert_eq!(report["content_type"], "image/jpeg");
+    assert_eq!(report["width"], 160);
+    assert_eq!(report["height"], 90);
+}
+
+#[test]
+#[cfg(feature = "media")]
+fn for_target_copies_a_source_that_already_fits() {
+    let dir = tempfile::tempdir().unwrap();
+    let clip = media_dir().join("sync/cfr.mp4");
+    // A small H.264/AAC MP4 is within the web target: copied, with a note.
+    let out = dir.path().join("web.mp4");
+    let report = run_json(
+        &["convert", "--for", "web"],
+        &[clip.as_path(), std::path::Path::new("-o"), out.as_path()],
+    );
+    assert_eq!(report["mode"], "copy", "{report}");
     assert!(
         report["diagnostics"]
             .as_array()
@@ -1356,4 +1341,18 @@ fn poster_sprites_and_publish_write_their_files() {
             .any(|d| d["message"].as_str().unwrap().contains("already fits web")),
         "{report}"
     );
+    // A quality ask re-encodes regardless.
+    let out = dir.path().join("web-crf.mp4");
+    let report = run_json(
+        &["convert", "--for", "web", "--crf", "30"],
+        &[clip.as_path(), std::path::Path::new("-o"), out.as_path()],
+    );
+    assert_ne!(report["mode"], "copy", "{report}");
+    // A target the source does not fit (portrait) is encoded onto its canvas.
+    let out = dir.path().join("tiktok.mp4");
+    let report = run_json(
+        &["convert", "--for", "tiktok"],
+        &[clip.as_path(), std::path::Path::new("-o"), out.as_path()],
+    );
+    assert_ne!(report["mode"], "copy", "{report}");
 }

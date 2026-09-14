@@ -104,6 +104,47 @@ pub fn content_type_for(path: &Path) -> &'static str {
     }
 }
 
+/// Writes an sRGB picture as PNG or, for any other extension, JPEG.
+pub fn write_picture(rgba: &[u8], width: u32, height: u32, path: &Path) -> Result<(), RenderError> {
+    let img = image::RgbaImage::from_raw(width, height, rgba.to_vec()).ok_or_else(|| {
+        RenderError::Asset {
+            id: path.display().to_string(),
+            reason: "picture buffer does not match its size".to_owned(),
+        }
+    })?;
+    let io = |e: image::ImageError| RenderError::Asset {
+        id: path.display().to_string(),
+        reason: e.to_string(),
+    };
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    if ext == "png" {
+        img.save(path).map_err(io)
+    } else {
+        let rgb = image::DynamicImage::ImageRgba8(img).to_rgb8();
+        let file = std::fs::File::create(path).map_err(|e| RenderError::Asset {
+            id: path.display().to_string(),
+            reason: e.to_string(),
+        })?;
+        let mut writer = std::io::BufWriter::new(file);
+        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 88);
+        enc.encode_image(&rgb).map_err(io)
+    }
+}
+
+/// Scales an sRGB picture to `width`×`height`.
+pub fn scale_picture(rgba: &[u8], width: u32, height: u32, to: (u32, u32)) -> Vec<u8> {
+    if (width, height) == to {
+        return rgba.to_vec();
+    }
+    let img = image::RgbaImage::from_raw(width, height, rgba.to_vec())
+        .expect("picture buffer matches its size");
+    image::imageops::resize(&img, to.0, to.1, image::imageops::FilterType::Triangle).into_raw()
+}
+
 /// Facts learned by opening the timeline's media assets.
 #[derive(Default)]
 pub struct ProbedAssets {
@@ -174,7 +215,7 @@ pub fn probe_assets(text: &str, root: &Path) -> ProbedAssets {
     out
 }
 
-pub use imp::{describe, probe, read_subtitles, render, render_outputs, renderer};
+pub use imp::{copy_sources, describe, probe, read_subtitles, render, render_outputs, renderer};
 
 #[cfg(feature = "media")]
 mod imp {
@@ -246,46 +287,6 @@ mod imp {
     }
 
     /// Writes an sRGB picture as JPEG or PNG by the path's extension.
-    fn write_picture(rgba: &[u8], width: u32, height: u32, path: &Path) -> Result<(), RenderError> {
-        let img = image::RgbaImage::from_raw(width, height, rgba.to_vec()).ok_or_else(|| {
-            RenderError::Asset {
-                id: path.display().to_string(),
-                reason: "picture buffer does not match its size".to_owned(),
-            }
-        })?;
-        let io = |e: image::ImageError| RenderError::Asset {
-            id: path.display().to_string(),
-            reason: e.to_string(),
-        };
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(str::to_ascii_lowercase)
-            .unwrap_or_default();
-        if ext == "png" {
-            img.save(path).map_err(io)
-        } else {
-            let rgb = image::DynamicImage::ImageRgba8(img).to_rgb8();
-            let file = std::fs::File::create(path).map_err(|e| RenderError::Asset {
-                id: path.display().to_string(),
-                reason: e.to_string(),
-            })?;
-            let mut writer = std::io::BufWriter::new(file);
-            let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 88);
-            enc.encode_image(&rgb).map_err(io)
-        }
-    }
-
-    /// Scales an sRGB picture to `width`×`height`.
-    fn scale_picture(rgba: &[u8], width: u32, height: u32, to: (u32, u32)) -> Vec<u8> {
-        if (width, height) == to {
-            return rgba.to_vec();
-        }
-        let img = image::RgbaImage::from_raw(width, height, rgba.to_vec())
-            .expect("picture buffer matches its size");
-        image::imageops::resize(&img, to.0, to.1, image::imageops::FilterType::Triangle).into_raw()
-    }
-
     /// A WebVTT timestamp.
     fn vtt_time(secs: f64) -> String {
         let ms = (secs * 1000.0).round().max(0.0) as u64;
@@ -323,6 +324,31 @@ mod imp {
         path: std::path::PathBuf,
         encoder: Option<Encoder>,
         sample_rate: u32,
+    }
+
+    /// The source files a stream copy of `comp` into `output` would take
+    /// its video from, when the copy planner allows one; `None` when the
+    /// composition needs a render.
+    pub fn copy_sources(
+        comp: &Composition,
+        root: &Path,
+        output: &Path,
+    ) -> Result<Option<Vec<std::path::PathBuf>>> {
+        let Some(container) = geneva_media::container_for(output, None) else {
+            return Ok(None);
+        };
+        match geneva_media::plan_stream_copy_explained(comp, root, container, None)? {
+            Ok(plan) if !plan.segments.is_empty() => {
+                let mut paths: Vec<std::path::PathBuf> = Vec::new();
+                for seg in &plan.segments {
+                    if !paths.contains(&seg.path) {
+                        paths.push(seg.path.clone());
+                    }
+                }
+                Ok(Some(paths))
+            }
+            _ => Ok(None),
+        }
     }
 
     pub fn render_outputs(
@@ -720,7 +746,7 @@ mod imp {
                 {
                     let tile_time = f64::from(next_tile) * every;
                     if next_tile < count && t.to_f64() + 1e-9 >= tile_time {
-                        let tile = scale_picture(
+                        let tile = super::scale_picture(
                             &frame.to_rgba8(),
                             frame.width(),
                             frame.height(),
@@ -804,8 +830,8 @@ mod imp {
             let rgba = poster_pick
                 .or(poster_fallback)
                 .unwrap_or_else(|| frame.to_rgba8());
-            let scaled = scale_picture(&rgba, comp.width, comp.height, (o.width, o.height));
-            write_picture(&scaled, o.width, o.height, &path)?;
+            let scaled = super::scale_picture(&rgba, comp.width, comp.height, (o.width, o.height));
+            super::write_picture(&scaled, o.width, o.height, &path)?;
             stats.push(super::OutputStats {
                 name: o.name.clone(),
                 kind: "poster",
@@ -820,7 +846,7 @@ mod imp {
         if let (Some((o, path)), Some(sheet), Some((every, count, cols, _))) =
             (sprites, sheet, sprite_plan)
         {
-            write_picture(sheet.as_raw(), sheet.width(), sheet.height(), &path)?;
+            super::write_picture(sheet.as_raw(), sheet.width(), sheet.height(), &path)?;
             let mut vtt = String::from("WEBVTT\n\n");
             let sheet_name = path
                 .file_name()
@@ -1964,6 +1990,15 @@ mod imp {
 
     pub fn read_subtitles(_: &Path, _: usize) -> Result<Vec<geneva_media::subtitles::Cue>> {
         Err(unavailable())
+    }
+
+    #[allow(clippy::unnecessary_wraps)]
+    pub fn copy_sources(
+        _: &Composition,
+        _: &Path,
+        _: &Path,
+    ) -> Result<Option<Vec<std::path::PathBuf>>> {
+        Ok(None)
     }
 
     pub fn render_outputs(

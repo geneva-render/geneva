@@ -5,6 +5,34 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## 0.4.2 — 2026-09-14
+
+Two verbs fewer. `publish` and `sprites` are gone after a day: `publish`
+was `convert --for web` plus pictures into a directory, under a name
+that means "upload", and its one useful rule belongs to `--for`; the
+`sprites` kind stays in the document for the players that want a sheet.
+`poster` is folded into `frame`.
+
+### Changes
+
+- `--for` copies a source that already fits its target. A source used
+  as it is, H.264 4:2:0 with AAC in MP4 or MOV, within the target's
+  size, frame-rate and bitrate ceilings, is stream-copied by `convert`,
+  `trim`, `concat` and the other verbs instead of being re-encoded to
+  the same thing, and the note says so. `--crf`, `--quality`, `--budget`
+  or `--exact` re-encode regardless.
+- `frame` takes a video file as well as a timeline: `geneva frame
+  talk.mp4 -o thumb.jpg` writes the chosen frame (the first clear one
+  after the opening) or the one at `--at`. Both inputs take `--width`
+  and `--height`, and write JPEG for a `.jpg` output.
+
+### Removed
+
+- `publish`, `sprites` and `poster` verbs, and `manifest.json`. The
+  JSON report carries the same rows with content types; redirect it to
+  keep a manifest. A document with an `outputs` map and `render -o DIR`
+  gives any bundle with exactly the files listed.
+
 ## 0.4.1 — 2026-09-14
 
 ### Added

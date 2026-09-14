@@ -37,9 +37,26 @@ checks that they exist and lets open-ended clips learn their lengths.
 Asset paths are relative to the timeline's directory unless `--assets`
 says otherwise.
 
-### `geneva frame <timeline> [--at TIME | --frame N] -o FILE`
+### `geneva frame <timeline|video> [--at TIME | --frame N] [-o FILE] [--width W] [--height H]`
 
-Renders one frame to a PNG file through the same renderer as `render`.
+One picture, as `.png` (default `frame.png`) or `.jpg`, at the frame's
+size unless `--width` or `--height` says otherwise (one keeps the
+aspect).
+
+From a timeline, the frame at `--at` (default 0) through the same
+renderer as `render`. From a video file, the frame at `--at`, or with no
+time the chosen one: the first clear frame after the opening (past the
+first twenty frames or 5%, not dark, following some motion), so a black
+leader or a phone clip's opening blur is skipped; failing that, the
+frame a tenth of the way in. Only the frames looked at are decoded, so
+it takes a fraction of a second. This is the `<video poster>` image,
+the library thumbnail, the preview card.
+
+```sh
+geneva frame job.json -o still.png --at 1.5s
+geneva frame talk.mp4 -o thumb.jpg                  # chosen frame, the video's size
+geneva frame talk.mp4 -o thumb.jpg --at 12s --width 640
+```
 
 ### `geneva render <timeline> -o FILE|DIR [options]`
 
@@ -133,7 +150,7 @@ otherwise. The printed timeline (`--show-timeline`) shows the choice.
 | Option | Effect |
 | --- | --- |
 | `--crf N`, `--preset NAME` | As for `render`. Setting either forces a re-encode. |
-| `--for TARGET` | Encode for a destination: a size ceiling (never upscaled), codec and level, quality, bitrate cap, keyframes, fast start and audio from one table; see [targets](#targets). |
+| `--for TARGET` | Encode for a destination: a size ceiling (never upscaled), codec and level, quality, bitrate cap, keyframes, fast start and audio from one table; see [targets](#targets). A source used as it is that already fits the target (H.264 4:2:0 with AAC in MP4 or MOV, within the size, frame-rate and bitrate ceilings) is copied instead, and the note says so; `--crf`, `--quality`, `--budget` or `--exact` re-encode it regardless. |
 | `--quality best\|good\|eco` | Quality tier for `--for`; `good` by default. |
 | `--budget SIZE` | With `--for`: cap the bitrate so that the file fits `SIZE` (for example `25MB`), and warn when it still does not. |
 | `--codec h264\|h265\|vp9\|av1\|prores\|dnxhd\|png\|mjpeg` | Video codec. Defaults to the container's usual one. |
@@ -239,69 +256,6 @@ geneva audio talk.mp4 -o talk.wav --extract --speech
 geneva audio talk.mp4 -o dubbed.mp4 --replace voice.wav
 geneva audio talk.mp4 -o scored.mp4 --mix music.mp3 --gain -12
 ```
-
-### `geneva poster <input> [-o FILE] [--at TIME] [--width W] [--height H]`
-
-One still of the video, as `.jpg` (default `poster.jpg`) or `.png`. With
-`--at`, the frame at that time; without it, the first clear frame after
-the opening: not dark, past the first motion, so a fade-in or a black
-leader is skipped. The size is the video's unless `--width` or
-`--height` says otherwise (one keeps the aspect). Only the frames needed
-are decoded.
-
-```sh
-geneva poster talk.mp4                      # poster.jpg, first clear frame
-geneva poster talk.mp4 -o thumb.png --at 12s --width 640
-```
-
-### `geneva sprites <input> [-o FILE] [--every TIME] [--columns N] [--width W] [--height H]`
-
-A sheet of thumbnails (default `sprites.jpg`) and, beside it with the
-same name, the WebVTT file (`sprites.vtt`) that maps each stretch of time
-to a tile with `#xywh=` fragments, which Video.js, hls.js, Plyr and the
-other players read for seek previews. Tiles are 90 pixels high by
-default, `--every` sets the time between them (about a hundred tiles
-over the video by default, at least a second apart), `--columns` the
-tiles per row (10).
-
-```sh
-geneva sprites talk.mp4 --every 5s          # sprites.jpg + sprites.vtt
-```
-
-### `geneva publish <input> -o DIR [--poster-at TIME] [--every TIME] [--speech] [--no-poster] [--no-sprites] [encoding options]`
-
-Everything a web page needs for one video, from one pass over the
-source, into `DIR`: `video.mp4` fitted to the `web` target (or the
-`--for` target given: size ceiling, H.264, quality, bitrate cap, two-second
-keyframes, fast start, AAC), `poster.jpg`, `sprites.jpg` with
-`sprites.vtt`, and with `--speech` the sound alone as `speech.wav` at
-16 kHz mono for transcription. A source that already fits the target
-(H.264 4:2:0 in MP4 or MOV, within the size, frame rate and bitrate
-ceilings) is copied, not re-encoded, and the report says so; `--crf`,
-`--quality`, `--budget` or `--exact` re-encode it regardless.
-
-```sh
-geneva publish talk.mp4 -o site/talk/                 # video.mp4, poster.jpg, sprites.jpg, sprites.vtt
-geneva publish talk.mp4 -o site/talk/ --speech --for phone --every 10s
-```
-
-`publish` also writes `manifest.json` into the directory: the same
-file list as the report, with paths relative to the directory, each
-file's `content_type`, `bytes`, and the picture size, plus the video's
-`width`, `height` and `duration`. It is the bridge to whatever serves
-or uploads the files; a bucket needs the content types set (a `.vtt`
-served as octets shows no previews), and the manifest carries them:
-
-```sh
-jq -r '.outputs[] | "\(.path)\t\(.content_type)"' site/talk/manifest.json |
-  while IFS=$'\t' read -r file type; do
-    aws s3 cp "site/talk/$file" "s3://bucket/talk/$file" --content-type "$type"
-  done
-```
-
-The document `publish` builds is an [`outputs`](timeline.md#outputs)
-map; `--show-timeline` prints it, and a hand-written one can add
-renditions at more sizes.
 
 ### `geneva subtitles <input> -o FILE --add FILE... [--language CODE...] | --burn FILE [--position P] [--margin PX] [--style JSON] [--safe PERCENT] | --extract [--track N]`
 

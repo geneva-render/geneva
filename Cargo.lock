@@ -543,7 +543,7 @@ dependencies = [
 
 [[package]]
 name = "geneva-anim"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "schemars",
  "serde",
@@ -552,7 +552,7 @@ dependencies = [
 
 [[package]]
 name = "geneva-cli"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -571,7 +571,7 @@ dependencies = [
 
 [[package]]
 name = "geneva-color"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "geneva-anim",
  "schemars",
@@ -582,7 +582,7 @@ dependencies = [
 
 [[package]]
 name = "geneva-golden"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "geneva-render",
  "geneva-timeline",
@@ -594,7 +594,7 @@ dependencies = [
 
 [[package]]
 name = "geneva-media"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "ffmpeg-next",
  "geneva-anim",
@@ -611,11 +611,11 @@ dependencies = [
 
 [[package]]
 name = "geneva-media-link"
-version = "0.4.1"
+version = "0.4.2"
 
 [[package]]
 name = "geneva-render"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "cosmic-text",
  "geneva-color",
@@ -628,7 +628,7 @@ dependencies = [
 
 [[package]]
 name = "geneva-timeline"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "geneva-anim",
  "geneva-color",
