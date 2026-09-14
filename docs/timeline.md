@@ -109,6 +109,64 @@ A keyframe can also be written as its fields in order, `[t, v]` or
   is solved analytically and rescaled so it settles exactly at the next
   keyframe; its parameters shape the overshoot and bounce, not the duration.
 
+### Animation
+
+Motion can also be written the way a stylesheet writes it. A top-level
+`keyframes` map holds the rules, and a clip's `animation` field plays one
+or more of them:
+
+```json
+"keyframes": {
+  "slide-in": { "from": "translate: -656px", "to": "translate: 0" },
+  "fade-in":  { "from": "opacity: 0", "to": "opacity: 1" },
+  "fade-out": { "from": "opacity: 1", "to": "opacity: 0" }
+},
+...
+"animation": "slide-in 0.5s ease-out, fade-in 0.3s, fade-out 0.3s 3.7s"
+```
+
+A rule maps an offset — `from`, `to` or a percentage — to a declaration
+block. The properties a block may set are the ones the renderer animates:
+
+| Property | Effect |
+| --- | --- |
+| `transform` | A list of `translate`, `translateX`, `translateY`, `scale`, `scaleX`, `scaleY` and `rotate` functions. Functions of the same kind compose: translations add, scales multiply, rotations add. Lengths are pixels; percentages are not accepted, since the clip's own box is not known until its source is opened (E442). |
+| `translate`, `scale`, `rotate` | The same three as separate properties, as CSS also allows: `"translate: 10px 20px"`, `"scale: 2"`, `"rotate: 45deg"`. |
+| `opacity` | A number or a percentage. |
+
+A property interpolates between the offsets that set it, and holds its
+first and last value outside them, which is CSS's `animation-fill-mode:
+both`; there is no `fill-mode` field yet.
+
+What a rule sets is laid over what the clip already has. A translation
+adds to `transform.position`, a scale multiplies `transform.scale`, a
+rotation adds to `transform.rotation`, and `opacity` replaces the clip's,
+since it is the same property either way. The clip's own value must be
+constant where a rule drives it; setting it with `keyframes` as well is
+an error (E443).
+
+The `animation` value is the CSS shorthand, in any order, with the parts
+geneva understands:
+
+| Part | Default | Notes |
+| --- | --- | --- |
+| rule name | required | A key of the document's `keyframes` (E440). |
+| duration | required | A time with its unit: `0.5s`, `500ms`. Must be more than zero. |
+| delay | `0s` | The second time in the entry. |
+| timing function | `linear` | `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, `step-end`, `cubic-bezier(x1, y1, x2, y2)`, or geneva's own `spring(stiffness[, damping[, mass]])`. It applies between each pair of offsets. |
+| iteration count | `1` | A number, or `infinite`, which runs until the clip ends. |
+| direction | `normal` | `normal`, `reverse`, `alternate`, `alternate-reverse`. |
+
+Several animations are separated by commas. Two of them may drive one
+property as long as their times do not collide (E444), which is how a
+fade-in and a fade-out live together above. Where one run ends and the
+next begins on a different value, the value snaps rather than ramping
+back.
+
+Everything here resolves to ordinary keyframe tracks, so an animated clip
+is composited exactly as a hand-written one is, and `--show-timeline`
+prints the document as it was written.
+
 ## Document structure
 
 ### Top level
@@ -120,6 +178,7 @@ A keyframe can also be written as its fields in order, `[t, v]` or
 | `outputs` | no | Map of name to [output entry](#outputs): the files one render writes from the composition, when there is more than one. |
 | `assets` | no | Map of asset id to asset. |
 | `compositions` | no | Map of name to reusable composition. |
+| `keyframes` | no | Map of name to an [animation rule](#animation): offset to declaration block. |
 | `layers` | no | Visual layers, composited bottom to top. |
 | `audio` | no | Audio-only tracks. |
 
@@ -245,6 +304,7 @@ contain other compositions up to 8 levels deep, and never themselves (E207).
 | `effects` | no | `[]` | Effects on the placed picture, in order; see below. |
 | `mask` | no | | A shape cut from the clip's box, or a luma image over it; see below. |
 | `speed` | no | `1` | How fast the source plays: `2` is twice as fast, `0.5` half speed. The clip lasts its source range divided by it; a video's audio is resampled, so the pitch follows; the clip's own keyframes stay in output time. A clip with a speed is always composited. |
+| `animation` | no | | [Animation](#animation) from the document's `keyframes`, spelled like the CSS shorthand. |
 | `transform` | no | centered | Position, anchor, scale, rotation. |
 | `opacity` | no | `1` | Animatable, 0 to 1. |
 | `blend` | no | `normal` | `normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `difference`, `soft-light`, `add`. Computed in linear light. |

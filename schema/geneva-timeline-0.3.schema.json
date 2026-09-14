@@ -36,6 +36,16 @@
       },
       "description": "Reusable sub-compositions, keyed by name. A clip shows one with a\nsource of kind \"composition\"."
     },
+    "keyframes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      },
+      "description": "Named motion, spelled like CSS `@keyframes`: each rule maps an\noffset (\"from\", \"to\", \"60%\") to a declaration block\n(\"transform: translateX(-656px); opacity: 0\"). A clip plays one\nwith its `animation` field."
+    },
     "layers": {
       "type": "array",
       "items": {
@@ -1164,6 +1174,13 @@
             }
           ],
           "description": "How the source is sized to the output frame before the transform.\nDefaults to \"contain\" for video and to \"none\" (natural size) for\neverything else."
+        },
+        "animation": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Motion from the document's `keyframes`, spelled like the CSS\n`animation` shorthand: a rule name with a duration, and optionally\na delay, a timing function, an iteration count and a direction\n(\"slide-in 0.5s ease-out\", \"pulse 2s infinite alternate\").\nSeveral are separated by commas. What a rule sets is applied on\ntop of `transform` and replaces `opacity`."
         },
         "transform": {
           "anyOf": [

@@ -153,6 +153,18 @@ them freely:
 
 A printed timeline (`--show-timeline`) always uses the long form.
 
+Motion has a second spelling too. A top-level `keyframes` map holds CSS
+`@keyframes` rules — an offset (`from`, `to`, `60%`) to a declaration
+block setting `transform`, `translate`, `scale`, `rotate` or `opacity` —
+and a clip's `animation` plays them with the CSS shorthand:
+`"slide-in 0.5s ease-out, fade-out 0.3s 3.7s"`. Duration and delay need
+their units; `infinite`, `alternate` and `spring(170, 26)` are
+understood. A rule's transform is laid over the clip's own (translations
+add to `transform.position`, scales multiply, rotations add) and its
+opacity replaces the clip's, so the clip's value must be constant where
+a rule drives it (E443). Everything resolves to the same keyframe
+tracks, so neither spelling is faster or slower than the other.
+
 ## Things that trip programs up
 
 - **Asset paths are relative to a root**, the timeline's directory by

@@ -21,6 +21,7 @@
 #![forbid(unsafe_code)]
 
 mod animated;
+mod animation;
 mod color;
 pub mod css;
 mod diagnostic;

@@ -9,6 +9,32 @@ the format version it was written for.
 
 ### Added
 
+- **Motion written the way a stylesheet writes it.** A top-level
+  `keyframes` map holds CSS `@keyframes` rules — an offset (`from`, `to`,
+  `60%`) to a declaration block — and a clip's `animation` field plays
+  them with the CSS shorthand:
+
+  ```json
+  "keyframes": { "slide-in": { "from": "translate: -656px", "to": "translate: 0" } },
+  "animation": "slide-in 0.5s ease-out, fade-out 0.3s 3.7s"
+  ```
+
+  A block sets `transform` (`translate`, `translateX`, `translateY`,
+  `scale`, `scaleX`, `scaleY`, `rotate`), the same three as separate
+  properties, or `opacity`. The shorthand takes a duration, a delay, a
+  timing function, an iteration count (including `infinite`) and a
+  direction (`alternate` and the rest), in any order, plus geneva's own
+  `spring(stiffness[, damping[, mass]])`. A rule is laid over what the
+  clip already sets: translations add to `transform.position`, scales
+  multiply, rotations add, and `opacity` replaces. Two animations may
+  drive one property where their times do not collide, which is how a
+  fade-in and a fade-out share `opacity`. It all resolves to the same
+  keyframe tracks the long form produces, so nothing downstream changes
+  and `--show-timeline` prints the document as written. New codes
+  E440–E444 and W440 cover a missing rule, a malformed shorthand or
+  rule, a property driven twice, and a rule that interpolates nothing;
+  W203 notes a rule nothing plays.
+
 - **Shorter spellings for the three things a document repeats most.** A
   point (`transform.position`, `transform.anchor`) can be a pair or a
   string: `[30, 36]`, `"30 36"`, `"0% 50%"`, or the CSS position keywords
@@ -57,8 +83,8 @@ the format version it was written for.
 ### Examples
 
 - Every example that places or animates something is written with the
-  shorthands above; each one renders byte for byte what it rendered
-  before.
+  shorthands above, and `lower-third.json` animates its card with
+  `@keyframes`; each one renders byte for byte what it rendered before.
 - `social-reframe.json`: a landscape clip reframed to 9:16 with a blurred
   backdrop and word-timed captions. `renditions.json`: three renditions, a
   poster, a sprite sheet and speech audio from one pass. `lower-third.json`

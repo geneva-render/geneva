@@ -12,6 +12,7 @@ use geneva_color::{Color, ColorTags, LinearRgba, ResolvedTags};
 use serde_json::json;
 
 use crate::animated::Animated;
+use crate::animation::{Animation, Values as AnimValues};
 use crate::color::ColorValue;
 use crate::diagnostic::{Diagnostic, Path};
 use crate::length::{Length, Point, Scale};
@@ -366,6 +367,8 @@ pub fn resolve_with(
         fps: timeline.output.fps.ratio(),
         used_assets: BTreeSet::new(),
         used_compositions: BTreeSet::new(),
+        used_rules: BTreeSet::new(),
+        rules: BTreeMap::new(),
         composition_stack: Vec::new(),
     };
     let comp = r.run();
@@ -380,8 +383,133 @@ struct Resolver<'a> {
     fps: Ratio,
     used_assets: BTreeSet<String>,
     used_compositions: BTreeSet<String>,
+    used_rules: BTreeSet<String>,
+    /// Keyframe rules after parsing, by name, each sorted by offset.
+    rules: BTreeMap<String, Vec<(f64, AnimValues)>>,
     /// Names of the compositions currently being resolved, for cycle checks.
     composition_stack: Vec<String>,
+}
+
+/// Keyframes an `animation` contributes to a clip, in clip-local seconds.
+#[derive(Default)]
+struct AnimationKnots {
+    translate: Vec<Keyframe<[f64; 2]>>,
+    scale: Vec<Keyframe<[f64; 2]>>,
+    rotate: Vec<Keyframe<f64>>,
+    opacity: Vec<Keyframe<f64>>,
+}
+
+impl AnimationKnots {
+    fn push(&mut self, time: f64, v: AnimValues, easing: Easing) {
+        if let Some(value) = v.translate {
+            self.translate.push(Keyframe {
+                time,
+                value,
+                easing,
+            });
+        }
+        if let Some(value) = v.scale {
+            self.scale.push(Keyframe {
+                time,
+                value,
+                easing,
+            });
+        }
+        if let Some(value) = v.rotate {
+            self.rotate.push(Keyframe {
+                time,
+                value,
+                easing,
+            });
+        }
+        if let Some(value) = v.opacity {
+            self.opacity.push(Keyframe {
+                time,
+                value,
+                easing,
+            });
+        }
+    }
+
+    /// Runs of one animation, and separate animations, are expanded in
+    /// whatever order they are written; time order is restored here.
+    fn sort(&mut self) {
+        self.translate.sort_by(|a, b| a.time.total_cmp(&b.time));
+        self.scale.sort_by(|a, b| a.time.total_cmp(&b.time));
+        self.rotate.sort_by(|a, b| a.time.total_cmp(&b.time));
+        self.opacity.sort_by(|a, b| a.time.total_cmp(&b.time));
+    }
+}
+
+/// The most runs one animation is expanded into, so that an infinite
+/// animation on a long clip cannot grow without bound.
+const MAX_ANIMATION_RUNS: u32 = 10_000;
+
+/// The gap left where one run ends and the next begins with a different
+/// value. A microsecond is far shorter than a frame at any rate, and keeps
+/// the track strictly ordered.
+const SEAM: f64 = 1e-6;
+
+/// Closes the seams inside one animation: where a run ends exactly where
+/// the next begins, the pair is one knot if the value is the same, and a
+/// snap if it is not.
+fn close_seams<T: PartialEq + Copy>(keys: &mut Vec<Keyframe<T>>) {
+    keys.sort_by(|a, b| a.time.total_cmp(&b.time));
+    let mut i = 0;
+    while i + 1 < keys.len() {
+        if keys[i].time == keys[i + 1].time {
+            if keys[i].value == keys[i + 1].value {
+                keys.remove(i + 1);
+                continue;
+            }
+            keys[i].easing = Easing::Named(geneva_anim::NamedEasing::Hold);
+            keys[i + 1].time += SEAM;
+        }
+        i += 1;
+    }
+}
+
+/// Lays one animation's runs out in clip-local seconds.
+fn expand(a: &Animation, steps: &[(f64, AnimValues)], length: f64, out: &mut AnimationKnots) {
+    let runs = if a.iterations.is_finite() {
+        a.iterations
+            .ceil()
+            .max(1.0)
+            .min(f64::from(MAX_ANIMATION_RUNS)) as u32
+    } else {
+        // An infinite animation runs until the clip ends.
+        let span = (length - a.delay).max(0.0);
+        ((span / a.duration).ceil().max(1.0) as u32).min(MAX_ANIMATION_RUNS)
+    };
+    let mut mine = AnimationKnots::default();
+    for i in 0..runs {
+        let reversed = a.direction.reversed(i);
+        // The last run of a fractional iteration count is cut short.
+        let limit = if a.iterations.is_finite() {
+            (a.iterations - f64::from(i)).min(1.0)
+        } else {
+            1.0
+        };
+        for (offset, v) in steps {
+            let progress = if reversed { 1.0 - offset } else { *offset };
+            if progress > limit + 1e-9 {
+                continue;
+            }
+            mine.push(
+                a.delay + (f64::from(i) + progress) * a.duration,
+                *v,
+                a.easing,
+            );
+        }
+    }
+    close_seams(&mut mine.translate);
+    close_seams(&mut mine.scale);
+    close_seams(&mut mine.rotate);
+    close_seams(&mut mine.opacity);
+    out.translate.append(&mut mine.translate);
+    out.scale.append(&mut mine.scale);
+    out.rotate.append(&mut mine.rotate);
+    out.opacity.append(&mut mine.opacity);
 }
 
 /// Deepest allowed nesting of compositions inside compositions.
@@ -434,6 +562,8 @@ impl Resolver<'_> {
                 )),
             );
         }
+
+        self.parse_keyframe_rules();
 
         let out = &tl.output;
         let out_path = Path::root().key("output");
@@ -582,6 +712,15 @@ impl Resolver<'_> {
                     "W202",
                     Path::root().key("compositions").key(name),
                     format!("composition {name:?} is never used"),
+                ));
+            }
+        }
+        for name in tl.keyframes.keys() {
+            if !self.used_rules.contains(name) {
+                self.diags.push(Diagnostic::note(
+                    "W203",
+                    Path::root().key("keyframes").key(name),
+                    format!("keyframes {name:?} are never used"),
                 ));
             }
         }
@@ -1310,6 +1449,46 @@ impl Resolver<'_> {
                 Some((0.0, 1.0)),
                 "opacity",
             );
+            // A rule's transform is laid over what the clip already sets:
+            // translations add to the position, scales multiply, rotations
+            // add. Opacity is the same property either way, so it replaces.
+            let (position, scale, rotation, opacity) = match clip.animation.as_deref() {
+                None => (position, scale, rotation, opacity),
+                Some(spec) => {
+                    let apath = cpath.key("animation");
+                    let k = self.resolve_animation(spec, &apath, length);
+                    (
+                        self.animated_over(
+                            position,
+                            &k.translate,
+                            &tpath.key("position"),
+                            "position",
+                            |b, d| [b[0] + d[0], b[1] + d[1]],
+                        ),
+                        self.animated_over(
+                            scale,
+                            &k.scale,
+                            &tpath.key("scale"),
+                            "scale",
+                            |b, d| [b[0] * d[0], b[1] * d[1]],
+                        ),
+                        self.animated_over(
+                            rotation,
+                            &k.rotate,
+                            &tpath.key("rotation"),
+                            "rotation",
+                            |b, d| b + d,
+                        ),
+                        self.animated_over(
+                            opacity,
+                            &k.opacity,
+                            &cpath.key("opacity"),
+                            "opacity",
+                            |_, v| v,
+                        ),
+                    )
+                }
+            };
             if let Some(crop) = &clip.crop {
                 self.check_crop(crop, &cpath.key("crop"));
             }
@@ -1927,6 +2106,160 @@ impl Resolver<'_> {
             max_width,
             spec: text.clone(),
         }
+    }
+
+    /// Parses every `@keyframes` rule once, so a rule used by ten clips
+    /// is reported once and the clips only look it up.
+    fn parse_keyframe_rules(&mut self) {
+        let root = Path::root().key("keyframes");
+        for (name, rule) in &self.tl.keyframes {
+            let rpath = root.key(name);
+            let mut steps: Vec<(f64, AnimValues)> = Vec::new();
+            for (key, block) in rule {
+                let kpath = rpath.key(key);
+                let offset = match crate::animation::parse_offset(key) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        self.diags
+                            .push(Diagnostic::error("E442", kpath, e).with_value(json!(key)));
+                        continue;
+                    }
+                };
+                match crate::animation::parse_declarations(block) {
+                    Ok(v) if v.is_empty() => self.diags.push(
+                        Diagnostic::warning("W440", kpath, format!("{key} sets nothing"))
+                            .with_help(
+                                "a keyframe sets transform, translate, scale, rotate or opacity",
+                            ),
+                    ),
+                    Ok(v) => steps.push((offset, v)),
+                    Err(e) => self
+                        .diags
+                        .push(Diagnostic::error("E442", kpath, e).with_value(json!(block))),
+                }
+            }
+            steps.sort_by(|a, b| a.0.total_cmp(&b.0));
+            if steps.windows(2).any(|w| w[0].0 == w[1].0) {
+                self.diags.push(
+                    Diagnostic::error(
+                        "E442",
+                        rpath.clone(),
+                        format!("{name:?} has two offsets at the same place"),
+                    )
+                    .with_help(
+                        "\"from\" and \"0%\" are the same offset, as are \"to\" and \"100%\"",
+                    ),
+                );
+            }
+            if steps.len() < 2 {
+                self.diags.push(
+                    Diagnostic::warning(
+                        "W440",
+                        rpath.clone(),
+                        format!("{name:?} has fewer than two offsets"),
+                    )
+                    .with_help(
+                        "an animation interpolates between offsets; one offset holds a value",
+                    ),
+                );
+            }
+            self.rules.insert(name.clone(), steps);
+        }
+    }
+
+    /// Expands a clip's `animation` into keyframes in clip-local seconds.
+    fn resolve_animation(&mut self, spec: &str, path: &Path, length: Ratio) -> AnimationKnots {
+        let mut knots = AnimationKnots::default();
+        let animations = match crate::animation::parse_animations(spec) {
+            Ok(a) => a,
+            Err(e) => {
+                self.push(Diagnostic::error("E441", path.clone(), e).with_value(json!(spec)));
+                return knots;
+            }
+        };
+        for a in &animations {
+            self.used_rules.insert(a.name.clone());
+            let Some(steps) = self.rules.get(&a.name) else {
+                let known: Vec<&str> = self.tl.keyframes.keys().map(String::as_str).collect();
+                let help = if known.is_empty() {
+                    "the document has no \"keyframes\" map".to_owned()
+                } else {
+                    format!("the document has {}", known.join(", "))
+                };
+                self.push(
+                    Diagnostic::error(
+                        "E440",
+                        path.clone(),
+                        format!("no keyframes named {:?}", a.name),
+                    )
+                    .with_value(json!(a.name))
+                    .with_help(help),
+                );
+                continue;
+            };
+            if steps.is_empty() {
+                continue;
+            }
+            expand(a, steps, length.to_f64(), &mut knots);
+        }
+        knots.sort();
+        for (times, what) in [
+            (
+                knots.translate.iter().map(|k| k.time).collect::<Vec<_>>(),
+                "translate",
+            ),
+            (knots.scale.iter().map(|k| k.time).collect(), "scale"),
+            (knots.rotate.iter().map(|k| k.time).collect(), "rotate"),
+            (knots.opacity.iter().map(|k| k.time).collect(), "opacity"),
+        ] {
+            if let Some([at, _]) = times.windows(2).find(|w| w[0] == w[1]) {
+                self.push(
+                    Diagnostic::error(
+                        "E444",
+                        path.clone(),
+                        format!("two animations set {what} at {at}s"),
+                    )
+                    .with_help("give them ranges that do not overlap, or merge them into one rule"),
+                );
+            }
+        }
+        knots
+    }
+
+    /// Lays an animation's keyframes over a track, which must be constant
+    /// where the animation drives it.
+    fn animated_over<T: geneva_anim::Interpolate + Copy>(
+        &mut self,
+        base: Track<T>,
+        knots: &[Keyframe<T>],
+        path: &Path,
+        what: &str,
+        combine: impl Fn(T, T) -> T,
+    ) -> Track<T> {
+        if knots.is_empty() {
+            return base;
+        }
+        if !base.is_constant() {
+            self.push(
+                Diagnostic::error(
+                    "E443",
+                    path.clone(),
+                    format!("{what} is set by keyframes and by an animation"),
+                )
+                .with_help("animate it one way or the other"),
+            );
+            return base;
+        }
+        let start = base.keyframes()[0].value;
+        let keys: Vec<Keyframe<T>> = knots
+            .iter()
+            .map(|k| Keyframe {
+                time: k.time,
+                value: combine(start, k.value),
+                easing: k.easing,
+            })
+            .collect();
+        Track::new(keys).unwrap_or(base)
     }
 
     fn resolve_transform(

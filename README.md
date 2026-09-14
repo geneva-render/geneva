@@ -40,6 +40,12 @@ This is the whole of `examples/lower-third.json`:
 
   "assets": { "iss": { "src": "iss.mp4" } },
 
+  "keyframes": {
+    "slide-in": { "from": "translate: -656px", "to": "translate: 0" },
+    "fade-in":  { "from": "opacity: 0", "to": "opacity: 1" },
+    "fade-out": { "from": "opacity: 1", "to": "opacity: 0" }
+  },
+
   "compositions": {
     "card": {
       "width": 560, "height": 96,
@@ -68,10 +74,8 @@ This is the whole of `examples/lower-third.json`:
     { "id": "lower-third", "clips": [ {
         "source": { "kind": "composition", "composition": "card" },
         "start": "2s", "duration": "4s",
-        "transform": {
-          "anchor": "bottom left",
-          "position": { "keyframes": [ [0, "-600 648", "ease-out"], ["0.5s", "56 648"] ] } },
-        "opacity": { "keyframes": [ [0, 0], ["0.3s", 1], ["3.7s", 1], ["4s", 0] ] } } ] }
+        "transform": { "anchor": "bottom left", "position": "56 648" },
+        "animation": "slide-in 0.5s ease-out, fade-in 0.3s, fade-out 0.3s 3.7s" } ] }
   ]
 }
 ```
@@ -101,10 +105,21 @@ take `%` or pixels, and a position takes `"left"`, `"bottom right"` or
 giving an anchor and a position — but you don't have to learn a new way to
 write a colour or a font.
 
-The card slides in because `position` has two keyframes half a second apart,
-one off the left edge and one in place, with `ease-out` between them. Same
-idea for the fade: four keyframes on `opacity`. Any number you can set, you
-can animate.
+The motion is written the way a stylesheet writes it. `keyframes` at the top
+is a set of `@keyframes` rules, and the card's `animation` plays three of
+them: a slide from 656 pixels to the left, a fade in over the first 0.3
+seconds, a fade out starting at 3.7. The shorthand takes what CSS takes —
+a duration, a delay, a timing function, `infinite`, `alternate` — and
+`spring(170, 26)` as well, which CSS doesn't have.
+
+Underneath they're ordinary keyframes, so anything you can't say in CSS you
+can still say directly:
+
+```json
+"position": { "keyframes": [ [0, "-600 648", "ease-out"], ["0.5s", "56 648"] ] }
+```
+
+Any number you can set, you can animate, either way round.
 
 The last line of the report is the part worth looking at twice. The card is
 only on screen for four of the ten seconds. geneva worked out that the rest

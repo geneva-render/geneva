@@ -48,6 +48,12 @@ pub struct Timeline {
     /// source of kind "composition".
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub compositions: BTreeMap<String, CompositionDef>,
+    /// Named motion, spelled like CSS `@keyframes`: each rule maps an
+    /// offset ("from", "to", "60%") to a declaration block
+    /// ("transform: translateX(-656px); opacity: 0"). A clip plays one
+    /// with its `animation` field.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub keyframes: BTreeMap<String, BTreeMap<String, String>>,
     /// Visual layers, composited from first (bottom) to last (top).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layers: Vec<Layer>,
@@ -589,6 +595,14 @@ pub struct Clip {
     /// everything else.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fit: Option<Fit>,
+    /// Motion from the document's `keyframes`, spelled like the CSS
+    /// `animation` shorthand: a rule name with a duration, and optionally
+    /// a delay, a timing function, an iteration count and a direction
+    /// ("slide-in 0.5s ease-out", "pulse 2s infinite alternate").
+    /// Several are separated by commas. What a rule sets is applied on
+    /// top of `transform` and replaces `opacity`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animation: Option<String>,
     /// Position, scale and rotation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transform: Option<Transform>,

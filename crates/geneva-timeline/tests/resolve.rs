@@ -249,6 +249,116 @@ fn the_last_word_needs_its_own_end() {
     assert!(e.contains(&("E102", "/layers/0/clips/0/source/words/1/end".to_owned())));
 }
 
+fn animated(rules: &str, clip: &str) -> String {
+    format!(
+        "{{{HEAD},\"keyframes\":{{{rules}}},\"layers\":[{{\"clips\":[{{\"source\":{{\"kind\":\"solid\",\"color\":\"red\"}},\"duration\":\"2s\",{clip}}}]}}]}}"
+    )
+}
+
+#[test]
+fn a_css_animation_becomes_a_keyframe_track() {
+    let text = animated(
+        r#""slide":{"from":"translate: -100px","to":"translate: 0"}"#,
+        r#""transform":{"position":"50 50"},"animation":"slide 0.5s ease-out""#,
+    );
+    let l = load(&text);
+    assert!(l.is_ok(), "{:?}", l.diagnostics);
+    let clip = &l.composition.unwrap().layers[0].clips[0];
+    assert_eq!(clip.position.sample(0.0), [-50.0, 50.0]);
+    assert_eq!(clip.position.sample(0.5), [50.0, 50.0]);
+    assert_eq!(clip.position.sample(1.9), [50.0, 50.0]);
+}
+
+#[test]
+fn two_animations_share_one_property_over_disjoint_ranges() {
+    let text = animated(
+        r#""in":{"from":"opacity: 0","to":"opacity: 1"},"out":{"from":"opacity: 1","to":"opacity: 0"}"#,
+        r#""animation":"in 0.2s, out 0.2s 1.8s""#,
+    );
+    let l = load(&text);
+    assert!(l.is_ok(), "{:?}", l.diagnostics);
+    let o = &l.composition.unwrap().layers[0].clips[0].opacity;
+    assert_eq!(o.sample(0.0), 0.0);
+    assert_eq!(o.sample(0.2), 1.0);
+    assert_eq!(o.sample(1.0), 1.0);
+    assert_eq!(o.sample(2.0), 0.0);
+}
+
+#[test]
+fn an_infinite_animation_fills_the_clip() {
+    let text = animated(
+        r#""spin":{"from":"rotate: 0deg","to":"rotate: 360deg"}"#,
+        r#""animation":"spin 0.5s infinite""#,
+    );
+    let l = load(&text);
+    assert!(l.is_ok(), "{:?}", l.diagnostics);
+    let r = &l.composition.unwrap().layers[0].clips[0].rotation;
+    // Four runs of half a second each cover the two-second clip; each run
+    // ends at 360deg and the next snaps back to 0.
+    assert_eq!(r.keyframes().len(), 8);
+    assert!((r.sample(1.75) - 180.0).abs() < 0.01, "{}", r.sample(1.75));
+    assert!(r.sample(0.49) > 350.0);
+    assert!(r.sample(0.51) < 30.0);
+}
+
+#[test]
+fn animation_problems_are_reported_where_they_are_written() {
+    let bad = [
+        (
+            "E440",
+            "/layers/0/clips/0/animation",
+            r#""slide":{"from":"opacity: 0","to":"opacity: 1"}"#,
+            r#""animation":"nope 1s""#,
+        ),
+        (
+            "E441",
+            "/layers/0/clips/0/animation",
+            r#""slide":{"from":"opacity: 0","to":"opacity: 1"}"#,
+            r#""animation":"slide""#,
+        ),
+        (
+            "E442",
+            "/keyframes/slide/from",
+            r#""slide":{"from":"colour: red","to":"opacity: 1"}"#,
+            r#""animation":"slide 1s""#,
+        ),
+        (
+            "E443",
+            "/layers/0/clips/0/opacity",
+            r#""slide":{"from":"opacity: 0","to":"opacity: 1"}"#,
+            r#""opacity":{"keyframes":[[0,0],["1s",1]]},"animation":"slide 1s""#,
+        ),
+        (
+            "E444",
+            "/layers/0/clips/0/animation",
+            r#""a":{"from":"opacity: 0","to":"opacity: 1"},"b":{"from":"opacity: 1","to":"opacity: 0"}"#,
+            r#""animation":"a 1s, b 1s""#,
+        ),
+    ];
+    for (code, path, rules, clip) in bad {
+        let e = errors(&animated(rules, clip));
+        assert!(
+            e.contains(&(code, path.to_owned())),
+            "{code} at {path} missing from {e:?}"
+        );
+    }
+}
+
+#[test]
+fn a_rule_nothing_plays_is_a_note() {
+    let text = animated(
+        r#""slide":{"from":"opacity: 0","to":"opacity: 1"}"#,
+        r#""id":"x""#,
+    );
+    let l = load(&text);
+    assert!(l.is_ok(), "{:?}", l.diagnostics);
+    assert!(
+        l.diagnostics
+            .iter()
+            .any(|d| d.code == "W203" && d.path == "/keyframes/slide")
+    );
+}
+
 #[test]
 fn odd_dimensions_and_unused_assets_are_reported_softly() {
     let text = r#"{"geneva":"0.1","output":{"width":641,"height":360,"fps":30,"duration":1},

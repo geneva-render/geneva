@@ -494,6 +494,7 @@ fn video_clip(
 ) -> Clip {
     Clip {
         id: None,
+        animation: None,
         source: Source::Video {
             asset: asset.to_owned(),
             in_,
@@ -600,6 +601,7 @@ impl CropArg {
 fn base_timeline(width: u32, height: u32, fps: Ratio, encode: Option<Encode>) -> Timeline {
     Timeline {
         geneva: geneva_timeline::FORMAT_VERSION.to_owned(),
+        keyframes: BTreeMap::new(),
         output: Output {
             width,
             height,
@@ -956,6 +958,7 @@ pub fn overlay(
         enabled: true,
         clips: vec![Clip {
             id: None,
+            animation: None,
             source,
             start,
             duration,
@@ -1616,6 +1619,7 @@ pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Re
         }
         layers[layer].push(Clip {
             id: None,
+            animation: None,
             source: Source::Text(Box::new(spec)),
             start: Some(seconds(cue.start)),
             duration: Some(seconds(cue.end - cue.start)),

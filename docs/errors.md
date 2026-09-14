@@ -50,6 +50,7 @@ result is not what was intended. Notes are informational.
 | E207 | A composition contains itself, directly or through another composition, or nesting exceeds 8 levels. |
 | W201 | (note) An asset is declared but never used. |
 | W202 | (note) A composition is declared but never used. |
+| W203 | (note) An animation rule is declared but no clip plays it. |
 
 ## Timing (E300–E399)
 
@@ -83,6 +84,12 @@ result is not what was intended. Notes are informational.
 | E431 | An `outputs` entry's `path` is not a plain file name inside the output directory, or its extension is not one the kind can write. |
 | E432 | Two `outputs` entries would write the same file. |
 | E433 | An `outputs` value is out of range: a poster `at` outside the composition, a sprite `every` that is not positive, or `columns` of 0. |
+| E440 | A clip's `animation` names a rule that is not in the document's `keyframes`. |
+| E441 | An `animation` value is malformed: no rule name, no duration, a duration of zero, two timing functions, or three times. |
+| E442 | A `keyframes` rule is malformed: an offset that is not `from`, `to` or a percentage in 0% to 100%, two offsets at the same place, a property that cannot be animated, or a value geneva cannot read (a percentage in a translation, an unknown transform function). |
+| E443 | A property is driven by the clip's own `keyframes` and by an animation at once. |
+| E444 | Two animations on one clip set the same property at the same time. |
+| W440 | An animation rule sets nothing at an offset, or has fewer than two offsets, so nothing interpolates. |
 | W401 | Output width or height is odd; most codecs need even dimensions. |
 | W402 | `subtitles --burn` found no cues in the file; the picture is written unchanged. |
 | W403 | A burned-in subtitle cue extends off-screen. The message gives the box size and by how much it leaves the frame; the path names the clip. |
