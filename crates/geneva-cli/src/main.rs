@@ -37,6 +37,16 @@ enum Format {
     Json,
 }
 
+impl Format {
+    /// How a long run reports its progress in this format.
+    fn progress(self) -> media::ProgressFormat {
+        match self {
+            Self::Human => media::ProgressFormat::Human,
+            Self::Json => media::ProgressFormat::Json,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Check a timeline and report every problem with its location and a fix.
@@ -875,7 +885,8 @@ fn render_to(
         return render_outputs_to(loaded, comp, root, output, overrides, format, size_limit);
     }
     let mut diagnostics = loaded.diagnostics.clone();
-    match media::render(comp, root, output, overrides, format == Format::Human) {
+    let progress = media::Progress::new(format.progress());
+    match media::render(comp, root, output, overrides, &progress) {
         Ok(stats) => {
             for note in &stats.notes {
                 diagnostics.push(Diagnostic::note("N600", "", note.clone()));
@@ -960,7 +971,8 @@ fn render_outputs_to(
     size_limit: Option<&(String, u64)>,
 ) -> Result<ExitCode> {
     let mut diagnostics = loaded.diagnostics.clone();
-    match media::render_outputs(comp, root, dir, overrides, format == Format::Human) {
+    let progress = media::Progress::new(format.progress());
+    match media::render_outputs(comp, root, dir, overrides, &progress) {
         Ok((outputs, stats)) => {
             for note in &stats.notes {
                 diagnostics.push(Diagnostic::note("N600", "", note.clone()));

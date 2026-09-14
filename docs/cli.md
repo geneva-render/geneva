@@ -11,6 +11,24 @@ Every command takes `--format json` before the subcommand to print one JSON
 document on stdout instead of readable text. In human mode diagnostics go
 to stderr and stdout stays clean.
 
+## Progress
+
+A render that has frames to composite says how far it has got on stderr,
+so stdout stays the one document the report is. In human mode that is a
+line rewritten in place, `frame 240/1800`. With `--format json` it is one
+object per line, at the first frame, about once a second, and at the last:
+
+```json
+{"event":"progress","frames":540,"total":1800,"seconds":8.0,"rate":67.5,"time":18.0,"duration":60.0,"remaining":18.67}
+```
+
+`frames` of `total` are done after `seconds` of work at `rate` frames a
+second, which is `time` of the output's `duration` in seconds, with
+`remaining` seconds left at that rate. `remaining` is `null` when there
+is nothing to estimate: on the last line, and on the first, whose half
+second measures the startup as much as the work. A render that copies its
+streams, or writes audio alone, has no frames to report and says nothing.
+
 Exit codes:
 
 | Code | Meaning |

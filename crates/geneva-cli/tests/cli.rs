@@ -1356,3 +1356,69 @@ fn for_target_copies_a_source_that_already_fits() {
     );
     assert_ne!(report["mode"], "copy", "{report}");
 }
+
+#[test]
+#[cfg(feature = "media")]
+fn a_render_reports_progress_in_the_format_it_was_asked_for() {
+    let dir = tempfile::tempdir().unwrap();
+    let demo = media_dir().join("overlay-demo.json");
+
+    // JSON mode: one object per line on stderr, stdout still one report.
+    let out = dir.path().join("demo.mp4");
+    let result = geneva()
+        .args(["--format", "json", "render"])
+        .arg(&demo)
+        .args(["-o"])
+        .arg(&out)
+        .args(["--preset", "ultrafast"])
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
+    let lines: Vec<serde_json::Value> = stderr
+        .lines()
+        .filter(|l| l.starts_with('{'))
+        .map(|l| serde_json::from_str(l).expect("a progress line is one JSON object"))
+        .collect();
+    assert!(!lines.is_empty(), "no progress lines in {stderr:?}");
+    for line in &lines {
+        assert_eq!(line["event"], "progress");
+        assert_eq!(line["total"], 38);
+        assert_eq!(line["duration"], 1.52);
+    }
+    let last = lines.last().unwrap();
+    assert_eq!(last["frames"], 38);
+    assert_eq!(last["time"], 1.52);
+    assert!(last["remaining"].is_null(), "{last}");
+    let doc: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(doc["ok"], true);
+
+    // Human mode: the line a person reads, rewritten in place.
+    let out = dir.path().join("human.mp4");
+    geneva()
+        .args(["render"])
+        .arg(&demo)
+        .args(["-o"])
+        .arg(&out)
+        .args(["--preset", "ultrafast"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("\rframe 38/38"));
+
+    // A copy renders no frames, so it reports none.
+    let copied = dir.path().join("cut.mp4");
+    let result = geneva()
+        .args(["--format", "json", "trim", "--to", "1s", "-o"])
+        .arg(&copied)
+        .arg(media_dir().join("clip.mp4"))
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&result.stderr)
+            .lines()
+            .filter(|l| l.starts_with('{'))
+            .count(),
+        0
+    );
+}

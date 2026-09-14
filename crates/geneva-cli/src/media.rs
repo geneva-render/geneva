@@ -1,10 +1,178 @@
 //! Media-dependent commands, with stubs when media support is compiled out.
 
+use std::cell::Cell;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use geneva_render::{RenderError, Renderer};
 use geneva_timeline::{AssetInfo, Composition, Diagnostic, Ratio};
+
+/// How a run reports the frames it has finished while it is still
+/// running: a rewritten line for a person, one JSON object per line for
+/// a program.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgressFormat {
+    /// One line on stderr, rewritten in place.
+    Human,
+    /// One JSON object per line on stderr.
+    Json,
+}
+
+// Rendering is what reports progress, so in a build without media
+// support (which cannot render) nothing below runs; the type still
+// exists because the stubs take it.
+/// A person's line is rewritten often enough to look live.
+#[cfg_attr(not(feature = "media"), allow(dead_code))]
+const HUMAN_INTERVAL: Duration = Duration::from_millis(250);
+/// A program's lines come often enough to be useful without filling a
+/// log; the first frame and the last one are always reported.
+#[cfg_attr(not(feature = "media"), allow(dead_code))]
+const JSON_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Reports the frames a long run has finished, at a readable pace.
+///
+/// Progress goes to stderr, so stdout stays the one JSON document the
+/// report is. A run that copies its streams finishes without rendering a
+/// frame and says nothing.
+#[cfg_attr(not(feature = "media"), allow(dead_code))]
+pub struct Progress {
+    format: ProgressFormat,
+    started: Instant,
+    /// When the last line was written, if any.
+    last: Cell<Option<Instant>>,
+}
+
+#[cfg_attr(not(feature = "media"), allow(dead_code))]
+impl Progress {
+    pub fn new(format: ProgressFormat) -> Self {
+        Self {
+            format,
+            started: Instant::now(),
+            last: Cell::new(None),
+        }
+    }
+
+    /// Reports `done` of `total` frames, unless the last report is too
+    /// recent. `fps` is the output's frame rate, which turns frames into
+    /// the time reached in the video.
+    pub fn frame(&self, done: u64, total: u64, fps: f64) {
+        let interval = match self.format {
+            ProgressFormat::Human => HUMAN_INTERVAL,
+            ProgressFormat::Json => JSON_INTERVAL,
+        };
+        let now = Instant::now();
+        if let Some(last) = self.last.get() {
+            if now.duration_since(last) < interval {
+                return;
+            }
+        }
+        self.write(done, total, fps, now);
+    }
+
+    /// Reports the finished run, closing the line a person reads. A run
+    /// that rendered no frames says nothing.
+    pub fn finish(&self, done: u64, total: u64, fps: f64) {
+        if done == 0 {
+            return;
+        }
+        self.write(done, total, fps, Instant::now());
+        if self.format == ProgressFormat::Human {
+            eprintln!();
+        }
+    }
+
+    fn write(&self, done: u64, total: u64, fps: f64, now: Instant) {
+        self.last.set(Some(now));
+        let elapsed = now.duration_since(self.started).as_secs_f64();
+        match self.format {
+            ProgressFormat::Human => eprint!("\rframe {done}/{total}"),
+            ProgressFormat::Json => eprintln!("{}", progress_line(done, total, fps, elapsed)),
+        }
+    }
+}
+
+/// Rounds to two decimals, so a line carries no more precision than it
+/// measured.
+fn round2(v: f64) -> f64 {
+    (v * 100.0).round() / 100.0
+}
+
+/// One progress line: what has been done, how far through the video it
+/// is, how fast the work is going and how long is left at that rate.
+fn progress_line(done: u64, total: u64, fps: f64, elapsed: f64) -> String {
+    let rate = if elapsed > 0.0 {
+        done as f64 / elapsed
+    } else {
+        0.0
+    };
+    // The estimate is the rate so far applied to the frames left. The
+    // first moments measure the startup as much as the work, so there is
+    // no estimate until there is half a second of it.
+    let remaining = (elapsed >= 0.5 && rate > 0.0 && total > done)
+        .then(|| round2((total - done) as f64 / rate));
+    let mut doc = serde_json::json!({
+        "event": "progress",
+        "frames": done,
+        "total": total,
+        "seconds": round2(elapsed),
+        "rate": round2(rate),
+    });
+    if fps > 0.0 {
+        doc["time"] = round2(done as f64 / fps).into();
+        doc["duration"] = round2(total as f64 / fps).into();
+    }
+    doc["remaining"] = remaining.into();
+    doc.to_string()
+}
+
+#[cfg(test)]
+mod progress_tests {
+    use super::progress_line;
+
+    #[test]
+    fn a_progress_line_carries_the_count_the_time_and_the_estimate() {
+        let doc: serde_json::Value =
+            serde_json::from_str(&progress_line(540, 1800, 30.0, 8.0)).unwrap();
+        assert_eq!(doc["event"], "progress");
+        assert_eq!(doc["frames"], 540);
+        assert_eq!(doc["total"], 1800);
+        assert_eq!(doc["seconds"], 8.0);
+        // 540 frames in 8 seconds is 67.5 a second; the 1260 left take 18.67.
+        assert_eq!(doc["rate"], 67.5);
+        assert_eq!(doc["remaining"], 18.67);
+        // At 30 fps those frames are 18 seconds of a 60-second video.
+        assert_eq!(doc["time"], 18.0);
+        assert_eq!(doc["duration"], 60.0);
+    }
+
+    #[test]
+    fn the_first_moments_are_too_short_to_estimate_from() {
+        // A tenth of a second of work is mostly startup: reporting the
+        // frames is honest, dividing by that rate is not.
+        let doc: serde_json::Value =
+            serde_json::from_str(&progress_line(1, 360, 30.0, 0.1)).unwrap();
+        assert_eq!(doc["frames"], 1);
+        assert_eq!(doc["total"], 360);
+        assert!(doc["remaining"].is_null(), "{doc}");
+    }
+
+    #[test]
+    fn the_last_line_has_nothing_left_to_estimate() {
+        let doc: serde_json::Value =
+            serde_json::from_str(&progress_line(1800, 1800, 30.0, 20.0)).unwrap();
+        assert_eq!(doc["frames"], 1800);
+        assert!(doc["remaining"].is_null());
+    }
+
+    #[test]
+    fn a_rate_that_is_not_known_leaves_the_video_times_out() {
+        let doc: serde_json::Value = serde_json::from_str(&progress_line(0, 10, 0.0, 0.0)).unwrap();
+        assert!(doc.get("time").is_none());
+        assert!(doc["remaining"].is_null());
+        assert_eq!(doc["rate"], 0.0);
+    }
+}
 
 /// Encoder settings the command line may override.
 pub struct RenderOverrides {
@@ -356,7 +524,7 @@ mod imp {
         root: &Path,
         dir: &Path,
         overrides: &RenderOverrides,
-        progress: bool,
+        progress: &super::Progress,
     ) -> Result<(Vec<super::OutputStats>, RenderStats), RenderError> {
         use geneva_timeline::schema::OutputKind;
         let started = Instant::now();
@@ -617,6 +785,12 @@ mod imp {
         let mut frame = geneva_render::Frame::new(0, 0, geneva_color::Color::BLACK);
         let mut render_error: Option<RenderError> = None;
         let mut done = 0u64;
+        // Frames the pass will composite; a document of pictures alone
+        // stops as soon as it has them, so this is the ceiling.
+        let frames = if needs_frames { total } else { 0 };
+        // With no video to write there is no count to work towards: the
+        // pass ends at the frame the last picture wanted.
+        let pictures_only = video_sinks.is_empty();
 
         std::thread::scope(|scope| {
             // One encoder thread per file, fed through a channel; spare
@@ -661,10 +835,10 @@ mod imp {
                     ));
                 }
             }
-            let frames = if needs_frames { total } else { 0 };
+
             // With no video to write, only the frames the pictures need
             // are composited, and the loop ends once they have them.
-            let pictures_only = video_sinks.is_empty();
+
             'frames: for n in 0..frames {
                 let t = comp.frame_time(n);
                 if pictures_only {
@@ -760,8 +934,8 @@ mod imp {
                     }
                 }
                 done += 1;
-                if progress && (done % 30 == 0 || done == frames) {
-                    eprint!("\rframe {done}/{frames}");
+                if !pictures_only {
+                    progress.frame(done, frames, comp.fps.to_f64());
                 }
             }
             for feed in video_feeds.into_iter().chain(audio_feeds) {
@@ -796,9 +970,11 @@ mod imp {
                 }
             }
         });
-        if progress && needs_frames && total > 0 {
-            eprintln!();
-        }
+        progress.finish(
+            done,
+            if pictures_only { done } else { frames },
+            comp.fps.to_f64(),
+        );
         if let Some(e) = render_error {
             return Err(e);
         }
@@ -974,7 +1150,7 @@ mod imp {
         output: &Path,
         settings: &EncodeSettings,
         plan: &geneva_media::chunks::ChunkPlan,
-        progress: bool,
+        progress: &super::Progress,
         started: Instant,
     ) -> Result<RenderStats, RenderError> {
         let media_err = |e: geneva_media::MediaError| RenderError::Asset {
@@ -1032,16 +1208,11 @@ mod imp {
                     })
                     .collect();
                 // Progress from the workers' shared count.
-                if progress {
-                    let mut last = 0;
-                    while workers.iter().any(|w| !w.is_finished()) {
-                        std::thread::sleep(std::time::Duration::from_millis(200));
-                        let n = done.load(std::sync::atomic::Ordering::Relaxed);
-                        if n != last {
-                            eprint!("\rframe {n}/{total}");
-                            last = n;
-                        }
-                    }
+                let fps = comp.fps.to_f64();
+                while workers.iter().any(|w| !w.is_finished()) {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    let n = done.load(std::sync::atomic::Ordering::Relaxed);
+                    progress.frame(n, total, fps);
                 }
                 workers
                     .into_iter()
@@ -1070,9 +1241,7 @@ mod imp {
             let _ = std::fs::remove_dir_all(&dir);
             return Err(media_err(e));
         }
-        if progress {
-            eprintln!("\rframe {total}/{total}");
-        }
+        progress.finish(total, total, comp.fps.to_f64());
         // Join: the stretches' video in order, the audio from the first.
         let segment = |path: &std::path::PathBuf| geneva_media::CopySegment {
             path: path.clone(),
@@ -1436,7 +1605,7 @@ mod imp {
         root: &Path,
         output: &Path,
         overrides: &RenderOverrides,
-        progress: bool,
+        progress: &super::Progress,
     ) -> Result<RenderStats, RenderError> {
         let started = Instant::now();
         let container =
@@ -1842,11 +2011,8 @@ mod imp {
                 Ok(planes)
             };
             let mut done = 0u64;
-            let report = |done: u64| {
-                if progress && (done % 30 == 0 || done == total) {
-                    eprint!("\rframe {done}/{total}");
-                }
-            };
+            let fps = comp.fps.to_f64();
+            let report = |done: u64| progress.frame(done, total, fps);
             // Sends the frames of one run; false once the encoder stopped
             // (its error is reported below) or a frame failed.
             let mut encode_run = |range: std::ops::Range<u64>,
@@ -1937,9 +2103,7 @@ mod imp {
         if let Some(Err(e)) = audio_joined {
             return Err(media_err(e));
         }
-        if progress && total > 0 {
-            eprintln!();
-        }
+        progress.finish(total, total, comp.fps.to_f64());
         if base.is_some() && smart.is_none() {
             notes.push(format!(
                 "overlays were drawn onto {composited} of {total} frames; the others went from the decoder to the encoder untouched"
@@ -2006,7 +2170,7 @@ mod imp {
         _: &Path,
         dir: &Path,
         _: &RenderOverrides,
-        _: bool,
+        _: &super::Progress,
     ) -> Result<(Vec<super::OutputStats>, RenderStats), RenderError> {
         Err(RenderError::Asset {
             id: dir.display().to_string(),
@@ -2019,7 +2183,7 @@ mod imp {
         _: &Path,
         output: &Path,
         overrides: &RenderOverrides,
-        _: bool,
+        _: &super::Progress,
     ) -> Result<RenderStats, RenderError> {
         let _ = (
             overrides.crf,

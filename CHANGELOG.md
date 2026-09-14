@@ -5,6 +5,29 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## 0.4.3 — 2026-09-14
+
+### Added
+
+- Progress as JSON. A render that composites frames now reports itself on
+  stderr in the format the command asked for: the line rewritten in place
+  for a person, and with `--format json` one object per line
+  (`{"event":"progress","frames":540,"total":1800,"seconds":8.0,
+  "rate":67.5,"time":18.0,"duration":60.0,"remaining":18.67}`) at the
+  first frame, about once a second, and at the last. `remaining` is the
+  estimate at the rate so far, and is `null` where there is nothing to
+  estimate from: the last line, and the first half second, which measures
+  the startup as much as the work. Stdout stays the one report document,
+  so a program can follow a long render and still read the result. Seventeen of the forty-one products surveyed parse ffmpeg's
+  stderr with regular expressions for this. A run that copies its streams
+  or writes audio alone renders no frames and says nothing.
+
+### Changes
+
+- The person's progress line is rewritten on a timer (four times a
+  second) rather than every thirtieth frame, so it moves at the same pace
+  whatever the frame rate, and the chunked path reports like the others.
+
 ## 0.4.2 — 2026-09-14
 
 Two verbs fewer. `publish` and `sprites` are gone after a day: `publish`

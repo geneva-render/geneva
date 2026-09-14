@@ -9,7 +9,9 @@ short on purpose; the [command-line reference](cli.md) and the
 - **One binary, no services.** `geneva` reads files, writes files and
   prints one report. It never needs a network.
 - **`--format json` everywhere.** Put it before the subcommand. Stdout is
-  then exactly one JSON document; stderr carries only progress text.
+  then exactly one JSON document; stderr carries one progress object per
+  line (see [progress](cli.md#progress)), so a long render can be
+  followed without waiting for the report.
 - **Exit codes mean something.** 0 done, 1 timeline invalid, 2 usage
   error, 3 render or encode failed.
 - **Deterministic.** The same timeline, assets and version produce the
@@ -51,6 +53,16 @@ repacked when needed) or `"render"`
 Diagnostics carry a stable `code` ([errors.md](errors.md)), a JSON
 pointer `path` into the document, and a `help` string when there is a
 concrete fix. Errors stop the run; warnings and notes do not.
+
+While a render runs, each line on stderr is a complete JSON object
+`{"event":"progress","frames":…,"total":…,"seconds":…,"rate":…,"time":…,
+"duration":…,"remaining":…}`: the first frame, then about once a second,
+then the last. `remaining` is the estimate in seconds at the rate so far,
+`null` when there is nothing to estimate from (the last line, and the
+first half second, which measures the startup too). Read stderr line by
+line
+to drive a progress bar or a timeout; a run that copies its streams
+prints none, because it renders no frames.
 
 ## A working loop
 
