@@ -200,50 +200,6 @@ Renders are deterministic. Same document, same assets, same version, same
 frames. You can cache by input hash. [docs/agents.md](docs/agents.md) covers
 the rest for scripts and agents.
 
-## Speed
-
-These are from one machine, so treat them as ratios. A four-core Xeon at
-2.1 GHz, a 60-second 1080p H.264 file, release build. Both sides encode with
-the same system x264 at the same preset and quality. Every step ran twice
-and the second run is the one below.
-
-| Job | geneva | ffmpeg |
-| --- | --- | --- |
-| Trim 10s out | 0.1s | 5.8s for the obvious command, 0.1s with `-c copy` |
-| Frame-accurate trim, cut mid-GOP | 0.6s | 4.8s |
-| Resize to 720p | 13.0s | 13.0s |
-| 3 sizes + thumbnail + sprites + speech audio | 42.9s | 53.1s as six commands, 43.3s as one |
-
-The first row is a copy rather than an encode. `ffmpeg -c copy` does the
-same thing at the same speed. The difference is that you have to know to
-reach for the flag, and geneva works it out from the job.
-
-The second row copies 285 of the 300 frames and re-encodes the 15 between
-the cut and the next keyframe. That's where the difference comes from.
-
-A single resize is a tie. Both scale in YUV and hand the frames to the same
-encoder.
-
-The last row: six ffmpeg commands read the file six times, geneva reads it
-once, and that's the 20%. An ffmpeg command with `split` filters also reads
-once and lands in the same place. What geneva gives you there is a document
-rather than a filter graph, plus the WebVTT file and a report of what it
-wrote.
-
-`check.sh` ships in the release archives. Point it at your own file and it
-prints this table for your machine.
-
-## What ffmpeg does better
-
-Plenty, and it's worth being clear about it. Hundreds of filters. Capture
-from a webcam or a screen. Streaming in and out. HLS and DASH. Loudness
-normalisation. Waveform images. Hardware encoders on every platform.
-Formats nobody has thought about in years. Twenty-five years of people
-throwing broken files at it.
-
-geneva reads and writes files, and does the jobs above. Reach for ffmpeg for
-the rest, or when you already know the flags.
-
 ## Commands
 
 ```sh
@@ -284,6 +240,10 @@ override. You can also download an archive from the
 [releases page](https://github.com/geneva-render/geneva/releases) and run the
 `install.sh` inside it. On macOS the installer clears the quarantine flag, so
 you won't get a Gatekeeper dialog.
+
+The archive also carries `check.sh`. Point it at one of your own files and
+it runs the everyday commands on it and times each one, next to ffmpeg
+doing the same job if you have ffmpeg installed.
 
 Linux builds need glibc 2.35 or newer, so Ubuntu 22.04, Debian 12 or RHEL 9
 and up. macOS builds need macOS 12 or newer on Apple silicon. Codecs,
