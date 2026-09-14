@@ -118,18 +118,25 @@ impl fmt::Display for Diagnostic {
             Severity::Error => "error",
         };
         writeln!(f, "{label}[{}]: {}", self.code, self.message)?;
-        let path = if self.path.is_empty() {
-            "(document)".to_owned()
-        } else {
-            self.path.clone()
-        };
         let location = self
             .location
             .map(|(line, col)| format!(" (line {line}, column {col})"))
             .unwrap_or_default();
-        match &self.value {
-            Some(v) => writeln!(f, "  --> {path} = {v}{location}")?,
-            None => writeln!(f, "  --> {path}{location}")?,
+        // A diagnostic about the document as a whole, with no value and
+        // no position, has nothing to point at; the arrow line would say
+        // only "(document)".
+        let anchored =
+            !self.path.is_empty() || self.value.is_some() || !location.is_empty();
+        if anchored {
+            let path = if self.path.is_empty() {
+                "(document)".to_owned()
+            } else {
+                self.path.clone()
+            };
+            match &self.value {
+                Some(v) => writeln!(f, "  --> {path} = {v}{location}")?,
+                None => writeln!(f, "  --> {path}{location}")?,
+            }
         }
         if let Some(help) = &self.help {
             writeln!(f, "   = help: {help}")?;

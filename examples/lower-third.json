@@ -1,5 +1,5 @@
 {
-  "geneva": "0.1",
+  "geneva": "0.3",
   "output": { "width": 1280, "height": 720, "fps": 30, "duration": "6s", "background": "#2a3440" },
   "compositions": {
     "lower-third": {
@@ -10,7 +10,15 @@
             "transform": { "anchor": { "x": "0%", "y": "0%" }, "position": { "x": 0, "y": 0 } } } ] },
         { "id": "dot", "clips": [ { "source": { "kind": "shape", "shape": "ellipse", "width": 40, "height": 40, "fill": "#ffffff" },
             "transform": { "position": { "x": 48, "y": "50%" },
-                           "scale": { "keyframes": [ { "t": 0, "v": 0, "ease": { "spring": { "damping": 10 } } }, { "t": "0.6s", "v": 1 } ] } } } ] }
+                           "scale": { "keyframes": [ { "t": 0, "v": 0, "ease": { "spring": { "damping": 10 } } }, { "t": "0.6s", "v": 1 } ] } } } ] },
+        { "id": "name", "clips": [ { "source": { "kind": "text", "text": "Ada Lovelace",
+            "font": "700 34px Liberation Sans", "color": "#ffffff", "align": "left", "max_width": 480 },
+            "transform": { "anchor": { "x": "0%", "y": "50%" }, "position": { "x": 88, "y": 36 } },
+            "opacity": { "keyframes": [ { "t": "0.2s", "v": 0 }, { "t": "0.6s", "v": 1 } ] } } ] },
+        { "id": "title", "clips": [ { "source": { "kind": "text", "text": "Analytical engines, 1843",
+            "font": "400 24px Liberation Sans", "color": "#aab4c0", "align": "left", "max_width": 480 },
+            "transform": { "anchor": { "x": "0%", "y": "50%" }, "position": { "x": 88, "y": 68 } },
+            "opacity": { "keyframes": [ { "t": "0.3s", "v": 0 }, { "t": "0.7s", "v": 1 } ] } } ] }
       ]
     }
   },

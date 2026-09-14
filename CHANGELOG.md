@@ -27,6 +27,16 @@ the format version it was written for.
 - The person's progress line is rewritten on a timer (four times a
   second) rather than every thirtieth frame, so it moves at the same pace
   whatever the frame rate, and the chunked path reports like the others.
+- A diagnostic about the document as a whole no longer prints an arrow
+  line reading `--> (document)`. It pointed at nothing and doubled the
+  length of every report that was only notes.
+
+### Examples
+
+- `social-reframe.json`: a landscape talk reframed to 9:16 with a blurred
+  backdrop and word-timed captions. `renditions.json`: three renditions, a
+  poster, a sprite sheet and speech audio from one pass. `lower-third.json`
+  gains the name and title it was drawing a plate for.
 
 ## 0.4.2 — 2026-09-14
 

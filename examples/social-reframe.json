@@ -1,0 +1,52 @@
+{
+  "geneva": "0.3",
+  "output": {
+    "width": 1080, "height": 1920, "fps": 30, "duration": "30s",
+    "encode": { "video": { "codec": "h264", "crf": 23, "keyframe_interval": 2 },
+                "audio": { "codec": "aac", "bitrate_kbps": 128 }, "fast_start": true }
+  },
+  "assets": { "talk": { "src": "talk.mp4" } },
+  "layers": [
+    {
+      "id": "backdrop",
+      "clips": [
+        {
+          "source": { "kind": "video", "asset": "talk", "audio": false },
+          "fit": "cover",
+          "effects": [ { "kind": "blur", "radius": 45 } ]
+        }
+      ]
+    },
+    {
+      "id": "picture",
+      "clips": [ { "source": { "kind": "video", "asset": "talk" }, "fit": "contain" } ]
+    },
+    {
+      "id": "captions",
+      "clips": [
+        {
+          "source": {
+            "kind": "text",
+            "words": [
+              { "text": "Every", "start": 0, "end": "0.4s" },
+              { "text": "word", "start": "0.4s", "end": "0.8s" },
+              { "text": "lands", "start": "0.8s", "end": "1.3s" },
+              { "text": "on", "start": "1.3s", "end": "1.5s" },
+              { "text": "its", "start": "1.5s", "end": "1.8s" },
+              { "text": "own", "start": "1.8s", "end": "2.2s" },
+              { "text": "beat", "start": "2.2s", "end": "3s" }
+            ],
+            "font": "700 72px/1.25 Liberation Sans",
+            "color": "white",
+            "highlight": { "color": "#ffd233" },
+            "outline": "4px #000000cc",
+            "max_width": "80%",
+            "align": "center"
+          },
+          "duration": "3s",
+          "transform": { "position": { "x": "50%", "y": "72%" } }
+        }
+      ]
+    }
+  ]
+}

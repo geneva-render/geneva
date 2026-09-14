@@ -1,0 +1,17 @@
+{
+  "geneva": "0.3",
+  "output": {
+    "width": 1920, "height": 1080, "fps": 30, "duration": "90s",
+    "encode": { "video": { "codec": "h264", "crf": 21, "keyframe_interval": 2 }, "fast_start": true }
+  },
+  "assets": { "talk": { "src": "talk.mp4" } },
+  "layers": [ { "clips": [ { "source": { "kind": "video", "asset": "talk" }, "fit": "contain" } ] } ],
+  "outputs": {
+    "1080p":   { "kind": "video" },
+    "720p":    { "kind": "video", "height": 720, "encode": { "video": { "crf": 23 } } },
+    "480p":    { "kind": "video", "height": 480, "encode": { "video": { "crf": 25 } } },
+    "poster":  { "kind": "poster", "width": 1280 },
+    "preview": { "kind": "sprites", "every": "5s", "columns": 10 },
+    "speech":  { "kind": "audio", "path": "speech.wav", "audio": { "sample_rate": 16000, "channels": 1 } }
+  }
+}
