@@ -67,6 +67,41 @@ pub struct OutputStats {
     pub bytes: u64,
     /// How the file was made: "copy" or "render".
     pub mode: &'static str,
+    /// The media type to serve the file as.
+    pub content_type: &'static str,
+    /// Picture size, when the file has one (a sprite sheet: one tile).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+}
+
+/// The media type a file should be served as, from its extension, so an
+/// uploader can set it right (players refuse a `.vtt` served as octets).
+pub fn content_type_for(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("mp4" | "m4v") => "video/mp4",
+        Some("mov") => "video/quicktime",
+        Some("mkv") => "video/x-matroska",
+        Some("webm") => "video/webm",
+        Some("mxf") => "application/mxf",
+        Some("m4a") => "audio/mp4",
+        Some("mp3") => "audio/mpeg",
+        Some("wav") => "audio/wav",
+        Some("flac") => "audio/flac",
+        Some("ogg") => "audio/ogg",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("png") => "image/png",
+        Some("vtt") => "text/vtt",
+        Some("srt") => "application/x-subrip",
+        Some("json") => "application/json",
+        _ => "application/octet-stream",
+    }
 }
 
 /// Facts learned by opening the timeline's media assets.
@@ -278,6 +313,8 @@ mod imp {
         format: geneva_media::convert::PlaneFormat,
         scaler: Option<geneva_media::PlaneScaler>,
         has_audio: bool,
+        width: u32,
+        height: u32,
     }
 
     /// An audio-only entry.
@@ -416,8 +453,11 @@ mod imp {
                                     name: o.name.clone(),
                                     kind: "video",
                                     bytes: std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+                                    content_type: super::content_type_for(&path),
                                     path,
                                     mode: "copy",
+                                    width: Some(o.width),
+                                    height: Some(o.height),
                                 });
                                 continue;
                             }
@@ -513,6 +553,8 @@ mod imp {
                         format,
                         scaler,
                         has_audio,
+                        width: o.width,
+                        height: o.height,
                     });
                 }
             }
@@ -739,8 +781,11 @@ mod imp {
                 name: sink.name,
                 kind: "video",
                 bytes: std::fs::metadata(&sink.path).map(|m| m.len()).unwrap_or(0),
+                content_type: super::content_type_for(&sink.path),
                 path: sink.path,
                 mode: "render",
+                width: Some(sink.width),
+                height: Some(sink.height),
             });
         }
         for sink in audio_sinks {
@@ -748,8 +793,11 @@ mod imp {
                 name: sink.name,
                 kind: "audio",
                 bytes: std::fs::metadata(&sink.path).map(|m| m.len()).unwrap_or(0),
+                content_type: super::content_type_for(&sink.path),
                 path: sink.path,
                 mode: "render",
+                width: None,
+                height: None,
             });
         }
         if let Some((o, path)) = poster {
@@ -762,8 +810,11 @@ mod imp {
                 name: o.name.clone(),
                 kind: "poster",
                 bytes: std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+                content_type: super::content_type_for(&path),
                 path,
                 mode: "render",
+                width: Some(o.width),
+                height: Some(o.height),
             });
         }
         if let (Some((o, path)), Some(sheet), Some((every, count, cols, _))) =
@@ -798,8 +849,21 @@ mod imp {
                 name: o.name.clone(),
                 kind: "sprites",
                 bytes: std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+                content_type: super::content_type_for(&path),
                 path,
                 mode: "render",
+                width: Some(o.width),
+                height: Some(o.height),
+            });
+            stats.push(super::OutputStats {
+                name: o.name.clone(),
+                kind: "sprites-map",
+                bytes: std::fs::metadata(&vtt_path).map(|m| m.len()).unwrap_or(0),
+                content_type: "text/vtt",
+                path: vtt_path,
+                mode: "render",
+                width: None,
+                height: None,
             });
         }
         Ok((

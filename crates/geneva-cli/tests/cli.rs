@@ -289,6 +289,7 @@ fn render_writes_a_playable_file_with_audio() {
     );
     let doc: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
     assert_eq!(doc["frames"], 38);
+    assert_eq!(doc["content_type"], "video/mp4");
     let probe = geneva()
         .args(["--format", "json", "probe"])
         .arg(&out)
@@ -1315,9 +1316,38 @@ fn poster_sprites_and_publish_write_their_files() {
         "sprites.jpg",
         "sprites.vtt",
         "speech.wav",
+        "manifest.json",
     ] {
         assert!(site.join(file).is_file(), "{file} missing");
     }
+    // Every file is a row with its media type, the sprite map included,
+    // and the manifest repeats the rows with paths inside the directory.
+    let row = |kind: &str| outputs.iter().find(|o| o["kind"] == kind).unwrap();
+    assert_eq!(row("sprites-map")["content_type"], "text/vtt");
+    assert_eq!(row("video")["content_type"], "video/mp4");
+    assert_eq!(row("audio")["content_type"], "audio/wav");
+    assert_eq!(row("manifest")["content_type"], "application/json");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(site.join("manifest.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest["width"], 160);
+    assert_eq!(manifest["duration"], 3.0);
+    let listed: Vec<&str> = manifest["outputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            "video.mp4",
+            "speech.wav",
+            "poster.jpg",
+            "sprites.jpg",
+            "sprites.vtt"
+        ]
+    );
     assert!(
         report["diagnostics"]
             .as_array()

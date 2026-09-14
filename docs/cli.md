@@ -48,8 +48,10 @@ extension unless the timeline sets `output.encode.container`. When the
 timeline has an [`outputs`](timeline.md#outputs) map, `-o` names a
 directory instead, every entry is written into it from one pass over the
 composition, and the report lists each file (`outputs[]` with `name`,
-`kind`, `path`, `bytes` and `mode` in JSON; one `wrote` line each in
-human mode).
+`kind`, `path`, `bytes`, `mode`, `content_type` and, for pictures and
+video, `width` and `height`, in JSON; one `wrote` line each in human
+mode). A sprite sheet's `.vtt` map is its own row (`kind`
+`sprites-map`), so the list is every file written and nothing else.
 
 | Option | Effect |
 | --- | --- |
@@ -281,6 +283,20 @@ ceilings) is copied, not re-encoded, and the report says so; `--crf`,
 ```sh
 geneva publish talk.mp4 -o site/talk/                 # video.mp4, poster.jpg, sprites.jpg, sprites.vtt
 geneva publish talk.mp4 -o site/talk/ --speech --for phone --every 10s
+```
+
+`publish` also writes `manifest.json` into the directory: the same
+file list as the report, with paths relative to the directory, each
+file's `content_type`, `bytes`, and the picture size, plus the video's
+`width`, `height` and `duration`. It is the bridge to whatever serves
+or uploads the files; a bucket needs the content types set (a `.vtt`
+served as octets shows no previews), and the manifest carries them:
+
+```sh
+jq -r '.outputs[] | "\(.path)\t\(.content_type)"' site/talk/manifest.json |
+  while IFS=$'\t' read -r file type; do
+    aws s3 cp "site/talk/$file" "s3://bucket/talk/$file" --content-type "$type"
+  done
 ```
 
 The document `publish` builds is an [`outputs`](timeline.md#outputs)

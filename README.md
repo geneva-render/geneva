@@ -75,9 +75,9 @@ texts; there is nothing else to install.
 
 ```sh
 # Pick the archive for your machine (adjust the version and the target)
-curl -fsSLO https://github.com/geneva-render/geneva/releases/download/v0.4.0/geneva-v0.4.0-aarch64-apple-darwin.tar.gz
-tar xzf geneva-v0.4.0-aarch64-apple-darwin.tar.gz
-sh geneva-v0.4.0-aarch64-apple-darwin/install.sh
+curl -fsSLO https://github.com/geneva-render/geneva/releases/download/v0.4.1/geneva-v0.4.1-aarch64-apple-darwin.tar.gz
+tar xzf geneva-v0.4.1-aarch64-apple-darwin.tar.gz
+sh geneva-v0.4.1-aarch64-apple-darwin/install.sh
 geneva --help
 ```
 
@@ -97,8 +97,8 @@ on a file you pass) and prints a table with the time each step took, next
 to the time ffmpeg takes for the same step when ffmpeg is installed:
 
 ```sh
-sh geneva-v0.4.0-aarch64-apple-darwin/check.sh            # built-in test clip
-sh geneva-v0.4.0-aarch64-apple-darwin/check.sh input.mp4  # your own file
+sh geneva-v0.4.1-aarch64-apple-darwin/check.sh            # built-in test clip
+sh geneva-v0.4.1-aarch64-apple-darwin/check.sh input.mp4  # your own file
 ```
 
 Linux binaries need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, RHEL 9

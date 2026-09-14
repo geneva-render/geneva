@@ -5,6 +5,20 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## 0.4.1 — 2026-09-14
+
+### Added
+
+- The report names the media type of every file it writes: `content_type`
+  beside `output` for `render`, `frame`, the verbs and `subtitles
+  --extract`, and on each `outputs[]` row of a multi-output render, with
+  `width` and `height` for pictures and video. A sprite sheet's `.vtt`
+  map is its own row (`kind` `sprites-map`), so the list is every file
+  written. `publish` writes the same list as `manifest.json` in its
+  directory, with paths relative to it and the video's size and length,
+  for whatever uploads or serves the files: a bucket needs the content
+  types set, and the manifest carries them.
+
 ## 0.4.0 — 2026-09-14
 
 Timeline format 0.3. Documents saying `"geneva": "0.1"` or `"0.2"` are

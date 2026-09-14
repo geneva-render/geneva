@@ -519,6 +519,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     let result = serde_json::json!({
                         "ok": true,
                         "output": args.output,
+                        "content_type": "image/png",
                         "time": time.to_string(),
                         "frame": frame_index,
                         "width": comp.width,
@@ -588,6 +589,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 &overrides,
                 cli.format,
                 size_limit.as_ref(),
+                false,
             )
         }
         Command::Convert(args) => {
@@ -739,6 +741,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         serde_json::to_string_pretty(&serde_json::json!({
                             "ok": true,
                             "output": args.output,
+                            "content_type": media::content_type_for(&args.output),
                             "cues": cues.len(),
                         }))?
                     );
@@ -858,6 +861,7 @@ fn run_verb(
         &overrides,
         format,
         size_limit.as_ref(),
+        compiled.manifest,
     )
 }
 
@@ -931,13 +935,16 @@ fn render_to(
     overrides: &media::RenderOverrides,
     format: Format,
     size_limit: Option<&(String, u64)>,
+    manifest: bool,
 ) -> Result<ExitCode> {
     let Some(comp) = &loaded.composition else {
         report(&loaded.diagnostics, format, None)?;
         return Ok(ExitCode::from(EXIT_INVALID));
     };
     if !comp.outputs.is_empty() {
-        return render_outputs_to(loaded, comp, root, output, overrides, format, size_limit);
+        return render_outputs_to(
+            loaded, comp, root, output, overrides, format, size_limit, manifest,
+        );
     }
     let mut diagnostics = loaded.diagnostics.clone();
     match media::render(comp, root, output, overrides, format == Format::Human) {
@@ -965,6 +972,7 @@ fn render_to(
             let result = serde_json::json!({
                 "ok": true,
                 "output": output,
+                "content_type": media::content_type_for(output),
                 "mode": stats.mode.as_str(),
                 "frames": stats.frames,
                 "duration": stats.duration,
@@ -1014,6 +1022,7 @@ fn render_to(
 
 /// Renders every entry of a timeline's `outputs` into the directory `dir`
 /// in one pass and reports each file written.
+#[allow(clippy::too_many_arguments)]
 fn render_outputs_to(
     loaded: &Loaded,
     comp: &Composition,
@@ -1022,12 +1031,27 @@ fn render_outputs_to(
     overrides: &media::RenderOverrides,
     format: Format,
     size_limit: Option<&(String, u64)>,
+    manifest: bool,
 ) -> Result<ExitCode> {
     let mut diagnostics = loaded.diagnostics.clone();
     match media::render_outputs(comp, root, dir, overrides, format == Format::Human) {
-        Ok((outputs, stats)) => {
+        Ok((mut outputs, stats)) => {
             for note in &stats.notes {
                 diagnostics.push(Diagnostic::note("N600", "", note.clone()));
+            }
+            if manifest {
+                let path = dir.join("manifest.json");
+                write_manifest(&path, dir, comp, &outputs)?;
+                outputs.push(media::OutputStats {
+                    name: "manifest".to_owned(),
+                    kind: "manifest",
+                    bytes: std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+                    content_type: "application/json",
+                    path,
+                    mode: "render",
+                    width: None,
+                    height: None,
+                });
             }
             if let Some((target, max)) = size_limit {
                 for o in outputs
@@ -1068,7 +1092,7 @@ fn render_outputs_to(
                     println!(
                         "wrote {} ({}, {}{how})",
                         o.path.display(),
-                        o.kind,
+                        o.kind.replace('-', " "),
                         targets::human_size(o.bytes)
                     );
                 }
@@ -1096,6 +1120,41 @@ fn render_outputs_to(
             Ok(ExitCode::from(EXIT_RENDER))
         }
     }
+}
+
+/// Writes the file list of a multi-output render as `manifest.json`:
+/// the report's `outputs` with paths relative to the directory, plus the
+/// composition's size and length, for whatever uploads or serves the
+/// files later.
+fn write_manifest(
+    path: &Path,
+    dir: &Path,
+    comp: &Composition,
+    outputs: &[media::OutputStats],
+) -> Result<()> {
+    let files: Vec<serde_json::Value> = outputs
+        .iter()
+        .map(|o| {
+            let mut v = serde_json::to_value(o).unwrap_or_default();
+            let relative = o
+                .path
+                .strip_prefix(dir)
+                .unwrap_or(&o.path)
+                .to_string_lossy()
+                .into_owned();
+            v["path"] = serde_json::Value::String(relative);
+            v
+        })
+        .collect();
+    let doc = serde_json::json!({
+        "generator": format!("geneva {}", env!("CARGO_PKG_VERSION")),
+        "width": comp.width,
+        "height": comp.height,
+        "duration": comp.duration.to_f64(),
+        "outputs": files,
+    });
+    std::fs::write(path, serde_json::to_string_pretty(&doc)? + "\n")
+        .with_context(|| format!("writing {}", path.display()))
 }
 
 fn render_diagnostic(err: &RenderError) -> Diagnostic {

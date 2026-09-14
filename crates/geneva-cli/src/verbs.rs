@@ -372,6 +372,10 @@ pub struct Compiled {
     /// Findings from compiling the verb (for example subtitle cues that
     /// leave the frame), reported with the timeline's own diagnostics.
     pub diagnostics: Vec<Diagnostic>,
+    /// Whether to write `manifest.json` into the output directory: the
+    /// report's file list with paths relative to the directory, for
+    /// whatever uploads or serves the files later.
+    pub manifest: bool,
 }
 
 /// Rounds a dimension to the nearest even number, as most codecs need.
@@ -684,6 +688,7 @@ pub fn convert(
         timeline: tl,
         root,
         diagnostics: Vec::new(),
+        manifest: false,
     })
 }
 
@@ -742,6 +747,7 @@ pub fn trim(
         timeline: tl,
         root,
         diagnostics: Vec::new(),
+        manifest: false,
     })
 }
 
@@ -802,6 +808,7 @@ pub fn concat(inputs: &[PathBuf], crossfade: Option<Time>, args: &EncodeArgs) ->
         timeline: tl,
         root,
         diagnostics: Vec::new(),
+        manifest: false,
     })
 }
 
@@ -984,6 +991,7 @@ pub fn overlay(
         timeline: tl,
         root,
         diagnostics: Vec::new(),
+        manifest: false,
     })
 }
 
@@ -1105,6 +1113,7 @@ pub fn audio(input: &Path, op: &AudioOp, speech: bool, args: &EncodeArgs) -> Res
         timeline: tl,
         root,
         diagnostics: Vec::new(),
+        manifest: false,
     })
 }
 
@@ -1168,6 +1177,7 @@ pub fn poster(
         timeline: tl,
         root,
         diagnostics: Vec::new(),
+        manifest: false,
     })
 }
 
@@ -1191,6 +1201,7 @@ pub fn sprites(
         timeline: tl,
         root,
         diagnostics: Vec::new(),
+        manifest: false,
     })
 }
 
@@ -1282,6 +1293,7 @@ pub fn publish(
             timeline: tl,
             root,
             diagnostics,
+            manifest: true,
         },
         args,
     ))
@@ -1383,6 +1395,7 @@ pub fn add_subtitles(input: &Path, files: &[SubtitleFile], args: &EncodeArgs) ->
         timeline: tl,
         root,
         diagnostics: Vec::new(),
+        manifest: false,
     })
 }
 
@@ -1773,5 +1786,6 @@ pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Re
         timeline: tl,
         root,
         diagnostics,
+        manifest: false,
     })
 }

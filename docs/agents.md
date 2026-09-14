@@ -30,11 +30,18 @@ Every command that touches a timeline returns:
 }
 ```
 
-`render` and the verbs add `output`, `mode`, `frames`, `duration` and
-`seconds`. A render of a document with an `outputs` map, and the
-`poster`, `sprites` and `publish` verbs, add `directory` and `outputs`
-instead of `output` and `mode`: one entry per file with `name`, `kind`,
-`path`, `bytes` and its own `mode`. `mode` is `"copy"` (source streams copied, no decoding),
+`render` and the verbs add `output`, `content_type`, `mode`, `frames`,
+`duration` and `seconds`. A render of a document with an `outputs` map,
+and the `poster`, `sprites` and `publish` verbs, add `directory` and
+`outputs` instead of `output` and `mode`: one entry per file with
+`name`, `kind`, `path`, `bytes`, `content_type`, its own `mode`, and
+`width` and `height` for pictures and video (one tile, for a sprite
+sheet). Every file written is a row, the sprite map as `sprites-map`,
+so a program can hand the list to an uploader as it is. `publish` also
+writes the same list as `manifest.json` in the directory, with paths
+relative to it. The content types are the point: a `.vtt` or `.mp4`
+served as `application/octet-stream` breaks players, and the report
+names the right type for each file. `mode` is `"copy"` (source streams copied, no decoding),
 `"smart"` (packets copied where nothing changes, the frames around cuts
 and under overlays encoded into the same stream),
 `"direct"` (decoded frames handed straight to the encoder, scaled or
