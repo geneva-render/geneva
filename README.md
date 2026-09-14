@@ -166,25 +166,28 @@ media type.
 Measured on one machine, so read them as ratios rather than absolutes: a
 four-core Intel Xeon at 2.1 GHz, a 60-second 1080p H.264 file, release
 build, software encoding through the same system x264 (build 164) on both
-sides, matched presets and quality settings. Each step ran twice and the
-second time is reported.
+sides, matched presets and quality. Each step ran twice and the second time
+is reported.
 
 | Job | Geneva | ffmpeg |
 | --- | --- | --- |
-| Trim 10s out | 0.1s | 5.9s the obvious command, 0.1s with `-c copy` |
-| Frame-accurate trim | 0.6s | 5.0s |
-| Resize to 720p | 12.9s | 13.3s |
-| 3 renditions + poster + sprites + speech | 78.3s | 54.3s as six commands, 45.3s as one |
+| Trim 10s out | 0.1s | 5.8s for the obvious command, 0.1s with `-c copy` |
+| Frame-accurate trim, cut mid-GOP | 0.6s | 4.8s |
+| Resize to 720p | 13.0s | 13.0s |
+| 3 renditions + poster + sprites + speech audio | 42.9s | 53.1s as six commands, 43.3s as one |
 
-Read honestly, that is: on cuts and joins geneva reaches the result an
-expert ffmpeg command would, without being told, and is many times faster
-than the command most people actually write. A frame-accurate trim is
-roughly eight times faster because only 15 of 300 frames are re-encoded. A
-single transcode is a wash. And the multi-output pass, today, is slower
-than doing it by hand, because every frame goes through the compositor
-while ffmpeg scales in YUV; the single-output path already avoids that and
-the multi-output path has not been given the same treatment yet. It buys
-you one document and one decode instead of six commands, not less CPU time.
+On cuts and joins geneva reaches the result an expert command would, without
+being told, and is many times faster than the command most people write. A
+frame-accurate trim is about eight times faster because only 15 of 300
+frames are re-encoded and the rest are copied. A single transcode is a
+wash: both scale in YUV and hand the frames to the same encoder.
+
+The last row is the one worth explaining. Six commands decode the file six
+times; geneva decodes once and feeds the encoders in parallel, which is
+where the 20% comes from. The single ffmpeg command with `split` filters
+also decodes once, and lands in the same place. What geneva gives you there
+is one document instead of a filter graph, plus the sprite sheet's WebVTT
+map and a report listing every file, rather than less CPU time.
 
 The archives carry `check.sh`, which runs this kind of comparison on your
 machine and your file and prints the table.

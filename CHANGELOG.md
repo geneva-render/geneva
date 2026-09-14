@@ -24,6 +24,16 @@ the format version it was written for.
 
 ### Changes
 
+- A multi-output render takes the direct path when the canvas is one video
+  filling the frame: the decoded frames are scaled to each rendition and
+  handed to the encoders without passing through the compositor, and only
+  the frames a poster or a sprite tile actually takes are composited. On a
+  four-core machine, three renditions plus a poster, a sprite sheet and
+  speech audio from a 60-second 1080p file take 42.9s, against 53.1s for
+  the six ffmpeg commands that do the same work and 43.3s for the single
+  command with `split` filters. The renditions also come out cleaner,
+  since the picture no longer makes a round trip through linear-light
+  float and back.
 - The person's progress line is rewritten on a timer (four times a
   second) rather than every thirtieth frame, so it moves at the same pace
   whatever the frame rate, and the chunked path reports like the others.

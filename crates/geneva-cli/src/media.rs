@@ -836,36 +836,86 @@ mod imp {
                 }
             }
 
+            // When the canvas is one video filling the frame, its frames
+            // come from the decoder already scaled and packed, and the
+            // compositor is only needed for the frames a picture wants.
+            let mut directs: Vec<Option<geneva_media::DirectSource>> = Vec::new();
+            if !pictures_only {
+                for (tags, format, _) in &canvases {
+                    directs.push(
+                        geneva_media::DirectSource::open(comp, root, *format, *tags)
+                            .ok()
+                            .flatten(),
+                    );
+                }
+            }
+            let direct_mode = !directs.is_empty() && directs.iter().all(Option::is_some);
+            if direct_mode {
+                if let Some(reason) = directs[0].as_ref().map(geneva_media::DirectSource::reason) {
+                    notes.push(reason);
+                }
+            }
+            let mut canvas_pool = geneva_media::convert::PlanePool::default();
+
             // With no video to write, only the frames the pictures need
             // are composited, and the loop ends once they have them.
 
             'frames: for n in 0..frames {
                 let t = comp.frame_time(n);
+                // A poster that names its time wants one frame; one that
+                // does not is still looking until it has picked, and the
+                // sheet wants a frame whenever a tile falls due.
+                let poster_done = poster.is_none() || poster_pick.is_some();
+                let tiles_done = sprite_plan.is_none_or(|(_, count, _, _)| next_tile >= count);
+                let poster_wants = !poster_done
+                    && match poster_at {
+                        Some(at) => at == n,
+                        None => true,
+                    };
+                let tile_wants = !tiles_done
+                    && sprite_plan.is_some_and(|(every, _, _, _)| {
+                        t.to_f64() + 1e-9 >= f64::from(next_tile) * every
+                    });
                 if pictures_only {
-                    let poster_done = poster.is_none() || poster_pick.is_some();
-                    let tiles_done = sprite_plan.is_none_or(|(_, count, _, _)| next_tile >= count);
                     if poster_done && tiles_done {
                         break;
                     }
-                    let poster_wants = !poster_done
-                        && match poster_at {
-                            Some(at) => at == n,
-                            None => n + 1 >= poster_earliest || n == total / 10 || n + 1 == total,
-                        };
-                    let tile_wants = !tiles_done
-                        && sprite_plan.is_some_and(|(every, _, _, _)| {
-                            t.to_f64() + 1e-9 >= f64::from(next_tile) * every
-                        });
-                    if !poster_wants && !tile_wants {
+                    let looking = poster_wants
+                        && poster_at.is_none()
+                        && !(n + 1 >= poster_earliest || n == total / 10 || n + 1 == total);
+                    if (!poster_wants || looking) && !tile_wants {
                         continue;
                     }
                 }
-                if let Err(e) = renderer.render_into(comp, t, &mut frame) {
-                    render_error = Some(e);
-                    break;
+                if direct_mode {
+                    for (planes, source) in canvases.iter_mut().zip(directs.iter_mut()) {
+                        let source = source.as_mut().expect("direct mode checked every canvas");
+                        match source.frame_with(t, &mut canvas_pool) {
+                            Ok(fresh) => {
+                                let spent = std::mem::replace(&mut planes.2, fresh);
+                                canvas_pool.give(spent);
+                            }
+                            Err(e) => {
+                                render_error = Some(err_at(dir, e));
+                                break 'frames;
+                            }
+                        }
+                    }
                 }
-                for (tags, format, planes) in &mut canvases {
-                    geneva_media::convert::frame_to_planes_into(&frame, *tags, *format, planes);
+                // The compositor runs for every frame unless the decoder
+                // is feeding the encoders, in which case only the frames a
+                // picture takes are composited.
+                let composited = !direct_mode || poster_wants || tile_wants;
+                if composited {
+                    if let Err(e) = renderer.render_into(comp, t, &mut frame) {
+                        render_error = Some(e);
+                        break;
+                    }
+                }
+                if !direct_mode {
+                    for (tags, format, planes) in &mut canvases {
+                        geneva_media::convert::frame_to_planes_into(&frame, *tags, *format, planes);
+                    }
                 }
                 for (sink, feed) in video_sinks.iter_mut().zip(video_feeds.iter_mut()) {
                     while let Ok(spare) = feed.spare_rx.try_recv() {
@@ -897,7 +947,7 @@ mod imp {
                     }
                 }
                 // Pictures from the composited frame.
-                if poster.is_some() {
+                if poster.is_some() && composited {
                     match poster_at {
                         Some(at) if at == n => poster_pick = Some(frame.to_rgba8()),
                         None if poster_pick.is_none() => {
@@ -917,6 +967,7 @@ mod imp {
                 }
                 if let (Some((o, _)), Some((every, count, cols, _)), Some(sheet)) =
                     (sprites.as_ref(), sprite_plan, sheet.as_mut())
+                    && composited
                 {
                     let tile_time = f64::from(next_tile) * every;
                     if next_tile < count && t.to_f64() + 1e-9 >= tile_time {
