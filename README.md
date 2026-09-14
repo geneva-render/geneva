@@ -1,4 +1,7 @@
-<img src="docs/wordmark.svg" alt="Geneva" width="360">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/wordmark-dark.png">
+  <img src="docs/wordmark.png" alt="Geneva" width="240">
+</picture>
 
 Geneva is a video tool with two halves that share one engine. On the
 outside, everyday commands: trim, concat, convert, resize, overlay, audio,
