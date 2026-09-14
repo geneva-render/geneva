@@ -1,7 +1,7 @@
 {
   "geneva": "0.3",
   "output": {
-    "width": 1920, "height": 1080, "fps": 30, "duration": "90s",
+    "width": 1920, "height": 1080, "fps": 30,
     "encode": { "video": { "codec": "h264", "crf": 21, "keyframe_interval": 2 }, "fast_start": true }
   },
   "assets": { "talk": { "src": "talk.mp4" } },

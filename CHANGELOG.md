@@ -33,10 +33,14 @@ the format version it was written for.
 
 ### Examples
 
-- `social-reframe.json`: a landscape talk reframed to 9:16 with a blurred
+- `social-reframe.json`: a landscape clip reframed to 9:16 with a blurred
   backdrop and word-timed captions. `renditions.json`: three renditions, a
   poster, a sprite sheet and speech audio from one pass. `lower-third.json`
   gains the name and title it was drawing a plate for.
+- `examples/talk.mp4`, a four-second 1080p clip rendered by geneva from
+  shapes and text, so the examples that need video run without supplying
+  any. Those two documents no longer set `output.duration`; they take the
+  length from the file, which `render` and `frame` probe for.
 
 ## 0.4.2 — 2026-09-14
 

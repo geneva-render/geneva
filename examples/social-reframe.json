@@ -1,7 +1,7 @@
 {
   "geneva": "0.3",
   "output": {
-    "width": 1080, "height": 1920, "fps": 30, "duration": "30s",
+    "width": 1080, "height": 1920, "fps": 30,
     "encode": { "video": { "codec": "h264", "crf": 23, "keyframe_interval": 2 },
                 "audio": { "codec": "aac", "bitrate_kbps": 128 }, "fast_start": true }
   },
