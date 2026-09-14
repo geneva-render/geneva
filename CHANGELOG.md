@@ -39,7 +39,9 @@ the format version it was written for.
   `opacity` multiplies down the tree instead of grouping. Anything it
   cannot draw it names rather than ignoring — E451 for markup or a
   selector it cannot parse, with the line and column, and W450 for a
-  property it does not draw, with the element it was on. E450 covers an
+  property it does not draw, for a `<link rel="stylesheet">` it will not
+  fetch, and for an element with a renderer of its own (`<iframe>`,
+  `<svg>`, `<canvas>`, `<video>`, `<object>`, `<embed>`). E450 covers an
   `html` source with both `html` and `asset`, or neither.
 
 - **Motion written the way a stylesheet writes it.** A top-level
