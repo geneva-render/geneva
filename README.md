@@ -153,15 +153,34 @@ difference between a coffee and an afternoon.
 geneva render examples/captions.json -o captioned.mp4
 ```
 
-Give a text clip its words and when each one lands:
+The footage goes in as an asset, the captions are a layer on top of it, and
+one file comes out:
 
 ```json
-"words": [ ["Dragon", 0], ["is", "0.5s"], ["captured", "0.8s"], ["by", "1.5s"],
-           ["the", "1.8s"], ["station", "2s"], ["arm", "2.6s", "3.4s"] ]
+"assets": { "iss": { "src": "iss.mp4" } },
+
+"layers": [
+  { "id": "footage", "clips": [ { "source": { "kind": "video", "asset": "iss" } } ] },
+
+  { "id": "captions", "clips": [ {
+      "source": {
+        "kind": "text",
+        "words": [ ["Dragon", 0], ["is", "0.5s"], ["captured", "0.8s"], ["by", "1.5s"],
+                   ["the", "1.8s"], ["station", "2s"], ["arm", "2.6s", "3.4s"] ],
+        "font": "700 44px Liberation Sans",
+        "color": "white",
+        "highlight": { "color": "#ffd233" },
+        "outline": "3px #000000cc",
+        "max_width": "80%"
+      },
+      "start": "1s", "duration": "3.4s",
+      "transform": { "position": "50% 80%" } } ] }
+]
 ```
 
-geneva draws the line and picks out whichever word is current, which is the
-style every short-form platform uses now.
+Each word carries when it lands; geneva draws the line and picks out
+whichever one is current, which is the style every short-form platform uses
+now.
 
 The text is properly shaped, so the Arabic line underneath reads right to
 left, and Thai would break in the right places. You get wrapping, an
@@ -178,8 +197,28 @@ geneva render examples/social-reframe.json -o reel.mp4
 ```
 
 Three layers make a 16:9 clip fit a 9:16 frame without cropping anything
-out. The clip fills the tall frame and gets blurred, the same clip sits
-whole on top, and the captions go over both.
+out — the same file twice, then the captions over both:
+
+```json
+"output": { "width": 1080, "height": 1920, "fps": 30 },
+"assets": { "iss": { "src": "iss.mp4" } },
+
+"layers": [
+  { "id": "backdrop", "clips": [ {
+      "source": { "kind": "video", "asset": "iss", "audio": false },
+      "fit": "cover",
+      "effects": [ { "kind": "blur", "radius": 45 } ] } ] },
+
+  { "id": "picture", "clips": [ {
+      "source": { "kind": "video", "asset": "iss" },
+      "fit": "contain" } ] },
+
+  { "id": "captions", "clips": [ { "source": { "kind": "text", "...": "as above" } } ] }
+]
+```
+
+The bottom copy fills the tall frame and gets blurred, the top one sits
+whole over it.
 
 If you only want the effect and not the document, there's a flag for it:
 

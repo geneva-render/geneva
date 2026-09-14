@@ -576,6 +576,10 @@ the message names it, so the rest of the document still draws.
   half-transparent box show through each other.
 - There is no `float`, no `z-index`, no grid, no transition and no media
   query. The clip's own `transform` and `animation` move the whole box.
+- **Nothing is fetched.** A `<link rel="stylesheet">` is W450, not a
+  request: put the rules in a `<style>` element or in the source's `css`.
+  Elements with a renderer of their own — `<iframe>`, `<svg>`, `<canvas>`,
+  `<video>`, `<object>`, `<embed>` — are W450 too.
 
 Layout and painting do not depend on time, so a markup box is drawn once
 per clip and reused for every frame it is on screen.

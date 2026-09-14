@@ -92,7 +92,7 @@ result is not what was intended. Notes are informational.
 | W440 | An animation rule sets nothing at an offset, or has fewer than two offsets, so nothing interpolates. |
 | E450 | An `html` source has both `html` and `asset`, or neither. |
 | E451 | The markup or its styles did not parse. The message says what is wrong and the location points at it: a tag that closes the wrong element, an unclosed element, a selector or at-rule geneva does not support, a declaration block that is never closed. |
-| W450 | A declaration names something geneva does not draw. It is skipped and the rest of the document is drawn; the message names the property and the element. |
+| W450 | The markup names something geneva does not draw: a property it has no support for, a `<link rel="stylesheet">` it will not fetch, or an element with its own renderer (`<iframe>`, `<svg>`, `<canvas>`, `<video>`, `<object>`, `<embed>`). It is skipped and the rest is drawn; the message names it. |
 | W401 | Output width or height is odd; most codecs need even dimensions. |
 | W402 | `subtitles --burn` found no cues in the file; the picture is written unchanged. |
 | W403 | A burned-in subtitle cue extends off-screen. The message gives the box size and by how much it leaves the frame; the path names the clip. |

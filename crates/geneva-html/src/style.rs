@@ -137,6 +137,28 @@ fn user_agent(tag: &str) -> &'static str {
     }
 }
 
+/// An element that would load something in a browser and loads nothing
+/// here, named so that the difference is visible.
+fn unfollowed(el: &crate::dom::Element) -> Option<String> {
+    match el.tag.as_str() {
+        "link" => {
+            let rel = el.attrs.get("rel").map_or("", String::as_str);
+            rel.eq_ignore_ascii_case("stylesheet").then(|| {
+                let href = el.attrs.get("href").map_or("", String::as_str);
+                format!(
+                    "<link rel=\"stylesheet\" href=\"{href}\">: geneva does not fetch \
+stylesheets; put the rules in a <style> element or in the source's \"css\""
+                )
+            })
+        }
+        "iframe" | "object" | "embed" | "video" | "canvas" | "svg" => Some(format!(
+            "<{}> is not drawn; geneva draws boxes, text and images",
+            el.tag
+        )),
+        _ => None,
+    }
+}
+
 /// Where a declaration came from, which orders the cascade.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct Origin {
@@ -168,6 +190,12 @@ pub fn cascade(doc: &Document, sheet: &Stylesheet) -> (Vec<Computed>, Vec<String
             // which is what a child's percentages resolve against.
             if id == doc.root {
                 computed.layout.display = Display::Block;
+            }
+            // Elements that pull in something geneva does not follow would
+            // otherwise draw nothing and say nothing, which is the one
+            // thing this crate promises not to do.
+            if let Some(what) = unfollowed(el) {
+                problems.push(what);
             }
             let mut declarations: Vec<(Origin, Declaration)> = Vec::new();
             for d in parse_declarations(user_agent(&el.tag)) {
@@ -907,5 +935,38 @@ mod tests {
         let h1 = doc.children(doc.root)[0];
         assert_eq!(styles[h1].text.weight, 400);
         assert_eq!(styles[h1].text.size, 32.0);
+    }
+}
+
+#[cfg(test)]
+mod unfollowed_tests {
+    use super::*;
+    use crate::css::parse_stylesheet;
+    use crate::dom::parse;
+
+    fn problems(html: &str) -> Vec<String> {
+        let doc = parse(html).unwrap();
+        let sheet = parse_stylesheet(&doc.style).unwrap();
+        cascade(&doc, &sheet).1
+    }
+
+    #[test]
+    fn a_stylesheet_link_is_named_rather_than_ignored() {
+        let p = problems("<link rel='stylesheet' href='house.css'><div></div>");
+        assert_eq!(p.len(), 1);
+        assert!(p[0].contains("house.css"), "{p:?}");
+        assert!(p[0].contains("does not fetch"), "{p:?}");
+
+        // A link that is not a stylesheet loads nothing in a browser either.
+        assert!(problems("<link rel='icon' href='x.png'>").is_empty());
+    }
+
+    #[test]
+    fn elements_with_their_own_renderer_are_named() {
+        for tag in ["iframe", "svg", "canvas", "video"] {
+            let p = problems(&format!("<{tag}></{tag}>"));
+            assert_eq!(p.len(), 1, "{tag}");
+            assert!(p[0].contains(tag), "{p:?}");
+        }
     }
 }

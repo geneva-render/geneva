@@ -2389,7 +2389,7 @@ impl Resolver<'_> {
                 for problem in &p.problems {
                     self.push(
                         Diagnostic::warning("W450", spath.clone(), problem.clone()).with_help(
-                            "the declaration is skipped; the timeline reference lists what geneva draws",
+                            "it is skipped and the rest is drawn; the timeline reference lists what geneva draws",
                         ),
                     );
                 }
