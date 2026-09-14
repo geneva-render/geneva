@@ -163,6 +163,16 @@ fade-in and a fade-out live together above. Where one run ends and the
 next begins on a different value, the value snaps rather than ramping
 back.
 
+A rule can also come from the markup a clip draws: `@keyframes` inside an
+[HTML source](#markup) is in scope for that clip, and if its outermost
+element carries an `animation`, that is what the clip plays. A rule named
+in both places is the document's, and says so (W451).
+
+A property set at only one offset of a rule has nothing to interpolate
+with, so it is dropped; a rule where nothing is left is W440. That is what
+makes `to { transform: none }` mean "back where it started" rather than
+"and reset the scale and rotation too".
+
 Everything here resolves to ordinary keyframe tracks, so an animated clip
 is composited exactly as a hand-written one is, and `--show-timeline`
 prints the document as it was written.
@@ -562,6 +572,29 @@ Lengths are `px`, `em`, `rem` and `%`; `em` is the element's own font
 size, settled before anything else uses it. Colours are the ones the rest
 of the format takes. Anything else is W450: the declaration is skipped and
 the message names it, so the rest of the document still draws.
+
+### Motion
+
+`@keyframes` in the markup's stylesheet are in scope for the clip that
+draws it, and an `animation` on the **outermost element** is what that
+clip plays, so a file that moves in a browser moves here too:
+
+```html
+<style>
+  @keyframes slide-in { from { transform: translateX(-656px) } to { transform: none } }
+  .card { animation: slide-in 0.5s ease-out; /* ... */ }
+</style>
+<div class="card">...</div>
+```
+
+The clip's own `animation` replaces it, since only the document knows
+where the clip sits in time; when both are set, W451 says which one won.
+
+An `animation` further in is W450, not motion. The markup is laid out and
+painted once and the clip moves that picture, which is what makes a box on
+screen for a minute cost one layout; a child moving on its own would mean
+a layout per frame. Put the motion on the outermost element, or split the
+parts that move into clips of their own.
 
 ### What it does not do
 

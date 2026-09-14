@@ -1,6 +1,11 @@
-<!-- A lower third. Open this file in a browser: it looks the same there. -->
+<!-- A lower third. Open this file in a browser: it looks and moves the same. -->
 <style>
+  @keyframes slide-in { from { transform: translateX(-656px) } to   { transform: none } }
+  @keyframes fade-in  { from { opacity: 0 }                   to   { opacity: 1 } }
+  @keyframes fade-out { from { opacity: 1 }                   to   { opacity: 0 } }
+
   .card {
+    animation: slide-in 0.5s ease-out, fade-in 0.3s, fade-out 0.3s 3.7s;
     display: flex;
     flex-direction: column;
     justify-content: center;

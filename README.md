@@ -33,12 +33,18 @@ MIT licensed. Linux and macOS. No services, no network access.
 ## A worked example
 
 Here's a lower third over ten seconds of footage from the space station.
-The card is an HTML file — open it in a browser and it looks the same:
+The card is an HTML file — open it in a browser and it looks and moves the
+same:
 
 ```html
-<!-- A lower third. Open this file in a browser: it looks the same there. -->
+<!-- A lower third. Open this file in a browser: it looks and moves the same. -->
 <style>
+  @keyframes slide-in { from { transform: translateX(-656px) } to   { transform: none } }
+  @keyframes fade-in  { from { opacity: 0 }                   to   { opacity: 1 } }
+  @keyframes fade-out { from { opacity: 1 }                   to   { opacity: 0 } }
+
   .card {
+    animation: slide-in 0.5s ease-out, fade-in 0.3s, fade-out 0.3s 3.7s;
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -79,20 +85,13 @@ and the document that puts it on the footage, in full:
     "card": { "src": "card.html" }
   },
 
-  "keyframes": {
-    "slide-in": { "from": "translate: -656px", "to": "translate: 0" },
-    "fade-in":  { "from": "opacity: 0", "to": "opacity: 1" },
-    "fade-out": { "from": "opacity: 1", "to": "opacity: 0" }
-  },
-
   "layers": [
     { "id": "footage", "clips": [ { "source": { "kind": "video", "asset": "iss" } } ] },
 
     { "id": "lower-third", "clips": [ {
         "source": { "kind": "html", "asset": "card", "width": 560 },
         "start": "2s", "duration": "4s",
-        "transform": { "anchor": "bottom left", "position": "56 648" },
-        "animation": "slide-in 0.5s ease-out, fade-in 0.3s, fade-out 0.3s 3.7s" } ] }
+        "transform": { "anchor": "bottom left", "position": "56 648" } } ] }
   ]
 }
 ```
@@ -122,18 +121,21 @@ layout — an element's text is one paragraph and a child element is a box —
 and a property it can't draw is a warning that names the property, not a
 silent difference.
 
-The motion is CSS too. `keyframes` at the top is a set of `@keyframes`
-rules, and the card's `animation` plays three of them: a slide from 656
-pixels to the left, a fade in over the first 0.3 seconds, a fade out
-starting at 3.7. The shorthand takes what CSS takes — a duration, a delay,
-a timing function, `infinite`, `alternate` — plus `spring(170, 26)`, which
-CSS hasn't got.
+The motion is CSS too, and it lives in the same file: `@keyframes` and an
+`animation` on the card. A slide from 656 pixels to the left, a fade in
+over the first 0.3 seconds, a fade out starting at 3.7. The shorthand takes
+what CSS takes — a duration, a delay, a timing function, `infinite`,
+`alternate` — plus `spring(170, 26)`, which CSS hasn't got. The JSON says
+only *when* the card is on screen and *where*; the card knows how it
+arrives.
 
 Underneath it's all keyframes, so anything you can't say in CSS you can say
-directly:
+in the document instead:
 
 ```json
-"position": { "keyframes": [ [0, "-600 648", "ease-out"], ["0.5s", "56 648"] ] }
+"transform": {
+  "position": { "keyframes": [ [0, "-600 648", "ease-out"], ["0.5s", "56 648"] ] }
+}
 ```
 
 Any number you can set, you can animate, either way round.

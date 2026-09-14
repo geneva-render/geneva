@@ -360,6 +360,49 @@ fn a_rule_nothing_plays_is_a_note() {
 }
 
 #[test]
+fn markup_carries_its_own_animation() {
+    let text = doc(
+        r#""layers":[{"clips":[{"duration":"2s","source":{"kind":"html","width":100,
+        "html":"<style>@keyframes slide { from { translate: -50px } to { translate: 0 } } .c { animation: slide 0.5s; height: 10px; background: red }</style><div class='c'></div>"},
+        "transform":{"position":"50 50"}}]}]"#,
+    );
+    let l = load(&text);
+    assert!(l.is_ok(), "{:?}", l.diagnostics);
+    let clip = &l.composition.unwrap().layers[0].clips[0];
+    assert_eq!(clip.position.sample(0.0), [0.0, 50.0]);
+    assert_eq!(clip.position.sample(0.5), [50.0, 50.0]);
+}
+
+#[test]
+fn a_clips_animation_replaces_the_markups() {
+    let text = format!(
+        "{{{HEAD},\"keyframes\":{{\"mine\":{{\"from\":\"opacity: 0\",\"to\":\"opacity: 1\"}}}},         \"layers\":[{{\"clips\":[{{\"duration\":\"2s\",\"source\":{{\"kind\":\"html\",\"width\":100,         \"html\":\"<style>@keyframes theirs {{ from {{ opacity: 1 }} to {{ opacity: 0 }} }}          .c {{ animation: theirs 1s; height: 10px }}</style><div class='c'></div>\"}},         \"animation\":\"mine 1s\"}}]}}]}}"
+    );
+    let l = load(&text);
+    assert!(l.is_ok(), "{:?}", l.diagnostics);
+    assert!(l.diagnostics.iter().any(|d| d.code == "W451"));
+    let o = &l.composition.unwrap().layers[0].clips[0].opacity;
+    // "mine" runs 0 to 1, not "theirs" running 1 to 0.
+    assert_eq!(o.sample(0.0), 0.0);
+    assert_eq!(o.sample(1.0), 1.0);
+}
+
+#[test]
+fn an_animation_below_the_outermost_element_is_a_warning() {
+    let text = doc(
+        r#""layers":[{"clips":[{"duration":"2s","source":{"kind":"html","width":100,
+        "html":"<style>@keyframes a { from { opacity: 0 } to { opacity: 1 } } p { animation: a 1s }</style><div><p>hi</p></div>"}}]}]"#,
+    );
+    let l = load(&text);
+    assert!(l.is_ok(), "{:?}", l.diagnostics);
+    assert!(
+        l.diagnostics
+            .iter()
+            .any(|d| d.code == "W450" && d.message.contains("outermost element only"))
+    );
+}
+
+#[test]
 fn odd_dimensions_and_unused_assets_are_reported_softly() {
     let text = r#"{"geneva":"0.1","output":{"width":641,"height":360,"fps":30,"duration":1},
         "assets":{"x":{"src":"x.png"}}}"#;

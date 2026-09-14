@@ -121,6 +121,9 @@ pub struct Computed {
     pub paint: Paint,
     /// Text, inherited by children.
     pub text: Text,
+    /// The `animation` shorthand, kept as written. Nothing here plays it;
+    /// the clip that draws the markup does.
+    pub animation: Option<String>,
 }
 
 /// The user-agent style for the handful of tags that carry one, so a
@@ -183,6 +186,7 @@ pub fn cascade(doc: &Document, sheet: &Stylesheet) -> (Vec<Computed>, Vec<String
             paint: Paint::default(),
             // Only the text properties come down from the parent.
             text: inherited.text.clone(),
+            animation: None,
         };
         if let Some(el) = doc.nodes[id].element() {
             // The root is the drawing surface, the way <body> is the page:
@@ -397,6 +401,7 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
         "flex" => flex_shorthand(v, em, c)?,
         "order" => {} // Ordering is not implemented; the source order stands.
 
+        "animation" => c.animation = Some(v.to_owned()),
         "background" | "background-color" => c.paint.background = Some(color(v)?),
         "opacity" => c.paint.opacity = number(v)?.clamp(0.0, 1.0),
         "box-shadow" => c.paint.shadow = shadow(v, em)?,

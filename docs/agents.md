@@ -174,7 +174,10 @@ layout from taffy. Refer to images by asset id, not by path
 (`<img src="logo">`). There is no inline layout: an element's text is one
 paragraph and a child element is a box. Anything geneva cannot draw is
 named rather than ignored: E451 for markup or a selector it cannot parse,
-W450 for a property it does not draw. See
+W450 for a property it does not draw. `@keyframes` in the markup are in
+scope for that clip, and an `animation` on its outermost element is what
+the clip plays unless the clip sets its own (W451 when both do), so a
+file that moves in a browser moves here. See
 [timeline.md](timeline.md#markup) for the property list.
 
 ## Things that trip programs up

@@ -20,6 +20,17 @@ the format version it was written for.
   <div class="card"><h1>Dragon CRS-17</h1><p>Berthing at the ISS</p></div>
   ```
 
+  Motion comes with it. `@keyframes` in the markup's stylesheet are in
+  scope for the clip that draws it, and an `animation` on the outermost
+  element is what the clip plays, so a card that slides in a browser
+  slides here — `examples/card.html` does exactly that, and renders byte
+  for byte what the same animation written in the document rendered. The
+  clip's own `animation` replaces the markup's, since only the document
+  knows where the clip sits in time (W451 when both are set). An
+  `animation` further in is W450: the markup is painted once and the clip
+  moves that picture, which is what makes a box on screen for a minute
+  cost one layout.
+
   A new crate, `geneva-html`, parses a strict HTML subset and a CSS subset
   (type, class and id selectors, the descendant and child combinators, the
   real cascade with specificity, source order, `!important` and
@@ -65,10 +76,14 @@ the format version it was written for.
   drive one property where their times do not collide, which is how a
   fade-in and a fade-out share `opacity`. It all resolves to the same
   keyframe tracks the long form produces, so nothing downstream changes
-  and `--show-timeline` prints the document as written. New codes
+  and `--show-timeline` prints the document as written. A property set at
+  one offset of a rule has nothing to interpolate with and is dropped,
+  which is what lets `to { transform: none }` mean "back where it
+  started" rather than "and reset the scale and rotation too". New codes
   E440–E444 and W440 cover a missing rule, a malformed shorthand or
   rule, a property driven twice, and a rule that interpolates nothing;
-  W203 notes a rule nothing plays.
+  W451 covers two things asking for one motion, and W203 notes a rule
+  nothing plays.
 
 - **Shorter spellings for the three things a document repeats most.** A
   point (`transform.position`, `transform.anchor`) can be a pair or a

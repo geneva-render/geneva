@@ -6,6 +6,7 @@
 //! (ids, classes, types), source order to break ties, `!important`, and
 //! inheritance for the properties that inherit.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::dom::{Document, Element, NodeId};
@@ -129,11 +130,19 @@ pub struct Rule {
     pub declarations: Vec<Declaration>,
 }
 
+/// One `@keyframes` rule: offsets to declaration blocks, as written.
+/// This is the shape a timeline's own `keyframes` map has, so markup and
+/// document feed the same animation.
+pub type KeyframesRule = BTreeMap<String, String>;
+
 /// A parsed stylesheet.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Stylesheet {
     /// Rules in source order.
     pub rules: Vec<Rule>,
+    /// `@keyframes` rules by name. Nothing here interprets them: they are
+    /// handed on to whatever plays the animation.
+    pub keyframes: BTreeMap<String, KeyframesRule>,
 }
 
 /// Why a stylesheet did not parse.
@@ -156,6 +165,7 @@ impl fmt::Display for CssError {
 pub fn parse_stylesheet(source: &str) -> Result<Stylesheet, CssError> {
     let source = strip_comments(source);
     let mut rules = Vec::new();
+    let mut keyframes: BTreeMap<String, KeyframesRule> = BTreeMap::new();
     let mut rest = source.as_str();
     let mut consumed = 0usize;
     while !rest.trim().is_empty() {
@@ -168,10 +178,22 @@ pub fn parse_stylesheet(source: &str) -> Result<Stylesheet, CssError> {
                 .chars()
                 .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
                 .collect();
-            return Err(CssError {
-                message: format!("@{name} is not supported"),
-                line: line(),
-            });
+            if name != "keyframes" {
+                return Err(CssError {
+                    message: format!("@{name} is not supported"),
+                    line: line(),
+                });
+            }
+            let (rule_name, rule, used) =
+                parse_keyframes(&rest[1 + name.len()..]).map_err(|message| CssError {
+                    message,
+                    line: line(),
+                })?;
+            keyframes.insert(rule_name, rule);
+            let used = 1 + name.len() + used;
+            consumed += used;
+            rest = &rest[used..];
+            continue;
         }
         let Some(open) = rest.find('{') else {
             return Err(CssError {
@@ -213,7 +235,72 @@ pub fn parse_stylesheet(source: &str) -> Result<Stylesheet, CssError> {
         consumed += close + 1;
         rest = &rest[close + 1..];
     }
-    Ok(Stylesheet { rules })
+    Ok(Stylesheet { rules, keyframes })
+}
+
+/// Parses the name and body of a `@keyframes` rule, given the text just
+/// after the at-keyword. Returns how much of it was consumed.
+fn parse_keyframes(text: &str) -> Result<(String, KeyframesRule, usize), String> {
+    let open = text
+        .find('{')
+        .ok_or_else(|| "@keyframes has no block".to_owned())?;
+    let name = text[..open].trim();
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(format!("{name:?} is not a keyframes name"));
+    }
+    let close = matching_brace(&text[open..])
+        .ok_or_else(|| format!("@keyframes {name} is never closed"))?;
+    let body = &text[open + 1..open + close];
+
+    let mut rule = KeyframesRule::new();
+    let mut rest = body;
+    while !rest.trim().is_empty() {
+        rest = rest.trim_start();
+        let Some(o) = rest.find('{') else {
+            return Err(format!("a keyframe in @keyframes {name} has no block"));
+        };
+        let c = matching_brace(&rest[o..])
+            .ok_or_else(|| format!("a keyframe in @keyframes {name} is never closed"))?;
+        let offsets = &rest[..o];
+        let block = rest[o + 1..o + c].trim().to_owned();
+        for offset in offsets.split(',') {
+            let offset = offset.trim();
+            if offset.is_empty() {
+                return Err(format!("an empty keyframe offset in @keyframes {name}"));
+            }
+            // Two blocks at one offset merge, as a browser merges them.
+            rule.entry(offset.to_ascii_lowercase())
+                .and_modify(|existing| {
+                    existing.push(';');
+                    existing.push_str(&block);
+                })
+                .or_insert_with(|| block.clone());
+        }
+        rest = &rest[o + c + 1..];
+    }
+    Ok((name.to_owned(), rule, open + close + 1))
+}
+
+/// The index of the `}` matching the `{` at the start of `text`.
+fn matching_brace(text: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, c) in text.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Parses a `style` attribute or a rule body.
@@ -394,6 +481,40 @@ mod tests {
         let err = parse_stylesheet("a {}\n/* two\nlines */\n@media print { }").unwrap_err();
         assert!(err.message.contains("@media"), "{err}");
         assert_eq!(err.line, 4);
+    }
+
+    #[test]
+    fn parses_keyframes_rules() {
+        let s = parse_stylesheet(
+            "a { color: red }\n\
+             @keyframes slide-in { from { transform: translateX(-10px) } to { transform: none } }\n\
+             @keyframes pulse { from, to { opacity: 1 } 50% { opacity: 0.4 } }\n\
+             b { color: blue }",
+        )
+        .unwrap();
+        assert_eq!(s.rules.len(), 2);
+        assert_eq!(s.keyframes.len(), 2);
+        let slide = &s.keyframes["slide-in"];
+        assert_eq!(slide["from"], "transform: translateX(-10px)");
+        assert_eq!(slide["to"], "transform: none");
+        let pulse = &s.keyframes["pulse"];
+        assert_eq!(pulse["from"], "opacity: 1");
+        assert_eq!(pulse["to"], "opacity: 1");
+        assert_eq!(pulse["50%"], "opacity: 0.4");
+    }
+
+    #[test]
+    fn a_broken_keyframes_rule_says_so() {
+        assert!(parse_stylesheet("@keyframes { from {} }").is_err());
+        assert!(parse_stylesheet("@keyframes a { from { opacity: 1 }").is_err());
+        assert!(parse_stylesheet("@keyframes a { opacity: 1 }").is_err());
+        // Other at-rules are still refused by name.
+        assert!(
+            parse_stylesheet("@media print { a {} }")
+                .unwrap_err()
+                .message
+                .contains("@media")
+        );
     }
 
     #[test]

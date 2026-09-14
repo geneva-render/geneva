@@ -7,19 +7,12 @@
     "card": { "src": "card.html" }
   },
 
-  "keyframes": {
-    "slide-in": { "from": "translate: -656px", "to": "translate: 0" },
-    "fade-in":  { "from": "opacity: 0", "to": "opacity: 1" },
-    "fade-out": { "from": "opacity: 1", "to": "opacity: 0" }
-  },
-
   "layers": [
     { "id": "footage", "clips": [ { "source": { "kind": "video", "asset": "iss" } } ] },
 
     { "id": "lower-third", "clips": [ {
         "source": { "kind": "html", "asset": "card", "width": 560 },
         "start": "2s", "duration": "4s",
-        "transform": { "anchor": "bottom left", "position": "56 648" },
-        "animation": "slide-in 0.5s ease-out, fade-in 0.3s, fade-out 0.3s 3.7s" } ] }
+        "transform": { "anchor": "bottom left", "position": "56 648" } } ] }
   ]
 }

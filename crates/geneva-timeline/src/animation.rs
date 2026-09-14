@@ -440,6 +440,11 @@ fn scale_pair(value: &str) -> Result<[f64; 2], String> {
 /// then the translation.
 fn apply_transform(value: &str, v: &mut Values) -> Result<(), String> {
     if value.trim() == "none" {
+        // CSS's identity transform, which is what "to { transform: none }"
+        // at the end of a slide means.
+        v.translate = Some([0.0, 0.0]);
+        v.scale = Some([1.0, 1.0]);
+        v.rotate = Some(0.0);
         return Ok(());
     }
     for token in tokens(value) {
@@ -570,6 +575,14 @@ mod tests {
                 .unwrap();
         assert_eq!(v.translate, Some([10.0, 20.0]));
         assert_eq!(v.scale, Some([6.0, 2.0]));
+    }
+
+    #[test]
+    fn transform_none_is_the_identity() {
+        let v = parse_declarations("transform: none").unwrap();
+        assert_eq!(v.translate, Some([0.0, 0.0]));
+        assert_eq!(v.scale, Some([1.0, 1.0]));
+        assert_eq!(v.rotate, Some(0.0));
     }
 
     #[test]

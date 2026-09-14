@@ -6,8 +6,8 @@ they are without you supplying any.
 
 | File | What it shows | Run it |
 | --- | --- | --- |
-| `lower-third.json` | A name card written as HTML and CSS (`card.html`), sliding in on `@keyframes` over real footage. Only the seconds under the card get re-encoded. | `geneva render examples/lower-third.json -o dragon.mp4` |
-| `card.html` | The card on its own. Open it in a browser; it looks the same there. | |
+| `lower-third.json` | A name card written as HTML and CSS (`card.html`), sliding in on its own `@keyframes` over real footage. Only the seconds under the card get re-encoded. | `geneva render examples/lower-third.json -o dragon.mp4` |
+| `card.html` | The card on its own, with the `@keyframes` that slide it in. Open it in a browser; it looks and moves the same there. | |
 | `captions.json` | Word-by-word captions with the current word picked out, and a second line in Arabic to show the text is properly shaped. | `geneva render examples/captions.json -o captioned.mp4` |
 | `social-reframe.json` | A 16:9 clip fitted to a 9:16 frame over a blurred copy of itself, with captions. | `geneva render examples/social-reframe.json -o reel.mp4` |
 | `renditions.json` | Three sizes, a thumbnail, a sprite sheet and 16 kHz speech audio, from one pass over the source. | `geneva render examples/renditions.json -o out/` |

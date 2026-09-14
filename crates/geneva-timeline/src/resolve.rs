@@ -394,6 +394,7 @@ pub fn resolve_with(
         used_compositions: BTreeSet::new(),
         used_rules: BTreeSet::new(),
         rules: BTreeMap::new(),
+        from_markup: None,
         composition_stack: Vec::new(),
     };
     let comp = r.run();
@@ -411,8 +412,22 @@ struct Resolver<'a> {
     used_rules: BTreeSet<String>,
     /// Keyframe rules after parsing, by name, each sorted by offset.
     rules: BTreeMap<String, Vec<(f64, AnimValues)>>,
+    /// What an `html` source's stylesheet contributed: its `@keyframes`
+    /// and the `animation` on its outermost element. Set while the clip's
+    /// source is resolved and taken by the clip a moment later, which is
+    /// the only time it is meaningful.
+    from_markup: Option<Markup>,
     /// Names of the compositions currently being resolved, for cycle checks.
     composition_stack: Vec<String>,
+}
+
+/// What a clip's markup said about motion.
+#[derive(Default)]
+struct Markup {
+    /// `@keyframes` from the stylesheet, parsed.
+    rules: BTreeMap<String, Vec<(f64, AnimValues)>>,
+    /// The `animation` on the outermost element, as written.
+    animation: Option<String>,
 }
 
 /// Keyframes an `animation` contributes to a clip, in clip-local seconds.
@@ -1352,6 +1367,9 @@ impl Resolver<'_> {
                 explicit_len.or_else(|| output_duration.map(|d| (d - start).max(Ratio::ZERO)));
             let (source, length) =
                 self.resolve_source(&clip.source, &cpath, assets, frame, open_hint);
+            // Taken straight after the source, which is the only moment it
+            // belongs to this clip.
+            let markup = self.from_markup.take().unwrap_or_default();
             let speed = self.speed_of(clip.speed, &cpath.key("speed"));
             // The source plays `speed` times faster, so it lasts that much
             // less.
@@ -1477,11 +1495,28 @@ impl Resolver<'_> {
             // A rule's transform is laid over what the clip already sets:
             // translations add to the position, scales multiply, rotations
             // add. Opacity is the same property either way, so it replaces.
-            let (position, scale, rotation, opacity) = match clip.animation.as_deref() {
+            // A clip's own `animation` replaces the one the markup carries,
+            // since only the document knows where the clip sits in time.
+            if clip.animation.is_some() && markup.animation.is_some() {
+                self.push(
+                    Diagnostic::warning(
+                        "W451",
+                        cpath.key("animation"),
+                        "this replaces the animation the markup asks for".to_owned(),
+                    )
+                    .with_help("remove one of them so the file and the document agree"),
+                );
+            }
+            let played = clip.animation.clone().or(markup.animation);
+            let (position, scale, rotation, opacity) = match played.as_deref() {
                 None => (position, scale, rotation, opacity),
                 Some(spec) => {
-                    let apath = cpath.key("animation");
-                    let k = self.resolve_animation(spec, &apath, length);
+                    let apath = if clip.animation.is_some() {
+                        cpath.key("animation")
+                    } else {
+                        cpath.key("source")
+                    };
+                    let k = self.resolve_animation(spec, &apath, length, &markup.rules);
                     (
                         self.animated_over(
                             position,
@@ -2157,7 +2192,22 @@ impl Resolver<'_> {
     fn parse_keyframe_rules(&mut self) {
         let root = Path::root().key("keyframes");
         for (name, rule) in &self.tl.keyframes {
-            let rpath = root.key(name);
+            let steps = self.parse_keyframe_rule(name, rule, &root.key(name));
+            self.rules.insert(name.clone(), steps);
+        }
+    }
+
+    /// Parses one rule's offsets and declaration blocks. `rpath` is what
+    /// its diagnostics point at, which is the document for a `keyframes`
+    /// entry and the source for an `@keyframes` inside markup.
+    fn parse_keyframe_rule(
+        &mut self,
+        name: &str,
+        rule: &BTreeMap<String, String>,
+        rpath: &Path,
+    ) -> Vec<(f64, AnimValues)> {
+        {
+            let rpath = rpath.clone();
             let mut steps: Vec<(f64, AnimValues)> = Vec::new();
             for (key, block) in rule {
                 let kpath = rpath.key(key);
@@ -2183,6 +2233,35 @@ impl Resolver<'_> {
                 }
             }
             steps.sort_by(|a, b| a.0.total_cmp(&b.0));
+            // A property set at one offset only has nothing to interpolate
+            // with, so it would hold a constant and drive nothing. Dropping
+            // it keeps a rule to what actually moves, which is what makes
+            // "to { transform: none }" mean "back to where you started"
+            // rather than "and reset the scale and rotation too".
+            let thin = |steps: &[(f64, AnimValues)], f: fn(&AnimValues) -> bool| {
+                steps.iter().filter(|(_, v)| f(&v.clone())).count() < 2
+            };
+            if thin(&steps, |v| v.translate.is_some()) {
+                for s in &mut steps {
+                    s.1.translate = None;
+                }
+            }
+            if thin(&steps, |v| v.scale.is_some()) {
+                for s in &mut steps {
+                    s.1.scale = None;
+                }
+            }
+            if thin(&steps, |v| v.rotate.is_some()) {
+                for s in &mut steps {
+                    s.1.rotate = None;
+                }
+            }
+            if thin(&steps, |v| v.opacity.is_some()) {
+                for s in &mut steps {
+                    s.1.opacity = None;
+                }
+            }
+            steps.retain(|(_, v)| !v.is_empty());
             if steps.windows(2).any(|w| w[0].0 == w[1].0) {
                 self.diags.push(
                     Diagnostic::error(
@@ -2200,19 +2279,26 @@ impl Resolver<'_> {
                     Diagnostic::warning(
                         "W440",
                         rpath.clone(),
-                        format!("{name:?} has fewer than two offsets"),
+                        format!("nothing in {name:?} interpolates"),
                     )
                     .with_help(
-                        "an animation interpolates between offsets; one offset holds a value",
+                        "a rule needs a property set at two offsets; one offset on its own \
+holds a value rather than moving it",
                     ),
                 );
             }
-            self.rules.insert(name.clone(), steps);
+            steps
         }
     }
 
     /// Expands a clip's `animation` into keyframes in clip-local seconds.
-    fn resolve_animation(&mut self, spec: &str, path: &Path, length: Ratio) -> AnimationKnots {
+    fn resolve_animation(
+        &mut self,
+        spec: &str,
+        path: &Path,
+        length: Ratio,
+        extra: &BTreeMap<String, Vec<(f64, AnimValues)>>,
+    ) -> AnimationKnots {
         let mut knots = AnimationKnots::default();
         let animations = match crate::animation::parse_animations(spec) {
             Ok(a) => a,
@@ -2223,12 +2309,30 @@ impl Resolver<'_> {
         };
         for a in &animations {
             self.used_rules.insert(a.name.clone());
-            let Some(steps) = self.rules.get(&a.name) else {
-                let known: Vec<&str> = self.tl.keyframes.keys().map(String::as_str).collect();
+            // The document's rules shadow the markup's, being the outer
+            // scope; a name in both is worth saying out loud.
+            if self.rules.contains_key(&a.name) && extra.contains_key(&a.name) {
+                self.push(
+                    Diagnostic::warning(
+                        "W451",
+                        path.clone(),
+                        format!("{:?} is a rule in the document and in the markup", a.name),
+                    )
+                    .with_help("the document's rule is the one played; rename one of them"),
+                );
+            }
+            let Some(steps) = self.rules.get(&a.name).or_else(|| extra.get(&a.name)) else {
+                let known: Vec<&str> = self
+                    .tl
+                    .keyframes
+                    .keys()
+                    .map(String::as_str)
+                    .chain(extra.keys().map(String::as_str))
+                    .collect();
                 let help = if known.is_empty() {
-                    "the document has no \"keyframes\" map".to_owned()
+                    "no \"keyframes\" are declared, in the document or in the markup".to_owned()
                 } else {
-                    format!("the document has {}", known.join(", "))
+                    format!("the rules in scope are {}", known.join(", "))
                 };
                 self.push(
                     Diagnostic::error(
@@ -2384,6 +2488,7 @@ impl Resolver<'_> {
         // is not Sync, and a resolved composition crosses threads. The
         // renderer parses it again once per clip and caches the picture.
         let markup = markup.unwrap_or_default();
+        self.from_markup = None;
         match geneva_html::prepare(&markup, &css) {
             Ok(p) => {
                 for problem in &p.problems {
@@ -2393,6 +2498,18 @@ impl Resolver<'_> {
                         ),
                     );
                 }
+                // The markup's own motion: `@keyframes` for the clip to
+                // play, and the `animation` its outermost element carries,
+                // so a file that moves in a browser moves here too.
+                let mut rules = BTreeMap::new();
+                for (name, rule) in &p.keyframes {
+                    let steps = self.parse_keyframe_rule(name, rule, spath);
+                    rules.insert(name.clone(), steps);
+                }
+                self.from_markup = Some(Markup {
+                    rules,
+                    animation: p.animation,
+                });
             }
             Err(e) => {
                 let field = match (html, asset) {
