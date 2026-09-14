@@ -1,24 +1,33 @@
 # Examples
 
-Each file is a complete timeline. `talk.mp4` is a four-second 1080p clip,
-made with geneva from `solid.json`-style shapes, so the examples that need
-video run as they are.
+Each file is a complete timeline. `iss.mp4` is ten seconds of footage from
+the International Space Station, so the examples that need video run as
+they are without you supplying any.
 
-| File | Shows | Run it |
+| File | What it shows | Run it |
 | --- | --- | --- |
-| `captions.json` | Word-by-word highlighted captions with an outline and a background box, in Latin, Arabic, Hebrew and Thai. | `geneva frame examples/captions.json --at 0.8s -o out.png` |
-| `social-reframe.json` | A landscape clip reframed to 9:16: the picture whole over a blurred, cover-fitted copy of itself, with timed captions. | `geneva render examples/social-reframe.json -o reel.mp4` |
-| `renditions.json` | An `outputs` map: three renditions, a poster, a sprite sheet and 16 kHz mono speech audio, from one pass. | `geneva render examples/renditions.json -o out/` |
-| `lower-third.json` | A reusable composition (plate, accent bar, springing dot, name, title) placed twice with different transforms. | `geneva frame examples/lower-third.json --at 1.2s -o out.png` |
+| `lower-third.json` | A name card built as its own composition, sliding in on keyframes over real footage. Only the seconds under the card get re-encoded. | `geneva render examples/lower-third.json -o dragon.mp4` |
+| `captions.json` | Word-by-word captions with the current word picked out, and a second line in Arabic to show the text is properly shaped. | `geneva render examples/captions.json -o captioned.mp4` |
+| `social-reframe.json` | A 16:9 clip fitted to a 9:16 frame over a blurred copy of itself, with captions. | `geneva render examples/social-reframe.json -o reel.mp4` |
+| `renditions.json` | Three sizes, a thumbnail, a sprite sheet and 16 kHz speech audio, from one pass over the source. | `geneva render examples/renditions.json -o out/` |
 | `shapes.json` | Keyframed position, scale, rotation and opacity, with eased and spring interpolation. | `geneva frame examples/shapes.json --at 1s -o out.png` |
-| `overlay.json` | Video clips with a crossfade, an image overlay, timed caption text and an audio bed. Needs media of your own. | `geneva render examples/overlay.json --assets DIR -o out.mp4` |
-| `solid.json` | The smallest useful document: one solid-colour layer. | `geneva frame examples/solid.json -o out.png` |
+| `overlay.json` | Crossfades between clips, an image on top, timed captions, an audio bed. Needs media of your own. | `geneva render examples/overlay.json --assets DIR -o out.mp4` |
+| `solid.json` | The smallest document that does anything. | `geneva frame examples/solid.json -o out.png` |
 
-`render` and `frame` open the media to learn its length, so a clip with no
-`duration` takes it from the file. Plain `geneva validate` does not open
-anything; add `--probe` when a document leaves lengths to the media.
+`render` and `frame` open the media to find out how long it is, so a clip
+with no `duration` takes its length from the file. Plain `geneva validate`
+doesn't open anything, so add `--probe` when a document leaves lengths to
+the media.
 
 ```sh
 geneva validate examples/renditions.json --probe
-geneva --format json validate examples/shapes.json
+geneva frame examples/lower-third.json --at 3.5s -o check.png
 ```
+
+## Where the footage came from
+
+`iss.mp4` is a ten-second excerpt of "Earth Views from the International
+Space Station", from NASA's public image and video library. NASA material
+is generally not subject to copyright. The excerpt was trimmed and
+re-encoded for size; the original is at
+<https://images.nasa.gov/details/Earth%20Views%20from%20the%20International%20Space%20Station>.

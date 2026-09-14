@@ -28,91 +28,109 @@ versions, and will until 1.0. See [CHANGELOG.md](CHANGELOG.md).
 
 MIT licensed. Linux and macOS. No services, no network access.
 
-## What it does
+## A worked example
 
-Every example below is a file in [`examples/`](examples/). They all run as
-they are: `examples/talk.mp4` is a four-second clip that geneva rendered
-from shapes, so you don't have to supply your own footage. Each picture is
-what the command next to it produced.
+Here's a lower third over ten seconds of footage from the space station.
+You write a document, you run one command, and geneva tells you what it
+did.
+
+```json
+"layers": [
+  { "id": "footage", "clips": [ { "source": { "kind": "video", "asset": "iss" } } ] },
+
+  { "id": "lower-third", "clips": [ {
+      "source": { "kind": "composition", "composition": "card" },
+      "start": "2s", "duration": "4s",
+      "transform": {
+        "anchor": { "x": "0%", "y": "100%" },
+        "position": { "keyframes": [
+          { "t": 0,      "v": { "x": -600, "y": 648 }, "ease": "ease-out" },
+          { "t": "0.5s", "v": { "x": 56,   "y": 648 } } ] } },
+      "opacity": { "keyframes": [ { "t": 0, "v": 0 }, { "t": "0.3s", "v": 1 },
+                                  { "t": "3.7s", "v": 1 }, { "t": "4s", "v": 0 } ] } } ] }
+]
+```
+
+```sh
+geneva render examples/lower-third.json -o dragon.mp4
+```
+
+<img src="docs/demo.gif" alt="A lower third sliding in over footage of a Dragon capsule at the space station" width="480">
+
+```
+note[N600]: smart cut: 165 of 300 frames copied from the source, 135 encoded in 1 run around the cuts and overlays
+note[N600]: H.264 runs encoded with the system's x264 (build 164) at CRF 18
+wrote dragon.mp4 (300 frames, 10s of video, 3.5s elapsed)
+```
+
+Three things are going on there.
+
+The card is its own little composition: a plate, a green bar, a name and a
+subtitle, sized 560 by 96. You build it once and place it in the timeline
+like any other clip, so a second one costs you four lines.
+
+It slides in because the `position` has two keyframes half a second apart,
+one off the left edge and one in place, with `ease-out` between them. Same
+idea for the fade: four keyframes on `opacity`. Any number you can set, you
+can animate.
+
+And the last line is the part worth looking at twice. The card is only on
+screen for four of the ten seconds. geneva worked out that the rest of the
+video is untouched, so it copied 165 frames straight through as they were
+and only re-encoded the 135 around the card. Ten seconds took three. On a
+ninety-minute film with a watermark on the title card, that's the
+difference between a coffee and an afternoon.
 
 ### Captions
 
-<img src="docs/captions.png" alt="Captions with the current word highlighted, above Arabic, Hebrew and Thai text" width="520">
+<img src="docs/captions.png" alt="A caption over the footage with the current word highlighted, and an Arabic line below it" width="560">
 
 ```sh
-geneva frame examples/captions.json --at 0.8s -o captions.png
+geneva render examples/captions.json -o captioned.mp4
 ```
 
 Give a text clip a list of words with start and end times. geneva draws the
-line and highlights whichever word is current.
+line and picks out whichever word is current, which is the style every
+short-form platform uses now.
 
-The text is shaped properly, so Arabic and Hebrew read right to left and
-Thai breaks in the right places. You can add an outline, a shadow and a
-rounded box. If you know CSS, write the styles the CSS way.
-
-```json
-{ "kind": "text",
-  "words": [ { "text": "Captions",  "start": 0,      "end": "0.6s" },
-             { "text": "highlight", "start": "0.6s", "end": "1.2s" } ],
-  "font": "700 64px Liberation Sans",
-  "highlight": { "color": "#ffb347" },
-  "outline": "3px black",
-  "background": "#00000099", "padding": 20, "radius": 14 }
-```
+The text is properly shaped, so the Arabic line underneath reads right to
+left, and Thai would break in the right places. You get wrapping, an
+outline, a shadow and a rounded box. If you know CSS you can write the
+styles the CSS way: `"700 44px Liberation Sans"` for the font,
+`"3px black"` for the outline.
 
 ### Vertical video
 
-<img src="docs/social-reframe.png" alt="A landscape clip on a 9:16 canvas over a blurred copy of itself, with captions" width="260">
+<img src="docs/social-reframe.png" alt="The landscape clip on a tall canvas over a blurred copy of itself, with captions" width="240">
 
 ```sh
-geneva frame examples/social-reframe.json --at 1s -o reframe.png
+geneva render examples/social-reframe.json -o reel.mp4
 ```
 
-Three layers. The clip fills the tall frame and gets blurred, the same clip
-sits whole on top of it, and the captions go over both.
+Three layers make a 16:9 clip fit a 9:16 frame without cropping anything
+out. The clip fills the tall frame and gets blurred, the same clip sits
+whole on top, and the captions go over both.
 
-If you just want the effect and not the document, there's a flag:
+If you only want the effect and not the document, there's a flag for it:
 
 ```sh
 geneva convert talk.mp4 -o reel.mp4 --for tiktok --fill blur
 ```
 
-### Lower thirds you can reuse
+### Everything a page needs, in one go
 
-<img src="docs/lower-third.png" alt="A lower third with a name and a title on a dark plate with an accent bar" width="420">
-
-```sh
-geneva frame examples/lower-third.json --at 1.2s -o lower-third.png
-```
-
-The plate, the accent bar, the dot that springs in, the name and the title
-are one named composition. The timeline drops it in twice at different
-positions and sizes. You design it once.
-
-### Keyframes
-
-<img src="docs/shapes.png" alt="Shapes with keyframed position, scale, rotation and opacity" width="360">
-
-```sh
-geneva frame examples/shapes.json --at 1s -o shapes.png
-```
-
-Put keyframes on position, scale, rotation, opacity, audio gain or a blur
-radius. Ease them by name, with a cubic Bézier, or with a spring.
-
-### One pass, many files
-
-Most video jobs need the same pile of files: a few sizes, a thumbnail, a
-sprite sheet for the player's scrub preview, and the audio at 16 kHz for
-whisper. Ask for them together and geneva reads the source once.
+A video on a web page usually needs the same pile of files: two or three
+sizes, a thumbnail, a sprite sheet for the scrub preview, and the audio on
+its own at 16 kHz to feed whisper. List them in one document and geneva
+reads the source once instead of six times.
 
 ```json
 "outputs": {
-  "1080p":   { "kind": "video" },
-  "720p":    { "kind": "video", "height": 720, "encode": { "video": { "crf": 23 } } },
-  "480p":    { "kind": "video", "height": 480, "encode": { "video": { "crf": 25 } } },
-  "poster":  { "kind": "poster", "width": 1280 },
-  "preview": { "kind": "sprites", "every": "5s", "columns": 10 },
+  "720p":    { "kind": "video" },
+  "480p":    { "kind": "video", "height": 480, "encode": { "video": { "crf": 23 } } },
+  "360p":    { "kind": "video", "height": 360, "encode": { "video": { "crf": 25 } } },
+  "poster":  { "kind": "poster", "width": 960 },
+  "preview": { "kind": "sprites", "every": "2s", "columns": 5 },
   "speech":  { "kind": "audio", "path": "speech.wav", "audio": { "sample_rate": 16000, "channels": 1 } }
 }
 ```
@@ -121,16 +139,27 @@ whisper. Ask for them together and geneva reads the source once.
 geneva render examples/renditions.json -o out/
 ```
 
-geneva picks the thumbnail for you. It skips the opening, then takes the
-first frame that isn't dark and has some movement behind it, so you don't
-get a black frame or a blurry one. The sprite sheet comes with the WebVTT
-file players expect.
+geneva picks the thumbnail rather than grabbing frame one. It skips the
+opening, then takes the first frame that isn't dark and has some movement
+behind it, so you don't end up with a black frame or a blurry one. The
+sprite sheet comes with the WebVTT file that players expect.
+
+### Checking a design without rendering it
+
+`geneva frame` writes a single frame as a PNG or JPEG. It's for when you're
+fiddling with the position of a title and don't want to sit through a
+render to see it.
+
+```sh
+geneva frame examples/lower-third.json --at 3.5s -o check.png
+```
 
 ### Cuts that don't re-encode
 
-If a trim or a join leaves the picture alone, geneva copies the packets
-instead of re-encoding. That takes about as long as reading the file. You
-don't have to know when it's safe, and you don't have to remember `-c copy`.
+The same trick from the worked example applies to plain cuts. A trim or a
+join that leaves the picture alone copies the packets instead of
+re-encoding, which takes about as long as reading the file. You don't have
+to know when that's safe, and you don't have to remember `-c copy`.
 
 ```
 $ geneva trim talk.mp4 -o cut.mp4 --from 0.5s --to 1.5s
@@ -139,17 +168,10 @@ note[N600]: cut at 0.5s moved to the keyframe at 0.48s
 wrote cut.mp4 (1s, streams copied without re-encoding, 0.0s elapsed)
 ```
 
-When it can't copy, it tells you why rather than quietly re-encoding:
+When it can't copy, it says why rather than quietly re-encoding:
 
 ```
 note[N600]: not copied without re-encoding: the audio of talk.mp4 is aac, which wav cannot hold
-```
-
-Need the cut on an exact frame? `--exact` re-encodes only the frames between
-your cut and the next keyframe, and copies the rest into the same track.
-
-```
-note[N600]: smart cut: 285 of 300 frames copied from the source, 15 encoded in 1 run around the cuts and overlays; audio copied as coded, each cut within half a packet
 ```
 
 ### Files that lie about their timing
@@ -158,15 +180,15 @@ Real files are full of traps. Variable frame rates. Edit lists. Audio that
 starts after the video. 29.97 fps in a 600-tick timebase. Phone clips whose
 average frame rate matches no frame in the file.
 
-geneva is tested against fourteen files built to break it, and the tests
-check that the output's timing matches the input's. A phone clip you trim
-stays a copy, and the audio doesn't drift.
+geneva is tested against fourteen files built to break exactly that, and
+the tests check the output's timing against the input's. A phone clip you
+trim stays a copy, and the audio doesn't drift.
 
 ### Colour
 
-Standard-definition footage stays BT.601 and HD stays BT.709. The tags end
-up in the file you write. If the source has no tags, geneva guesses from the
-size and tells you what it guessed.
+Standard-definition footage stays BT.601 and HD stays BT.709, and the tags
+end up in the file you write. If the source has no tags, geneva guesses
+from the size and tells you what it guessed.
 
 ```
 $ geneva probe clip.mp4
@@ -176,8 +198,8 @@ $ geneva probe clip.mp4
 ```
 
 An HDR clip off a phone comes back to SDR through ITU-R BT.2446 method A,
-which is the conversion the spec asks for. You don't get the blown-out
-highlights a naive curve gives you. Use `--keep-hdr` to keep it HDR.
+which is the conversion the spec asks for, so you don't get the blown-out
+highlights a naive curve gives you. `--keep-hdr` keeps it HDR instead.
 
 ### Running it from a script
 
@@ -185,7 +207,7 @@ Add `--format json` and stdout becomes one JSON document. Progress goes to
 stderr, one object per line, so you can follow a long render and still read
 the result at the end.
 
-geneva checks a timeline before it decodes anything. Every problem comes
+geneva checks a document before it decodes anything. Every problem comes
 with a code, a pointer to the spot in your JSON, the bad value and a fix.
 Misspell a field and you get an error, not silence.
 
@@ -197,8 +219,8 @@ error[E301]: clip 0 of layer 0 lasts 6s but its source range is only 2s
 ```
 
 Renders are deterministic. Same document, same assets, same version, same
-frames. You can cache by input hash. [docs/agents.md](docs/agents.md) covers
-the rest for scripts and agents.
+frames, so you can cache by input hash. [docs/agents.md](docs/agents.md)
+has the rest for scripts and agents.
 
 ## Commands
 
