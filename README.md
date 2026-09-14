@@ -214,19 +214,21 @@ and the second run is the one below.
 | Resize to 720p | 13.0s | 13.0s |
 | 3 sizes + thumbnail + sprites + speech audio | 42.9s | 53.1s as six commands, 43.3s as one |
 
-On cuts, geneva gets to the answer an expert would, without being told, and
-it beats the command most people actually write. The frame-accurate trim is
-about eight times faster because it only re-encodes 15 frames out of 300.
+The first row is a copy rather than an encode. `ffmpeg -c copy` does the
+same thing at the same speed. The difference is that you have to know to
+reach for the flag, and geneva works it out from the job.
+
+The second row copies 285 of the 300 frames and re-encodes the 15 between
+the cut and the next keyframe. That's where the difference comes from.
 
 A single resize is a tie. Both scale in YUV and hand the frames to the same
 encoder.
 
-The last row is worth explaining. Six ffmpeg commands read the file six
-times. geneva reads it once and runs the encoders in parallel, which is
-where the 20% comes from. One clever ffmpeg command with `split` filters
-also reads once, and ends up level with geneva. What you get from geneva
-there is a document instead of a filter graph, plus the WebVTT file and a
-report listing everything it wrote.
+The last row: six ffmpeg commands read the file six times, geneva reads it
+once, and that's the 20%. An ffmpeg command with `split` filters also reads
+once and lands in the same place. What geneva gives you there is a document
+rather than a filter graph, plus the WebVTT file and a report of what it
+wrote.
 
 `check.sh` ships in the release archives. Point it at your own file and it
 prints this table for your machine.
