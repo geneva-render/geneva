@@ -60,8 +60,7 @@
                 "text": "Dragon CRS-17",
                 "font": "700 32px Liberation Sans",
                 "color": "#ffffff",
-                "align": "left",
-                "max_width": 480
+                "align": "left"
               },
               "transform": {
                 "anchor": {
@@ -81,11 +80,10 @@
             {
               "source": {
                 "kind": "text",
-                "text": "Berthing at the ISS  \u00b7  NASA",
+                "text": "Berthing at the ISS  ·  NASA",
                 "font": "400 20px Liberation Sans",
                 "color": "#9fb0bf",
-                "align": "left",
-                "max_width": 480
+                "align": "left"
               },
               "transform": {
                 "anchor": {

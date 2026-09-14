@@ -31,24 +31,55 @@ MIT licensed. Linux and macOS. No services, no network access.
 ## A worked example
 
 Here's a lower third over ten seconds of footage from the space station.
-You write a document, you run one command, and geneva tells you what it
-did.
+This is the whole document, line breaks tightened up so it fits on a screen:
 
 ```json
-"layers": [
-  { "id": "footage", "clips": [ { "source": { "kind": "video", "asset": "iss" } } ] },
+{
+  "geneva": "0.3",
+  "output": { "width": 1280, "height": 720, "fps": 30 },
 
-  { "id": "lower-third", "clips": [ {
-      "source": { "kind": "composition", "composition": "card" },
-      "start": "2s", "duration": "4s",
-      "transform": {
-        "anchor": { "x": "0%", "y": "100%" },
-        "position": { "keyframes": [
-          { "t": 0,      "v": { "x": -600, "y": 648 }, "ease": "ease-out" },
-          { "t": "0.5s", "v": { "x": 56,   "y": 648 } } ] } },
-      "opacity": { "keyframes": [ { "t": 0, "v": 0 }, { "t": "0.3s", "v": 1 },
-                                  { "t": "3.7s", "v": 1 }, { "t": "4s", "v": 0 } ] } } ] }
-]
+  "assets": { "iss": { "src": "iss.mp4" } },
+
+  "compositions": {
+    "card": {
+      "width": 560, "height": 96,
+      "layers": [
+        { "clips": [ { "source": { "kind": "shape", "shape": "rect", "width": "100%",
+            "height": "100%", "fill": "#0b1016d9", "radius": 8 } } ] },
+
+        { "clips": [ { "source": { "kind": "shape", "shape": "rect", "width": 5,
+            "height": "100%", "fill": "#4ade80" },
+            "transform": { "anchor": { "x": "0%", "y": "0%" },
+                           "position": { "x": 0, "y": 0 } } } ] },
+
+        { "clips": [ { "source": { "kind": "text", "text": "Dragon CRS-17",
+            "font": "700 32px Liberation Sans", "color": "#ffffff", "align": "left" },
+            "transform": { "anchor": { "x": "0%", "y": "50%" },
+                           "position": { "x": 30, "y": 36 } } } ] },
+
+        { "clips": [ { "source": { "kind": "text", "text": "Berthing at the ISS  ·  NASA",
+            "font": "400 20px Liberation Sans", "color": "#9fb0bf", "align": "left" },
+            "transform": { "anchor": { "x": "0%", "y": "50%" },
+                           "position": { "x": 30, "y": 68 } } } ] }
+      ]
+    }
+  },
+
+  "layers": [
+    { "id": "footage", "clips": [ { "source": { "kind": "video", "asset": "iss" } } ] },
+
+    { "id": "lower-third", "clips": [ {
+        "source": { "kind": "composition", "composition": "card" },
+        "start": "2s", "duration": "4s",
+        "transform": {
+          "anchor": { "x": "0%", "y": "100%" },
+          "position": { "keyframes": [
+            { "t": 0,      "v": { "x": -600, "y": 648 }, "ease": "ease-out" },
+            { "t": "0.5s", "v": { "x": 56,   "y": 648 } } ] } },
+        "opacity": { "keyframes": [ { "t": 0, "v": 0 }, { "t": "0.3s", "v": 1 },
+                                    { "t": "3.7s", "v": 1 }, { "t": "4s", "v": 0 } ] } } ] }
+  ]
+}
 ```
 
 ```sh
@@ -63,22 +94,28 @@ note[N600]: H.264 runs encoded with the system's x264 (build 164) at CRF 18
 wrote dragon.mp4 (300 frames, 10s of video, 3.5s elapsed)
 ```
 
-Three things are going on there.
+Reading it from the top: `assets` names the files you're working with, so
+`"asset": "iss"` further down means `iss.mp4`. `compositions` holds anything
+you want to build once and reuse — here a 560x96 card with a plate, a green
+bar and two lines of text. Then `layers` is the timeline itself: the footage
+at the bottom, the card on top of it from two seconds in.
 
-The card is its own little composition: a plate, a green bar, a name and a
-subtitle, sized 560 by 96. You build it once and place it in the timeline
-like any other clip, so a second one costs you four lines.
+Values are spelled the way CSS spells them. `"700 32px Liberation Sans"` is
+the `font` shorthand, colours take the `#rrggbbaa` you already know, and
+sizes take `%` or pixels. There are no selectors and no box model — you
+place things by giving an anchor and a position — but you don't have to
+learn a new way to write a colour or a font.
 
-It slides in because the `position` has two keyframes half a second apart,
+The card slides in because `position` has two keyframes half a second apart,
 one off the left edge and one in place, with `ease-out` between them. Same
 idea for the fade: four keyframes on `opacity`. Any number you can set, you
 can animate.
 
-And the last line is the part worth looking at twice. The card is only on
-screen for four of the ten seconds. geneva worked out that the rest of the
-video is untouched, so it copied 165 frames straight through as they were
-and only re-encoded the 135 around the card. Ten seconds took three. On a
-ninety-minute film with a watermark on the title card, that's the
+The last line of the report is the part worth looking at twice. The card is
+only on screen for four of the ten seconds. geneva worked out that the rest
+of the video is untouched, so it copied 165 frames straight through as they
+were and only re-encoded the 135 around the card. Ten seconds took three. On
+a ninety-minute film with a watermark on the title card, that's the
 difference between a coffee and an afternoon.
 
 ### Captions
