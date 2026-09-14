@@ -197,8 +197,13 @@ pub fn plan_stream_copy_explained(
             .unwrap_or_default();
         let source_tags = VideoReader::open(&clip.path, overrides)?.tags();
         if source_tags != comp.color {
+            let hint = if source_tags.is_hdr() == comp.color.is_hdr() {
+                "; set output.color to the source's tags to copy it"
+            } else {
+                ""
+            };
             return refuse(format!(
-                "{name} is {}, and the output is {}",
+                "{name} is {}, and the output is {}{hint}",
                 describe_tags(source_tags),
                 describe_tags(comp.color)
             ));

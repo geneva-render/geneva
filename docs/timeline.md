@@ -1,10 +1,10 @@
-# Timeline format 0.2
+# Timeline format 0.3
 
 A timeline is a JSON document that describes a video composition: the output
 frame, a table of assets, visual layers made of clips, and audio tracks.
 This page is the reference for humans and for programs that generate
 timelines. The machine-readable schema is in
-[`schema/geneva-timeline-0.2.schema.json`](../schema/geneva-timeline-0.2.schema.json)
+[`schema/geneva-timeline-0.3.schema.json`](../schema/geneva-timeline-0.3.schema.json)
 and is printed by `geneva schema`.
 
 Unknown fields are errors everywhere. That is deliberate: a misspelled
@@ -15,7 +15,7 @@ silently ignored.
 
 ```json
 {
-  "geneva": "0.2",
+  "geneva": "0.3",
   "output": { "width": 1280, "height": 720, "fps": 30, "duration": "3s" },
   "layers": [
     { "clips": [ { "source": { "kind": "solid", "color": "#1d2230" } } ] }
@@ -91,8 +91,9 @@ object with a `keyframes` array:
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `geneva` | yes | Format version, `"0.2"`. A `"0.1"` document is read as it is: 0.2 only adds optional clip fields (`crop`, `effects`, `mask`, `speed`). |
+| `geneva` | yes | Format version, `"0.3"`. A `"0.1"` or `"0.2"` document is read as it is: 0.2 added optional clip fields (`crop`, `effects`, `mask`, `speed`), 0.3 adds the optional `outputs` map. |
 | `output` | yes | Frame size, rate, duration, background, color, audio and encoding settings. |
+| `outputs` | no | Map of name to [output entry](#outputs): the files one render writes from the composition, when there is more than one. |
 | `assets` | no | Map of asset id to asset. |
 | `compositions` | no | Map of name to reusable composition. |
 | `layers` | no | Visual layers, composited bottom to top. |
@@ -125,6 +126,48 @@ object with a `keyframes` array:
 | `encode.fast_start` | no | `true` | Whether MP4, MOV and M4A files carry their index at the front so playback can start before the download ends. |
 | `encode.audio.codec` | no | `aac` (`opus` for webm and ogg, `flac` for flac, `pcm` for wav, `mp3` for mp3, `pcm24` for mxf) | `aac`, `opus`, `mp3`, `vorbis`, `flac`, `alac`, `ac3`, `pcm` (16-bit), `pcm24`. |
 | `encode.audio.bitrate_kbps` | no | 160 | Audio bitrate. |
+
+### `outputs`
+
+A composition is usually rendered to the one file `geneva render -o FILE`
+names. The `outputs` map instead lists every file one render should
+write from it, each made from the same composited frames in a single
+pass: renditions at several sizes, a poster, a sprite sheet for seek
+previews, the audio alone. `geneva render -o DIR` then writes them all
+into `DIR`, and the report lists each file with its size and how it was
+made. The frames are composited once and scaled per rendition; the
+source is decoded once, whatever the number of entries.
+
+```json
+"outputs": {
+  "1080p":   { "kind": "video" },
+  "720p":    { "kind": "video", "height": 720 },
+  "poster":  { "kind": "poster" },
+  "sprites": { "kind": "sprites", "every": "5s", "columns": 10 },
+  "speech":  { "kind": "audio", "audio": { "sample_rate": 16000, "channels": 1 } }
+}
+```
+
+| Field | Kinds | Default | Description |
+| --- | --- | --- | --- |
+| `kind` | all | required | `video`, `poster` (one still), `sprites` (a sheet of thumbnails and a WebVTT file mapping times to tiles) or `audio` (the sound alone). |
+| `path` | all | the entry's name with the kind's usual extension: `.mp4`, `.jpg`, `.jpg`, `.wav` | File name inside the output directory: a plain name, no directories (E431), with an extension the kind can write: `mp4`, `mov`, `mkv`, `webm`, `mxf` for video; `jpg`, `jpeg`, `png` for pictures; `wav`, `m4a`, `mp3`, `flac`, `ogg` for audio. Two entries cannot write the same file (E432). A sprite sheet also writes `<name>.vtt` beside it. |
+| `width`, `height` | video, poster, sprites | the canvas size; sprites: tiles 90 pixels high | Picture size. Giving one of the two keeps the canvas's aspect (video sizes rounded to even, W401 when both are given odd). For sprites, the size of one tile; `height` only, the width follows. |
+| `encode` | video, audio | `output.encode` for video; the container's usual codecs for audio | Encoder settings for this file, the same block as `output.encode`. |
+| `audio` | video, audio | `output.audio` | Sample rate and channel count for this file. |
+| `at` | poster | the first clear frame | Time of the still: a [time](#times) inside the composition (E433). Without it, the poster is the first frame after the opening (5% in, at least 20 frames) that is not dark and follows some motion, so a fade-in or a black leader is skipped; failing that, the frame a tenth of the way in. |
+| `every` | sprites | about a hundred tiles over the length, at least a second apart | Time between tiles (E433 when zero or negative). |
+| `columns` | sprites | 10 | Tiles per row (E433 when zero). |
+
+A field that does not belong to the entry's kind is an error (E430).
+
+A `video` entry at the canvas size with no encode settings of its own
+is a candidate for [stream copy](architecture.md#stream-copy) like a
+single-file render, and is copied when the composition allows it; the
+other renditions are encoded from the composited frames, each in its own
+thread. With `--crf`, `--preset` or `--exact` on the command line every
+video entry is encoded. When no entry is a video, only the frames the
+pictures need are composited.
 
 ### `assets`
 
@@ -432,7 +475,8 @@ information as one JSON document.
 `geneva render` copies the source streams instead of rendering when the
 composition is a plain cut or join of video at natural size and no quality
 setting asks for a re-encode (see the architecture page); `--exact` forces
-frame-accurate rendering.
+frame-accurate rendering. With an `outputs` map, `-o` names a directory
+and every entry is written from one pass over the composition.
 
 The CPU reference renderer draws every source kind: `solid`, `shape`,
 `image`, `video`, `text` and `composition`, with every transform, opacity,

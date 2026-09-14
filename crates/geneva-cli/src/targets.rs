@@ -245,6 +245,18 @@ pub const TARGETS: &[Target] = &[
 ];
 
 /// The target of that name, if any.
+/// A target's bitrate ceiling in kb/s for a picture `short` lines across
+/// its short side at `fps`: the table's entry for that size, raised by
+/// half for high frame rates.
+pub fn cap_kbps(t: &Target, short: u32, fps: f64) -> Option<u32> {
+    let hfr = fps > 30.5;
+    t.caps
+        .iter()
+        .find(|(lines, _)| *lines >= short)
+        .or(t.caps.last())
+        .map(|(_, kbps)| if hfr { kbps * 3 / 2 } else { *kbps })
+}
+
 pub fn find(name: &str) -> Option<&'static Target> {
     TARGETS.iter().find(|t| t.name.eq_ignore_ascii_case(name))
 }
@@ -447,13 +459,7 @@ pub fn apply(tl: &mut Timeline, facts: &Facts, opts: &Options<'_>) -> Vec<Diagno
 
     // Bitrate ceiling: the target's for this size, raised for high frame
     // rates, and lowered to fit a size budget when there is one.
-    let hfr = fps > 30.5;
-    let mut cap = t
-        .caps
-        .iter()
-        .find(|(lines, _)| *lines >= short)
-        .or(t.caps.last())
-        .map(|(_, kbps)| if hfr { kbps * 3 / 2 } else { *kbps });
+    let mut cap = cap_kbps(t, short, fps);
     if let Some(c) = cap {
         why.push(format!("capped at {c} kb/s"));
     }

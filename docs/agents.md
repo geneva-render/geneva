@@ -31,7 +31,10 @@ Every command that touches a timeline returns:
 ```
 
 `render` and the verbs add `output`, `mode`, `frames`, `duration` and
-`seconds`. `mode` is `"copy"` (source streams copied, no decoding),
+`seconds`. A render of a document with an `outputs` map, and the
+`poster`, `sprites` and `publish` verbs, add `directory` and `outputs`
+instead of `output` and `mode`: one entry per file with `name`, `kind`,
+`path`, `bytes` and its own `mode`. `mode` is `"copy"` (source streams copied, no decoding),
 `"smart"` (packets copied where nothing changes, the frames around cuts
 and under overlays encoded into the same stream),
 `"direct"` (decoded frames handed straight to the encoder, scaled or
@@ -105,6 +108,15 @@ Version 0.3.0 kept the format at 0.2 and added optional encode fields:
 tone-mapped to SDR unless the output is HDR, and the verbs take
 `--keep-hdr`. Time zero of a file is its first video frame, so an audio
 track that starts later keeps its offset.
+
+Format 0.3 adds the optional top-level `outputs` map: the files one
+render writes from the composition, each `{ "kind": "video" | "poster" |
+"sprites" | "audio", ... }` with a size, a time (`at` for a poster),
+an interval and column count (sprites) or encode and audio settings of
+its own. `geneva render -o DIR` writes them all in one pass. The
+`poster`, `sprites` and `publish` verbs build such documents;
+`publish` is the one to reach for when a page needs a video, a poster
+and seek previews, and it copies a source that already fits the web.
 
 ## Things that trip programs up
 

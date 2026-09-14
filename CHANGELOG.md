@@ -5,6 +5,47 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## 0.4.0 — 2026-09-14
+
+Timeline format 0.3. Documents saying `"geneva": "0.1"` or `"0.2"` are
+read unchanged.
+
+### Added
+
+- **Multi-output documents.** A top-level `outputs` map lists every file
+  one render writes from the composition: `video` renditions at several
+  sizes, a `poster` still, a `sprites` sheet with its WebVTT map for seek
+  previews, and the `audio` alone, each with its own size, encode and
+  audio settings. `geneva render -o DIR` writes them all in one pass:
+  the sources are decoded and the frames composited once, scaled per
+  rendition and encoded in parallel threads; a canvas-size rendition
+  with no encode asks of its own is stream-copied like a single-file
+  render. When no entry is a video, only the frames the pictures need
+  are composited. The report lists each file with its size and mode.
+  New codes E430–E433 cover fields that do not belong to a kind, bad
+  file names, two entries writing one file, and out-of-range values.
+- `geneva poster`: one still, at a time or the first clear frame after
+  the opening (not dark, past the first motion).
+- `geneva sprites`: a thumbnail sheet and the `.vtt` file players read
+  for seek previews.
+- `geneva publish`: everything a web page needs for a video from one
+  pass over the source: `video.mp4` fitted to the `web` target (or
+  `--for`), `poster.jpg`, `sprites.jpg` and `sprites.vtt`, and with
+  `--speech` the sound as 16 kHz mono `speech.wav`. A source that
+  already fits the target is copied, not re-encoded, and the report
+  says so.
+- `geneva audio --extract --speech`: 16 kHz mono, what speech
+  recognizers want.
+- Pictures of the composition keep exact sizes; only video sizes are
+  rounded to even.
+
+### Changes
+
+- The copy planner's refusal for a colour-tag mismatch between two SDR
+  encodings now says how to get the copy (set `output.color` to the
+  source's tags); the verbs already do.
+- The JSON Schema moves to `schema/geneva-timeline-0.3.schema.json`.
+
 ## 0.3.5 — 2026-09-13
 
 ### Fixes

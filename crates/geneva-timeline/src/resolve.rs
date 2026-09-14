@@ -18,8 +18,8 @@ use crate::length::{Length, Point, Scale};
 use crate::ratio::Ratio;
 use crate::schema::{
     ACCEPTED_VERSIONS, Asset, AssetKind, AudioOutput, AudioTrack, BlendMode, CompositionDef, Crop,
-    Effect, Encode, FORMAT_VERSION, Fit, Layer, Mask, ShapeKind, Source, TextSource, Timeline,
-    Transform, TransitionKind, VideoCodec,
+    Effect, Encode, FORMAT_VERSION, Fit, Layer, Mask, OutputKind, ShapeKind, Source, TextSource,
+    Timeline, Transform, TransitionKind, VideoCodec,
 };
 use crate::time::Time;
 
@@ -50,6 +50,34 @@ pub struct Composition {
     pub audio: Vec<ResolvedAudioTrack>,
     /// Subtitle tracks to write as text streams.
     pub subtitles: Vec<ResolvedSubtitleTrack>,
+    /// The files of a multi-output render, in name order; empty for a
+    /// single-output document.
+    pub outputs: Vec<ResolvedOutput>,
+}
+
+/// One entry of `outputs`, with its size and times settled.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedOutput {
+    /// The entry's key.
+    pub name: String,
+    /// What it writes.
+    pub kind: OutputKind,
+    /// File name relative to the output directory.
+    pub path: String,
+    /// Picture width: the rendition's, the poster's, or one sprite tile's.
+    pub width: u32,
+    /// Picture height, likewise.
+    pub height: u32,
+    /// Encoder settings, as written on the entry or inherited.
+    pub encode: Option<Encode>,
+    /// Audio format, as written on the entry or inherited.
+    pub audio: Option<AudioOutput>,
+    /// Poster time in seconds; `None` picks a frame.
+    pub at: Option<Ratio>,
+    /// Sprite interval in seconds.
+    pub every: Option<Ratio>,
+    /// Sprite tiles per row.
+    pub columns: Option<u32>,
 }
 
 impl Composition {
@@ -702,6 +730,7 @@ impl Resolver<'_> {
             }
         }
 
+        let outputs = self.resolve_outputs(duration);
         Composition {
             width: out.width,
             height: out.height,
@@ -715,7 +744,245 @@ impl Resolver<'_> {
             layers,
             audio,
             subtitles,
+            outputs,
         }
+    }
+
+    /// The `outputs` entries, each checked for the fields its kind takes,
+    /// a usable file name, and a size derived from the canvas.
+    fn resolve_outputs(&mut self, duration: Ratio) -> Vec<ResolvedOutput> {
+        let tl = self.tl;
+        let out = &tl.output;
+        let mut resolved = Vec::new();
+        let mut paths: BTreeMap<String, String> = BTreeMap::new();
+        for (name, spec) in &tl.outputs {
+            let path = Path::root().key("outputs").key(name);
+            let kind = spec.kind;
+            // Fields that belong to other kinds.
+            let stray: &[(&str, bool)] = &[
+                ("at", spec.at.is_some() && kind != OutputKind::Poster),
+                ("every", spec.every.is_some() && kind != OutputKind::Sprites),
+                (
+                    "columns",
+                    spec.columns.is_some() && kind != OutputKind::Sprites,
+                ),
+                (
+                    "encode",
+                    spec.encode.is_some() && !matches!(kind, OutputKind::Video | OutputKind::Audio),
+                ),
+                (
+                    "audio",
+                    spec.audio.is_some() && !matches!(kind, OutputKind::Video | OutputKind::Audio),
+                ),
+                (
+                    "width",
+                    spec.width.is_some() && matches!(kind, OutputKind::Audio | OutputKind::Sprites),
+                ),
+                ("height", spec.height.is_some() && kind == OutputKind::Audio),
+            ];
+            for (field, is_stray) in stray {
+                if *is_stray {
+                    self.push(
+                        Diagnostic::error(
+                            "E430",
+                            path.key(field),
+                            format!("\"{field}\" does not apply to a {} output", kind.as_str()),
+                        )
+                        .with_help("remove the field, or change \"kind\""),
+                    );
+                }
+            }
+            // The file name: relative, inside the directory, with an
+            // extension the kind can write.
+            let default_ext = match kind {
+                OutputKind::Video => "mp4",
+                OutputKind::Poster | OutputKind::Sprites => "jpg",
+                OutputKind::Audio => "wav",
+            };
+            let file = spec
+                .path
+                .clone()
+                .unwrap_or_else(|| format!("{name}.{default_ext}"));
+            let ext = std::path::Path::new(&file)
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase)
+                .unwrap_or_default();
+            let allowed: &[&str] = match kind {
+                OutputKind::Video => &["mp4", "mov", "mkv", "webm", "mxf"],
+                OutputKind::Poster | OutputKind::Sprites => &["jpg", "jpeg", "png"],
+                OutputKind::Audio => &["wav", "m4a", "mp3", "flac", "ogg"],
+            };
+            if file.starts_with('/')
+                || file.contains("..")
+                || file.contains('\\')
+                || file.contains('/')
+                || file.is_empty()
+            {
+                self.push(
+                    Diagnostic::error(
+                        "E431",
+                        path.key("path"),
+                        "the path must be a plain file name inside the output directory",
+                    )
+                    .with_value(file.clone()),
+                );
+            } else if !allowed.contains(&ext.as_str()) {
+                self.push(
+                    Diagnostic::error(
+                        "E431",
+                        path.key("path"),
+                        format!(
+                            "a {} output cannot be written as .{ext}; use {}",
+                            kind.as_str(),
+                            allowed
+                                .iter()
+                                .map(|e| format!(".{e}"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    )
+                    .with_value(file.clone()),
+                );
+            }
+            if let Some(other) = paths.insert(file.clone(), name.clone()) {
+                self.push(
+                    Diagnostic::error(
+                        "E432",
+                        path.key("path"),
+                        format!("outputs \"{other}\" and \"{name}\" would both write {file}"),
+                    )
+                    .with_value(file.clone()),
+                );
+            }
+            // The picture size. A derived video dimension is rounded to
+            // even, as codecs want; pictures keep exact sizes.
+            let even = |v: u32| {
+                if kind == OutputKind::Video && v % 2 == 1 {
+                    v + 1
+                } else {
+                    v
+                }
+                .max(1)
+            };
+            let (width, height) = match kind {
+                OutputKind::Audio => (0, 0),
+                OutputKind::Sprites => {
+                    let h = spec.height.unwrap_or(90).max(1);
+                    let w = (f64::from(h) * f64::from(out.width) / f64::from(out.height.max(1)))
+                        .round() as u32;
+                    (w.max(1), h)
+                }
+                OutputKind::Video | OutputKind::Poster => match (spec.width, spec.height) {
+                    (None, None) => (out.width, out.height),
+                    (Some(w), Some(h)) => {
+                        for (field, v) in [("width", w), ("height", h)] {
+                            if v == 0 {
+                                self.push(
+                                    Diagnostic::error(
+                                        "E402",
+                                        path.key(field),
+                                        format!("{field} must be greater than 0"),
+                                    )
+                                    .with_value(v),
+                                );
+                            }
+                        }
+                        (w, h)
+                    }
+                    (Some(w), None) => {
+                        let h = (f64::from(w) * f64::from(out.height) / f64::from(out.width.max(1)))
+                            .round() as u32;
+                        (w, even(h.max(1)))
+                    }
+                    (None, Some(h)) => {
+                        let w = (f64::from(h) * f64::from(out.width) / f64::from(out.height.max(1)))
+                            .round() as u32;
+                        (even(w.max(1)), h)
+                    }
+                },
+            };
+            if kind == OutputKind::Video {
+                for (field, v) in [("width", width), ("height", height)] {
+                    if v % 2 == 1 {
+                        self.push(
+                            Diagnostic::warning(
+                                "W401",
+                                path.key(field),
+                                format!("{field} {v} is odd"),
+                            )
+                            .with_value(v)
+                            .with_help("most video codecs need even dimensions"),
+                        );
+                    }
+                }
+            }
+            // Times.
+            let at = spec.at.map(|t| {
+                let secs = t.resolve(self.fps);
+                if secs < Ratio::ZERO || secs >= duration {
+                    self.push(
+                        Diagnostic::error(
+                            "E433",
+                            path.key("at"),
+                            format!("the poster time {secs}s is outside the composition (0 to {duration}s)"),
+                        )
+                        .with_value(json!(t.to_string())),
+                    );
+                }
+                secs
+            });
+            let every = spec.every.map(|t| {
+                let secs = t.resolve(self.fps);
+                if secs <= Ratio::ZERO {
+                    self.push(
+                        Diagnostic::error(
+                            "E433",
+                            path.key("every"),
+                            "the sprite interval must be greater than 0",
+                        )
+                        .with_value(json!(t.to_string())),
+                    );
+                }
+                secs
+            });
+            if let Some(c) = spec.columns {
+                if c == 0 {
+                    self.push(
+                        Diagnostic::error(
+                            "E433",
+                            path.key("columns"),
+                            "columns must be at least 1",
+                        )
+                        .with_value(c),
+                    );
+                }
+            }
+            let encode = match kind {
+                OutputKind::Video => spec.encode.clone().or_else(|| out.encode.clone()),
+                OutputKind::Audio => spec.encode.clone(),
+                _ => None,
+            };
+            let audio = match kind {
+                OutputKind::Video | OutputKind::Audio => {
+                    spec.audio.clone().or_else(|| out.audio.clone())
+                }
+                _ => None,
+            };
+            resolved.push(ResolvedOutput {
+                name: name.clone(),
+                kind,
+                path: file,
+                width,
+                height,
+                encode,
+                audio,
+                at,
+                every,
+                columns: spec.columns,
+            });
+        }
+        resolved
     }
 
     fn resolve_assets(&mut self) -> BTreeMap<String, ResolvedAsset> {

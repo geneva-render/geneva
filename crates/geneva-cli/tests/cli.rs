@@ -117,7 +117,7 @@ fn schema_prints_json_schema() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"$schema\""))
-        .stdout(predicate::str::contains("geneva-timeline-0.2"));
+        .stdout(predicate::str::contains("geneva-timeline-0.3"));
 }
 
 #[test]
@@ -1187,4 +1187,143 @@ fn a_rotated_clip_is_shown_probed_copied_and_rendered_upright() {
     assert_eq!(info["video"]["rotation"], 0, "{info:#}");
     assert_eq!(info["video"]["width"], 180, "{info:#}");
     assert_eq!(info["video"]["height"], 320, "{info:#}");
+}
+
+#[test]
+#[cfg(feature = "media")]
+fn render_writes_every_output_of_a_document_in_one_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    let doc = dir.path().join("many.json");
+    std::fs::write(
+        &doc,
+        r##"{
+          "geneva": "0.3",
+          "output": { "width": 160, "height": 90, "fps": 24,
+            "color": { "primaries": "bt601-625", "transfer": "bt709", "matrix": "bt601", "range": "limited" } },
+          "assets": { "clip": { "src": "sync/cfr.mp4" } },
+          "layers": [ { "clips": [ { "source": { "kind": "video", "asset": "clip" } } ] } ],
+          "outputs": {
+            "full": { "kind": "video" },
+            "small": { "kind": "video", "width": 80, "encode": { "video": { "preset": "ultrafast" } } },
+            "poster": { "kind": "poster", "at": "1s", "path": "cover.png" },
+            "seek": { "kind": "sprites", "every": "1s", "columns": 2 },
+            "sound": { "kind": "audio", "audio": { "sample_rate": 16000, "channels": 1 } }
+          }
+        }"##,
+    )
+    .unwrap();
+    let out = dir.path().join("out");
+    let report = run_json(
+        &["render"],
+        &[
+            doc.as_path(),
+            std::path::Path::new("--assets"),
+            media_dir().as_path(),
+            std::path::Path::new("-o"),
+            out.as_path(),
+        ],
+    );
+    assert_eq!(report["ok"], true);
+    let outputs = report["outputs"].as_array().unwrap();
+    let mode = |name: &str| {
+        let entry = outputs
+            .iter()
+            .find(|o| o["name"] == name)
+            .unwrap_or_else(|| panic!("no output {name}: {report}"));
+        entry["mode"].as_str().unwrap().to_owned()
+    };
+    // The canvas-size rendition with no encode asks is a stream copy;
+    // the smaller one is encoded.
+    assert_eq!(mode("full"), "copy");
+    assert_eq!(mode("small"), "render");
+    for file in [
+        "full.mp4",
+        "small.mp4",
+        "cover.png",
+        "seek.jpg",
+        "seek.vtt",
+        "sound.wav",
+    ] {
+        assert!(out.join(file).is_file(), "{file} missing");
+    }
+    let vtt = std::fs::read_to_string(out.join("seek.vtt")).unwrap();
+    assert!(vtt.starts_with("WEBVTT"));
+    assert!(
+        vtt.contains("seek.jpg#xywh=80,0,160,90") || vtt.contains("seek.jpg#xywh=160,0,160,90"),
+        "{vtt}"
+    );
+    let small = run_json(&["probe"], &[out.join("small.mp4").as_path()]);
+    assert_eq!(small["video"]["width"], 80);
+    assert_eq!(small["video"]["frames"], 72);
+    let sound = run_json(&["probe"], &[out.join("sound.wav").as_path()]);
+    assert_eq!(sound["audio"]["sample_rate"], 16000);
+    assert_eq!(sound["audio"]["channels"], 1);
+    let cover = image::open(out.join("cover.png")).unwrap();
+    assert_eq!((cover.width(), cover.height()), (160, 90));
+}
+
+#[test]
+#[cfg(feature = "media")]
+fn poster_sprites_and_publish_write_their_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let clip = media_dir().join("sync/cfr.mp4");
+    let poster = dir.path().join("still.jpg");
+    let report = run_json(
+        &["poster"],
+        &[
+            clip.as_path(),
+            std::path::Path::new("-o"),
+            poster.as_path(),
+            std::path::Path::new("--at"),
+            std::path::Path::new("0.5s"),
+        ],
+    );
+    assert_eq!(report["frames"], 1, "{report}");
+    assert!(poster.is_file());
+
+    let sheet = dir.path().join("seek.png");
+    let report = run_json(
+        &[
+            "sprites",
+            "--every",
+            "1s",
+            "--columns",
+            "3",
+            "--height",
+            "45",
+        ],
+        &[clip.as_path(), std::path::Path::new("-o"), sheet.as_path()],
+    );
+    assert_eq!(report["frames"], 3, "{report}");
+    let img = image::open(&sheet).unwrap();
+    assert_eq!((img.width(), img.height()), (240, 45));
+    let vtt = std::fs::read_to_string(dir.path().join("seek.vtt")).unwrap();
+    assert!(vtt.contains("seek.png#xywh=160,0,80,45"), "{vtt}");
+
+    // A small H.264 MP4 already fits the web target, so publish copies it.
+    let site = dir.path().join("site");
+    let report = run_json(
+        &["publish", "--speech"],
+        &[clip.as_path(), std::path::Path::new("-o"), site.as_path()],
+    );
+    let outputs = report["outputs"].as_array().unwrap();
+    let video = outputs.iter().find(|o| o["name"] == "video").unwrap();
+    assert_eq!(video["mode"], "copy", "{report}");
+    for file in [
+        "video.mp4",
+        "poster.jpg",
+        "sprites.jpg",
+        "sprites.vtt",
+        "speech.wav",
+    ] {
+        assert!(site.join(file).is_file(), "{file} missing");
+    }
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["message"].as_str().unwrap().contains("already fits web")),
+        "{report}"
+    );
 }

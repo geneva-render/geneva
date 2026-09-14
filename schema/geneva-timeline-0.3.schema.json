@@ -4,15 +4,23 @@
   "properties": {
     "geneva": {
       "type": "string",
-      "description": "Format version: \"0.2\", or \"0.1\" for a document written before\ncrop, effects, mask and speed existed (read as it is).",
+      "description": "Format version: \"0.3\", or \"0.1\" and \"0.2\" for a document written before\ncrop, effects, mask and speed existed (read as it is).",
       "enum": [
         "0.1",
-        "0.2"
+        "0.2",
+        "0.3"
       ]
     },
     "output": {
       "$ref": "#/$defs/Output",
       "description": "Frame size, rate, duration and encoding settings of the output."
+    },
+    "outputs": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/OutputSpec"
+      },
+      "description": "Further files rendered from the same composition in one pass:\nvideo renditions, a poster, a sprite sheet, audio. Keys name them;\neach is written under the directory `render -o` names. With\noutputs present, `output` describes the canvas the outputs are\nmade from."
     },
     "assets": {
       "type": "object",
@@ -55,7 +63,7 @@
     "output"
   ],
   "title": "Geneva timeline",
-  "description": "Geneva timeline format 0.2: a declarative video composition.",
+  "description": "Geneva timeline format 0.3: a declarative video composition.",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
     "Output": {
@@ -832,6 +840,123 @@
         }
       ],
       "description": "Audio codec."
+    },
+    "OutputSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/OutputKind",
+          "description": "What to write."
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "File name, relative to the output directory. Defaults to the\noutput's name with the kind's usual extension (`.mp4`, `.jpg`,\n`.wav`); a sprite sheet writes a `.vtt` map next to it."
+        },
+        "width": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Picture width. For a video rendition or a poster, the canvas is\nscaled to it; giving one of width and height keeps the aspect."
+        },
+        "height": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Picture height. For a sprite sheet, the height of one tile\n(default 90)."
+        },
+        "encode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Encode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Encoder settings for a video or audio output; a video rendition\nfalls back to `output.encode`."
+        },
+        "audio": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AudioOutput"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Audio format for a video or audio output; falls back to\n`output.audio`."
+        },
+        "at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Poster: the time of the frame to take. Without it the frame is\nchosen: the first clear, non-black frame after the opening."
+        },
+        "every": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Sprite sheet: the interval between tiles. Without it the sheet\nholds about a hundred tiles, at least a second apart."
+        },
+        "columns": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Sprite sheet: tiles per row (default 10)."
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "description": "One file of a multi-output render, made from the composition."
+    },
+    "OutputKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "video",
+          "description": "A video file: the composition, scaled to the entry's size."
+        },
+        {
+          "type": "string",
+          "const": "poster",
+          "description": "One frame as an image."
+        },
+        {
+          "type": "string",
+          "const": "sprites",
+          "description": "A tiled sheet of small frames with a WebVTT map, for scrubbing."
+        },
+        {
+          "type": "string",
+          "const": "audio",
+          "description": "An audio file of the mix."
+        }
+      ],
+      "description": "What a multi-output entry writes."
     },
     "Asset": {
       "type": "object",
@@ -2526,5 +2651,5 @@
       "description": "A subtitle track: one subtitle file written to the output as a text\nstream, for players to show or hide."
     }
   },
-  "$id": "https://geneva-render.github.io/schema/geneva-timeline-0.2.schema.json"
+  "$id": "https://geneva-render.github.io/schema/geneva-timeline-0.3.schema.json"
 }

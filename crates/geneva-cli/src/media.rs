@@ -54,6 +54,21 @@ pub struct RenderStats {
     pub seconds: f64,
 }
 
+/// One file written by a multi-output render.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OutputStats {
+    /// The entry's name in `outputs`.
+    pub name: String,
+    /// The kind, as its JSON spelling.
+    pub kind: &'static str,
+    /// Where it was written.
+    pub path: std::path::PathBuf,
+    /// Size on disk.
+    pub bytes: u64,
+    /// How the file was made: "copy" or "render".
+    pub mode: &'static str,
+}
+
 /// Facts learned by opening the timeline's media assets.
 #[derive(Default)]
 pub struct ProbedAssets {
@@ -124,10 +139,11 @@ pub fn probe_assets(text: &str, root: &Path) -> ProbedAssets {
     out
 }
 
-pub use imp::{describe, probe, read_subtitles, render, renderer};
+pub use imp::{describe, probe, read_subtitles, render, render_outputs, renderer};
 
 #[cfg(feature = "media")]
 mod imp {
+    use std::fmt::Write as _;
     use std::path::Path;
     use std::time::Instant;
 
@@ -139,6 +155,724 @@ mod imp {
     use geneva_timeline::{Composition, Ratio};
 
     use super::{RenderMode, RenderOverrides, RenderStats};
+
+    /// The subtitle tracks of a composition as streams to write.
+    fn subtitle_settings(
+        comp: &Composition,
+        root: &Path,
+    ) -> Result<Vec<geneva_media::SubtitleSettings>, RenderError> {
+        let mut subtitles = Vec::new();
+        for track in &comp.subtitles {
+            let Some(asset) = comp.assets.get(&track.asset) else {
+                continue;
+            };
+            let path = root.join(&asset.src);
+            let text = std::fs::read_to_string(&path).map_err(|e| RenderError::Asset {
+                id: track.asset.clone(),
+                reason: format!("{}: {e}", path.display()),
+            })?;
+            let mut cues =
+                geneva_media::subtitles::parse(&text).map_err(|e| RenderError::Asset {
+                    id: track.asset.clone(),
+                    reason: e.to_string(),
+                })?;
+            geneva_media::subtitles::shift(&mut cues, track.offset);
+            subtitles.push(geneva_media::SubtitleSettings {
+                language: track.language.clone(),
+                title: track.title.clone(),
+                cues,
+            });
+        }
+        Ok(subtitles)
+    }
+
+    /// A rough luminance of the frame on a coarse grid, and how much it
+    /// moved since `previous`: what the poster picker looks at.
+    fn frame_gist(frame: &geneva_render::Frame, previous: Option<&[f32]>) -> (Vec<f32>, f32, f32) {
+        let (w, h) = (frame.width() as usize, frame.height() as usize);
+        let step = (w.max(h) / 64).max(1);
+        let px = frame.pixels();
+        let mut grid = Vec::with_capacity((w / step + 1) * (h / step + 1));
+        let mut y = 0;
+        while y < h {
+            let mut x = 0;
+            while x < w {
+                let p = px[y * w + x];
+                grid.push(0.2126 * p.r + 0.7152 * p.g + 0.0722 * p.b);
+                x += step;
+            }
+            y += step;
+        }
+        let mean = grid.iter().sum::<f32>() / grid.len().max(1) as f32;
+        let motion = previous.filter(|p| p.len() == grid.len()).map_or(1.0, |p| {
+            grid.iter().zip(p).map(|(a, b)| (a - b).abs()).sum::<f32>() / grid.len() as f32
+        });
+        (grid, mean, motion)
+    }
+
+    /// Writes an sRGB picture as JPEG or PNG by the path's extension.
+    fn write_picture(rgba: &[u8], width: u32, height: u32, path: &Path) -> Result<(), RenderError> {
+        let img = image::RgbaImage::from_raw(width, height, rgba.to_vec()).ok_or_else(|| {
+            RenderError::Asset {
+                id: path.display().to_string(),
+                reason: "picture buffer does not match its size".to_owned(),
+            }
+        })?;
+        let io = |e: image::ImageError| RenderError::Asset {
+            id: path.display().to_string(),
+            reason: e.to_string(),
+        };
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default();
+        if ext == "png" {
+            img.save(path).map_err(io)
+        } else {
+            let rgb = image::DynamicImage::ImageRgba8(img).to_rgb8();
+            let file = std::fs::File::create(path).map_err(|e| RenderError::Asset {
+                id: path.display().to_string(),
+                reason: e.to_string(),
+            })?;
+            let mut writer = std::io::BufWriter::new(file);
+            let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 88);
+            enc.encode_image(&rgb).map_err(io)
+        }
+    }
+
+    /// Scales an sRGB picture to `width`×`height`.
+    fn scale_picture(rgba: &[u8], width: u32, height: u32, to: (u32, u32)) -> Vec<u8> {
+        if (width, height) == to {
+            return rgba.to_vec();
+        }
+        let img = image::RgbaImage::from_raw(width, height, rgba.to_vec())
+            .expect("picture buffer matches its size");
+        image::imageops::resize(&img, to.0, to.1, image::imageops::FilterType::Triangle).into_raw()
+    }
+
+    /// A WebVTT timestamp.
+    fn vtt_time(secs: f64) -> String {
+        let ms = (secs * 1000.0).round().max(0.0) as u64;
+        format!(
+            "{:02}:{:02}:{:02}.{:03}",
+            ms / 3_600_000,
+            (ms / 60_000) % 60,
+            (ms / 1000) % 60,
+            ms % 1000
+        )
+    }
+
+    /// Renders every entry of `comp.outputs` into `dir` from one pass
+    /// over the composition: each frame is composited once, scaled to
+    /// each video rendition, sampled for the poster and the sprite
+    /// sheet; the audio is mixed once per file that takes it. A video
+    /// rendition that is a plain copy of a source (the canvas size, no
+    /// change, a container that holds the streams) is copied instead.
+    /// What each frame has to become for one video entry.
+    struct VideoSink {
+        name: String,
+        path: std::path::PathBuf,
+        encoder: Option<Encoder>,
+        tags: geneva_color::ResolvedTags,
+        format: geneva_media::convert::PlaneFormat,
+        scaler: Option<geneva_media::PlaneScaler>,
+        has_audio: bool,
+    }
+
+    /// An audio-only entry.
+    struct AudioSink {
+        name: String,
+        path: std::path::PathBuf,
+        encoder: Option<Encoder>,
+        sample_rate: u32,
+    }
+
+    pub fn render_outputs(
+        comp: &Composition,
+        root: &Path,
+        dir: &Path,
+        overrides: &RenderOverrides,
+        progress: bool,
+    ) -> Result<(Vec<super::OutputStats>, RenderStats), RenderError> {
+        use geneva_timeline::schema::OutputKind;
+        let started = Instant::now();
+        std::fs::create_dir_all(dir).map_err(|e| RenderError::Asset {
+            id: dir.display().to_string(),
+            reason: e.to_string(),
+        })?;
+        let err_at = |path: &Path, e: geneva_media::MediaError| RenderError::Asset {
+            id: path.display().to_string(),
+            reason: e.to_string(),
+        };
+        let mut notes = Vec::new();
+        let mut stats: Vec<super::OutputStats> = Vec::new();
+        let subtitles = subtitle_settings(comp, root)?;
+        let hdr_metadata = hdr_metadata_for(comp, root);
+
+        let mut video_sinks: Vec<VideoSink> = Vec::new();
+        let mut audio_sinks: Vec<AudioSink> = Vec::new();
+        let mut poster: Option<(&geneva_timeline::ResolvedOutput, std::path::PathBuf)> = None;
+        let mut sprites: Option<(&geneva_timeline::ResolvedOutput, std::path::PathBuf)> = None;
+
+        for o in &comp.outputs {
+            let path = dir.join(&o.path);
+            match o.kind {
+                OutputKind::Poster => poster = Some((o, path)),
+                OutputKind::Sprites => sprites = Some((o, path)),
+                OutputKind::Audio => {
+                    let container = geneva_media::container_for(
+                        &path,
+                        o.encode.as_ref().and_then(|e| e.container),
+                    )
+                    .ok_or_else(|| RenderError::Asset {
+                        id: path.display().to_string(),
+                        reason: "unknown audio container".to_owned(),
+                    })?;
+                    let (_, default_audio) = geneva_media::default_codecs(container);
+                    let enc = o.encode.as_ref().and_then(|e| e.audio.as_ref());
+                    let codec = enc.and_then(|a| a.codec).unwrap_or(default_audio);
+                    let sample_rate = geneva_media::audio_sample_rate_for(
+                        codec,
+                        Some(container),
+                        o.audio
+                            .as_ref()
+                            .and_then(|a| a.sample_rate)
+                            .unwrap_or(48000),
+                    );
+                    let settings = EncodeSettings {
+                        video: None,
+                        container: Some(container),
+                        audio: Some(AudioSettings {
+                            codec,
+                            bitrate_kbps: enc.and_then(|a| a.bitrate_kbps).unwrap_or(160),
+                            sample_rate,
+                            channels: o
+                                .audio
+                                .as_ref()
+                                .and_then(|a| a.channels)
+                                .unwrap_or(2)
+                                .clamp(1, 2),
+                        }),
+                        subtitles: Vec::new(),
+                        fast_start: true,
+                        copied_audio: None,
+                    };
+                    let encoder = Encoder::new(&path, settings).map_err(|e| err_at(&path, e))?;
+                    audio_sinks.push(AudioSink {
+                        name: o.name.clone(),
+                        path,
+                        encoder: Some(encoder),
+                        sample_rate,
+                    });
+                }
+                OutputKind::Video => {
+                    let container = geneva_media::container_for(
+                        &path,
+                        o.encode.as_ref().and_then(|e| e.container),
+                    )
+                    .ok_or_else(|| RenderError::Asset {
+                        id: path.display().to_string(),
+                        reason: "unknown container".to_owned(),
+                    })?;
+                    let video = o.encode.as_ref().and_then(|e| e.video.as_ref());
+                    let audio = o.encode.as_ref().and_then(|e| e.audio.as_ref());
+                    let fast_start = o.encode.as_ref().and_then(|e| e.fast_start).unwrap_or(true);
+                    // A copy, when the entry asks for nothing the source
+                    // does not already have.
+                    let wants_encode = overrides.crf.is_some()
+                        || overrides.preset.is_some()
+                        || video.is_some_and(|v| {
+                            v.crf.is_some()
+                                || v.preset.is_some()
+                                || v.tune.is_some()
+                                || v.fixed_keyframes == Some(true)
+                        });
+                    let canvas_size = (o.width, o.height) == (comp.width, comp.height);
+                    if canvas_size && !wants_encode && !overrides.exact {
+                        let plan = geneva_media::plan_stream_copy_explained(
+                            comp,
+                            root,
+                            container,
+                            video.and_then(|v| v.codec),
+                        )
+                        .map_err(|e| err_at(&path, e))?;
+                        match plan {
+                            Ok(mut plan) => {
+                                if overrides.no_audio {
+                                    plan.audio.clear();
+                                }
+                                let report =
+                                    geneva_media::stream_copy(&plan, &path, &subtitles, fast_start)
+                                        .map_err(|e| err_at(&path, e))?;
+                                notes.push(format!("{}: {}", o.name, plan.reason));
+                                notes.extend(
+                                    report
+                                        .notes()
+                                        .into_iter()
+                                        .map(|n| format!("{}: {n}", o.name)),
+                                );
+                                stats.push(super::OutputStats {
+                                    name: o.name.clone(),
+                                    kind: "video",
+                                    bytes: std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+                                    path,
+                                    mode: "copy",
+                                });
+                                continue;
+                            }
+                            Err(geneva_media::CopyRefusal(Some(reason))) => {
+                                notes.push(format!(
+                                    "{}: not copied without re-encoding: {reason}",
+                                    o.name
+                                ));
+                            }
+                            Err(_) => {}
+                        }
+                    }
+                    let (default_video, default_audio) = geneva_media::default_codecs(container);
+                    let audio_codec = audio.and_then(|a| a.codec).unwrap_or(default_audio);
+                    let sample_rate = geneva_media::audio_sample_rate_for(
+                        audio_codec,
+                        Some(container),
+                        o.audio
+                            .as_ref()
+                            .and_then(|a| a.sample_rate)
+                            .unwrap_or(48000),
+                    );
+                    let audio_settings = if overrides.no_audio || container.is_video_only() {
+                        None
+                    } else {
+                        Some(AudioSettings {
+                            codec: audio_codec,
+                            bitrate_kbps: audio.and_then(|a| a.bitrate_kbps).unwrap_or(160),
+                            sample_rate,
+                            channels: o
+                                .audio
+                                .as_ref()
+                                .and_then(|a| a.channels)
+                                .unwrap_or(2)
+                                .clamp(1, 2),
+                        })
+                    };
+                    let settings = EncodeSettings {
+                        video: Some(VideoSettings {
+                            width: o.width,
+                            height: o.height,
+                            fps: comp.fps,
+                            codec: video.and_then(|v| v.codec).unwrap_or(default_video),
+                            crf: overrides.crf.or_else(|| video.and_then(|v| v.crf)),
+                            preset: overrides
+                                .preset
+                                .clone()
+                                .or_else(|| video.and_then(|v| v.preset.clone())),
+                            hardware: video
+                                .and_then(|v| v.hardware)
+                                .unwrap_or(geneva_timeline::schema::HardwarePolicy::Auto),
+                            color: comp.color,
+                            profile: video.and_then(|v| v.profile),
+                            keyframe_interval: video.and_then(|v| v.keyframe_interval),
+                            max_bitrate_kbps: video.and_then(|v| v.max_bitrate_kbps),
+                            bitrate_kbps: video.and_then(|v| v.bitrate_kbps),
+                            level: video.and_then(|v| v.level.clone()),
+                            tune: video.and_then(|v| v.tune),
+                            fixed_keyframes: video.and_then(|v| v.fixed_keyframes).unwrap_or(false),
+                            hdr_metadata: hdr_metadata.clone(),
+                            threads: None,
+                            stitch: None,
+                        }),
+                        container: Some(container),
+                        audio: audio_settings,
+                        subtitles: subtitles.clone(),
+                        fast_start,
+                        copied_audio: None,
+                    };
+                    let has_audio = settings.audio.is_some();
+                    let encoder = Encoder::new(&path, settings).map_err(|e| err_at(&path, e))?;
+                    if let Some(note) = encoder.video_encoder_note() {
+                        notes.push(format!("{}: {note}", o.name));
+                    }
+                    let (tags, format) = encoder.video_format().map_err(|e| err_at(&path, e))?;
+                    let scaler = if canvas_size {
+                        None
+                    } else {
+                        Some(
+                            geneva_media::PlaneScaler::new(
+                                format,
+                                (comp.width, comp.height),
+                                (o.width, o.height),
+                            )
+                            .map_err(|e| err_at(&path, e))?,
+                        )
+                    };
+                    video_sinks.push(VideoSink {
+                        name: o.name.clone(),
+                        path,
+                        encoder: Some(encoder),
+                        tags,
+                        format,
+                        scaler,
+                        has_audio,
+                    });
+                }
+            }
+        }
+
+        let total = comp.frame_count();
+        let needs_frames = !video_sinks.is_empty() || poster.is_some() || sprites.is_some();
+        // The sprite grid.
+        let sprite_plan = sprites.as_ref().map(|(o, _)| {
+            let duration = comp.duration.to_f64();
+            let every = o
+                .every
+                .map_or_else(|| (duration / 100.0).ceil().max(1.0), Ratio::to_f64);
+            let count = ((duration / every).ceil() as u32).max(1);
+            let columns = o.columns.unwrap_or(10).max(1).min(count);
+            let rows = count.div_ceil(columns);
+            (every, count, columns, rows)
+        });
+        let mut sheet: Option<image::RgbaImage> = sprite_plan.map(|(_, _, cols, rows)| {
+            let (o, _) = sprites.as_ref().expect("planned from the entry");
+            image::RgbaImage::new(cols * o.width, rows * o.height)
+        });
+        let mut next_tile = 0u32;
+        // The poster: an explicit frame, or the first clear one.
+        let poster_at: Option<u64> = poster.as_ref().and_then(|(o, _)| {
+            o.at.map(|t| ((t * comp.fps).floor().max(0) as u64).min(total.saturating_sub(1)))
+        });
+        let poster_earliest = (total / 20).max(20).min(total.saturating_sub(1));
+        let mut poster_pick: Option<Vec<u8>> = None;
+        let mut poster_fallback: Option<Vec<u8>> = None;
+        let mut previous_gist: Option<Vec<f32>> = None;
+
+        let mut renderer = CpuRenderer::new(MediaAssets::new(root).keep_hdr(comp.color.is_hdr()));
+        let mut frame = geneva_render::Frame::new(0, 0, geneva_color::Color::BLACK);
+        let mut render_error: Option<RenderError> = None;
+        let mut done = 0u64;
+
+        std::thread::scope(|scope| {
+            // One encoder thread per file, fed through a channel; spare
+            // plane buffers come back to be filled again.
+            let mut video_feeds: Vec<Feed<'_>> = Vec::new();
+            for sink in &mut video_sinks {
+                let encoder = sink.encoder.take().expect("encoder not yet started");
+                video_feeds.push(spawn_feed(
+                    scope,
+                    encoder,
+                    sink.has_audio.then_some(48000),
+                    comp,
+                    root,
+                ));
+            }
+            let mut audio_feeds: Vec<Feed<'_>> = Vec::new();
+            for sink in &mut audio_sinks {
+                let encoder = sink.encoder.take().expect("encoder not yet started");
+                audio_feeds.push(spawn_feed(
+                    scope,
+                    encoder,
+                    Some(sink.sample_rate),
+                    comp,
+                    root,
+                ));
+            }
+            // Canvas planes, one set per distinct layout the renditions want.
+            let mut canvases: Vec<(
+                geneva_color::ResolvedTags,
+                geneva_media::convert::PlaneFormat,
+                geneva_media::convert::Planes,
+            )> = Vec::new();
+            for sink in &video_sinks {
+                if !canvases
+                    .iter()
+                    .any(|(t, f, _)| *t == sink.tags && *f == sink.format)
+                {
+                    canvases.push((
+                        sink.tags,
+                        sink.format,
+                        geneva_media::convert::Planes::new(sink.format, comp.width, comp.height),
+                    ));
+                }
+            }
+            let frames = if needs_frames { total } else { 0 };
+            // With no video to write, only the frames the pictures need
+            // are composited, and the loop ends once they have them.
+            let pictures_only = video_sinks.is_empty();
+            'frames: for n in 0..frames {
+                let t = comp.frame_time(n);
+                if pictures_only {
+                    let poster_done = poster.is_none() || poster_pick.is_some();
+                    let tiles_done = sprite_plan.is_none_or(|(_, count, _, _)| next_tile >= count);
+                    if poster_done && tiles_done {
+                        break;
+                    }
+                    let poster_wants = !poster_done
+                        && match poster_at {
+                            Some(at) => at == n,
+                            None => n + 1 >= poster_earliest || n == total / 10 || n + 1 == total,
+                        };
+                    let tile_wants = !tiles_done
+                        && sprite_plan.is_some_and(|(every, _, _, _)| {
+                            t.to_f64() + 1e-9 >= f64::from(next_tile) * every
+                        });
+                    if !poster_wants && !tile_wants {
+                        continue;
+                    }
+                }
+                if let Err(e) = renderer.render_into(comp, t, &mut frame) {
+                    render_error = Some(e);
+                    break;
+                }
+                for (tags, format, planes) in &mut canvases {
+                    geneva_media::convert::frame_to_planes_into(&frame, *tags, *format, planes);
+                }
+                for (sink, feed) in video_sinks.iter_mut().zip(video_feeds.iter_mut()) {
+                    while let Ok(spare) = feed.spare_rx.try_recv() {
+                        feed.pool.give(spare);
+                    }
+                    let canvas = &canvases
+                        .iter()
+                        .find(|(t, f, _)| *t == sink.tags && *f == sink.format)
+                        .expect("canvas laid out for the sink")
+                        .2;
+                    let planes = match sink.scaler.as_mut() {
+                        Some(scaler) => match scaler.scale(canvas, &mut feed.pool) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                render_error = Some(err_at(&sink.path, e));
+                                break 'frames;
+                            }
+                        },
+                        None => {
+                            let mut p = feed.pool.take(sink.format, comp.width, comp.height);
+                            for (dst, src) in p.planes.iter_mut().zip(&canvas.planes) {
+                                dst.data.copy_from_slice(&src.data);
+                            }
+                            p
+                        }
+                    };
+                    if feed.tx.send(Msg::Planes(planes)).is_err() {
+                        break 'frames;
+                    }
+                }
+                // Pictures from the composited frame.
+                if poster.is_some() {
+                    match poster_at {
+                        Some(at) if at == n => poster_pick = Some(frame.to_rgba8()),
+                        None if poster_pick.is_none() => {
+                            let (gist, mean, motion) = frame_gist(&frame, previous_gist.as_deref());
+                            if n == total / 10 {
+                                poster_fallback = Some(frame.to_rgba8());
+                            }
+                            if n >= poster_earliest && mean > 0.05 && motion > 0.02 {
+                                poster_pick = Some(frame.to_rgba8());
+                            } else if n + 1 == total && poster_fallback.is_none() {
+                                poster_fallback = Some(frame.to_rgba8());
+                            }
+                            previous_gist = Some(gist);
+                        }
+                        Some(_) | None => {}
+                    }
+                }
+                if let (Some((o, _)), Some((every, count, cols, _)), Some(sheet)) =
+                    (sprites.as_ref(), sprite_plan, sheet.as_mut())
+                {
+                    let tile_time = f64::from(next_tile) * every;
+                    if next_tile < count && t.to_f64() + 1e-9 >= tile_time {
+                        let tile = scale_picture(
+                            &frame.to_rgba8(),
+                            frame.width(),
+                            frame.height(),
+                            (o.width, o.height),
+                        );
+                        let tile =
+                            image::RgbaImage::from_raw(o.width, o.height, tile).expect("tile size");
+                        let (x, y) = ((next_tile % cols) * o.width, (next_tile / cols) * o.height);
+                        image::imageops::replace(sheet, &tile, i64::from(x), i64::from(y));
+                        next_tile += 1;
+                    }
+                }
+                done += 1;
+                if progress && (done % 30 == 0 || done == frames) {
+                    eprint!("\rframe {done}/{frames}");
+                }
+            }
+            for feed in video_feeds.into_iter().chain(audio_feeds) {
+                drop(feed.tx);
+                if let Some(a) = feed.audio {
+                    if let Err(e) = a.join().unwrap_or_else(|p| std::panic::resume_unwind(p)) {
+                        render_error.get_or_insert(RenderError::Asset {
+                            id: dir.display().to_string(),
+                            reason: e.to_string(),
+                        });
+                    }
+                }
+                match feed
+                    .worker
+                    .join()
+                    .unwrap_or_else(|p| std::panic::resume_unwind(p))
+                {
+                    Ok(encoder) => {
+                        if let Err(e) = encoder.finish() {
+                            render_error.get_or_insert(RenderError::Asset {
+                                id: dir.display().to_string(),
+                                reason: e.to_string(),
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        render_error.get_or_insert(RenderError::Asset {
+                            id: dir.display().to_string(),
+                            reason: e.to_string(),
+                        });
+                    }
+                }
+            }
+        });
+        if progress && needs_frames && total > 0 {
+            eprintln!();
+        }
+        if let Some(e) = render_error {
+            return Err(e);
+        }
+        for sink in video_sinks {
+            stats.push(super::OutputStats {
+                name: sink.name,
+                kind: "video",
+                bytes: std::fs::metadata(&sink.path).map(|m| m.len()).unwrap_or(0),
+                path: sink.path,
+                mode: "render",
+            });
+        }
+        for sink in audio_sinks {
+            stats.push(super::OutputStats {
+                name: sink.name,
+                kind: "audio",
+                bytes: std::fs::metadata(&sink.path).map(|m| m.len()).unwrap_or(0),
+                path: sink.path,
+                mode: "render",
+            });
+        }
+        if let Some((o, path)) = poster {
+            let rgba = poster_pick
+                .or(poster_fallback)
+                .unwrap_or_else(|| frame.to_rgba8());
+            let scaled = scale_picture(&rgba, comp.width, comp.height, (o.width, o.height));
+            write_picture(&scaled, o.width, o.height, &path)?;
+            stats.push(super::OutputStats {
+                name: o.name.clone(),
+                kind: "poster",
+                bytes: std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+                path,
+                mode: "render",
+            });
+        }
+        if let (Some((o, path)), Some(sheet), Some((every, count, cols, _))) =
+            (sprites, sheet, sprite_plan)
+        {
+            write_picture(sheet.as_raw(), sheet.width(), sheet.height(), &path)?;
+            let mut vtt = String::from("WEBVTT\n\n");
+            let sheet_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let duration = comp.duration.to_f64();
+            for i in 0..count.min(next_tile.max(1)) {
+                let start = f64::from(i) * every;
+                let end = (start + every).min(duration);
+                let (x, y) = ((i % cols) * o.width, (i / cols) * o.height);
+                let _ = write!(
+                    vtt,
+                    "{} --> {}\n{sheet_name}#xywh={x},{y},{},{}\n\n",
+                    vtt_time(start),
+                    vtt_time(end),
+                    o.width,
+                    o.height
+                );
+            }
+            let vtt_path = path.with_extension("vtt");
+            std::fs::write(&vtt_path, vtt).map_err(|e| RenderError::Asset {
+                id: vtt_path.display().to_string(),
+                reason: e.to_string(),
+            })?;
+            stats.push(super::OutputStats {
+                name: o.name.clone(),
+                kind: "sprites",
+                bytes: std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+                path,
+                mode: "render",
+            });
+        }
+        Ok((
+            stats,
+            RenderStats {
+                frames: done,
+                duration: comp.duration,
+                mode: RenderMode::Render,
+                notes,
+                seconds: started.elapsed().as_secs_f64(),
+            },
+        ))
+    }
+
+    /// Placeholder kept for the sink loop above.
+    /// One encoder thread per file, fed through a channel; spare plane
+    /// buffers come back to be filled again.
+    struct Feed<'scope> {
+        tx: std::sync::mpsc::SyncSender<Msg>,
+        spare_rx: std::sync::mpsc::Receiver<geneva_media::convert::Planes>,
+        pool: geneva_media::convert::PlanePool,
+        worker: std::thread::ScopedJoinHandle<'scope, Result<Encoder, geneva_media::MediaError>>,
+        audio: Option<std::thread::ScopedJoinHandle<'scope, Result<(), geneva_media::MediaError>>>,
+    }
+
+    fn spawn_feed<'scope, 'env>(
+        scope: &'scope std::thread::Scope<'scope, 'env>,
+        mut encoder: Encoder,
+        sample_rate: Option<u32>,
+        comp: &'env Composition,
+        root: &'env Path,
+    ) -> Feed<'scope> {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Msg>(8);
+        let (spare_tx, spare_rx) = std::sync::mpsc::channel();
+        let audio_encoder = sample_rate.and_then(|_| encoder.take_audio_encoder());
+        let worker = scope.spawn(move || -> Result<Encoder, geneva_media::MediaError> {
+            for msg in rx {
+                match msg {
+                    Msg::Planes(planes) => {
+                        encoder.push_planes(&planes)?;
+                        let _ = spare_tx.send(planes);
+                    }
+                    Msg::Audio(packets, time) => encoder.write_audio_packets(packets, time)?,
+                    Msg::Copied(_) | Msg::EndSegment | Msg::CopiedAudio(_) => {}
+                }
+            }
+            Ok(encoder)
+        });
+        let audio = audio_encoder.map(|mut enc| {
+            let tx = tx.clone();
+            let rate = sample_rate.expect("audio comes with a rate");
+            scope.spawn(move || -> Result<(), geneva_media::MediaError> {
+                let mut mixer = geneva_media::mix::Mixer::new(comp, root, rate);
+                while let Some(chunk) = mixer.next_block(rate as usize)? {
+                    let packets = enc.push(&chunk)?;
+                    if tx.send(Msg::Audio(packets, enc.time())).is_err() {
+                        return Ok(());
+                    }
+                }
+                let time = enc.time();
+                let packets = enc.finish()?;
+                let _ = tx.send(Msg::Audio(packets, time));
+                Ok(())
+            })
+        });
+        Feed {
+            tx,
+            spare_rx,
+            pool: geneva_media::convert::PlanePool::default(),
+            worker,
+            audio,
+        }
+    }
 
     /// Encodes the output in the plan's stretches at once, one worker
     /// each with its own decoders, compositor and encoder writing a
@@ -1166,6 +1900,19 @@ mod imp {
 
     pub fn read_subtitles(_: &Path, _: usize) -> Result<Vec<geneva_media::subtitles::Cue>> {
         Err(unavailable())
+    }
+
+    pub fn render_outputs(
+        _: &Composition,
+        _: &Path,
+        dir: &Path,
+        _: &RenderOverrides,
+        _: bool,
+    ) -> Result<(Vec<super::OutputStats>, RenderStats), RenderError> {
+        Err(RenderError::Asset {
+            id: dir.display().to_string(),
+            reason: geneva_media::MediaError::Unavailable.to_string(),
+        })
     }
 
     pub fn render(

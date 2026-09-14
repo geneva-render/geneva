@@ -388,3 +388,80 @@ fn output_color_defaults_to_bt709_at_any_size() {
     let comp = load(text).composition.unwrap();
     assert_eq!(comp.color, geneva_color::ResolvedTags::SDR_VIDEO);
 }
+
+const HEAD3: &str =
+    r#""geneva":"0.3","output":{"width":640,"height":360,"fps":30,"duration":"4s"}"#;
+
+fn doc3(body: &str) -> String {
+    format!("{{{HEAD3},{body}}}")
+}
+
+#[test]
+fn outputs_take_their_sizes_and_names_from_the_canvas() {
+    let text = doc3(
+        r##""layers":[{"clips":[{"source":{"kind":"solid","color":"#fff"}}]}],
+        "outputs":{
+          "full":{"kind":"video"},
+          "small":{"kind":"video","width":320},
+          "cover":{"kind":"poster","path":"cover.png","at":"1s"},
+          "seek":{"kind":"sprites","every":"2s","columns":4},
+          "sound":{"kind":"audio","audio":{"sample_rate":16000,"channels":1}}
+        }"##,
+    );
+    let l = load(&text);
+    assert!(l.is_ok(), "{:#?}", l.diagnostics);
+    let comp = l.composition.unwrap();
+    let by_name = |n: &str| comp.outputs.iter().find(|o| o.name == n).unwrap();
+    assert_eq!(by_name("full").path, "full.mp4");
+    assert_eq!((by_name("full").width, by_name("full").height), (640, 360));
+    assert_eq!(
+        (by_name("small").width, by_name("small").height),
+        (320, 180)
+    );
+    assert_eq!(by_name("cover").path, "cover.png");
+    assert_eq!(by_name("cover").at, Some(Ratio::from_int(1)));
+    assert_eq!((by_name("seek").width, by_name("seek").height), (160, 90));
+    assert_eq!(by_name("seek").every, Some(Ratio::from_int(2)));
+    assert_eq!(by_name("seek").columns, Some(4));
+    assert_eq!(by_name("sound").path, "sound.wav");
+    assert_eq!(
+        by_name("sound").audio.as_ref().and_then(|a| a.sample_rate),
+        Some(16000)
+    );
+}
+
+#[test]
+fn outputs_reject_stray_fields_bad_paths_clashes_and_bad_values() {
+    let text = doc3(
+        r##""layers":[{"clips":[{"source":{"kind":"solid","color":"#fff"}}]}],
+        "outputs":{
+          "a":{"kind":"poster","every":"1s"},
+          "b":{"kind":"video","path":"sub/b.mp4"},
+          "c":{"kind":"video","path":"c.txt"},
+          "d":{"kind":"video","path":"e.mp4"},
+          "e":{"kind":"video"},
+          "f":{"kind":"poster","at":"9s"},
+          "g":{"kind":"sprites","every":"0s","columns":0}
+        }"##,
+    );
+    let errs = errors(&text);
+    let has = |code: &str, path: &str| errs.iter().any(|(c, p)| *c == code && p == path);
+    assert!(has("E430", "/outputs/a/every"), "{errs:?}");
+    assert!(has("E431", "/outputs/b/path"), "{errs:?}");
+    assert!(has("E431", "/outputs/c/path"), "{errs:?}");
+    assert!(
+        has("E432", "/outputs/e/path") || has("E432", "/outputs/d/path"),
+        "{errs:?}"
+    );
+    assert!(has("E433", "/outputs/f/at"), "{errs:?}");
+    assert!(has("E433", "/outputs/g/every"), "{errs:?}");
+    assert!(has("E433", "/outputs/g/columns"), "{errs:?}");
+}
+
+#[test]
+fn outputs_need_format_0_3_and_are_absent_by_default() {
+    let l = load(&doc(
+        r##""layers":[{"clips":[{"source":{"kind":"solid","color":"#fff"}}]}]"##,
+    ));
+    assert!(l.composition.unwrap().outputs.is_empty());
+}

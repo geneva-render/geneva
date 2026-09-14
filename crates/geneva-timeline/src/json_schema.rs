@@ -38,7 +38,10 @@ mod tests {
     #[test]
     fn schema_pins_the_version() {
         let s = json_schema();
-        assert_eq!(s["properties"]["geneva"]["enum"], json!(["0.1", "0.2"]));
+        assert_eq!(
+            s["properties"]["geneva"]["enum"],
+            json!(["0.1", "0.2", "0.3"])
+        );
         assert_eq!(
             s["$schema"],
             json!("https://json-schema.org/draft/2020-12/schema")
@@ -47,7 +50,7 @@ mod tests {
             s["$id"]
                 .as_str()
                 .unwrap()
-                .ends_with("geneva-timeline-0.2.schema.json")
+                .ends_with("geneva-timeline-0.3.schema.json")
         );
     }
 }

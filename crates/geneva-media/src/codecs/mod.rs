@@ -7,6 +7,7 @@ mod encode;
 mod ffi;
 mod h264;
 mod probe;
+mod scale;
 mod smartcut;
 mod subtitle_streams;
 mod tags;
@@ -31,6 +32,7 @@ pub use ffi::HdrMetadata;
 /// An encoded packet on its way to the muxer.
 pub use ffmpeg_next::Packet;
 pub use probe::{hdr_metadata_of, probe};
+pub use scale::PlaneScaler;
 pub use smartcut::{
     AudioCopy, AudioGrid, AudioSegment, CopiedPacket, Segment, SmartPlan, SourceStream,
     plan_smart_cut, read_copied, read_copied_audio,

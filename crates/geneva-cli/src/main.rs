@@ -63,6 +63,14 @@ enum Command {
     Audio(AudioArgs),
     /// Attach subtitle files as streams, or extract a subtitle stream.
     Subtitles(SubtitlesArgs),
+    /// Write one still of a video: a poster or thumbnail.
+    Poster(PosterArgs),
+    /// Write a sheet of thumbnails with the WebVTT file players use for
+    /// seek previews.
+    Sprites(SpritesArgs),
+    /// Write everything a web page needs for a video in one pass: the
+    /// video fitted to the web, a poster and seek-preview sprites.
+    Publish(PublishArgs),
     /// List the destinations `--for` knows and what each one implies.
     Targets,
 }
@@ -115,9 +123,10 @@ struct FrameArgs {
 struct RenderArgs {
     #[command(flatten)]
     timeline: TimelineArgs,
-    /// Output file. The extension selects the container unless the
-    /// timeline sets one.
-    #[arg(short, long, value_name = "FILE")]
+    /// Output file; the extension selects the container unless the
+    /// timeline sets one. When the timeline has `outputs`, a directory
+    /// that every entry is written into.
+    #[arg(short, long, value_name = "FILE|DIR")]
     output: PathBuf,
     /// Constant-quality level, overriding the timeline.
     #[arg(long)]
@@ -308,6 +317,9 @@ struct AudioArgs {
     /// Mix this file's audio in with the original.
     #[arg(long, value_name = "FILE")]
     mix: Option<PathBuf>,
+    /// With --extract: write 16 kHz mono, what speech recognizers want.
+    #[arg(long, requires = "extract")]
+    speech: bool,
     /// Gain in decibels applied to the mixed-in audio.
     #[arg(
         long,
@@ -365,6 +377,85 @@ struct SubtitlesArgs {
     /// down to half their size; each one shrunk is reported.
     #[arg(long, requires = "burn")]
     fit: bool,
+    #[command(flatten)]
+    encode: verbs::EncodeArgs,
+}
+
+#[derive(Args)]
+struct PosterArgs {
+    /// Input video.
+    input: PathBuf,
+    /// Output picture, .jpg or .png.
+    #[arg(short, long, value_name = "FILE", default_value = "poster.jpg")]
+    output: PathBuf,
+    /// Time of the still, for example 1.5, "1.5s", "45f" or "00:00:01.5".
+    /// Without it, the first clear frame after the opening: not dark,
+    /// not a fade, past the first motion.
+    #[arg(long, value_name = "TIME")]
+    at: Option<String>,
+    /// Width in pixels; the video's by default. The height follows.
+    #[arg(long)]
+    width: Option<u32>,
+    /// Height in pixels. The width follows when not given.
+    #[arg(long)]
+    height: Option<u32>,
+    /// Print the compiled timeline as JSON instead of rendering.
+    #[arg(long)]
+    show_timeline: bool,
+}
+
+#[derive(Args)]
+struct SpritesArgs {
+    /// Input video.
+    input: PathBuf,
+    /// Output sheet, .jpg or .png; the WebVTT file goes beside it with
+    /// the same name and a .vtt extension.
+    #[arg(short, long, value_name = "FILE", default_value = "sprites.jpg")]
+    output: PathBuf,
+    /// Time between tiles, for example 1, "5s" or "0.5s". Defaults to
+    /// about a hundred tiles over the video, at least one per second.
+    #[arg(long, value_name = "TIME")]
+    every: Option<String>,
+    /// Tiles per row. Defaults to 10.
+    #[arg(long)]
+    columns: Option<u32>,
+    /// Tile width in pixels. Defaults to a 90-pixel-high tile.
+    #[arg(long)]
+    width: Option<u32>,
+    /// Tile height in pixels. The width follows when not given.
+    #[arg(long)]
+    height: Option<u32>,
+    /// Print the compiled timeline as JSON instead of rendering.
+    #[arg(long)]
+    show_timeline: bool,
+}
+
+#[derive(Args)]
+struct PublishArgs {
+    /// Input video.
+    input: PathBuf,
+    /// Directory to write into: video.mp4, poster.jpg, sprites.jpg and
+    /// sprites.vtt.
+    #[arg(short, long, value_name = "DIR")]
+    output: PathBuf,
+    /// Time of the poster. Without it, the first clear frame.
+    #[arg(long, value_name = "TIME")]
+    poster_at: Option<String>,
+    /// Time between sprite tiles; about a hundred tiles by default.
+    #[arg(long, value_name = "TIME")]
+    every: Option<String>,
+    /// Also write speech.wav: the audio alone at 16 kHz mono, for
+    /// transcription.
+    #[arg(long)]
+    speech: bool,
+    /// Write no poster.
+    #[arg(long)]
+    no_poster: bool,
+    /// Write no sprites.
+    #[arg(long)]
+    no_sprites: bool,
+    /// Encoding options for the video; `--for` defaults to web, and a
+    /// source that already fits the target is copied, not re-encoded.
     #[command(flatten)]
     encode: verbs::EncodeArgs,
 }
@@ -574,8 +665,46 @@ fn run(cli: Cli) -> Result<ExitCode> {
             } else {
                 anyhow::bail!("choose one of --extract, --mute, --replace or --mix");
             };
-            let compiled = verbs::audio(&args.input, &op, &args.encode)?;
+            let compiled = verbs::audio(&args.input, &op, args.speech, &args.encode)?;
             run_verb(&compiled, &args.output, &args.encode, cli.format)
+        }
+        Command::Poster(args) => {
+            let compiled = verbs::poster(
+                &args.input,
+                parse_time("--at", args.at.as_deref())?,
+                args.width,
+                args.height,
+            )?;
+            let encode = verbs::EncodeArgs {
+                show_timeline: args.show_timeline,
+                ..Default::default()
+            };
+            run_verb(&compiled, &args.output, &encode, cli.format)
+        }
+        Command::Sprites(args) => {
+            let compiled = verbs::sprites(
+                &args.input,
+                parse_time("--every", args.every.as_deref())?,
+                args.columns,
+                args.width,
+                args.height,
+            )?;
+            let encode = verbs::EncodeArgs {
+                show_timeline: args.show_timeline,
+                ..Default::default()
+            };
+            run_verb(&compiled, &args.output, &encode, cli.format)
+        }
+        Command::Publish(args) => {
+            let opts = verbs::PublishOptions {
+                poster_at: parse_time("--poster-at", args.poster_at.as_deref())?,
+                every: parse_time("--every", args.every.as_deref())?,
+                speech: args.speech,
+                no_poster: args.no_poster,
+                no_sprites: args.no_sprites,
+            };
+            let (compiled, encode) = verbs::publish(&args.input, &opts, &args.encode)?;
+            run_verb(&compiled, &args.output, &encode, cli.format)
         }
         Command::Targets => {
             if cli.format == Format::Json {
@@ -666,6 +795,21 @@ fn run_verb(
     let mut timeline = compiled.timeline.clone();
     let mut extra = compiled.diagnostics.clone();
     let mut size_limit = None;
+    // A verb that writes one file of a multi-output document names the
+    // file; the document's directory is the file's, and the entry takes
+    // its name.
+    let mut output = output.to_path_buf();
+    if timeline.outputs.len() == 1 && output.extension().is_some() {
+        let file = output
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        for spec in timeline.outputs.values_mut() {
+            spec.path = Some(file.clone());
+        }
+        output = timeline_dir(&output);
+    }
+    let output = output.as_path();
     if let Some(name) = &encode.for_ {
         // A first resolution gives the facts the target needs (the size
         // and length the verb arrived at); the target then rewrites the
@@ -792,6 +936,9 @@ fn render_to(
         report(&loaded.diagnostics, format, None)?;
         return Ok(ExitCode::from(EXIT_INVALID));
     };
+    if !comp.outputs.is_empty() {
+        return render_outputs_to(loaded, comp, root, output, overrides, format, size_limit);
+    }
     let mut diagnostics = loaded.diagnostics.clone();
     match media::render(comp, root, output, overrides, format == Format::Human) {
         Ok(stats) => {
@@ -848,6 +995,92 @@ fn render_to(
                         stats.seconds
                     );
                 }
+            } else {
+                report(&diagnostics, format, Some(result))?;
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(err) => {
+            diagnostics.push(render_diagnostic(&err));
+            report(
+                &diagnostics,
+                format,
+                Some(serde_json::json!({ "ok": false })),
+            )?;
+            Ok(ExitCode::from(EXIT_RENDER))
+        }
+    }
+}
+
+/// Renders every entry of a timeline's `outputs` into the directory `dir`
+/// in one pass and reports each file written.
+fn render_outputs_to(
+    loaded: &Loaded,
+    comp: &Composition,
+    root: &Path,
+    dir: &Path,
+    overrides: &media::RenderOverrides,
+    format: Format,
+    size_limit: Option<&(String, u64)>,
+) -> Result<ExitCode> {
+    let mut diagnostics = loaded.diagnostics.clone();
+    match media::render_outputs(comp, root, dir, overrides, format == Format::Human) {
+        Ok((outputs, stats)) => {
+            for note in &stats.notes {
+                diagnostics.push(Diagnostic::note("N600", "", note.clone()));
+            }
+            if let Some((target, max)) = size_limit {
+                for o in outputs
+                    .iter()
+                    .filter(|o| o.kind == "video" && o.bytes > *max)
+                {
+                    diagnostics.push(
+                        Diagnostic::warning(
+                            "W412",
+                            "",
+                            format!(
+                                "{} is {}; {target} allows {}",
+                                o.path.display(),
+                                targets::human_size(o.bytes),
+                                targets::human_size(*max)
+                            ),
+                        )
+                        .with_help("a lower --quality, a smaller --budget or a shorter video brings it down"),
+                    );
+                }
+            }
+            let result = serde_json::json!({
+                "ok": true,
+                "directory": dir,
+                "outputs": outputs,
+                "frames": stats.frames,
+                "duration": stats.duration,
+                "seconds": stats.seconds,
+            });
+            if format == Format::Human {
+                report(&diagnostics, format, None)?;
+                for o in &outputs {
+                    let how = match o.mode {
+                        "copy" => ", streams copied without re-encoding".to_owned(),
+                        "render" => String::new(),
+                        other => format!(", {other}"),
+                    };
+                    println!(
+                        "wrote {} ({}, {}{how})",
+                        o.path.display(),
+                        o.kind,
+                        targets::human_size(o.bytes)
+                    );
+                }
+                println!(
+                    "{} output{} from {} frame{}, {}s of video, {:.1}s elapsed",
+                    outputs.len(),
+                    if outputs.len() == 1 { "" } else { "s" },
+                    stats.frames,
+                    if stats.frames == 1 { "" } else { "s" },
+                    stats.duration,
+                    stats.seconds
+                );
             } else {
                 report(&diagnostics, format, Some(result))?;
             }

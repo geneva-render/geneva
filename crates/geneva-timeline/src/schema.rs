@@ -15,23 +15,30 @@ use crate::length::{Length, Point, Scale};
 use crate::time::{Fps, Time};
 
 /// The timeline format version this crate writes.
-pub const FORMAT_VERSION: &str = "0.2";
+pub const FORMAT_VERSION: &str = "0.3";
 
 /// The format versions this crate reads. A 0.2 document is a 0.1 document
 /// with more optional fields (crop, effects, mask, speed), so both are
 /// accepted as they are.
-pub const ACCEPTED_VERSIONS: &[&str] = &["0.1", "0.2"];
+pub const ACCEPTED_VERSIONS: &[&str] = &["0.1", "0.2", "0.3"];
 
 /// A complete composition: output settings, assets and layers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(title = "Geneva timeline")]
 pub struct Timeline {
-    /// Format version: "0.2", or "0.1" for a document written before
+    /// Format version: "0.3", or "0.1" and "0.2" for a document written before
     /// crop, effects, mask and speed existed (read as it is).
     pub geneva: String,
     /// Frame size, rate, duration and encoding settings of the output.
     pub output: Output,
+    /// Further files rendered from the same composition in one pass:
+    /// video renditions, a poster, a sprite sheet, audio. Keys name them;
+    /// each is written under the directory `render -o` names. With
+    /// outputs present, `output` describes the canvas the outputs are
+    /// made from.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub outputs: BTreeMap<String, OutputSpec>,
     /// Media files the composition may reference, keyed by a short id.
     /// Layers refer to assets by id and never by path.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -107,6 +114,72 @@ pub struct AudioOutput {
     /// Channel count: 1 (mono) or 2 (stereo). Defaults to 2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channels: Option<u8>,
+}
+
+/// One file of a multi-output render, made from the composition.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutputSpec {
+    /// What to write.
+    pub kind: OutputKind,
+    /// File name, relative to the output directory. Defaults to the
+    /// output's name with the kind's usual extension (`.mp4`, `.jpg`,
+    /// `.wav`); a sprite sheet writes a `.vtt` map next to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Picture width. For a video rendition or a poster, the canvas is
+    /// scaled to it; giving one of width and height keeps the aspect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    /// Picture height. For a sprite sheet, the height of one tile
+    /// (default 90).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    /// Encoder settings for a video or audio output; a video rendition
+    /// falls back to `output.encode`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encode: Option<Encode>,
+    /// Audio format for a video or audio output; falls back to
+    /// `output.audio`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<AudioOutput>,
+    /// Poster: the time of the frame to take. Without it the frame is
+    /// chosen: the first clear, non-black frame after the opening.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<Time>,
+    /// Sprite sheet: the interval between tiles. Without it the sheet
+    /// holds about a hundred tiles, at least a second apart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub every: Option<Time>,
+    /// Sprite sheet: tiles per row (default 10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub columns: Option<u32>,
+}
+
+/// What a multi-output entry writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum OutputKind {
+    /// A video file: the composition, scaled to the entry's size.
+    Video,
+    /// One frame as an image.
+    Poster,
+    /// A tiled sheet of small frames with a WebVTT map, for scrubbing.
+    Sprites,
+    /// An audio file of the mix.
+    Audio,
+}
+
+impl OutputKind {
+    /// The JSON spelling of the kind.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Video => "video",
+            Self::Poster => "poster",
+            Self::Sprites => "sprites",
+            Self::Audio => "audio",
+        }
+    }
 }
 
 /// Encoder settings for the rendered file.

@@ -41,10 +41,15 @@ says otherwise.
 
 Renders one frame to a PNG file through the same renderer as `render`.
 
-### `geneva render <timeline> -o FILE [options]`
+### `geneva render <timeline> -o FILE|DIR [options]`
 
 Renders the whole timeline. The output container comes from the file
-extension unless the timeline sets `output.encode.container`.
+extension unless the timeline sets `output.encode.container`. When the
+timeline has an [`outputs`](timeline.md#outputs) map, `-o` names a
+directory instead, every entry is written into it from one pass over the
+composition, and the report lists each file (`outputs[]` with `name`,
+`kind`, `path`, `bytes` and `mode` in JSON; one `wrote` line each in
+human mode).
 
 | Option | Effect |
 | --- | --- |
@@ -217,20 +222,70 @@ Places an image or a video (without its audio) over the input.
 geneva overlay talk.mp4 logo.png -o branded.mp4 --at bottom-right --scale 0.5 --opacity 0.8
 ```
 
-### `geneva audio <input> -o FILE --extract | --mute | --replace FILE | --mix FILE [--gain DB]`
+### `geneva audio <input> -o FILE --extract [--speech] | --mute | --replace FILE | --mix FILE [--gain DB]`
 
 | Operation | Output |
 | --- | --- |
-| `--extract` | Only the audio, to `.m4a` (AAC), `.ogg` (Opus), `.flac` or `.wav`. Copied without re-encoding when the codec already matches the container. |
+| `--extract` | Only the audio, to `.m4a` (AAC), `.ogg` (Opus), `.flac` or `.wav`. Copied without re-encoding when the codec already matches the container. `--speech` writes it the way speech recognizers want it, 16 kHz mono, so `-o talk.wav --extract --speech` is the file to hand a transcriber. |
 | `--mute` | The video without its audio track. |
 | `--replace FILE` | The video with another file's audio, cut to the video's length. |
 | `--mix FILE` | The original audio and another file's mixed together; `--gain` adjusts the mixed-in file in decibels. |
 
 ```sh
 geneva audio talk.mp4 -o talk.m4a --extract
+geneva audio talk.mp4 -o talk.wav --extract --speech
 geneva audio talk.mp4 -o dubbed.mp4 --replace voice.wav
 geneva audio talk.mp4 -o scored.mp4 --mix music.mp3 --gain -12
 ```
+
+### `geneva poster <input> [-o FILE] [--at TIME] [--width W] [--height H]`
+
+One still of the video, as `.jpg` (default `poster.jpg`) or `.png`. With
+`--at`, the frame at that time; without it, the first clear frame after
+the opening: not dark, past the first motion, so a fade-in or a black
+leader is skipped. The size is the video's unless `--width` or
+`--height` says otherwise (one keeps the aspect). Only the frames needed
+are decoded.
+
+```sh
+geneva poster talk.mp4                      # poster.jpg, first clear frame
+geneva poster talk.mp4 -o thumb.png --at 12s --width 640
+```
+
+### `geneva sprites <input> [-o FILE] [--every TIME] [--columns N] [--width W] [--height H]`
+
+A sheet of thumbnails (default `sprites.jpg`) and, beside it with the
+same name, the WebVTT file (`sprites.vtt`) that maps each stretch of time
+to a tile with `#xywh=` fragments, which Video.js, hls.js, Plyr and the
+other players read for seek previews. Tiles are 90 pixels high by
+default, `--every` sets the time between them (about a hundred tiles
+over the video by default, at least a second apart), `--columns` the
+tiles per row (10).
+
+```sh
+geneva sprites talk.mp4 --every 5s          # sprites.jpg + sprites.vtt
+```
+
+### `geneva publish <input> -o DIR [--poster-at TIME] [--every TIME] [--speech] [--no-poster] [--no-sprites] [encoding options]`
+
+Everything a web page needs for one video, from one pass over the
+source, into `DIR`: `video.mp4` fitted to the `web` target (or the
+`--for` target given: size ceiling, H.264, quality, bitrate cap, two-second
+keyframes, fast start, AAC), `poster.jpg`, `sprites.jpg` with
+`sprites.vtt`, and with `--speech` the sound alone as `speech.wav` at
+16 kHz mono for transcription. A source that already fits the target
+(H.264 4:2:0 in MP4 or MOV, within the size, frame rate and bitrate
+ceilings) is copied, not re-encoded, and the report says so; `--crf`,
+`--quality`, `--budget` or `--exact` re-encode it regardless.
+
+```sh
+geneva publish talk.mp4 -o site/talk/                 # video.mp4, poster.jpg, sprites.jpg, sprites.vtt
+geneva publish talk.mp4 -o site/talk/ --speech --for phone --every 10s
+```
+
+The document `publish` builds is an [`outputs`](timeline.md#outputs)
+map; `--show-timeline` prints it, and a hand-written one can add
+renditions at more sizes.
 
 ### `geneva subtitles <input> -o FILE --add FILE... [--language CODE...] | --burn FILE [--position P] [--margin PX] [--style JSON] [--safe PERCENT] | --extract [--track N]`
 

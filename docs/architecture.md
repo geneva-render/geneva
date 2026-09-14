@@ -220,10 +220,30 @@ two sessions contend for it). So `auto` chunks VP9 and OpenH264 only;
 everything else needs an explicit count. `scripts/check.sh` runs one
 encode with chunks off and on `auto` and prints both times.
 
+## Multi-output render
+
+A document with an `outputs` map is rendered by one pass over the
+composition (`render_outputs` in `crates/geneva-cli/src/media.rs`). The
+compositor produces each frame once; the frame is converted to planes
+once per distinct colour encoding and sample layout the renditions
+want, then scaled per rendition (`geneva-media::PlaneScaler`, the same
+threaded swscale the direct path uses) and sent over a bounded channel
+to that rendition's encoder thread, which returns the plane buffers for
+reuse. Audio-only entries and the audio of video entries are mixed by
+their own threads from the same composition. A video entry at the
+canvas size with no encode settings of its own goes through the copy
+planner first and is stream-copied when the composition allows it. The
+poster is taken from the composited frame at its time, or from the first
+frame after the opening that is not dark and follows motion (a cheap
+16×9 luma gist per frame decides); sprite tiles are scaled from the
+composited frame at each interval into one sheet, and the WebVTT map is
+written beside it. With no video entry only the frames the pictures need
+are composited, so a poster costs one frame.
+
 ## Verbs
 
-`trim`, `concat`, `convert`, `resize`, `overlay` and `audio` do not have
-code paths of their own. Each probes its inputs, builds a timeline
+`trim`, `concat`, `convert`, `resize`, `overlay`, `audio`, `poster`,
+`sprites` and `publish` do not have code paths of their own. Each probes its inputs, builds a timeline
 document (`crates/geneva-cli/src/verbs.rs`), and hands it to the same
 load, validate, plan and render sequence a timeline file goes through, so
 stream copy, diagnostics and the JSON report behave identically.

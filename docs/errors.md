@@ -79,6 +79,10 @@ result is not what was intended. Notes are informational.
 | E420 | The output color tags describe HDR (`pq` or `hlg`) but `encode.video.codec` carries eight bits or is unset (the default, H.264); set it to `h265`, `av1`, `vp9` or `prores`. |
 | E421 | `encode.video.profile` names a profile of another codec, or is set without a codec. |
 | E422 | `encode.video.fixed_keyframes` is set without `encode.video.keyframe_interval`. |
+| E430 | An `outputs` entry has a field its kind does not take (`at` on a video, `every` on a poster, `encode` on a picture). |
+| E431 | An `outputs` entry's `path` is not a plain file name inside the output directory, or its extension is not one the kind can write. |
+| E432 | Two `outputs` entries would write the same file. |
+| E433 | An `outputs` value is out of range: a poster `at` outside the composition, a sprite `every` that is not positive, or `columns` of 0. |
 | W401 | Output width or height is odd; most codecs need even dimensions. |
 | W402 | `subtitles --burn` found no cues in the file; the picture is written unchanged. |
 | W403 | A burned-in subtitle cue extends off-screen. The message gives the box size and by how much it leaves the frame; the path names the clip. |
