@@ -4,6 +4,7 @@ members = [
     "crates/geneva-anim",
     "crates/geneva-color",
     "crates/geneva-timeline",
+    "crates/geneva-html",
     "crates/geneva-render",
     "crates/geneva-golden",
     "crates/geneva-media",
@@ -24,6 +25,7 @@ authors = ["Francesco Benetti <francesco@benetti.dev>"]
 geneva-anim = { path = "crates/geneva-anim", version = "0.4.3" }
 geneva-color = { path = "crates/geneva-color", version = "0.4.3" }
 geneva-timeline = { path = "crates/geneva-timeline", version = "0.4.3" }
+geneva-html = { path = "crates/geneva-html", version = "0.4.3" }
 geneva-render = { path = "crates/geneva-render", version = "0.4.3" }
 geneva-golden = { path = "crates/geneva-golden", version = "0.4.3" }
 geneva-media = { path = "crates/geneva-media", version = "0.4.3", default-features = false }
@@ -40,6 +42,7 @@ serde_path_to_error = "0.1"
 thiserror = "2.0"
 cosmic-text = { version = "0.19", default-features = false, features = ["std", "swash"] }
 swash = "0.2"
+taffy = { version = "0.9", default-features = false, features = ["std", "flexbox", "block_layout", "content_size", "calc", "taffy_tree"] }
 ffmpeg-next = { version = "9", default-features = false, features = ["codec", "format", "software-scaling", "software-resampling"] }
 
 [workspace.lints.rust]

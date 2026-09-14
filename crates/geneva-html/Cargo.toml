@@ -1,0 +1,15 @@
+[package]
+name = "geneva-html"
+description = "A small HTML and CSS subset with flexbox layout, for drawing overlays in the Geneva engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+geneva-color = { workspace = true }
+taffy = { workspace = true }
+
+[lints]
+workspace = true
