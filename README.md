@@ -3,89 +3,39 @@
   <img src="docs/wordmark.png" alt="Geneva" width="240">
 </picture>
 
-Geneva is a video tool with two halves that share one engine. On the
-outside, everyday commands: trim, concat, convert, resize, overlay, audio,
-subtitles, frame, probe. Underneath, a versioned JSON document with a
-compositor behind it: layers and nested compositions, keyframed animation,
-text with real shaping, masks, blend modes, colour-managed compositing in
-linear light, audio mixing. Every command compiles to one of those
-documents and will print it, so a one-line job can grow into a composition
-without changing tools.
+geneva turns a JSON file into a video.
 
-It uses FFmpeg's libraries to demux, decode, encode and mux. What it adds
-is a set of things built in that usually cost you a filter chain, a report
-that says what it did and why, and defaults that are right on the details
-that go quietly wrong.
+It also handles the quick jobs from the command line. Trim a clip. Join two
+files. Resize, burn in subtitles, pull the audio out. Each of those commands
+writes the same JSON under the hood, and `--show-timeline` prints it, so you
+can grab it and keep editing.
 
-One binary, no services, no network access, MIT licensed. Linux and macOS.
+Under the commands there's a real compositor: layers, keyframes, text that
+shapes properly, masks, blend modes. Colour is handled in linear light.
+
+One binary. It uses FFmpeg's libraries to read and write files, so it opens
+what ffmpeg opens.
 
 ```sh
 geneva trim talk.mp4 -o intro.mp4 --to 30s        # copies the streams, no re-encode
-geneva convert talk.mp4 -o web.mp4 --for web      # a destination, not fifteen flags
-geneva render job.json -o out/                    # every output in the document, one pass
+geneva convert talk.mp4 -o web.mp4 --for web      # one flag instead of fifteen
+geneva render job.json -o out/                    # everything the document asks for
 ```
 
-**Status: 0.4.** The format, the renderer, the verbs and the encoders work
-end to end. GPU rendering is not there. The format is versioned and will
-keep changing until 1.0; see [CHANGELOG.md](CHANGELOG.md).
+**Status: 0.4.** The format, the renderer, the commands and the encoders all
+work. There's no GPU rendering yet. The format still changes between
+versions, and will until 1.0. See [CHANGELOG.md](CHANGELOG.md).
 
-## Built in, not assembled
+MIT licensed. Linux and macOS. No services, no network access.
 
-**Text that a designer would recognise.** Shaped, not stamped: Arabic and
-Hebrew run right to left, Thai breaks where Thai breaks. Wrapping,
-alignment, outline, drop shadow, a rounded background box, and word-level
-timing with a style for whichever word is current. Where CSS has a
-spelling, the document takes it: `font` as `"700 72px/1.25 Inter"`,
-`outline` as `"2px black"`, `shadow` as the `text-shadow` shorthand
-`"0 2px 8px #0008"`. A font file can travel in the document as an asset, so
-a render need not depend on what is installed.
+## What it does
 
-**Animation as a function of time.** Keyframes on position, scale,
-rotation, opacity, gain and effect parameters, with easing by name, cubic
-Bézier or a spring. Nothing is a filter expression evaluated per frame; the
-value at time *t* is defined by the document.
+Every example below is a file in [`examples/`](examples/). They all run as
+they are: `examples/talk.mp4` is a four-second clip that geneva rendered
+from shapes, so you don't have to supply your own footage. Each picture is
+what the command next to it produced.
 
-**Compositing that respects colour.** Layers blend in linear light with the
-usual modes. Standard-definition sources stay BT.601 and high-definition
-stays BT.709, tags travel into the output, and untagged material is
-inferred from its size with the assumption printed. HDR becomes SDR by
-ITU-R BT.2446 method A, the conversion the recommendation specifies, rather
-than a curve that sends every highlight to white.
-
-**A copy planner.** Trims, joins and format changes that leave the picture
-alone copy the coded packets instead of re-encoding. You do not have to
-know when that is safe: the planner decides, and when it refuses it names
-the fact that stopped it rather than falling back in silence.
-
-**Smart cut.** When a cut has to land on an exact frame, only the frames
-between the cut and the next keyframe are re-encoded; the rest are copied
-into the same track, stitched at packet level.
-
-**Many outputs from one document.** Renditions at several sizes, a poster
-still, a sprite sheet with the WebVTT map players read, the audio alone at
-16 kHz for a speech model: declared together, produced in one pass.
-
-**Timing that survives real files.** Variable frame rates, edit lists,
-negative composition offsets, audio that starts late, 29.97 in a 600-tick
-timebase, phone clips whose average frame rate matches no actual frame. A
-corpus of fourteen such files asserts that output timing matches input
-timing.
-
-**A machine-readable surface.** `--format json` puts one document on stdout
-and a stream of progress objects on stderr. Timelines are validated before
-anything is decoded, with a code, a JSON pointer, the offending value and a
-fix for every problem. Unknown fields are errors, so a typo is caught
-rather than ignored. Renders are deterministic, so output can be cached by
-input hash.
-
-## Examples
-
-Every file in [`examples/`](examples/) is a complete timeline, and
-`examples/talk.mp4` is a four-second clip geneva made from shapes, so the
-ones that need video run as they are. Each picture below is the output of
-the command beside it, scaled down for this page.
-
-### Captions with word timing
+### Captions
 
 <img src="docs/captions.png" alt="Captions with the current word highlighted, above Arabic, Hebrew and Thai text" width="520">
 
@@ -93,9 +43,12 @@ the command beside it, scaled down for this page.
 geneva frame examples/captions.json --at 0.8s -o captions.png
 ```
 
-One text source carries the words and their times, a base style and a
-highlight style. Four scripts in one frame, an outline and a background box
-on the caption line.
+Give a text clip a list of words with start and end times. geneva draws the
+line and highlights whichever word is current.
+
+The text is shaped properly, so Arabic and Hebrew read right to left and
+Thai breaks in the right places. You can add an outline, a shadow and a
+rounded box. If you know CSS, write the styles the CSS way.
 
 ```json
 { "kind": "text",
@@ -107,7 +60,7 @@ on the caption line.
   "background": "#00000099", "padding": 20, "radius": 14 }
 ```
 
-### Reframing to vertical
+### Vertical video
 
 <img src="docs/social-reframe.png" alt="A landscape clip on a 9:16 canvas over a blurred copy of itself, with captions" width="260">
 
@@ -115,11 +68,16 @@ on the caption line.
 geneva frame examples/social-reframe.json --at 1s -o reframe.png
 ```
 
-Three layers: the picture cover-fitted and blurred to fill the frame, the
-picture whole on top, captions over both. The same effect without the
-document is `geneva convert talk.mp4 -o reel.mp4 --for tiktok --fill blur`.
+Three layers. The clip fills the tall frame and gets blurred, the same clip
+sits whole on top of it, and the captions go over both.
 
-### A lower third, built once and placed twice
+If you just want the effect and not the document, there's a flag:
+
+```sh
+geneva convert talk.mp4 -o reel.mp4 --for tiktok --fill blur
+```
+
+### Lower thirds you can reuse
 
 <img src="docs/lower-third.png" alt="A lower third with a name and a title on a dark plate with an accent bar" width="420">
 
@@ -127,11 +85,11 @@ document is `geneva convert talk.mp4 -o reel.mp4 --for tiktok --fill blur`.
 geneva frame examples/lower-third.json --at 1.2s -o lower-third.png
 ```
 
-The plate, accent bar, springing dot, name and title are a named
-composition. The timeline places it twice with different transforms, so the
-second costs one clip rather than a copy of the design.
+The plate, the accent bar, the dot that springs in, the name and the title
+are one named composition. The timeline drops it in twice at different
+positions and sizes. You design it once.
 
-### Keyframes and easing
+### Keyframes
 
 <img src="docs/shapes.png" alt="Shapes with keyframed position, scale, rotation and opacity" width="360">
 
@@ -139,14 +97,14 @@ second costs one clip rather than a copy of the design.
 geneva frame examples/shapes.json --at 1s -o shapes.png
 ```
 
-Position, scale, rotation and opacity on keyframes, with eased and spring
-interpolation.
+Put keyframes on position, scale, rotation, opacity, audio gain or a blur
+radius. Ease them by name, with a cubic Bézier, or with a spring.
 
-### Renditions, poster, sprites and speech audio
+### One pass, many files
 
-```sh
-geneva render examples/renditions.json -o out/
-```
+Most video jobs need the same pile of files: a few sizes, a thumbnail, a
+sprite sheet for the player's scrub preview, and the audio at 16 kHz for
+whisper. Ask for them together and geneva reads the source once.
 
 ```json
 "outputs": {
@@ -159,78 +117,20 @@ geneva render examples/renditions.json -o out/
 }
 ```
 
-The poster is chosen rather than grabbed: the first frame past the opening
-that is not dark and follows some motion, so a fade-in or a phone clip's
-opening blur is skipped. The report lists every file with its size and
-media type.
-
-## Speed
-
-Measured on one machine, so read them as ratios rather than absolutes: a
-four-core Intel Xeon at 2.1 GHz, a 60-second 1080p H.264 file, release
-build, software encoding through the same system x264 (build 164) on both
-sides, matched presets and quality. Each step ran twice and the second time
-is reported.
-
-| Job | Geneva | ffmpeg |
-| --- | --- | --- |
-| Trim 10s out | 0.1s | 5.8s for the obvious command, 0.1s with `-c copy` |
-| Frame-accurate trim, cut mid-GOP | 0.6s | 4.8s |
-| Resize to 720p | 13.0s | 13.0s |
-| 3 renditions + poster + sprites + speech audio | 42.9s | 53.1s as six commands, 43.3s as one |
-
-On cuts and joins geneva reaches the result an expert command would, without
-being told, and is many times faster than the command most people write. A
-frame-accurate trim is about eight times faster because only 15 of 300
-frames are re-encoded and the rest are copied. A single transcode is a
-wash: both scale in YUV and hand the frames to the same encoder.
-
-The last row is the one worth explaining. Six commands decode the file six
-times; geneva decodes once and feeds the encoders in parallel, which is
-where the 20% comes from. The single ffmpeg command with `split` filters
-also decodes once, and lands in the same place. What geneva gives you there
-is one document instead of a filter graph, plus the sprite sheet's WebVTT
-map and a report listing every file, rather than less CPU time.
-
-The archives carry `check.sh`, which runs this kind of comparison on your
-machine and your file and prints the table.
-
-## What ffmpeg does better
-
-Everything not listed above, and a good deal of it matters: hundreds of
-filters, capture from devices, streaming in and out, HLS and DASH, loudness
-normalisation, waveforms, hardware encoders on every platform, formats off
-the beaten path, and twenty-five years of hardening against broken files.
-Geneva reads and writes files and does the jobs above. For the rest, or
-when you already know the flags, use ffmpeg.
-
-## Everyday commands
-
 ```sh
-geneva trim talk.mp4 -o intro.mp4 --to 30s              # copied, no re-encode
-geneva trim talk.mp4 -o clip.mp4 --from 12s --exact     # smart cut, frame-accurate
-geneva concat part1.mp4 part2.mp4 -o all.mp4            # copied when the streams match
-geneva concat a.mp4 b.mp4 -o ab.mp4 --crossfade 0.5s    # rendered
-geneva resize talk.mp4 -o talk-720.mp4 --height 720
-geneva convert talk.mp4 -o web.mp4 --for web            # copied when a browser already plays it
-geneva convert talk.mp4 -o talk.mov --codec prores --profile hq
-geneva convert talk.mp4 -o frames/%04d.png              # image sequence
-geneva overlay talk.mp4 logo.png -o branded.mp4 --at bottom-right --scale 0.5
-geneva audio talk.mp4 -o talk.wav --extract --speech    # 16 kHz mono, for transcription
-geneva audio talk.mp4 -o scored.mp4 --mix music.mp3 --gain -12
-geneva subtitles talk.mp4 -o burned.mp4 --burn en.srt --fit
-geneva frame talk.mp4 -o thumb.jpg                      # the first clear frame past the opening
-geneva probe talk.mp4                                   # streams, colour tags, what was assumed
+geneva render examples/renditions.json -o out/
 ```
 
-`--for` carries a destination's whole policy: size ceiling, codec, level,
-quality, bitrate cap, keyframe interval, fast start and audio, from one
-table that `geneva targets` prints with the source and date of each
-platform's numbers. Any verb prints the document it built with
-`--show-timeline`, which is the fastest way to a correct skeleton: run the
-verb, keep the JSON, edit it, render it.
+geneva picks the thumbnail for you. It skips the opening, then takes the
+first frame that isn't dark and has some movement behind it, so you don't
+get a black frame or a blurry one. The sprite sheet comes with the WebVTT
+file players expect.
 
-A run says what it did:
+### Cuts that don't re-encode
+
+If a trim or a join leaves the picture alone, geneva copies the packets
+instead of re-encoding. That takes about as long as reading the file. You
+don't have to know when it's safe, and you don't have to remember `-c copy`.
 
 ```
 $ geneva trim talk.mp4 -o cut.mp4 --from 0.5s --to 1.5s
@@ -239,6 +139,56 @@ note[N600]: cut at 0.5s moved to the keyframe at 0.48s
 wrote cut.mp4 (1s, streams copied without re-encoding, 0.0s elapsed)
 ```
 
+When it can't copy, it tells you why rather than quietly re-encoding:
+
+```
+note[N600]: not copied without re-encoding: the audio of talk.mp4 is aac, which wav cannot hold
+```
+
+Need the cut on an exact frame? `--exact` re-encodes only the frames between
+your cut and the next keyframe, and copies the rest into the same track.
+
+```
+note[N600]: smart cut: 285 of 300 frames copied from the source, 15 encoded in 1 run around the cuts and overlays; audio copied as coded, each cut within half a packet
+```
+
+### Files that lie about their timing
+
+Real files are full of traps. Variable frame rates. Edit lists. Audio that
+starts after the video. 29.97 fps in a 600-tick timebase. Phone clips whose
+average frame rate matches no frame in the file.
+
+geneva is tested against fourteen files built to break it, and the tests
+check that the output's timing matches the input's. A phone clip you trim
+stays a copy, and the audio doesn't drift.
+
+### Colour
+
+Standard-definition footage stays BT.601 and HD stays BT.709. The tags end
+up in the file you write. If the source has no tags, geneva guesses from the
+size and tells you what it guessed.
+
+```
+$ geneva probe clip.mp4
+  video: h264 720×576 @ 25 fps, yuv420p
+    color: primaries untagged, transfer untagged, matrix untagged, range untagged
+    assumed: matrix bt601, primaries bt601-625, transfer bt709, range limited (untagged material below HD resolution)
+```
+
+An HDR clip off a phone comes back to SDR through ITU-R BT.2446 method A,
+which is the conversion the spec asks for. You don't get the blown-out
+highlights a naive curve gives you. Use `--keep-hdr` to keep it HDR.
+
+### Running it from a script
+
+Add `--format json` and stdout becomes one JSON document. Progress goes to
+stderr, one object per line, so you can follow a long render and still read
+the result at the end.
+
+geneva checks a timeline before it decodes anything. Every problem comes
+with a code, a pointer to the spot in your JSON, the bad value and a fix.
+Misspell a field and you get an error, not silence.
+
 ```
 $ geneva validate job.json
 error[E301]: clip 0 of layer 0 lasts 6s but its source range is only 2s
@@ -246,29 +196,102 @@ error[E301]: clip 0 of layer 0 lasts 6s but its source range is only 2s
    = help: shorten the duration or widen the in/out range
 ```
 
+Renders are deterministic. Same document, same assets, same version, same
+frames. You can cache by input hash. [docs/agents.md](docs/agents.md) covers
+the rest for scripts and agents.
+
+## Speed
+
+These are from one machine, so treat them as ratios. A four-core Xeon at
+2.1 GHz, a 60-second 1080p H.264 file, release build. Both sides encode with
+the same system x264 at the same preset and quality. Every step ran twice
+and the second run is the one below.
+
+| Job | geneva | ffmpeg |
+| --- | --- | --- |
+| Trim 10s out | 0.1s | 5.8s for the obvious command, 0.1s with `-c copy` |
+| Frame-accurate trim, cut mid-GOP | 0.6s | 4.8s |
+| Resize to 720p | 13.0s | 13.0s |
+| 3 sizes + thumbnail + sprites + speech audio | 42.9s | 53.1s as six commands, 43.3s as one |
+
+On cuts, geneva gets to the answer an expert would, without being told, and
+it beats the command most people actually write. The frame-accurate trim is
+about eight times faster because it only re-encodes 15 frames out of 300.
+
+A single resize is a tie. Both scale in YUV and hand the frames to the same
+encoder.
+
+The last row is worth explaining. Six ffmpeg commands read the file six
+times. geneva reads it once and runs the encoders in parallel, which is
+where the 20% comes from. One clever ffmpeg command with `split` filters
+also reads once, and ends up level with geneva. What you get from geneva
+there is a document instead of a filter graph, plus the WebVTT file and a
+report listing everything it wrote.
+
+`check.sh` ships in the release archives. Point it at your own file and it
+prints this table for your machine.
+
+## What ffmpeg does better
+
+Plenty, and it's worth being clear about it. Hundreds of filters. Capture
+from a webcam or a screen. Streaming in and out. HLS and DASH. Loudness
+normalisation. Waveform images. Hardware encoders on every platform.
+Formats nobody has thought about in years. Twenty-five years of people
+throwing broken files at it.
+
+geneva reads and writes files, and does the jobs above. Reach for ffmpeg for
+the rest, or when you already know the flags.
+
+## Commands
+
+```sh
+geneva trim talk.mp4 -o intro.mp4 --to 30s              # copied, no re-encode
+geneva trim talk.mp4 -o clip.mp4 --from 12s --exact     # frame-accurate, smart cut
+geneva concat part1.mp4 part2.mp4 -o all.mp4            # copied when the streams match
+geneva concat a.mp4 b.mp4 -o ab.mp4 --crossfade 0.5s    # rendered
+geneva resize talk.mp4 -o talk-720.mp4 --height 720
+geneva convert talk.mp4 -o web.mp4 --for web            # copied if a browser can already play it
+geneva convert talk.mp4 -o talk.mov --codec prores --profile hq
+geneva convert talk.mp4 -o frames/%04d.png              # image sequence
+geneva overlay talk.mp4 logo.png -o branded.mp4 --at bottom-right --scale 0.5
+geneva audio talk.mp4 -o talk.wav --extract --speech    # 16 kHz mono, for whisper
+geneva audio talk.mp4 -o scored.mp4 --mix music.mp3 --gain -12
+geneva subtitles talk.mp4 -o burned.mp4 --burn en.srt --fit
+geneva frame talk.mp4 -o thumb.jpg                      # first clear frame past the opening
+geneva probe talk.mp4                                   # streams, colour tags, what was guessed
+```
+
+`--for` sets everything a destination needs at once: the size ceiling, the
+codec, the level, the quality, the bitrate cap, the keyframe interval, fast
+start and the audio settings. Run `geneva targets` to see the table, with a
+source and a date for every platform's numbers.
+
+Add `--show-timeline` to any command and it prints the JSON instead of
+rendering. That's the quickest way to a document that already works. Run the
+command, keep the JSON, edit it, render it.
+
 ## Installing
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/geneva-render/geneva/main/scripts/install.sh | sh
 ```
 
-That fetches the latest release for your machine and installs it to
-`/usr/local/bin`, or `~/.local/bin` when the first is not writable
-(`GENEVA_PREFIX` overrides). You can instead take an archive from the
-[releases page](https://github.com/geneva-render/geneva/releases) and run
-the `install.sh` inside it. On macOS the installer clears the quarantine
-flag a browser download carries, so the binary starts without a Gatekeeper
-detour.
+That grabs the right build for your machine and puts it in `/usr/local/bin`,
+or `~/.local/bin` if the first isn't writable. Set `GENEVA_PREFIX` to
+override. You can also download an archive from the
+[releases page](https://github.com/geneva-render/geneva/releases) and run the
+`install.sh` inside it. On macOS the installer clears the quarantine flag, so
+you won't get a Gatekeeper dialog.
 
-Linux binaries need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, RHEL 9).
-macOS binaries need macOS 12 or newer on Apple silicon. Codecs, containers
-and font shaping are built in.
+Linux builds need glibc 2.35 or newer, so Ubuntu 22.04, Debian 12 or RHEL 9
+and up. macOS builds need macOS 12 or newer on Apple silicon. Codecs,
+containers and font shaping are all built in.
 
-Software H.264 is the one thing worth knowing about. Geneva bundles
-OpenH264, which writes larger files than x264 at the same quality. It does
-not bundle x264, which is GPL licensed, but it loads the system's copy when
-one is present and the report says which encoder ran. Hardware encoders
-(VideoToolbox, NVENC) come first when they are there.
+One thing to know about H.264. geneva bundles OpenH264, which makes bigger
+files than x264 at the same quality. It doesn't bundle x264 itself, because
+x264 is GPL, but it will use the copy on your system if you have one, and it
+says which encoder it used. Hardware encoders come first when they're
+available.
 
 ```sh
 sudo apt install libx264-164     # Debian 12, Ubuntu 24.04 (libx264-163 on 22.04)
@@ -277,27 +300,25 @@ brew install x264                # macOS
 
 ## Documentation
 
-| Page | Contents |
+| Page | What's in it |
 | --- | --- |
-| [docs/timeline.md](docs/timeline.md) | The format: every field, with defaults and rules |
-| [docs/cli.md](docs/cli.md) | Every command and option, targets, containers and codecs |
-| [docs/agents.md](docs/agents.md) | The short version for programs and AI agents |
-| [docs/errors.md](docs/errors.md) | Every diagnostic code and what to do about it |
-| [docs/color.md](docs/color.md) | Tags, inference, the working space, HDR |
-| [docs/architecture.md](docs/architecture.md) | How the renderer, the copy planner and the encoders fit |
+| [docs/timeline.md](docs/timeline.md) | The format: every field, its default and its rules |
+| [docs/cli.md](docs/cli.md) | Every command and flag, the `--for` targets, containers and codecs |
+| [docs/agents.md](docs/agents.md) | The short version, for scripts and AI agents |
+| [docs/errors.md](docs/errors.md) | Every error code and what to do about it |
+| [docs/color.md](docs/color.md) | Tags, guessing, the working space, HDR |
+| [docs/architecture.md](docs/architecture.md) | How the renderer, the copy planner and the encoders fit together |
 
 ## How this was built
 
-Every line of this repository was written by Claude, Anthropic's model,
-running in Claude Code, from the direction, review and testing of one
-person: the Rust, the tests, the documentation and the design notes behind
-them. The commit trailers record which model wrote each commit.
+Claude wrote all of it, running in Claude Code, directed and reviewed by one
+person. That covers the Rust, the tests, these docs and the design notes
+behind them. The commit trailers say which model wrote each commit.
 
-It is worth saying plainly rather than leaving to be discovered. If you are
-deciding whether to trust the code, you should know where it came from and
-read it accordingly. And if you are curious what the method produces, the
-repository is the evidence, including the mistakes the history records and
-the fixes that followed.
+It seems better to say that up front than to let you work it out. If you're
+deciding whether to trust the code, you should know where it came from. And
+if you're curious what this way of working actually produces, the repository
+is the answer, bugs and fixes included.
 
 ## Building from source
 
@@ -306,29 +327,27 @@ scripts/build-media-libs.sh   # builds the media libraries once, 10 to 20 minute
 cargo build --release
 ```
 
-The script needs a C and C++ toolchain, cmake, meson, ninja, nasm,
-pkg-config and clang. [CONTRIBUTING.md](CONTRIBUTING.md) has the
-per-platform package lists and the test workflow. Third-party components
-and their licences are in
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+You'll need a C and C++ toolchain, cmake, meson, ninja, nasm, pkg-config and
+clang. [CONTRIBUTING.md](CONTRIBUTING.md) lists the packages per platform and
+explains how to run the tests. Third-party components and their licences are
+in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
-## Repository layout
+## What's where
 
-| Path | Contents |
+| Path | What it holds |
 | --- | --- |
 | `crates/geneva-timeline` | The format: types, parsing, validation, resolution, JSON Schema |
-| `crates/geneva-render` | The compositor and the renderer interface |
-| `crates/geneva-color` | Colour tags, inference, transfer functions, matrices, linear light |
-| `crates/geneva-anim` | Keyframes and easing; animation as a pure function of time |
+| `crates/geneva-render` | The compositor |
+| `crates/geneva-color` | Colour tags, guessing, transfer functions, matrices, linear light |
+| `crates/geneva-anim` | Keyframes and easing |
 | `crates/geneva-media` | Probing, decoding, encoding, the copy planner, smart cut, mixing |
-| `crates/geneva-golden` | Perceptual image comparison and the golden-frame driver |
-| `crates/geneva-cli` | The `geneva` command-line tool |
+| `crates/geneva-golden` | Image comparison and the golden-frame tests |
+| `crates/geneva-cli` | The `geneva` command |
 | `schema/` | Published JSON Schema, one file per format version |
 | `tests/golden/` | Golden scenes, their reference frames and fonts |
-| `tests/media/` | Small media files, including the timing corpus |
+| `tests/media/` | Small test files, including the fourteen timing traps |
 
 ## Licence
 
-Geneva is open source under the [MIT Licence](LICENSE). The bundled
-third-party components and their licences are listed in
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+MIT. See [LICENSE](LICENSE). The bundled third-party components and their
+licences are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
