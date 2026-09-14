@@ -1587,7 +1587,7 @@
             "keyframes": {
               "type": "array",
               "items": {
-                "$ref": "#/$defs/KeyframeSpec"
+                "$ref": "#/$defs/Keyframe_Color"
               },
               "minItems": 1
             }
@@ -1599,35 +1599,34 @@
         }
       ]
     },
-    "KeyframeSpec": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "t": {
-          "$ref": "#/$defs/Time",
-          "description": "Time of the keyframe, relative to the start of the clip."
-        },
-        "v": {
-          "$ref": "#/$defs/Color",
-          "description": "Value at that time."
-        },
-        "ease": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Easing"
+    "Keyframe_Color": {
+      "description": "One keyframe: {\"t\": .., \"v\": .., \"ease\": ..} or the same three in order as [t, v] or [t, v, ease].",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "$ref": "#/$defs/Time"
             },
-            {
-              "type": "null"
+            "v": {
+              "$ref": "#/$defs/Color"
+            },
+            "ease": {
+              "$ref": "#/$defs/Easing"
             }
+          },
+          "required": [
+            "t",
+            "v"
           ],
-          "description": "Easing applied between this keyframe and the next. Defaults to linear."
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3
         }
-      },
-      "required": [
-        "t",
-        "v"
-      ],
-      "description": "One keyframe as written in a timeline."
+      ]
     },
     "Easing": {
       "anyOf": [
@@ -1788,28 +1787,34 @@
       ]
     },
     "Word": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "text": {
-          "type": "string",
-          "description": "The word."
+      "title": "Word",
+      "description": "One timed word: {\"text\": .., \"start\": .., \"end\": ..} or the same three in order as [text, start] or [text, start, end]. Without an end, a word runs to the next word's start; the last word needs its own.",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "start": {
+              "$ref": "#/$defs/Time"
+            },
+            "end": {
+              "$ref": "#/$defs/Time"
+            }
+          },
+          "required": [
+            "text",
+            "start"
+          ],
+          "additionalProperties": false
         },
-        "start": {
-          "$ref": "#/$defs/Time",
-          "description": "When the word becomes current, relative to the clip start."
-        },
-        "end": {
-          "$ref": "#/$defs/Time",
-          "description": "When the word stops being current."
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3
         }
-      },
-      "required": [
-        "text",
-        "start",
-        "end"
-      ],
-      "description": "One timed word."
+      ]
     },
     "TextStyle": {
       "type": "object",
@@ -2102,7 +2107,7 @@
             "keyframes": {
               "type": "array",
               "items": {
-                "$ref": "#/$defs/KeyframeSpec2"
+                "$ref": "#/$defs/Keyframe_Point"
               },
               "minItems": 1
             }
@@ -2115,53 +2120,66 @@
       ]
     },
     "Point": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "x": {
-          "$ref": "#/$defs/Length",
-          "description": "Horizontal component; percentages refer to the output width."
-        },
-        "y": {
-          "$ref": "#/$defs/Length",
-          "description": "Vertical component; percentages refer to the output height."
-        }
-      },
-      "required": [
-        "x",
-        "y"
-      ],
-      "description": "A 2D point or size with independent units per axis."
-    },
-    "KeyframeSpec2": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "t": {
-          "$ref": "#/$defs/Time",
-          "description": "Time of the keyframe, relative to the start of the clip."
-        },
-        "v": {
-          "$ref": "#/$defs/Point",
-          "description": "Value at that time."
-        },
-        "ease": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Easing"
+      "title": "Point",
+      "description": "A 2D point: {\"x\": .., \"y\": ..}, a pair like [30, 36], or a string of one or two components (\"30 36\", \"0% 50%\", \"left\", \"bottom right\"). A component is a length or one of left, right, top, bottom, center.",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "x": {
+              "$ref": "#/$defs/Length"
             },
-            {
-              "type": "null"
+            "y": {
+              "$ref": "#/$defs/Length"
             }
+          },
+          "required": [
+            "x",
+            "y"
           ],
-          "description": "Easing applied between this keyframe and the next. Defaults to linear."
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Length"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        {
+          "type": "string"
         }
-      },
-      "required": [
-        "t",
-        "v"
-      ],
-      "description": "One keyframe as written in a timeline."
+      ]
+    },
+    "Keyframe_Point": {
+      "description": "One keyframe: {\"t\": .., \"v\": .., \"ease\": ..} or the same three in order as [t, v] or [t, v, ease].",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "$ref": "#/$defs/Time"
+            },
+            "v": {
+              "$ref": "#/$defs/Point"
+            },
+            "ease": {
+              "$ref": "#/$defs/Easing"
+            }
+          },
+          "required": [
+            "t",
+            "v"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3
+        }
+      ]
     },
     "Animated_Scale": {
       "description": "Either a constant value or {\"keyframes\": [...]} with values interpolated over time.",
@@ -2175,7 +2193,7 @@
             "keyframes": {
               "type": "array",
               "items": {
-                "$ref": "#/$defs/KeyframeSpec3"
+                "$ref": "#/$defs/Keyframe_Scale"
               },
               "minItems": 1
             }
@@ -2212,35 +2230,34 @@
         }
       ]
     },
-    "KeyframeSpec3": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "t": {
-          "$ref": "#/$defs/Time",
-          "description": "Time of the keyframe, relative to the start of the clip."
-        },
-        "v": {
-          "$ref": "#/$defs/Scale",
-          "description": "Value at that time."
-        },
-        "ease": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Easing"
+    "Keyframe_Scale": {
+      "description": "One keyframe: {\"t\": .., \"v\": .., \"ease\": ..} or the same three in order as [t, v] or [t, v, ease].",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "$ref": "#/$defs/Time"
             },
-            {
-              "type": "null"
+            "v": {
+              "$ref": "#/$defs/Scale"
+            },
+            "ease": {
+              "$ref": "#/$defs/Easing"
             }
+          },
+          "required": [
+            "t",
+            "v"
           ],
-          "description": "Easing applied between this keyframe and the next. Defaults to linear."
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3
         }
-      },
-      "required": [
-        "t",
-        "v"
-      ],
-      "description": "One keyframe as written in a timeline."
+      ]
     },
     "Animated_double": {
       "description": "Either a constant value or {\"keyframes\": [...]} with values interpolated over time.",
@@ -2255,7 +2272,7 @@
             "keyframes": {
               "type": "array",
               "items": {
-                "$ref": "#/$defs/KeyframeSpec4"
+                "$ref": "#/$defs/Keyframe_double"
               },
               "minItems": 1
             }
@@ -2267,36 +2284,35 @@
         }
       ]
     },
-    "KeyframeSpec4": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "t": {
-          "$ref": "#/$defs/Time",
-          "description": "Time of the keyframe, relative to the start of the clip."
-        },
-        "v": {
-          "type": "number",
-          "format": "double",
-          "description": "Value at that time."
-        },
-        "ease": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Easing"
+    "Keyframe_double": {
+      "description": "One keyframe: {\"t\": .., \"v\": .., \"ease\": ..} or the same three in order as [t, v] or [t, v, ease].",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "$ref": "#/$defs/Time"
             },
-            {
-              "type": "null"
+            "v": {
+              "type": "number",
+              "format": "double"
+            },
+            "ease": {
+              "$ref": "#/$defs/Easing"
             }
+          },
+          "required": [
+            "t",
+            "v"
           ],
-          "description": "Easing applied between this keyframe and the next. Defaults to linear."
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3
         }
-      },
-      "required": [
-        "t",
-        "v"
-      ],
-      "description": "One keyframe as written in a timeline."
+      ]
     },
     "BlendMode": {
       "oneOf": [

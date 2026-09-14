@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 use geneva_color::ColorTags;
 use schemars::JsonSchema;
+use serde::de;
 use serde::{Deserialize, Serialize};
 
 use crate::animated::Animated;
@@ -923,15 +924,97 @@ pub struct TextSource {
 }
 
 /// One timed word.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+///
+/// JSON forms: the object (`{"text": "hello", "start": 0, "end": "0.5s"}`)
+/// or the same three in order (`["hello", 0, "0.5s"]`, or `["hello", 0]`
+/// where the next word's start is also this word's end).
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Word {
     /// The word.
     pub text: String,
     /// When the word becomes current, relative to the clip start.
     pub start: Time,
-    /// When the word stops being current.
-    pub end: Time,
+    /// When the word stops being current. Defaults to the next word's
+    /// start; the last word needs its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<Time>,
+}
+
+impl<'de> Deserialize<'de> for Word {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        /// The canonical object form, kept on the derive so its field errors
+        /// keep their paths and spelling.
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Object {
+            text: String,
+            start: Time,
+            #[serde(default)]
+            end: Option<Time>,
+        }
+
+        struct WordVisitor;
+
+        impl<'de> de::Visitor<'de> for WordVisitor {
+            type Value = Word;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str(
+                    "a timed word: {\"text\": .., \"start\": ..} or [text, start] or [text, start, end]",
+                )
+            }
+
+            fn visit_map<A: de::MapAccess<'de>>(self, map: A) -> Result<Word, A::Error> {
+                let o = Object::deserialize(de::value::MapAccessDeserializer::new(map))?;
+                Ok(Word {
+                    text: o.text,
+                    start: o.start,
+                    end: o.end,
+                })
+            }
+
+            fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Word, A::Error> {
+                let text: String = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::custom("a word needs its text and a start time"))?;
+                let start: Time = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::custom("a word needs its text and a start time"))?;
+                let end: Option<Time> = seq.next_element()?;
+                if seq.next_element::<de::IgnoredAny>()?.is_some() {
+                    return Err(de::Error::custom(
+                        "a word in list form is [text, start] or [text, start, end], nothing longer",
+                    ));
+                }
+                Ok(Word { text, start, end })
+            }
+        }
+
+        deserializer.deserialize_any(WordVisitor)
+    }
+}
+
+impl JsonSchema for Word {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Word".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let time = generator.subschema_for::<Time>();
+        schemars::json_schema!({
+            "title": "Word",
+            "description": "One timed word: {\"text\": .., \"start\": .., \"end\": ..} or the same three in order as [text, start] or [text, start, end]. Without an end, a word runs to the next word's start; the last word needs its own.",
+            "anyOf": [
+                {
+                    "type": "object",
+                    "properties": { "text": { "type": "string" }, "start": time, "end": time },
+                    "required": ["text", "start"],
+                    "additionalProperties": false
+                },
+                { "type": "array", "minItems": 2, "maxItems": 3 }
+            ]
+        })
+    }
 }
 
 /// Font and color properties of text.

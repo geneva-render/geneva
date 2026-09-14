@@ -134,8 +134,13 @@ impl JsonSchema for Length {
 }
 
 /// A 2D point or size with independent units per axis.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+///
+/// JSON forms: the object (`{"x": 30, "y": 36}`), a pair (`[30, 36]`), or a
+/// string of one or two components (`"30 36"`, `"0% 50%"`, `"left"`,
+/// `"bottom right"`). A component is a length or one of the CSS keywords
+/// `left`, `right`, `top`, `bottom`, `center`. A single length applies to
+/// both axes; a single keyword centers the axis it says nothing about.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct Point {
     /// Horizontal component; percentages refer to the output width.
     pub x: Length,
@@ -143,10 +148,151 @@ pub struct Point {
     pub y: Length,
 }
 
+/// The axis a component of a shorthand point lands on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Axis {
+    X,
+    Y,
+}
+
+/// The two components a CSS position keyword fixes, if any.
+fn keyword(token: &str) -> Option<(Option<Length>, Option<Length>)> {
+    const ZERO: Length = Length::Percent(0.0);
+    const HALF: Length = Length::Percent(50.0);
+    const FULL: Length = Length::Percent(100.0);
+    Some(match token {
+        "left" => (Some(ZERO), None),
+        "right" => (Some(FULL), None),
+        "top" => (None, Some(ZERO)),
+        "bottom" => (None, Some(FULL)),
+        "center" => (Some(HALF), Some(HALF)),
+        _ => return None,
+    })
+}
+
+/// One component of a shorthand point: a keyword that fixes `axis`, or a
+/// length.
+fn component(token: &str, axis: Axis) -> Result<Length, String> {
+    match keyword(token) {
+        Some((x, y)) => {
+            let (taken, other) = match axis {
+                Axis::X => (x, "vertical"),
+                Axis::Y => (y, "horizontal"),
+            };
+            taken.ok_or_else(|| format!("{token:?} positions the {other} axis"))
+        }
+        None => Length::parse(token),
+    }
+}
+
+const POINT_FORMS: &str = "write two components like \"30 36\" or \"0% 50%\", a keyword like \"left\" or \"bottom right\", or an object {\"x\": .., \"y\": ..}";
+
 impl Point {
     /// Resolves both components to pixels against an output size.
     pub fn to_px(self, width: f64, height: f64) -> [f64; 2] {
         [self.x.to_px(width), self.y.to_px(height)]
+    }
+
+    /// Parses the shorthand string form.
+    pub fn parse(s: &str) -> Result<Self, String> {
+        let tokens: Vec<&str> = s.split_whitespace().collect();
+        let (a, b) = match tokens.as_slice() {
+            [one] => {
+                if let Some((x, y)) = keyword(one) {
+                    return Ok(Self {
+                        x: x.unwrap_or(Length::Percent(50.0)),
+                        y: y.unwrap_or(Length::Percent(50.0)),
+                    });
+                }
+                let l = Length::parse(one)
+                    .map_err(|_| format!("invalid point {s:?}; {POINT_FORMS}"))?;
+                return Ok(Self { x: l, y: l });
+            }
+            // "top left" reads as naturally as "left top", so a component
+            // that can only be vertical, or a second one that can only be
+            // horizontal, puts the pair back in x-then-y order.
+            [a, b] if matches!(*a, "top" | "bottom") || matches!(*b, "left" | "right") => (*b, *a),
+            [a, b] => (*a, *b),
+            _ => return Err(format!("invalid point {s:?}; {POINT_FORMS}")),
+        };
+        let x = component(a, Axis::X).map_err(|e| format!("{e} in point {s:?}; {POINT_FORMS}"))?;
+        let y = component(b, Axis::Y).map_err(|e| format!("{e} in point {s:?}; {POINT_FORMS}"))?;
+        Ok(Self { x, y })
+    }
+}
+
+impl JsonSchema for Point {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Point".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let length = generator.subschema_for::<Length>();
+        json_schema!({
+            "title": "Point",
+            "description": "A 2D point: {\"x\": .., \"y\": ..}, a pair like [30, 36], or a string of one or two components (\"30 36\", \"0% 50%\", \"left\", \"bottom right\"). A component is a length or one of left, right, top, bottom, center.",
+            "anyOf": [
+                {
+                    "type": "object",
+                    "properties": { "x": length, "y": length },
+                    "required": ["x", "y"],
+                    "additionalProperties": false
+                },
+                { "type": "array", "items": length, "minItems": 2, "maxItems": 2 },
+                { "type": "string" }
+            ]
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for Point {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        /// The canonical object form, kept on the derive so its field errors
+        /// keep their paths and spelling.
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Object {
+            x: Length,
+            y: Length,
+        }
+
+        struct PointVisitor;
+
+        impl<'de> Visitor<'de> for PointVisitor {
+            type Value = Point;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str(
+                    "a point: {\"x\": .., \"y\": ..}, a pair like [30, 36], or a string like \"30 36\" or \"bottom right\"",
+                )
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Point, E> {
+                Point::parse(v).map_err(E::custom)
+            }
+
+            fn visit_map<A: de::MapAccess<'de>>(self, map: A) -> Result<Point, A::Error> {
+                let o = Object::deserialize(de::value::MapAccessDeserializer::new(map))?;
+                Ok(Point { x: o.x, y: o.y })
+            }
+
+            fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Point, A::Error> {
+                let x: Length = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::custom("a point pair needs two components"))?;
+                let y: Length = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::custom("a point pair needs two components"))?;
+                if seq.next_element::<de::IgnoredAny>()?.is_some() {
+                    return Err(de::Error::custom(
+                        "a point pair has two components, not more",
+                    ));
+                }
+                Ok(Point { x, y })
+            }
+        }
+
+        deserializer.deserialize_any(PointVisitor)
     }
 }
 
@@ -286,5 +432,62 @@ mod tests {
         assert_eq!(s, Scale { x: 1.0, y: 0.5 });
         assert!(serde_json::from_str::<Scale>(r#"{"x": 1}"#).is_err());
         assert!(serde_json::from_str::<Point>(r#"{"x": 1, "y": 2, "z": 3}"#).is_err());
+    }
+
+    fn point(json: &str) -> Point {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn point_shorthands() {
+        let object = point(r#"{"x": 30, "y": 36}"#);
+        assert_eq!(point(r#""30 36""#), object);
+        assert_eq!(point("[30, 36]"), object);
+        assert_eq!(point(r#""30px 36px""#), object);
+        assert_eq!(
+            point(r#""0% 50%""#),
+            Point {
+                x: Length::Percent(0.0),
+                y: Length::Percent(50.0)
+            }
+        );
+        // One length goes on both axes.
+        assert_eq!(point("\"12\""), point(r#"{"x": 12, "y": 12}"#));
+    }
+
+    #[test]
+    fn point_keywords() {
+        assert_eq!(point(r#""left""#), point(r#"{"x": "0%", "y": "50%"}"#));
+        assert_eq!(point(r#""bottom""#), point(r#"{"x": "50%", "y": "100%"}"#));
+        assert_eq!(point(r#""center""#), point(r#"{"x": "50%", "y": "50%"}"#));
+        let corner = point(r#"{"x": "100%", "y": "0%"}"#);
+        assert_eq!(point(r#""right top""#), corner);
+        assert_eq!(point(r#""top right""#), corner);
+        // A keyword names its own axis, so it can pair with a length.
+        assert_eq!(point(r#""left 36""#), point(r#"{"x": "0%", "y": 36}"#));
+        assert_eq!(point(r#""center 36""#), point(r#"{"x": "50%", "y": 36}"#));
+    }
+
+    #[test]
+    fn point_shorthand_errors() {
+        for bad in [
+            r#""left right""#,
+            r#""top bottom""#,
+            r#""1 2 3""#,
+            r#""""#,
+            "[1]",
+            "[1,2,3]",
+        ] {
+            assert!(
+                serde_json::from_str::<Point>(bad).is_err(),
+                "{bad} should not parse"
+            );
+        }
+        let err = serde_json::from_str::<Point>(r#""left right""#)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("horizontal axis"), "{err}");
+        // Either order of a keyword pair, and a keyword with a length.
+        assert_eq!(point(r#""top 36""#), point(r#""36 top""#));
     }
 }

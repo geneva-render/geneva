@@ -228,6 +228,28 @@ fn text_needs_content_and_ordered_words() {
 }
 
 #[test]
+fn words_in_list_form_run_to_the_next_word() {
+    let text = doc(r#""layers":[{"clips":[{"source":{"kind":"text",
+        "words":[["Dragon",0],["is","0.5s"],["captured","0.8s","1.5s"]]}}]}]"#);
+    let l = load(&text);
+    assert!(l.is_ok(), "{:?}", l.diagnostics);
+    let clip = &l.composition.unwrap().layers[0].clips[0];
+    let ResolvedSource::Text(t) = &clip.source else {
+        panic!("expected a text source");
+    };
+    let ends: Vec<String> = t.words.iter().map(|w| w.2.to_string()).collect();
+    assert_eq!(ends, ["0.5", "0.8", "1.5"]);
+}
+
+#[test]
+fn the_last_word_needs_its_own_end() {
+    let text = doc(r#""layers":[{"clips":[{"source":{"kind":"text",
+        "words":[["Dragon",0],["is","0.5s"]]}}]}]"#);
+    let e = errors(&text);
+    assert!(e.contains(&("E102", "/layers/0/clips/0/source/words/1/end".to_owned())));
+}
+
+#[test]
 fn odd_dimensions_and_unused_assets_are_reported_softly() {
     let text = r#"{"geneva":"0.1","output":{"width":641,"height":360,"fps":30,"duration":1},
         "assets":{"x":{"src":"x.png"}}}"#;

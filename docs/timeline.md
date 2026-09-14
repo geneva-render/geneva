@@ -54,6 +54,23 @@ Positions and sizes are pixels in the output frame when written as numbers
 the output width for horizontal values and the output height for vertical
 values. In `transform.anchor`, percentages refer to the clip's own box.
 
+### Points
+
+A point (`transform.position`, `transform.anchor`) is written as an object,
+a pair, or a string:
+
+```json
+{ "x": 30, "y": 36 }        [30, 36]        "30 36"        "0% 50%"
+```
+
+A string component is a length or one of the CSS keywords `left`, `right`,
+`top`, `bottom`, `center`. A keyword names its own axis, so `"left 36"`,
+`"36 top"` and `"top 36"` all read the way CSS reads them, and a pair of
+keywords works in either order (`"bottom right"`, `"right bottom"`). One
+keyword centers the axis it says nothing about, so `"left"` is
+`{ "x": "0%", "y": "50%" }`; one length goes on both axes, so `"12"` is
+`{ "x": 12, "y": 12 }`.
+
 ### Colors
 
 Colors are sRGB strings: `"#rgb"`, `"#rrggbb"`, `"#rrggbbaa"`,
@@ -71,6 +88,13 @@ object with a `keyframes` array:
   { "t": 0, "v": 0 },
   { "t": "0.5s", "v": 1, "ease": "ease-out" }
 ] }
+```
+
+A keyframe can also be written as its fields in order, `[t, v]` or
+`[t, v, ease]`, which is easier to read down a column:
+
+```json
+"opacity": { "keyframes": [ [0, 0], ["0.5s", 1, "ease-out"] ] }
 ```
 
 - `t` is relative to the start of the clip.
@@ -308,8 +332,8 @@ output frame; `scale` and `rotation` act around it.
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `position` | `{ "x": "50%", "y": "50%" }` | Animatable point in the output frame. |
-| `anchor` | `{ "x": "50%", "y": "50%" }` | Point on the clip's box; percentages refer to the box. |
+| `position` | `"center"` | Animatable [point](#points) in the output frame. |
+| `anchor` | `"center"` | [Point](#points) on the clip's box; percentages refer to the box. |
 | `scale` | `1` | Animatable; a number or `{ "x": ..., "y": ... }`. |
 | `rotation` | `0` | Animatable; degrees, clockwise. |
 
@@ -359,7 +383,7 @@ Every source has a `kind`.
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
 | `text` | unless `words` | | The text. |
-| `words` | no | | `[{ "text", "start", "end" }]` with clip-relative times, in order, non-overlapping (E411). |
+| `words` | no | | Timed words, in order and non-overlapping (E411). Each is `{ "text", "start", "end" }` or its fields in order, `["word", start, end]` or `["word", start]`. Times are clip-relative. Without an `end` a word is current until the next one starts; the last word needs its own (E102). |
 | `highlight` | no | | Style overrides for the word whose range contains the current time. |
 | `font` | no | system sans-serif | Id of a `font` asset, a family name, or the CSS `font` shorthand (`"600 40px/1.2 Inter"`), whose parts fill in `size`, `weight`, `italic` and `line_height` unless those are set. A font asset also supplies its weight and style unless set here. |
 | `size` | no | `48` | Font size in pixels. |

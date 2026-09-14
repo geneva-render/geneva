@@ -9,6 +9,19 @@ the format version it was written for.
 
 ### Added
 
+- **Shorter spellings for the three things a document repeats most.** A
+  point (`transform.position`, `transform.anchor`) can be a pair or a
+  string: `[30, 36]`, `"30 36"`, `"0% 50%"`, or the CSS position keywords
+  `"left"`, `"center"`, `"bottom right"` (either order, and a keyword
+  pairs with a length as `"left 36"`). A keyframe can be its fields in
+  order, `[t, v]` or `[t, v, ease]`. A timed word can be `["word",
+  start, end]`, or `["word", start]` where the next word's start is this
+  word's end; the last word needs its own (E102). All three are accepted
+  next to the long forms and mean exactly the same thing, and a printed
+  timeline (`--show-timeline`) still uses the long forms, which stay
+  canonical. A document that uses them says `"geneva": "0.3"` like any
+  other; it needs 0.4.3 or later to read. The card in
+  `examples/lower-third.json` went from 176 lines to 40.
 - Progress as JSON. A render that composites frames now reports itself on
   stderr in the format the command asked for: the line rewritten in place
   for a person, and with `--format json` one object per line
@@ -43,6 +56,9 @@ the format version it was written for.
 
 ### Examples
 
+- Every example that places or animates something is written with the
+  shorthands above; each one renders byte for byte what it rendered
+  before.
 - `social-reframe.json`: a landscape clip reframed to 9:16 with a blurred
   backdrop and word-timed captions. `renditions.json`: three renditions, a
   poster, a sprite sheet and speech audio from one pass. `lower-third.json`

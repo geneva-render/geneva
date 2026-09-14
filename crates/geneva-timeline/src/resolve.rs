@@ -1813,18 +1813,40 @@ impl Resolver<'_> {
             for (i, w) in list.iter().enumerate() {
                 let p = wpath.index(i);
                 let start = self.time(w.start, &p.key("start"), "word start");
-                let end = self.time(w.end, &p.key("end"), "word end");
+                // A word without an "end" is current until the next one
+                // starts. The last word has no next one, so it needs its own.
+                let (written, epath) = match w.end {
+                    Some(t) => (Some(t), p.key("end")),
+                    None => (
+                        list.get(i + 1).map(|n| n.start),
+                        wpath.index(i + 1).key("start"),
+                    ),
+                };
+                let Some(written) = written else {
+                    self.push(
+                        Diagnostic::error(
+                            "E102",
+                            p.key("end"),
+                            format!("the last word {:?} has no \"end\"", w.text),
+                        )
+                        .with_help(
+                            "a word takes its end from the word after it; the last one needs its own",
+                        ),
+                    );
+                    continue;
+                };
+                let end = self.time(written, &epath, "word end");
                 if end <= start {
                     self.push(
                         Diagnostic::error(
                             "E411",
-                            p.key("end"),
+                            epath,
                             format!(
                                 "word {:?} ends at {end}s, not after it starts at {start}s",
                                 w.text
                             ),
                         )
-                        .with_value(json!(w.end.to_string())),
+                        .with_value(json!(written.to_string())),
                     );
                 }
                 if start < prev_end {

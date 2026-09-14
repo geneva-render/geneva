@@ -9,10 +9,10 @@
           "id": "panel",
           "source": { "kind": "shape", "shape": "rect", "width": "60%", "height": 200, "fill": "#2b3a55", "radius": 24 },
           "transform": {
-            "position": { "x": "50%", "y": "50%" },
-            "scale": { "keyframes": [ { "t": 0, "v": 0.8, "ease": "ease-out" }, { "t": "0.5s", "v": 1 } ] }
+            "position": "center",
+            "scale": { "keyframes": [ [0, 0.8, "ease-out"], ["0.5s", 1] ] }
           },
-          "opacity": { "keyframes": [ { "t": 0, "v": 0 }, { "t": "0.5s", "v": 1 } ] }
+          "opacity": { "keyframes": [ [0, 0], ["0.5s", 1] ] }
         }
       ]
     },
@@ -25,11 +25,11 @@
           "start": "0.5s",
           "transform": {
             "position": { "keyframes": [
-              { "t": 0, "v": { "x": "25%", "y": "50%" }, "ease": "ease-in-out" },
-              { "t": "1s", "v": { "x": "75%", "y": "50%" }, "ease": { "spring": { "damping": 12 } } },
-              { "t": "2s", "v": { "x": "50%", "y": "25%" } }
+              [0, "25% 50%", "ease-in-out"],
+              ["1s", "75% 50%", { "spring": { "damping": 12 } }],
+              ["2s", "50% 25%"]
             ] },
-            "rotation": { "keyframes": [ { "t": 0, "v": 0 }, { "t": "2.5s", "v": 360 } ] }
+            "rotation": { "keyframes": [ [0, 0], ["2.5s", 360] ] }
           }
         }
       ]

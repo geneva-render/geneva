@@ -32,7 +32,7 @@ result is not what was intended. Notes are informational.
 | --- | --- |
 | E100 | The file is not valid JSON. The location points at the syntax error. |
 | E101 | Unknown field. The message lists the fields allowed at that location. |
-| E102 | Required field missing. |
+| E102 | Required field missing, including the `end` of the last timed word, which has no next word to take it from. |
 | E103 | Wrong type or invalid value for a field, including malformed times, lengths and colors. |
 | E104 | Duplicate field. |
 | E105 | Unknown enum value. The message lists the accepted values. |

@@ -9,8 +9,10 @@ use serde_json::{Map, Value};
 use crate::time::Time;
 
 /// One keyframe as written in a timeline.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+///
+/// JSON forms: the object (`{"t": 0, "v": 1, "ease": "ease-out"}`) or the
+/// same three in order (`[0, 1, "ease-out"]`, or `[0, 1]` for linear).
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct KeyframeSpec<T> {
     /// Time of the keyframe, relative to the start of the clip.
     pub t: Time,
@@ -19,6 +21,86 @@ pub struct KeyframeSpec<T> {
     /// Easing applied between this keyframe and the next. Defaults to linear.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ease: Option<Easing>,
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for KeyframeSpec<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        /// The canonical object form, kept on the derive so its field errors
+        /// keep their paths and spelling.
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields, bound = "T: Deserialize<'de>")]
+        struct Object<T> {
+            t: Time,
+            v: T,
+            #[serde(default)]
+            ease: Option<Easing>,
+        }
+
+        struct KeyframeVisitor<T>(std::marker::PhantomData<T>);
+
+        impl<'de, T: Deserialize<'de>> Visitor<'de> for KeyframeVisitor<T> {
+            type Value = KeyframeSpec<T>;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a keyframe: {\"t\": .., \"v\": ..} or [t, v] or [t, v, ease]")
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+                let o = Object::<T>::deserialize(de::value::MapAccessDeserializer::new(map))?;
+                Ok(KeyframeSpec {
+                    t: o.t,
+                    v: o.v,
+                    ease: o.ease,
+                })
+            }
+
+            fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                let t: Time = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::custom("a keyframe needs a time and a value"))?;
+                let v: T = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::custom("a keyframe needs a time and a value"))?;
+                let ease: Option<Easing> = seq.next_element()?;
+                if seq.next_element::<de::IgnoredAny>()?.is_some() {
+                    return Err(de::Error::custom(
+                        "a keyframe in list form is [t, v] or [t, v, ease], nothing longer",
+                    ));
+                }
+                Ok(KeyframeSpec { t, v, ease })
+            }
+        }
+
+        deserializer.deserialize_any(KeyframeVisitor(std::marker::PhantomData))
+    }
+}
+
+impl<T: JsonSchema> JsonSchema for KeyframeSpec<T> {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        format!("Keyframe_{}", T::schema_name()).into()
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        format!("geneva::KeyframeSpec<{}>", T::schema_id()).into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let value = generator.subschema_for::<T>();
+        let time = generator.subschema_for::<Time>();
+        let ease = generator.subschema_for::<Easing>();
+        json_schema!({
+            "description": "One keyframe: {\"t\": .., \"v\": .., \"ease\": ..} or the same three in order as [t, v] or [t, v, ease].",
+            "anyOf": [
+                {
+                    "type": "object",
+                    "properties": { "t": time, "v": value, "ease": ease },
+                    "required": ["t", "v"],
+                    "additionalProperties": false
+                },
+                { "type": "array", "minItems": 2, "maxItems": 3 }
+            ]
+        })
+    }
 }
 
 /// A property that is either constant or driven by keyframes.
@@ -232,6 +314,38 @@ mod tests {
     }
 
     #[test]
+    fn keyframes_in_list_form() {
+        let long: Animated<f64> = serde_json::from_str(
+            r#"{"keyframes":[{"t":0,"v":0},{"t":"0.3s","v":1,"ease":"ease-out"}]}"#,
+        )
+        .unwrap();
+        let short: Animated<f64> =
+            serde_json::from_str(r#"{"keyframes":[[0,0],["0.3s",1,"ease-out"]]}"#).unwrap();
+        assert_eq!(short, long);
+
+        // A point value keeps its own shorthand inside the list form.
+        let p: Animated<Point> =
+            serde_json::from_str(r#"{"keyframes":[[0,"-600 648","ease-out"],["0.5s",[56,648]]]}"#)
+                .unwrap();
+        let k = p.keyframes().unwrap();
+        assert_eq!(k[0].v.to_px(0.0, 0.0), [-600.0, 648.0]);
+        assert_eq!(k[1].v.to_px(0.0, 0.0), [56.0, 648.0]);
+
+        assert!(serde_json::from_str::<Animated<f64>>(r#"{"keyframes":[[0]]}"#).is_err());
+        assert!(
+            serde_json::from_str::<Animated<f64>>(r#"{"keyframes":[[0,1,"linear",2]]}"#).is_err()
+        );
+    }
+
+    #[test]
+    fn list_keyframe_errors_keep_their_path() {
+        let json = r#"{"keyframes":[[0,0],["1s","big"]]}"#;
+        let mut de = serde_json::Deserializer::from_str(json);
+        let err = serde_path_to_error::deserialize::<_, Animated<f64>>(&mut de).unwrap_err();
+        assert_eq!(err.path().to_string(), "keyframes[1][1]");
+    }
+
+    #[test]
     fn serializes_back_to_the_same_shape() {
         let a: Animated<f64> =
             serde_json::from_str(r#"{"keyframes":[{"t":0,"v":0},{"t":"1s","v":1}]}"#).unwrap();
@@ -243,6 +357,12 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&Animated::Constant(2.5)).unwrap(),
             "2.5"
+        );
+        // The list form is an input spelling; printed timelines use objects.
+        let a: Animated<f64> = serde_json::from_str(r#"{"keyframes":[[0,0],["1s",1]]}"#).unwrap();
+        assert_eq!(
+            serde_json::to_string(&a).unwrap(),
+            r#"{"keyframes":[{"t":"0s","v":0.0},{"t":"1s","v":1.0}]}"#
         );
     }
 }

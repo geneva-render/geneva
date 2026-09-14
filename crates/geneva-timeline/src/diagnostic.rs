@@ -125,8 +125,7 @@ impl fmt::Display for Diagnostic {
         // A diagnostic about the document as a whole, with no value and
         // no position, has nothing to point at; the arrow line would say
         // only "(document)".
-        let anchored =
-            !self.path.is_empty() || self.value.is_some() || !location.is_empty();
+        let anchored = !self.path.is_empty() || self.value.is_some() || !location.is_empty();
         if anchored {
             let path = if self.path.is_empty() {
                 "(document)".to_owned()

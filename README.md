@@ -31,7 +31,7 @@ MIT licensed. Linux and macOS. No services, no network access.
 ## A worked example
 
 Here's a lower third over ten seconds of footage from the space station.
-This is the whole document, line breaks tightened up so it fits on a screen:
+This is the whole of `examples/lower-third.json`:
 
 ```json
 {
@@ -49,18 +49,15 @@ This is the whole document, line breaks tightened up so it fits on a screen:
 
         { "clips": [ { "source": { "kind": "shape", "shape": "rect", "width": 5,
             "height": "100%", "fill": "#4ade80" },
-            "transform": { "anchor": { "x": "0%", "y": "0%" },
-                           "position": { "x": 0, "y": 0 } } } ] },
+            "transform": { "anchor": "top left", "position": "0 0" } } ] },
 
         { "clips": [ { "source": { "kind": "text", "text": "Dragon CRS-17",
             "font": "700 32px Liberation Sans", "color": "#ffffff", "align": "left" },
-            "transform": { "anchor": { "x": "0%", "y": "50%" },
-                           "position": { "x": 30, "y": 36 } } } ] },
+            "transform": { "anchor": "left", "position": "30 36" } } ] },
 
         { "clips": [ { "source": { "kind": "text", "text": "Berthing at the ISS  ·  NASA",
             "font": "400 20px Liberation Sans", "color": "#9fb0bf", "align": "left" },
-            "transform": { "anchor": { "x": "0%", "y": "50%" },
-                           "position": { "x": 30, "y": 68 } } } ] }
+            "transform": { "anchor": "left", "position": "30 68" } } ] }
       ]
     }
   },
@@ -72,12 +69,9 @@ This is the whole document, line breaks tightened up so it fits on a screen:
         "source": { "kind": "composition", "composition": "card" },
         "start": "2s", "duration": "4s",
         "transform": {
-          "anchor": { "x": "0%", "y": "100%" },
-          "position": { "keyframes": [
-            { "t": 0,      "v": { "x": -600, "y": 648 }, "ease": "ease-out" },
-            { "t": "0.5s", "v": { "x": 56,   "y": 648 } } ] } },
-        "opacity": { "keyframes": [ { "t": 0, "v": 0 }, { "t": "0.3s", "v": 1 },
-                                    { "t": "3.7s", "v": 1 }, { "t": "4s", "v": 0 } ] } } ] }
+          "anchor": "bottom left",
+          "position": { "keyframes": [ [0, "-600 648", "ease-out"], ["0.5s", "56 648"] ] } },
+        "opacity": { "keyframes": [ [0, 0], ["0.3s", 1], ["3.7s", 1], ["4s", 0] ] } } ] }
   ]
 }
 ```
@@ -101,10 +95,11 @@ bar and two lines of text. Then `layers` is the timeline itself: the footage
 at the bottom, the card on top of it from two seconds in.
 
 Values are spelled the way CSS spells them. `"700 32px Liberation Sans"` is
-the `font` shorthand, colours take the `#rrggbbaa` you already know, and
-sizes take `%` or pixels. There are no selectors and no box model — you
-place things by giving an anchor and a position — but you don't have to
-learn a new way to write a colour or a font.
+the `font` shorthand, colours take the `#rrggbbaa` you already know, sizes
+take `%` or pixels, and a position takes `"left"`, `"bottom right"` or
+`"30 36"`. There are no selectors and no box model — you place things by
+giving an anchor and a position — but you don't have to learn a new way to
+write a colour or a font.
 
 The card slides in because `position` has two keyframes half a second apart,
 one off the left edge and one in place, with `ease-out` between them. Same
@@ -126,9 +121,15 @@ difference between a coffee and an afternoon.
 geneva render examples/captions.json -o captioned.mp4
 ```
 
-Give a text clip a list of words with start and end times. geneva draws the
-line and picks out whichever word is current, which is the style every
-short-form platform uses now.
+Give a text clip its words and when each one lands:
+
+```json
+"words": [ ["Dragon", 0], ["is", "0.5s"], ["captured", "0.8s"], ["by", "1.5s"],
+           ["the", "1.8s"], ["station", "2s"], ["arm", "2.6s", "3.4s"] ]
+```
+
+geneva draws the line and picks out whichever word is current, which is the
+style every short-form platform uses now.
 
 The text is properly shaped, so the Arabic line underneath reads right to
 left, and Thai would break in the right places. You get wrapping, an
@@ -181,16 +182,6 @@ opening, then takes the first frame that isn't dark and has some movement
 behind it, so you don't end up with a black frame or a blurry one. The
 sprite sheet comes with the WebVTT file that players expect.
 
-### Checking a design without rendering it
-
-`geneva frame` writes a single frame as a PNG or JPEG. It's for when you're
-fiddling with the position of a title and don't want to sit through a
-render to see it.
-
-```sh
-geneva frame examples/lower-third.json --at 3.5s -o check.png
-```
-
 ### Cuts that don't re-encode
 
 The same trick from the worked example applies to plain cuts. A trim or a
@@ -210,16 +201,6 @@ When it can't copy, it says why rather than quietly re-encoding:
 ```
 note[N600]: not copied without re-encoding: the audio of talk.mp4 is aac, which wav cannot hold
 ```
-
-### Files that lie about their timing
-
-Real files are full of traps. Variable frame rates. Edit lists. Audio that
-starts after the video. 29.97 fps in a 600-tick timebase. Phone clips whose
-average frame rate matches no frame in the file.
-
-geneva is tested against fourteen files built to break exactly that, and
-the tests check the output's timing against the input's. A phone clip you
-trim stays a copy, and the audio doesn't drift.
 
 ### Colour
 

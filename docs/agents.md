@@ -138,6 +138,21 @@ document of this kind. `--for` on a verb copies a source that already
 fits the target instead of re-encoding it, and the note says which
 branch it took.
 
+Three parts of a document have a shorter spelling, all of them optional
+and all of them accepted alongside the long form, so a document can mix
+them freely:
+
+- A point (`transform.position`, `transform.anchor`) as a pair or a
+  string: `[30, 36]`, `"30 36"`, `"0% 50%"`, or the CSS keywords
+  `"left"`, `"center"`, `"bottom right"`.
+- A keyframe as its fields in order: `[t, v]` or `[t, v, ease]`, so
+  `{ "keyframes": [ [0, 0], ["0.5s", 1, "ease-out"] ] }`.
+- A timed word as its fields in order: `["word", start, end]`, or
+  `["word", start]` where the next word's start ends it. The last word
+  needs its own end (E102).
+
+A printed timeline (`--show-timeline`) always uses the long form.
+
 ## Things that trip programs up
 
 - **Asset paths are relative to a root**, the timeline's directory by
