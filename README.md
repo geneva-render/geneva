@@ -219,10 +219,7 @@ document that already works.
 
 ## How this was built
 
-I built this with Claude, which wrote effectively all of the code, the
-tests and the docs. If you are deciding whether to trust it you should
-know where it came from, so I would rather say it than have you work it
-out. The commit trailers name the model behind each commit.
+This was built almost entirely with Fable/Opus, which wrote the code, tests, and docs under my guidance. I’m being upfront about that, and you can decide for yourself whether you trust the code.
 
 ## Building from source
 
@@ -238,5 +235,7 @@ explains how to run the tests;
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE). The bundled third-party components and their
+MIT. 
+See [LICENSE](LICENSE).
+The bundled third-party components and their
 licences are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
