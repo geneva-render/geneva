@@ -124,7 +124,7 @@ captions look like, and nothing else:
 geneva render examples/lower-third.json -o dragon.mp4
 ```
 
-<img src="docs/demo.gif" alt="A name card sliding in at the top left over footage of a Dragon capsule at the space station, with captions below" width="640">
+<img src="docs/demo.gif" alt="A name card sliding in at the top left over footage of a Dragon capsule at the space station, with captions below" width="640" height="360">
 
 ```
 note[N453]: 2 cues read from "words.json"
@@ -147,6 +147,8 @@ starts off its own edge whatever size the output is. The motion is in the
 same file, as `@keyframes` and an `animation`, taking what CSS takes plus
 `spring(170, 26)`. It is not a browser, and anything it cannot draw is a
 warning that names it rather than a silent difference.
+[examples/README.md](examples/README.md#writing-a-card) says what the
+subset covers and where it stops.
 
 The captions are one clip in the document and one clip per cue on the
 timeline. The transcript carries the timing, so nothing here says when a
@@ -197,7 +199,6 @@ its output:
 | **One read, many files** | renditions, a poster, a sprite sheet and speech audio written in a single pass over the source | [examples](examples/README.md#one-read-many-files) |
 | **Cuts that copy** | trims and joins that never touch the picture | [examples](examples/README.md#cuts-that-dont-re-encode) |
 | **Transitions** | dissolve or dip through a colour, at a join or at the head and tail of a piece. One field moves the picture and the sound together, rather than a video filter and an audio filter that have to be kept in step | [docs/timeline.md](docs/timeline.md#transitions) |
-| **Overlays as HTML and CSS** | what geneva draws and what it will not | [examples](examples/README.md#writing-a-card) |
 | **Colour** | BT.601 and BT.709 kept, untagged material guessed out loud, HDR tone-mapped by BT.2446 | [docs/color.md](docs/color.md) |
 | **Scripts and agents** | `--format json`, coded diagnostics that point at the field, deterministic output | [docs/agents.md](docs/agents.md) |
 

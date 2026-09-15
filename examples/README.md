@@ -42,7 +42,7 @@ geneva subtitles examples/iss.mp4 --burn examples/words.json \
   -o captioned.mp4
 ```
 
-<img src="../docs/captions.gif" alt="Captions over the footage, each word picked out in yellow as it is said" width="640">
+<img src="../docs/captions.gif" alt="Captions over the footage, each word picked out in yellow as it is said" width="640" height="360">
 
 geneva groups the words into cues the way a caption editor would: at most
 two lines, about forty characters, nothing on screen for less than a beat.
@@ -89,7 +89,7 @@ one layer of something larger:
 geneva render examples/captions.json -o captioned.mp4
 ```
 
-<img src="../docs/captions.png" alt="A caption over the footage with the current word highlighted, and an Arabic line below it" width="560">
+<img src="../docs/captions.png" alt="A caption over the footage with the current word highlighted, and an Arabic line below it" width="560" height="315">
 
 One line in the document is one clip per cue on the timeline, which is why
 183 of the 300 frames were still copied rather than composited. The text
@@ -119,7 +119,7 @@ that yet.
 
 ## Vertical video
 
-<img src="../docs/social-reframe.png" alt="The landscape clip on a tall canvas over a blurred copy of itself, with captions" width="240">
+<img src="../docs/social-reframe.png" alt="The landscape clip on a tall canvas over a blurred copy of itself, with captions" width="240" height="427">
 
 ```sh
 geneva render examples/social-reframe.json -o reel.mp4
