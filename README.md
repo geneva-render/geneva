@@ -196,6 +196,7 @@ its output:
 | **Vertical video** | 16:9 into 9:16 over a blurred copy of itself | [examples](examples/README.md#vertical-video) |
 | **One read, many files** | renditions, a poster, a sprite sheet and speech audio written in a single pass over the source | [examples](examples/README.md#one-read-many-files) |
 | **Cuts that copy** | trims and joins that never touch the picture | [examples](examples/README.md#cuts-that-dont-re-encode) |
+| **Transitions** | dissolve or dip through a colour, at a join or at the head and tail of a piece. One field moves the picture and the sound together, rather than a video filter and an audio filter that have to be kept in step | [docs/timeline.md](docs/timeline.md#transitions) |
 | **Overlays as HTML and CSS** | what geneva draws and what it will not | [examples](examples/README.md#writing-a-card) |
 | **Colour** | BT.601 and BT.709 kept, untagged material guessed out loud, HDR tone-mapped by BT.2446 | [docs/color.md](docs/color.md) |
 | **Scripts and agents** | `--format json`, coded diagnostics that point at the field, deterministic output | [docs/agents.md](docs/agents.md) |
@@ -206,7 +207,8 @@ its output:
 geneva trim talk.mp4 -o intro.mp4 --to 30s              # copied, no re-encode
 geneva trim talk.mp4 -o clip.mp4 --from 12s --exact     # frame-accurate, smart cut
 geneva concat part1.mp4 part2.mp4 -o all.mp4            # copied when the streams match
-geneva concat a.mp4 b.mp4 -o ab.mp4 --crossfade 0.5s    # rendered
+geneva concat a.mp4 b.mp4 -o ab.mp4 --crossfade 0.5s    # dissolve, picture and sound
+geneva concat a.mp4 b.mp4 -o ab.mp4 --fade 0.6s         # dip through black
 geneva resize talk.mp4 -o talk-720.mp4 --height 720
 geneva convert talk.mp4 -o web.mp4 --for web            # copied if a browser can already play it
 geneva convert talk.mp4 -o talk.mov --codec prores --profile hq
