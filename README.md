@@ -147,18 +147,22 @@ Nothing is on screen for the first second or the last four, so 135 of the
 curl -fsSL https://raw.githubusercontent.com/geneva-render/geneva/main/scripts/install.sh | sh
 ```
 
-That grabs the right build for your machine and puts it in `/usr/local/bin`,
-or `~/.local/bin` if the first isn't writable (`GENEVA_PREFIX` overrides).
-The [releases page](https://github.com/geneva-render/geneva/releases) has
-the archives, each with the same `install.sh` inside, plus a `check.sh`
-that times the everyday commands on a file of yours against ffmpeg doing
-the same job. Linux needs glibc 2.35 or newer; macOS needs 12 or newer on
-Apple silicon. Codecs, containers and font shaping are built in.
+It picks the build for your machine and installs it to `/usr/local/bin`,
+or to `~/.local/bin` if that is not writable. Set `GENEVA_PREFIX` to
+choose somewhere else.
 
-The one thing worth knowing is H.264. geneva bundles OpenH264, which makes
-bigger files than x264 at the same quality, and doesn't bundle x264
-itself because x264 is GPL. It will use the copy on your system if there is
-one, and it always says which encoder it used.
+The [releases page](https://github.com/geneva-render/geneva/releases) has
+the archives if you would rather download one yourself. Each carries the
+same `install.sh`, and a `check.sh` that runs the everyday commands on a
+file of yours and times them against ffmpeg.
+
+Linux needs glibc 2.35 or newer. macOS needs 12 or newer, on Apple
+silicon. Codecs, containers and font shaping are built in.
+
+One thing to know about H.264. geneva bundles OpenH264, which at the same
+quality makes bigger files than x264. It does not bundle x264, which is
+GPL, but it will use your system's copy if you have one, and it always
+says which encoder it used.
 
 ```sh
 sudo apt install libx264-164     # Debian 12, Ubuntu 24.04 (libx264-163 on 22.04)
@@ -166,9 +170,6 @@ brew install x264                # macOS
 ```
 
 ## What else it does
-
-Three of these are runnable examples, with their document, command and
-output. The rest point at the reference.
 
 | | What it does | Where |
 | --- | --- | --- |
