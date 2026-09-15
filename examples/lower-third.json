@@ -11,8 +11,7 @@
     { "id": "footage", "clips": [ { "source": { "kind": "video", "asset": "iss" } } ] },
 
     { "id": "lower-third", "clips": [ {
-        "source": { "kind": "html", "asset": "card", "width": 560 },
-        "start": "2s", "duration": "4s",
-        "transform": { "anchor": "bottom left", "position": "56 648" } } ] }
+        "source": { "kind": "html", "asset": "card" },
+        "start": "2s", "duration": "4s" } ] }
   ]
 }

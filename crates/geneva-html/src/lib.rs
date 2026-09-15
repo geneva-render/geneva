@@ -89,14 +89,28 @@ pub struct Prepared {
     /// play it; it is what the clip drawing this markup animates with, so
     /// a file that moves in a browser moves here too.
     pub animation: Option<String>,
+    /// The style of the element that carries that animation, kept so that
+    /// a percentage in it can resolve against that element's box rather
+    /// than the surface's, which is what CSS does.
+    animated: Option<Computed>,
 }
 
 impl Prepared {
-    /// Lays the document out in a box `width` wide, and `height` tall when
-    /// one is given; without a height the box fits its content.
+    /// The border box of the element carrying the animation, against a
+    /// surface of `width` by `height`. `None` on an axis its style leaves
+    /// to the content.
+    pub fn animated_box(&self, width: f32, height: f32) -> (Option<f32>, Option<f32>) {
+        self.animated
+            .as_ref()
+            .map_or((None, None), |s| style::declared_box(s, (width, height)))
+    }
+}
+
+impl Prepared {
+    /// Lays the document out. A dimension that is `None` fits the content.
     pub fn layout<M: Measure>(
         &self,
-        width: f32,
+        width: Option<f32>,
         height: Option<f32>,
         measure: &mut M,
     ) -> Result<Laid, String> {
@@ -128,12 +142,14 @@ pub fn prepare(html: &str, extra: &str) -> Result<Prepared, Error> {
         .filter(|id| doc.nodes[*id].element().is_some())
         .collect();
     let mut animation = None;
+    let mut animated = None;
     for (id, computed) in styles.iter().enumerate() {
         let Some(spec) = &computed.animation else {
             continue;
         };
         if outermost.first() == Some(&id) {
             animation = Some(spec.clone());
+            animated = Some(computed.clone());
         } else if doc.nodes[id].element().is_some() {
             let tag = doc.nodes[id].element().map_or("", |e| e.tag.as_str());
             problems.push(format!(
@@ -148,6 +164,7 @@ because the markup is drawn once and the clip moves the picture"
         problems,
         keyframes: sheet.keyframes,
         animation,
+        animated,
     })
 }
 
@@ -186,6 +203,27 @@ mod tests {
             "{:?}",
             p.problems
         );
+    }
+
+    #[test]
+    fn the_animated_elements_box_is_reported_for_percentages() {
+        // A percentage width is of the surface; padding and border widen a
+        // content-box element and not a border-box one.
+        let p = prepare(
+            "<style>@keyframes a { from { translate: -100% } to { translate: 0 } }              .c { animation: a 1s; width: 50%; height: 40px; padding: 10px;              border-left: 6px solid red }</style><div class='c'></div>",
+            "",
+        )
+        .unwrap();
+        assert_eq!(p.animated_box(1000.0, 500.0), (Some(526.0), Some(60.0)));
+
+        let p = prepare(
+            "<style>@keyframes a { from { opacity: 0 } to { opacity: 1 } }              .c { animation: a 1s; width: 50%; padding: 10px; box-sizing: border-box }             </style><div class='c'></div>",
+            "",
+        )
+        .unwrap();
+        // Border-box takes the width as written, and the height is left to
+        // the content, which only laying it out could tell.
+        assert_eq!(p.animated_box(1000.0, 500.0), (Some(500.0), None));
     }
 
     #[test]

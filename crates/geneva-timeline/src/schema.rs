@@ -862,13 +862,16 @@ pub enum Source {
         /// A stylesheet applied after any `<style>` in the markup.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         css: Option<String>,
-        /// Box width. Defaults to the frame width.
+        /// Box width: a length, or "auto" to fit the content. Defaults to
+        /// the frame width, so markup is laid out on a surface the size of
+        /// the picture, the way a page is.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        width: Option<Length>,
-        /// Box height. Without one the box is as tall as its content,
-        /// so a card fits the text inside it.
+        width: Option<BoxSize>,
+        /// Box height: a length, or "auto" to fit the content, which is
+        /// how a card sizes itself to its text. Defaults to the frame
+        /// height.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        height: Option<Length>,
+        height: Option<BoxSize>,
     },
     /// A reusable composition declared under "compositions".
     Composition {
@@ -963,6 +966,88 @@ pub struct TextSource {
     /// Drop shadow.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadow: Option<Shadow>,
+}
+
+/// A box dimension: a length, or `"auto"` to fit what is inside it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BoxSize {
+    /// As large as the content.
+    Auto,
+    /// A fixed size; percentages refer to the frame.
+    Fixed(Length),
+}
+
+impl BoxSize {
+    /// The size in pixels, or `None` for `auto`.
+    pub fn to_px(self, reference: f64) -> Option<f64> {
+        match self {
+            Self::Auto => None,
+            Self::Fixed(l) => Some(l.to_px(reference)),
+        }
+    }
+}
+
+impl Serialize for BoxSize {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Auto => serializer.serialize_str("auto"),
+            Self::Fixed(l) => l.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for BoxSize {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct V;
+
+        impl de::Visitor<'_> for V {
+            type Value = BoxSize;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a length, or \"auto\" to fit the content")
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<BoxSize, E> {
+                if v.trim().eq_ignore_ascii_case("auto") {
+                    return Ok(BoxSize::Auto);
+                }
+                Length::parse(v).map(BoxSize::Fixed).map_err(E::custom)
+            }
+
+            fn visit_f64<E: de::Error>(self, v: f64) -> Result<BoxSize, E> {
+                if v.is_finite() {
+                    Ok(BoxSize::Fixed(Length::Px(v)))
+                } else {
+                    Err(E::custom("length must be finite"))
+                }
+            }
+
+            fn visit_i64<E: de::Error>(self, v: i64) -> Result<BoxSize, E> {
+                Ok(BoxSize::Fixed(Length::Px(v as f64)))
+            }
+
+            fn visit_u64<E: de::Error>(self, v: u64) -> Result<BoxSize, E> {
+                Ok(BoxSize::Fixed(Length::Px(v as f64)))
+            }
+        }
+
+        deserializer.deserialize_any(V)
+    }
+}
+
+impl JsonSchema for BoxSize {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "BoxSize".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let length = generator.subschema_for::<Length>();
+        schemars::json_schema!({
+            "title": "BoxSize",
+            "description": "A box dimension: a length (a number of pixels, \"120px\", or a percentage of the frame), or \"auto\" to fit the content.",
+            "anyOf": [length, { "const": "auto" }]
+        })
+    }
 }
 
 /// One timed word.

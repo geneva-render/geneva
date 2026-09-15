@@ -54,13 +54,38 @@ pub struct Animation {
     pub direction: Direction,
 }
 
+/// A translation component: pixels, or a percentage of the clip's own
+/// box, as CSS resolves a percentage in `translate`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Shift {
+    /// A distance in pixels.
+    Px(f64),
+    /// A share of the clip's own width or height; `100.0` is all of it.
+    Percent(f64),
+}
+
+impl Shift {
+    /// Resolves against the clip's box, when its size is known.
+    pub fn to_px(self, box_size: Option<f64>) -> Option<f64> {
+        match self {
+            Self::Px(v) => Some(v),
+            Self::Percent(p) => box_size.map(|s| s * p / 100.0),
+        }
+    }
+
+    /// Whether the value needs the clip's box to resolve.
+    pub fn is_relative(self) -> bool {
+        matches!(self, Self::Percent(_))
+    }
+}
+
 /// The properties one offset of a rule sets. Each is `None` when the
 /// declaration block says nothing about it, which is how CSS decides
 /// between which offsets a property interpolates.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct Values {
-    /// Pixels added to the clip's position.
-    pub translate: Option<[f64; 2]>,
+    /// Added to the clip's position.
+    pub translate: Option<[Shift; 2]>,
     /// Factors multiplied into the clip's scale.
     pub scale: Option<[f64; 2]>,
     /// Degrees added to the clip's rotation.
@@ -156,20 +181,21 @@ fn angle(token: &str) -> Result<f64, String> {
     finite(v, token).map(|v| v * factor)
 }
 
-/// A pixel length: `-656px`, `12`, `0`. Percentages are not accepted,
-/// since a clip's own box is not known until the source is opened.
-fn pixels(token: &str) -> Result<f64, String> {
-    if token.ends_with('%') {
-        return Err(format!(
-            "percentages are not supported in {token:?}; write the distance in pixels"
-        ));
+/// A distance: `-656px`, `12`, `0`, or `-100%` of the clip's own box.
+fn pixels(token: &str) -> Result<Shift, String> {
+    if let Some(body) = token.strip_suffix('%') {
+        let v: f64 = body
+            .trim()
+            .parse()
+            .map_err(|_| format!("invalid percentage {token:?}"))?;
+        return finite(v, token).map(Shift::Percent);
     }
     let body = token.strip_suffix("px").unwrap_or(token);
     let v: f64 = body
         .trim()
         .parse()
-        .map_err(|_| format!("invalid length {token:?}; write it like \"-656px\""))?;
-    finite(v, token)
+        .map_err(|_| format!("invalid length {token:?}; write it like \"-656px\" or \"-100%\""))?;
+    finite(v, token).map(Shift::Px)
 }
 
 /// A plain number, or a percentage for the properties that take one.
@@ -399,9 +425,18 @@ scale, rotate or opacity"
     Ok(v)
 }
 
-fn add(base: Option<[f64; 2]>, d: [f64; 2]) -> [f64; 2] {
-    let b = base.unwrap_or([0.0, 0.0]);
-    [b[0] + d[0], b[1] + d[1]]
+/// Composes two translations. Two of a kind add; a pixel distance and a
+/// percentage cannot, so the later one wins, as the last `transform`
+/// function of a kind does in a browser when they cannot be folded.
+fn add(base: Option<[Shift; 2]>, d: [Shift; 2]) -> [Shift; 2] {
+    let b = base.unwrap_or([Shift::Px(0.0), Shift::Px(0.0)]);
+    let one = |a: Shift, b: Shift| match (a, b) {
+        (Shift::Px(x), Shift::Px(y)) => Shift::Px(x + y),
+        (Shift::Percent(x), Shift::Percent(y)) => Shift::Percent(x + y),
+        (Shift::Px(0.0), other) | (other, Shift::Px(0.0)) => other,
+        (_, later) => later,
+    };
+    [one(b[0], d[0]), one(b[1], d[1])]
 }
 
 fn mul(base: Option<[f64; 2]>, d: [f64; 2]) -> [f64; 2] {
@@ -409,11 +444,11 @@ fn mul(base: Option<[f64; 2]>, d: [f64; 2]) -> [f64; 2] {
     [b[0] * d[0], b[1] * d[1]]
 }
 
-/// One or two lengths, as the `translate` property takes.
-fn translate_pair(value: &str) -> Result<[f64; 2], String> {
+/// One or two distances, as the `translate` property takes.
+fn translate_pair(value: &str) -> Result<[Shift; 2], String> {
     let t = tokens(value);
     match t.as_slice() {
-        [x] => Ok([pixels(x)?, 0.0]),
+        [x] => Ok([pixels(x)?, Shift::Px(0.0)]),
         [x, y] => Ok([pixels(x)?, pixels(y)?]),
         _ => Err(format!(
             "invalid translate {value:?}; write one or two lengths"
@@ -442,7 +477,7 @@ fn apply_transform(value: &str, v: &mut Values) -> Result<(), String> {
     if value.trim() == "none" {
         // CSS's identity transform, which is what "to { transform: none }"
         // at the end of a slide means.
-        v.translate = Some([0.0, 0.0]);
+        v.translate = Some([Shift::Px(0.0), Shift::Px(0.0)]);
         v.scale = Some([1.0, 1.0]);
         v.rotate = Some(0.0);
         return Ok(());
@@ -459,11 +494,15 @@ fn apply_transform(value: &str, v: &mut Values) -> Result<(), String> {
         match name {
             "translate" => {
                 let x = pixels(args[0])?;
-                let y = two(1).map(pixels).transpose()?.unwrap_or(0.0);
+                let y = two(1).map(pixels).transpose()?.unwrap_or(Shift::Px(0.0));
                 v.translate = Some(add(v.translate, [x, y]));
             }
-            "translateX" => v.translate = Some(add(v.translate, [pixels(args[0])?, 0.0])),
-            "translateY" => v.translate = Some(add(v.translate, [0.0, pixels(args[0])?])),
+            "translateX" => {
+                v.translate = Some(add(v.translate, [pixels(args[0])?, Shift::Px(0.0)]));
+            }
+            "translateY" => {
+                v.translate = Some(add(v.translate, [Shift::Px(0.0), pixels(args[0])?]));
+            }
             "scale" => {
                 let x = number(args[0])?;
                 let y = two(1).map(number).transpose()?.unwrap_or(x);
@@ -559,13 +598,13 @@ mod tests {
     fn parses_declarations_into_values() {
         let v = parse_declarations("transform: translateX(-656px) rotate(0.25turn); opacity: 0")
             .unwrap();
-        assert_eq!(v.translate, Some([-656.0, 0.0]));
+        assert_eq!(v.translate, Some([Shift::Px(-656.0), Shift::Px(0.0)]));
         assert_eq!(v.rotate, Some(90.0));
         assert_eq!(v.opacity, Some(0.0));
         assert_eq!(v.scale, None);
 
         let v = parse_declarations("translate: 10px 20px; scale: 2; rotate: 45deg").unwrap();
-        assert_eq!(v.translate, Some([10.0, 20.0]));
+        assert_eq!(v.translate, Some([Shift::Px(10.0), Shift::Px(20.0)]));
         assert_eq!(v.scale, Some([2.0, 2.0]));
         assert_eq!(v.rotate, Some(45.0));
 
@@ -573,14 +612,29 @@ mod tests {
         let v =
             parse_declarations("transform: translateX(10px) translateY(20px) scale(2) scaleX(3)")
                 .unwrap();
-        assert_eq!(v.translate, Some([10.0, 20.0]));
+        assert_eq!(v.translate, Some([Shift::Px(10.0), Shift::Px(20.0)]));
         assert_eq!(v.scale, Some([6.0, 2.0]));
+    }
+
+    #[test]
+    fn translate_takes_percentages_of_the_clips_own_box() {
+        let v = parse_declarations("transform: translateX(-100%)").unwrap();
+        assert_eq!(v.translate, Some([Shift::Percent(-100.0), Shift::Px(0.0)]));
+        assert_eq!(Shift::Percent(-100.0).to_px(Some(560.0)), Some(-560.0));
+        assert_eq!(Shift::Percent(-100.0).to_px(None), None);
+        assert_eq!(Shift::Px(-8.0).to_px(None), Some(-8.0));
+
+        let v = parse_declarations("translate: -50% 25%").unwrap();
+        assert_eq!(
+            v.translate,
+            Some([Shift::Percent(-50.0), Shift::Percent(25.0)])
+        );
     }
 
     #[test]
     fn transform_none_is_the_identity() {
         let v = parse_declarations("transform: none").unwrap();
-        assert_eq!(v.translate, Some([0.0, 0.0]));
+        assert_eq!(v.translate, Some([Shift::Px(0.0), Shift::Px(0.0)]));
         assert_eq!(v.scale, Some([1.0, 1.0]));
         assert_eq!(v.rotate, Some(0.0));
     }
@@ -590,7 +644,6 @@ mod tests {
         for bad in [
             "color: red",
             "transform: skew(10deg)",
-            "transform: translateX(50%)",
             "opacity",
             "transform: translateX()",
         ] {

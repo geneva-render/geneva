@@ -20,6 +20,19 @@ the format version it was written for.
   <div class="card"><h1>Dragon CRS-17</h1><p>Berthing at the ISS</p></div>
   ```
 
+  The box defaults to the size of the frame, so CSS places things in the
+  picture the way it places them on a page and the clip needs no
+  `transform` at all; `"auto"` on either side fits the content instead.
+  That costs nothing: the painter reports the rectangle it actually
+  marked and the compositor reads only that, which on the lower third
+  example is the difference between +35% and +13% against a box drawn
+  tight around the card — and the remaining difference is a drop shadow
+  the tight box was silently clipping.
+
+  `box-sizing` is `content-box` by default, as CSS has it. taffy's own
+  default is `border-box`, so a `width` with `padding` used to come out
+  the wrong size.
+
   Motion comes with it. `@keyframes` in the markup's stylesheet are in
   scope for the clip that draws it, and an `animation` on the outermost
   element is what the clip plays, so a card that slides in a browser
@@ -61,7 +74,7 @@ the format version it was written for.
   them with the CSS shorthand:
 
   ```json
-  "keyframes": { "slide-in": { "from": "translate: -656px", "to": "translate: 0" } },
+  "keyframes": { "slide-in": { "from": "translate: -100%", "to": "translate: 0" } },
   "animation": "slide-in 0.5s ease-out, fade-out 0.3s 3.7s"
   ```
 
@@ -74,9 +87,20 @@ the format version it was written for.
   clip already sets: translations add to `transform.position`, scales
   multiply, rotations add, and `opacity` replaces. Two animations may
   drive one property where their times do not collide, which is how a
-  fade-in and a fade-out share `opacity`. It all resolves to the same
-  keyframe tracks the long form produces, so nothing downstream changes
-  and `--show-timeline` prints the document as written. A property set at
+  fade-in and a fade-out share `opacity`.
+
+  A distance in `translate` can be a percentage, of the box being moved:
+  the element carrying the animation when the rule comes from markup, and
+  the clip's own box when the clip plays it, as CSS resolves one against
+  the element. So `translateX(-100%)` slides a card in by exactly its own
+  width and survives a change of output size. A clip whose size is only
+  known once its file is open — a video, an image, a text run — has no
+  box to take a share of, and says so (E442). `font-size` and
+  `line-height` take percentages too, of the inherited size.
+
+  It all lowers to the same keyframe tracks the long form produces, so
+  nothing downstream changes and `--show-timeline` prints the document as
+  written. A property set at
   one offset of a rule has nothing to interpolate with and is dropped,
   which is what lets `to { transform: none }` mean "back where it
   started" rather than "and reset the scale and rotation too". New codes

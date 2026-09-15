@@ -105,6 +105,7 @@ pub fn ycbcr16_to_image(planes: &Planes16, width: u32, height: u32, tags: Resolv
         width,
         height,
         pixels: Vec::new(),
+        content: None,
     };
     let hdr = HdrToSdr::new(tags, None);
     ycbcr16_into(planes, width, height, tags, hdr.as_ref(), &mut image);
@@ -300,6 +301,7 @@ pub fn rgba8_to_image(
         width,
         height,
         pixels: Vec::new(),
+        content: None,
     };
     rgba8_into(data, stride, width, height, transfer, &mut image);
     image
@@ -874,6 +876,7 @@ mod tests {
                 width: 0,
                 height: 0,
                 pixels: Vec::new(),
+                content: None,
             };
             yuv420p8_into(
                 &Planes420 {

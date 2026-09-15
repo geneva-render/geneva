@@ -133,21 +133,63 @@ pub fn render(
         memo: HashMap::new(),
     };
     let laid = prepared.layout(
-        html.width as f32,
+        html.width.map(|w| w as f32),
         html.height.map(|h| h as f32),
         &mut context,
     )?;
     Ok(paint(&laid, context.text, images))
 }
 
+/// The union of everything the display list can touch, in the box's own
+/// pixels. A full-frame box whose markup draws one card in a corner is
+/// mostly empty; the compositor is told so rather than reading all of it.
+fn painted_bounds(laid: &Laid) -> Option<[f64; 4]> {
+    let mut b: Option<[f64; 4]> = None;
+    for painted in &laid.boxes {
+        if painted.opacity <= 0.0 {
+            continue;
+        }
+        // A shadow reaches outside its box; everything else a box draws,
+        // its text included, is inside it.
+        let grow = painted
+            .paint
+            .shadow
+            .map_or(0.0, |s| s.blur.abs() + s.x.abs().max(s.y.abs()) + 1.0);
+        let r = [
+            f64::from(painted.rect[0]) - grow,
+            f64::from(painted.rect[1]) - grow,
+            f64::from(painted.rect[0] + painted.rect[2]) + grow,
+            f64::from(painted.rect[1] + painted.rect[3]) + grow,
+        ];
+        b = Some(match b {
+            None => r,
+            Some(o) => [
+                o[0].min(r[0]),
+                o[1].min(r[1]),
+                o[2].max(r[2]),
+                o[3].max(r[3]),
+            ],
+        });
+    }
+    b
+}
+
 /// Paints the display list in order.
 fn paint(laid: &Laid, text: &mut TextEngine, images: &HashMap<String, Image>) -> Image {
     let width = laid.size.0.ceil().max(1.0) as u32;
     let height = laid.size.1.ceil().max(1.0) as u32;
+    let content = painted_bounds(laid).map(|[x0, y0, x1, y1]| {
+        let x = x0.floor().clamp(0.0, f64::from(width)) as u32;
+        let y = y0.floor().clamp(0.0, f64::from(height)) as u32;
+        let right = x1.ceil().clamp(0.0, f64::from(width)) as u32;
+        let bottom = y1.ceil().clamp(0.0, f64::from(height)) as u32;
+        [x, y, right.saturating_sub(x), bottom.saturating_sub(y)]
+    });
     let mut image = Image {
         width,
         height,
         pixels: vec![LinearRgba::TRANSPARENT; width as usize * height as usize],
+        content,
     };
     for b in &laid.boxes {
         if b.opacity <= 0.0 {

@@ -300,9 +300,15 @@ impl<A: AssetSource> CpuRenderer<A> {
                 let Some(window) = window_of(clip, paint.size()) else {
                     continue;
                 };
-                let Some(place) =
-                    Placement::new(comp.width, comp.height, clip, local, window, mask_image)
-                else {
+                let Some(place) = Placement::new(
+                    comp.width,
+                    comp.height,
+                    clip,
+                    local,
+                    window,
+                    paint.content(),
+                    mask_image,
+                ) else {
                     continue;
                 };
                 let b = place.bounds;
@@ -414,8 +420,15 @@ impl<A: AssetSource> CpuRenderer<A> {
             let Some(window) = window_of(clip, paint.size()) else {
                 continue;
             };
-            let Some(placement) = Placement::new(width, height, clip, local, window, mask_image)
-            else {
+            let Some(placement) = Placement::new(
+                width,
+                height,
+                clip,
+                local,
+                window,
+                paint.content(),
+                mask_image,
+            ) else {
                 continue;
             };
             let scratch = if sigma > 0.0 {
@@ -593,6 +606,16 @@ impl Paint<'_> {
         }
     }
 
+    /// The part of the paint that is not transparent, when it knows.
+    fn content(&self) -> Option<[f64; 4]> {
+        match self {
+            Self::Image(img) => img
+                .content
+                .map(|[x, y, w, h]| [f64::from(x), f64::from(y), f64::from(w), f64::from(h)]),
+            Self::Solid { .. } | Self::Shape { .. } => None,
+        }
+    }
+
     fn size(&self) -> (f64, f64) {
         match self {
             Self::Solid { width, height, .. } | Self::Shape { width, height, .. } => {
@@ -749,6 +772,7 @@ impl Placement {
         clip: &ResolvedClip,
         local: f64,
         window: [f64; 4],
+        content: Option<[f64; 4]>,
         mask_image: Option<Arc<Image>>,
     ) -> Option<Self> {
         let [cx, cy, w, h] = window;
@@ -794,11 +818,26 @@ impl Placement {
                 position[1] + sin * x + cos * y,
             ]
         };
+        // The extent is what the paint can actually mark, which for a box
+        // of markup with a lot of empty space is far less than its window.
+        let [ex, ey, ew, eh] = match content {
+            Some([x, y, cw, ch]) => {
+                let x0 = x.max(cx);
+                let y0 = y.max(cy);
+                let x1 = (x + cw).min(cx + w);
+                let y1 = (y + ch).min(cy + h);
+                if x1 <= x0 || y1 <= y0 {
+                    return None;
+                }
+                [x0, y0, x1 - x0, y1 - y0]
+            }
+            None => window,
+        };
         let corners = [
-            forward([cx, cy]),
-            forward([cx + w, cy]),
-            forward([cx, cy + h]),
-            forward([cx + w, cy + h]),
+            forward([ex, ey]),
+            forward([ex + ew, ey]),
+            forward([ex, ey + eh]),
+            forward([ex + ew, ey + eh]),
         ];
         let (mut x0, mut y0, mut x1, mut y1) = (
             f64::INFINITY,

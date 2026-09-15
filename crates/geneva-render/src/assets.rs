@@ -17,6 +17,11 @@ pub struct Image {
     pub height: u32,
     /// Premultiplied linear pixels, row-major.
     pub pixels: Vec<LinearRgba>,
+    /// The sub-rectangle `[x, y, w, h]` outside which every pixel is
+    /// transparent, when whatever drew the image knows one. Compositing
+    /// skips the rest, so a picture with a lot of empty space around it
+    /// costs what it draws rather than what it spans.
+    pub content: Option<[u32; 4]>,
 }
 
 impl Image {
@@ -39,6 +44,7 @@ impl Image {
             width,
             height,
             pixels,
+            content: None,
         }
     }
 
@@ -82,6 +88,7 @@ impl Image {
             width,
             height,
             pixels,
+            content: None,
         }
     }
 
@@ -91,6 +98,7 @@ impl Image {
             width: frame.width(),
             height: frame.height(),
             pixels: frame.pixels().to_vec(),
+            content: None,
         }
     }
 
@@ -101,6 +109,7 @@ impl Image {
             width,
             height,
             pixels: frame.into_pixels(),
+            content: None,
         }
     }
 

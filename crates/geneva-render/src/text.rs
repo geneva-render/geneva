@@ -171,6 +171,7 @@ impl TextEngine {
             width,
             height,
             pixels: vec![LinearRgba::TRANSPARENT; width as usize * height as usize],
+            content: None,
         };
 
         if let Some(bg) = spec.background {

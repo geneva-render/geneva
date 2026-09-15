@@ -1603,24 +1603,24 @@
             "width": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/Length"
+                  "$ref": "#/$defs/BoxSize"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Box width. Defaults to the frame width."
+              "description": "Box width: a length, or \"auto\" to fit the content. Defaults to\nthe frame width, so markup is laid out on a surface the size of\nthe picture, the way a page is."
             },
             "height": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/Length"
+                  "$ref": "#/$defs/BoxSize"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Box height. Without one the box is as tall as its content,\nso a card fits the text inside it."
+              "description": "Box height: a length, or \"auto\" to fit the content, which is\nhow a card sizes itself to its text. Defaults to the frame\nheight."
             },
             "kind": {
               "type": "string",
@@ -2015,6 +2015,18 @@
         },
         {
           "type": "string"
+        }
+      ]
+    },
+    "BoxSize": {
+      "title": "BoxSize",
+      "description": "A box dimension: a length (a number of pixels, \"120px\", or a percentage of the frame), or \"auto\" to fit the content.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Length"
+        },
+        {
+          "const": "auto"
         }
       ]
     },

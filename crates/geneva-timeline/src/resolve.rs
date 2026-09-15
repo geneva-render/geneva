@@ -12,15 +12,15 @@ use geneva_color::{Color, ColorTags, LinearRgba, ResolvedTags};
 use serde_json::json;
 
 use crate::animated::Animated;
-use crate::animation::{Animation, Values as AnimValues};
+use crate::animation::{Animation, Shift, Values as AnimValues};
 use crate::color::ColorValue;
 use crate::diagnostic::{Diagnostic, Path};
 use crate::length::{Length, Point, Scale};
 use crate::ratio::Ratio;
 use crate::schema::{
-    ACCEPTED_VERSIONS, Asset, AssetKind, AudioOutput, AudioTrack, BlendMode, CompositionDef, Crop,
-    Effect, Encode, FORMAT_VERSION, Fit, Layer, Mask, OutputKind, ShapeKind, Source, TextSource,
-    Timeline, Transform, TransitionKind, VideoCodec,
+    ACCEPTED_VERSIONS, Asset, AssetKind, AudioOutput, AudioTrack, BlendMode, BoxSize,
+    CompositionDef, Crop, Effect, Encode, FORMAT_VERSION, Fit, Layer, Mask, OutputKind, ShapeKind,
+    Source, TextSource, Timeline, Transform, TransitionKind, VideoCodec,
 };
 use crate::time::Time;
 
@@ -293,8 +293,8 @@ pub struct ResolvedHtml {
     pub html: String,
     /// The stylesheet applied after any `<style>` in the markup.
     pub css: String,
-    /// Box width in pixels.
-    pub width: f64,
+    /// Box width in pixels, or `None` to fit the content.
+    pub width: Option<f64>,
     /// Box height in pixels, or `None` to fit the content.
     pub height: Option<f64>,
 }
@@ -428,6 +428,10 @@ struct Markup {
     rules: BTreeMap<String, Vec<(f64, AnimValues)>>,
     /// The `animation` on the outermost element, as written.
     animation: Option<String>,
+    /// That element's box, which is what a percentage in its animation is
+    /// a share of, the way CSS resolves one against the element and not
+    /// against the page.
+    animated_box: (Option<f64>, Option<f64>),
 }
 
 /// Keyframes an `animation` contributes to a clip, in clip-local seconds.
@@ -442,6 +446,12 @@ struct AnimationKnots {
 impl AnimationKnots {
     fn push(&mut self, time: f64, v: AnimValues, easing: Easing) {
         if let Some(value) = v.translate {
+            // Percentages are resolved before this point, so whatever is
+            // left is a distance in pixels.
+            let value = [
+                value[0].to_px(None).unwrap_or(0.0),
+                value[1].to_px(None).unwrap_or(0.0),
+            ];
             self.translate.push(Keyframe {
                 time,
                 value,
@@ -484,6 +494,24 @@ impl AnimationKnots {
 /// The most runs one animation is expanded into, so that an infinite
 /// animation on a long clip cannot grow without bound.
 const MAX_ANIMATION_RUNS: u32 = 10_000;
+
+/// The clip's own box, where it is known before anything is drawn. A
+/// percentage in `translate` resolves against it, as CSS resolves one
+/// against the element's border box.
+fn clip_box(source: &ResolvedSource, frame: FrameSize) -> (Option<f64>, Option<f64>) {
+    match source {
+        ResolvedSource::Html(h) => (h.width, h.height),
+        ResolvedSource::Shape { width, height, .. } => (Some(*width), Some(*height)),
+        ResolvedSource::Solid { .. } => {
+            (Some(f64::from(frame.width)), Some(f64::from(frame.height)))
+        }
+        ResolvedSource::Composition(c) => (Some(f64::from(c.width)), Some(f64::from(c.height))),
+        // A picture's size is whatever the file turns out to be.
+        ResolvedSource::Text(_) | ResolvedSource::Image { .. } | ResolvedSource::Video { .. } => {
+            (None, None)
+        }
+    }
+}
 
 /// The gap left where one run ends and the next begins with a different
 /// value. A microsecond is far shorter than a frame at any rate, and keeps
@@ -1516,7 +1544,17 @@ impl Resolver<'_> {
                     } else {
                         cpath.key("source")
                     };
-                    let k = self.resolve_animation(spec, &apath, length, &markup.rules);
+                    // A percentage in the clip's own animation is a share
+                    // of the clip's box; in one the markup carries it is a
+                    // share of the element that carries it, as in a
+                    // browser.
+                    let relative_to = if clip.animation.is_some() {
+                        clip_box(&source, frame)
+                    } else {
+                        markup.animated_box
+                    };
+                    let k =
+                        self.resolve_animation(spec, &apath, length, &markup.rules, relative_to);
                     (
                         self.animated_over(
                             position,
@@ -2298,6 +2336,7 @@ holds a value rather than moving it",
         path: &Path,
         length: Ratio,
         extra: &BTreeMap<String, Vec<(f64, AnimValues)>>,
+        clip_box: (Option<f64>, Option<f64>),
     ) -> AnimationKnots {
         let mut knots = AnimationKnots::default();
         let animations = match crate::animation::parse_animations(spec) {
@@ -2348,7 +2387,49 @@ holds a value rather than moving it",
             if steps.is_empty() {
                 continue;
             }
-            expand(a, steps, length.to_f64(), &mut knots);
+            // A percentage in a translation is a share of the clip's own
+            // box, which a picture does not have until it is opened.
+            let mut unresolved: Option<Shift> = None;
+            let steps: Vec<(f64, AnimValues)> = steps
+                .iter()
+                .map(|(offset, v)| {
+                    let mut v = *v;
+                    if let Some([x, y]) = v.translate {
+                        match (x.to_px(clip_box.0), y.to_px(clip_box.1)) {
+                            (Some(px), Some(py)) => {
+                                v.translate = Some([Shift::Px(px), Shift::Px(py)]);
+                            }
+                            _ => {
+                                unresolved = Some(if x.is_relative() && clip_box.0.is_none() {
+                                    x
+                                } else {
+                                    y
+                                });
+                                v.translate = None;
+                            }
+                        }
+                    }
+                    (*offset, v)
+                })
+                .collect();
+            if let Some(shift) = unresolved {
+                let _ = shift;
+                self.push(
+                    Diagnostic::error(
+                        "E442",
+                        path.clone(),
+                        format!(
+                            "{:?} moves the clip by a percentage of a box whose size is not known yet",
+                            a.name
+                        ),
+                    )
+                    .with_help(
+                        "a video, image or text clip is whatever size its content turns out to \
+be; write the distance in pixels, or give the source a size",
+                    ),
+                );
+            }
+            expand(a, &steps, length.to_f64(), &mut knots);
         }
         knots.sort();
         for (times, what) in [
@@ -2418,18 +2499,24 @@ holds a value rather than moving it",
         html: Option<&str>,
         asset: Option<&str>,
         css: Option<&str>,
-        width: Option<Length>,
-        height: Option<Length>,
+        width: Option<BoxSize>,
+        height: Option<BoxSize>,
         spath: &Path,
         assets: &BTreeMap<String, ResolvedAsset>,
         frame: FrameSize,
     ) -> ResolvedSource {
-        let w = width.map_or(f64::from(frame.width), |l| {
-            self.positive_length(l, &spath.key("width"), f64::from(frame.width), "width")
-        });
-        let h = height.map(|l| {
-            self.positive_length(l, &spath.key("height"), f64::from(frame.height), "height")
-        });
+        // The box defaults to the frame, so markup is laid out on a
+        // surface the size of the picture and CSS can place things in it
+        // the way it places them on a page.
+        let side = |r: &mut Self, size: Option<BoxSize>, name: &str, reference: f64| match size {
+            None => Some(reference),
+            Some(BoxSize::Auto) => None,
+            Some(BoxSize::Fixed(l)) => {
+                Some(r.positive_length(l, &spath.key(name), reference, name))
+            }
+        };
+        let w = side(self, width, "width", f64::from(frame.width));
+        let h = side(self, height, "height", f64::from(frame.height));
         let css = css.unwrap_or_default().to_owned();
 
         let markup = match (html, asset) {
@@ -2506,9 +2593,14 @@ holds a value rather than moving it",
                     let steps = self.parse_keyframe_rule(name, rule, spath);
                     rules.insert(name.clone(), steps);
                 }
+                let (bw, bh) = p.animated_box(
+                    w.unwrap_or(f64::from(frame.width)) as f32,
+                    h.unwrap_or(f64::from(frame.height)) as f32,
+                );
                 self.from_markup = Some(Markup {
                     rules,
                     animation: p.animation,
+                    animated_box: (bw.map(f64::from), bh.map(f64::from)),
                 });
             }
             Err(e) => {

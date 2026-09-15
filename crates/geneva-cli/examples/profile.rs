@@ -189,6 +189,7 @@ fn conversions() {
         width: 0,
         height: 0,
         pixels: Vec::new(),
+        content: None,
     };
     let tags = geneva_color::ResolvedTags::SDR_VIDEO;
     let n = 50;

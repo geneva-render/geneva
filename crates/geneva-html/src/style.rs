@@ -189,6 +189,9 @@ pub fn cascade(doc: &Document, sheet: &Stylesheet) -> (Vec<Computed>, Vec<String
             animation: None,
         };
         if let Some(el) = doc.nodes[id].element() {
+            // CSS's default is content-box; taffy's is border-box, so it
+            // is set here rather than inherited from the layout default.
+            computed.layout.box_sizing = BoxSizing::ContentBox;
             // The root is the drawing surface, the way <body> is the page:
             // a block box the size of the box the document is drawn into,
             // which is what a child's percentages resolve against.
@@ -408,7 +411,7 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
 
         "color" => c.text.color = color(v)?,
         "font-family" => c.text.family = Some(family(v)),
-        "font-size" => c.text.size = pixels(v, em)?,
+        "font-size" => c.text.size = size_or_percent(v, em)?,
         "font-weight" => {
             c.text.weight = match l {
                 "normal" => 400,
@@ -420,10 +423,12 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
         "font-style" => c.text.italic = l == "italic" || l == "oblique",
         "font" => font_shorthand(v, em, c)?,
         "line-height" => {
-            c.text.line_height = if l.ends_with("px") {
-                pixels(v, em)? / c.text.size.max(1.0)
+            c.text.line_height = if let Some(p) = percent(v) {
+                p / 100.0
             } else if l == "normal" {
                 1.2
+            } else if l.ends_with("px") || l.ends_with("em") || l.ends_with("rem") {
+                pixels(v, em)? / c.text.size.max(1.0)
             } else {
                 number(v)?
             };
@@ -594,6 +599,15 @@ fn pixels(token: &str, em: f64) -> Result<f64, String> {
         return Ok(0.0);
     }
     number(t).map_err(|_| format!("{token:?} is not a length; write it like \"12px\" or \"1.5em\""))
+}
+
+/// A font size: a length, or a percentage of the inherited size, which is
+/// what `em` refers to here.
+fn size_or_percent(value: &str, em: f64) -> Result<f64, String> {
+    match percent(value) {
+        Some(p) => Ok(em * p / 100.0),
+        None => pixels(value, em),
+    }
 }
 
 fn percent(token: &str) -> Option<f64> {
@@ -884,6 +898,18 @@ mod tests {
     }
 
     #[test]
+    fn font_size_and_line_height_take_percentages() {
+        let (doc, styles, problems) = styled(
+            "<style>.a { font-size: 20px } .b { font-size: 150%; line-height: 200% }</style>\
+             <div class=a><p class=b>x</p></div>",
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let b = doc.children(doc.children(doc.root)[0])[0];
+        assert_eq!(styles[b].text.size, 30.0);
+        assert!((styles[b].text.line_height - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn shorthands_expand() {
         let (doc, styles, problems) = styled(
             "<style>.a { margin: 1px 2px 3px 4px; border: 5px solid #4ade80; \
@@ -974,4 +1000,31 @@ mod unfollowed_tests {
             assert!(p[0].contains(tag), "{p:?}");
         }
     }
+}
+
+/// The border box the style declares for an element, resolved against a
+/// containing block. `None` on an axis the style leaves to the content,
+/// where nothing short of laying it out can say how big it is.
+pub fn declared_box(style: &Computed, block: (f32, f32)) -> (Option<f32>, Option<f32>) {
+    use taffy::{MaybeResolve, ResolveOrZero};
+
+    let zero = |l: LengthPercentage, r: f32| l.resolve_or_zero(Some(r), |_, _| 0.0);
+    // CSS resolves a percentage padding or border against the containing
+    // block's inline size on both axes.
+    let inline = block.0;
+    let extra =
+        |lead: LengthPercentage, trail: LengthPercentage| zero(lead, inline) + zero(trail, inline);
+    let pad_x = extra(style.layout.padding.left, style.layout.padding.right)
+        + extra(style.layout.border.left, style.layout.border.right);
+    let pad_y = extra(style.layout.padding.top, style.layout.padding.bottom)
+        + extra(style.layout.border.top, style.layout.border.bottom);
+    let border_box = style.layout.box_sizing == BoxSizing::BorderBox;
+    let axis = |d: Dimension, reference: f32, extra: f32| {
+        d.maybe_resolve(Some(reference), |_, _| 0.0)
+            .map(|v| if border_box { v } else { v + extra })
+    };
+    (
+        axis(style.layout.size.width, block.0, pad_x),
+        axis(style.layout.size.height, block.1, pad_y),
+    )
 }

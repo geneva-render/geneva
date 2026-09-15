@@ -374,6 +374,58 @@ fn markup_carries_its_own_animation() {
 }
 
 #[test]
+fn a_percentage_translate_is_a_share_of_the_animated_element() {
+    let text = doc(
+        r#""layers":[{"clips":[{"duration":"2s","source":{"kind":"html","width":1000,"height":100,
+        "html":"<style>@keyframes slide { from { translate: -100% } to { translate: 0 } } .c { animation: slide 1s linear; width: 200px; height: 50px; background: red }</style><div class='c'></div>"},
+        "transform":{"anchor":"top left","position":"0 0"}}]}]"#,
+    );
+    let l = load(&text);
+    assert!(l.is_ok(), "{:?}", l.diagnostics);
+    let clip = &l.composition.unwrap().layers[0].clips[0];
+    // 100% is the element's 200px, not the 1000px surface it sits on.
+    assert_eq!(clip.position.sample(0.0), [-200.0, 0.0]);
+    assert_eq!(clip.position.sample(0.5), [-100.0, 0.0]);
+    assert_eq!(clip.position.sample(1.0), [0.0, 0.0]);
+}
+
+#[test]
+fn a_percentage_needs_a_box_to_be_a_share_of() {
+    // A text clip is whatever size its content turns out to be.
+    let text = format!(
+        "{{{HEAD},\"keyframes\":{{\"slide\":{{\"from\":\"translate: -100%\",\"to\":\"translate: 0\"}}}},         \"layers\":[{{\"clips\":[{{\"duration\":\"2s\",\"source\":{{\"kind\":\"text\",\"text\":\"hi\"}},         \"animation\":\"slide 1s\"}}]}}]}}"
+    );
+    let e = errors(&text);
+    assert!(
+        e.contains(&("E442", "/layers/0/clips/0/animation".to_owned())),
+        "{e:?}"
+    );
+}
+
+#[test]
+fn an_html_box_defaults_to_the_frame_and_auto_fits_the_content() {
+    let both = |size: &str| {
+        let text = doc(&format!(
+            r#""layers":[{{"clips":[{{"duration":"2s","source":{{"kind":"html"{size},
+            "html":"<style>.c {{ height: 30px }}</style><div class='c'></div>"}}}}]}}]"#
+        ));
+        let l = load(&text);
+        assert!(l.is_ok(), "{:?}", l.diagnostics);
+        match &l.composition.unwrap().layers[0].clips[0].source {
+            ResolvedSource::Html(h) => (h.width, h.height),
+            _ => panic!("expected markup"),
+        }
+    };
+    // The frame of the test documents is 640 by 360.
+    assert_eq!(both(""), (Some(640.0), Some(360.0)));
+    assert_eq!(both(r#","height":"auto""#), (Some(640.0), None));
+    assert_eq!(
+        both(r#","width":"50%","height":100"#),
+        (Some(320.0), Some(100.0))
+    );
+}
+
+#[test]
 fn a_clips_animation_replaces_the_markups() {
     let text = format!(
         "{{{HEAD},\"keyframes\":{{\"mine\":{{\"from\":\"opacity: 0\",\"to\":\"opacity: 1\"}}}},         \"layers\":[{{\"clips\":[{{\"duration\":\"2s\",\"source\":{{\"kind\":\"html\",\"width\":100,         \"html\":\"<style>@keyframes theirs {{ from {{ opacity: 1 }} to {{ opacity: 0 }} }}          .c {{ animation: theirs 1s; height: 10px }}</style><div class='c'></div>\"}},         \"animation\":\"mine 1s\"}}]}}]}}"

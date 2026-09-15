@@ -130,9 +130,17 @@ block. The properties a block may set are the ones the renderer animates:
 
 | Property | Effect |
 | --- | --- |
-| `transform` | A list of `translate`, `translateX`, `translateY`, `scale`, `scaleX`, `scaleY` and `rotate` functions. Functions of the same kind compose: translations add, scales multiply, rotations add. Lengths are pixels; percentages are not accepted, since the clip's own box is not known until its source is opened (E442). |
+| `transform` | A list of `translate`, `translateX`, `translateY`, `scale`, `scaleX`, `scaleY` and `rotate` functions. Functions of the same kind compose: translations add, scales multiply, rotations add. A distance is in pixels or a percentage of the box it moves (see below). |
 | `translate`, `scale`, `rotate` | The same three as separate properties, as CSS also allows: `"translate: 10px 20px"`, `"scale: 2"`, `"rotate: 45deg"`. |
 | `opacity` | A number or a percentage. |
+
+A percentage distance is a share of the box being moved, as in CSS:
+the element carrying the animation when a rule comes from markup, and the
+clip's own box when the clip's `animation` plays it. So
+`translateX(-100%)` slides a card in by exactly its own width, whatever
+that turns out to be. A clip whose size is only known once its file is
+open — a video, an image, a text run — has no box to take a share of, and
+a percentage there is E442.
 
 A property interpolates between the offsets that set it, and holds its
 first and last value outside them, which is CSS's `animation-fill-mode:
@@ -455,8 +463,8 @@ Every source has a `kind`.
 | `html` | unless `asset` | | The markup, written in the document. |
 | `asset` | unless `html` | | Id of an asset of kind `html`, read as the markup. Give one of `html` and `asset`, not both (E450). |
 | `css` | no | | A stylesheet applied after any `<style>` in the markup, so it wins ties. |
-| `width` | no | the frame width | Box width. |
-| `height` | no | fits the content | Box height. Without one the box is as tall as what is inside it, so a card sizes itself to its text. |
+| `width` | no | the frame width | Box width: a length, a percentage of the frame, or `"auto"` to fit the content. |
+| `height` | no | the frame height | Box height, same forms. `"auto"` fits the content, so a card sizes itself to its text. |
 
 `text`
 
@@ -533,9 +541,14 @@ so rather than drawing something else.
 ```
 
 The box the markup is drawn into is the drawing surface, the way `<body>`
-is the page: block layout, `width` wide and, without a `height`, as tall
-as its content. A child fills the height with `height: 100%`, as in a
-browser.
+is the page: block layout, and by default the size of the frame, so CSS
+places things in the picture the way it places them on a page and the
+clip needs no `transform`. Set either side to `"auto"` to fit the content
+instead.
+
+A surface the size of the frame costs no more than a small one to
+composite: the painter reports the rectangle it actually marked, and the
+compositor reads that rather than the whole surface.
 
 ### What it parses
 
@@ -569,9 +582,14 @@ author overrides freely: `h1`, `h2`, `h3`, `b`, `strong`, `i`, `em`,
 | Text | `color`, `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space` |
 
 Lengths are `px`, `em`, `rem` and `%`; `em` is the element's own font
-size, settled before anything else uses it. Colours are the ones the rest
-of the format takes. Anything else is W450: the declaration is skipped and
-the message names it, so the rest of the document still draws.
+size, settled before anything else uses it, and a percentage `font-size`
+or `line-height` is of the inherited one. Percentage widths, heights,
+margins, padding, gaps and insets resolve against the containing block,
+as in CSS. `box-sizing` is `content-box` by default, as in CSS, so
+padding and border are added to a width rather than taken out of it.
+Colours are the ones the rest of the format takes. Anything else is W450:
+the declaration is skipped and the message names it, so the rest of the
+document still draws.
 
 ### Motion
 

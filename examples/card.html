@@ -1,31 +1,31 @@
 <!-- A lower third. Open this file in a browser: it looks and moves the same. -->
 <style>
-  @keyframes slide-in { from { transform: translateX(-656px) } to   { transform: none } }
-  @keyframes fade-in  { from { opacity: 0 }                   to   { opacity: 1 } }
-  @keyframes fade-out { from { opacity: 1 }                   to   { opacity: 0 } }
+  @keyframes slide-in { from { translate: -100% } to   { translate: 0 } }
+  @keyframes fade-in  { from { opacity: 0 }      to   { opacity: 1 } }
+  @keyframes fade-out { from { opacity: 1 }      to   { opacity: 0 } }
 
   .card {
     animation: slide-in 0.5s ease-out, fade-in 0.3s, fade-out 0.3s 3.7s;
+
+    position: absolute;
+    left: 4.4%;
+    bottom: 10%;
+    width: 44%;
+
     display: flex;
     flex-direction: column;
     justify-content: center;
     gap: 2px;
     padding: 16px 28px;
+    box-sizing: border-box;
+
     background: #0b1016d9;
     border-radius: 8px;
     border-left: 5px solid #4ade80;
     box-shadow: 0 6px 24px #00000066;
   }
-  .card h1 {
-    margin: 0;
-    font: 700 32px Liberation Sans;
-    color: #ffffff;
-  }
-  .card p {
-    margin: 0;
-    font: 400 20px Liberation Sans;
-    color: #9fb0bf;
-  }
+  .card h1 { margin: 0; font: 700 32px Liberation Sans; color: #ffffff }
+  .card p  { margin: 0; font: 400 20px Liberation Sans; color: #9fb0bf }
 </style>
 
 <div class="card">

@@ -39,32 +39,32 @@ same:
 ```html
 <!-- A lower third. Open this file in a browser: it looks and moves the same. -->
 <style>
-  @keyframes slide-in { from { transform: translateX(-656px) } to   { transform: none } }
-  @keyframes fade-in  { from { opacity: 0 }                   to   { opacity: 1 } }
-  @keyframes fade-out { from { opacity: 1 }                   to   { opacity: 0 } }
+  @keyframes slide-in { from { translate: -100% } to   { translate: 0 } }
+  @keyframes fade-in  { from { opacity: 0 }      to   { opacity: 1 } }
+  @keyframes fade-out { from { opacity: 1 }      to   { opacity: 0 } }
 
   .card {
     animation: slide-in 0.5s ease-out, fade-in 0.3s, fade-out 0.3s 3.7s;
+
+    position: absolute;
+    left: 4.4%;
+    bottom: 10%;
+    width: 44%;
+
     display: flex;
     flex-direction: column;
     justify-content: center;
     gap: 2px;
     padding: 16px 28px;
+    box-sizing: border-box;
+
     background: #0b1016d9;
     border-radius: 8px;
     border-left: 5px solid #4ade80;
     box-shadow: 0 6px 24px #00000066;
   }
-  .card h1 {
-    margin: 0;
-    font: 700 32px Liberation Sans;
-    color: #ffffff;
-  }
-  .card p {
-    margin: 0;
-    font: 400 20px Liberation Sans;
-    color: #9fb0bf;
-  }
+  .card h1 { margin: 0; font: 700 32px Liberation Sans; color: #ffffff }
+  .card p  { margin: 0; font: 400 20px Liberation Sans; color: #9fb0bf }
 </style>
 
 <div class="card">
@@ -73,7 +73,7 @@ same:
 </div>
 ```
 
-and the document that puts it on the footage, in full:
+and the whole document that puts it on the footage:
 
 ```json
 {
@@ -89,9 +89,8 @@ and the document that puts it on the footage, in full:
     { "id": "footage", "clips": [ { "source": { "kind": "video", "asset": "iss" } } ] },
 
     { "id": "lower-third", "clips": [ {
-        "source": { "kind": "html", "asset": "card", "width": 560 },
-        "start": "2s", "duration": "4s",
-        "transform": { "anchor": "bottom left", "position": "56 648" } } ] }
+        "source": { "kind": "html", "asset": "card" },
+        "start": "2s", "duration": "4s" } ] }
   ]
 }
 ```
@@ -108,29 +107,34 @@ note[N600]: H.264 runs encoded with the system's x264 (build 164) at CRF 18
 wrote dragon.mp4 (300 frames, 10s of video, 3.5s elapsed)
 ```
 
-The card is real CSS. `display: flex` is flexbox, `padding` and
-`border-left` are the box model, `border-radius` and `box-shadow` draw what
-they say. Nothing measures the text for you: the plate is as tall as the two
-lines inside it because that's what a column of flex items does. Geneva
-parses the markup, cascades the styles and lays it out with
+The JSON says only *when*. Everything else is the card's business, and
+everything in the card is real CSS: `display: flex` is flexbox, `padding`
+and `border-left` are the box model, `position: absolute` with `left` and
+`bottom` puts it on the picture the way it would put it on a page. Nothing
+measures the text for you — the plate is as tall as the two lines inside it
+because that's what a column of flex items does. Geneva parses the markup,
+cascades the styles and lays it out with
 [taffy](https://github.com/DioxusLabs/taffy), so the layout is an
 implementation of the spec rather than a guess at it.
 
+There isn't a pixel coordinate anywhere. `left: 4.4%` and `width: 44%` are
+shares of the frame, and `translate: -100%` is the card's own width, so the
+slide starts exactly off its own edge — resize the output and the card
+follows.
+
+The motion lives in the same file: `@keyframes` and an `animation` on the
+card. A slide in, a fade in over the first 0.3 seconds, a fade out starting
+at 3.7. The shorthand takes what CSS takes — a duration, a delay, a timing
+function, `infinite`, `alternate` — plus `spring(170, 26)`, which CSS
+hasn't got.
+
 It is not a browser, and it says so when it matters. There's no inline
 layout — an element's text is one paragraph and a child element is a box —
-and a property it can't draw is a warning that names the property, not a
-silent difference.
-
-The motion is CSS too, and it lives in the same file: `@keyframes` and an
-`animation` on the card. A slide from 656 pixels to the left, a fade in
-over the first 0.3 seconds, a fade out starting at 3.7. The shorthand takes
-what CSS takes — a duration, a delay, a timing function, `infinite`,
-`alternate` — plus `spring(170, 26)`, which CSS hasn't got. The JSON says
-only *when* the card is on screen and *where*; the card knows how it
-arrives.
+and anything it can't draw is a warning that names it, not a silent
+difference.
 
 Underneath it's all keyframes, so anything you can't say in CSS you can say
-in the document instead:
+in the document instead, on any clip and not just markup:
 
 ```json
 "transform": {

@@ -79,13 +79,12 @@ enum Leaf {
     Image(DomId),
 }
 
-/// Lays the document out in a box `width` wide. Without a `height` the
-/// box is as tall as its content, which is how a card sizes itself to the
-/// text inside it.
+/// Lays the document out. A dimension that is `None` is sized to the
+/// content, which is how a card fits itself to the text inside it.
 pub fn layout<M: Measure>(
     doc: &Document,
     styles: &[Computed],
-    width: f32,
+    width: Option<f32>,
     height: Option<f32>,
     measure: &mut M,
 ) -> Result<Laid, String> {
@@ -93,7 +92,7 @@ pub fn layout<M: Measure>(
     let mut map: Vec<Option<NodeId>> = vec![None; doc.nodes.len()];
     let mut root_style = styles[doc.root].layout.clone();
     root_style.size = Size {
-        width: Dimension::length(width),
+        width: width.map_or_else(Dimension::auto, Dimension::length),
         height: height.map_or_else(Dimension::auto, Dimension::length),
     };
     let mut styles = styles.to_vec();
@@ -104,7 +103,7 @@ pub fn layout<M: Measure>(
     tree.compute_layout_with_measure(
         root,
         Size {
-            width: AvailableSpace::Definite(width),
+            width: width.map_or(AvailableSpace::MaxContent, AvailableSpace::Definite),
             height: height.map_or(AvailableSpace::MaxContent, AvailableSpace::Definite),
         },
         |known, available, _id, context, _style| {
@@ -339,7 +338,7 @@ mod tests {
         let sheet = parse_stylesheet(&doc.style).unwrap();
         let (styles, problems) = crate::style::cascade(&doc, &sheet);
         assert!(problems.is_empty(), "{problems:?}");
-        let laid = layout(&doc, &styles, w, Some(h), &mut Cells).unwrap();
+        let laid = layout(&doc, &styles, Some(w), Some(h), &mut Cells).unwrap();
         (doc, laid)
     }
 
@@ -379,7 +378,9 @@ mod tests {
     }
 
     #[test]
-    fn padding_and_border_shrink_the_content_box() {
+    fn padding_and_border_grow_a_content_box() {
+        // CSS's default: width is the content, and padding and border are
+        // added to it.
         let (_, laid) = lay(
             "<style>.a { width: 100px; height: 50px; padding: 8px; border: 2px solid red }\
              </style><div class=a></div>",
@@ -387,8 +388,21 @@ mod tests {
             100.0,
         );
         let a = &laid.boxes[0];
-        assert_eq!(a.rect, [0.0, 0.0, 100.0, 50.0]);
+        assert_eq!(a.rect, [0.0, 0.0, 120.0, 70.0]);
         assert_eq!(a.border, [2.0, 2.0, 2.0, 2.0]);
+        assert_eq!(a.content_rect, [10.0, 10.0, 100.0, 50.0]);
+    }
+
+    #[test]
+    fn border_box_takes_the_width_as_written() {
+        let (_, laid) = lay(
+            "<style>.a { box-sizing: border-box; width: 100px; height: 50px; \
+             padding: 8px; border: 2px solid red }</style><div class=a></div>",
+            200.0,
+            100.0,
+        );
+        let a = &laid.boxes[0];
+        assert_eq!(a.rect, [0.0, 0.0, 100.0, 50.0]);
         assert_eq!(a.content_rect, [10.0, 10.0, 80.0, 30.0]);
     }
 

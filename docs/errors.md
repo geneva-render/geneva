@@ -86,7 +86,7 @@ result is not what was intended. Notes are informational.
 | E433 | An `outputs` value is out of range: a poster `at` outside the composition, a sprite `every` that is not positive, or `columns` of 0. |
 | E440 | A clip's `animation` names a rule that is not in the document's `keyframes`. |
 | E441 | An `animation` value is malformed: no rule name, no duration, a duration of zero, two timing functions, or three times. |
-| E442 | A `keyframes` rule is malformed: an offset that is not `from`, `to` or a percentage in 0% to 100%, two offsets at the same place, a property that cannot be animated, or a value geneva cannot read (a percentage in a translation, an unknown transform function). |
+| E442 | A `keyframes` rule is malformed: an offset that is not `from`, `to` or a percentage in 0% to 100%, two offsets at the same place, a property that cannot be animated, an unknown transform function, or a percentage distance on a clip whose box is not known until its file is opened. |
 | E443 | A property is driven by the clip's own `keyframes` and by an animation at once. |
 | E444 | Two animations on one clip set the same property at the same time. |
 | W440 | An animation rule sets nothing at an offset, or has fewer than two offsets, so nothing interpolates. |
