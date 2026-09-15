@@ -3,10 +3,14 @@
   <img src="docs/wordmark.png" alt="Geneva" width="240">
 </picture>
 
-geneva edits and processes video programmatically — one-line commands for
-the everyday jobs, a JSON document for anything more. Same engine either
-way: the commands compile to the document, and `--show-timeline` prints
-it, so you can grab it and keep editing.
+geneva edits and processes video programmatically. One-line commands cover
+the everyday jobs; a JSON document covers anything more. Both run the same
+engine, and the document is a file you can read, diff and check into a
+repository.
+
+It reads the job before it decodes anything, so a mistake is an error that
+names the field rather than a bad file an hour later, and it reports what
+it did on the way through.
 
 ```sh
 geneva trim talk.mp4 -o intro.mp4 --to 30s        # copies the streams, no re-encode
@@ -14,10 +18,10 @@ geneva subtitles talk.mp4 -o subbed.mp4 --burn transcript.json --highlight "#ffd
 geneva render job.json -o out/                    # everything the document asks for
 ```
 
-Underneath is a real compositor: layers, keyframes, text that shapes
-properly, masks, blend modes. Overlays can be written as HTML and CSS —
-flexbox, the box model, `@keyframes` — and geneva lays them out itself,
-with no browser anywhere. Colour is handled in linear light.
+Underneath is a compositor: layers, keyframes, shaped text, masks, blend
+modes. Overlays can be written as HTML and CSS, including flexbox, the box
+model and `@keyframes`, and geneva lays them out without a browser. Colour
+is handled in linear light.
 
 One binary. It uses FFmpeg's libraries to read and write files, so it
 opens what ffmpeg opens.
@@ -31,7 +35,7 @@ MIT licensed. Linux and macOS. No services, no network access.
 ## A worked example
 
 Here's a lower third over ten seconds of footage from the space station.
-The card is an HTML file — open it in a browser and it looks and moves the
+The card is an HTML file. Open it in a browser and it looks and moves the
 same:
 
 ```html
@@ -112,18 +116,18 @@ and `border-left` are the box model, `position: absolute` with `left` and
 and lays them out with [taffy](https://github.com/DioxusLabs/taffy), so
 the layout implements the spec rather than guessing at it.
 
-There isn't a pixel coordinate anywhere: `left: 4.4%` and `width: 44%` are
-shares of the frame, and `translate: -100%` is the card's own width, so
-the slide starts exactly off its own edge. The motion is in the same file
-— `@keyframes` and an `animation`, taking what CSS takes, plus
-`spring(170, 26)`, which CSS hasn't got. It is not a browser, and anything
-it can't draw is a warning that names it rather than a silent difference.
+There are no pixel coordinates. `left: 4.4%` and `width: 44%` are shares of
+the frame, and `translate: -100%` is the card's own width, so the slide
+starts off its own edge whatever size the output is. The motion is in the
+same file, as `@keyframes` and an `animation`, taking what CSS takes plus
+`spring(170, 26)`. It is not a browser, and anything it cannot draw is a
+warning that names it rather than a silent difference.
 
-The last line of the report is the part worth looking at twice. The card
-is on screen for four of the ten seconds, so geneva copied the other 165
-frames straight through and re-encoded only the 135 around it. On a
-ninety-minute film with a watermark on the title card, that's the
-difference between a coffee and an afternoon.
+The last line of the report is worth reading twice. The card is on screen
+for four of the ten seconds, so geneva copied the other 165 frames as they
+were and re-encoded only the 135 around it. On a ninety-minute film with a
+watermark on the title card, that is the difference between a coffee and
+an afternoon.
 
 ## Installing
 
@@ -141,8 +145,8 @@ Apple silicon. Codecs, containers and font shaping are built in.
 
 The one thing worth knowing is H.264. geneva bundles OpenH264, which makes
 bigger files than x264 at the same quality, and doesn't bundle x264
-itself because x264 is GPL — but it will use the copy on your system, and
-it always says which encoder it used.
+itself because x264 is GPL. It will use the copy on your system if there is
+one, and it always says which encoder it used.
 
 ```sh
 sudo apt install libx264-164     # Debian 12, Ubuntu 24.04 (libx264-163 on 22.04)
@@ -154,17 +158,17 @@ brew install x264                # macOS
 Most rows below are a runnable example, with its document, its command and
 its output:
 
-| | |
-| --- | --- |
-| **Delivery presets** — `--for tiktok`, `--for web`, `--for email` set size, codec, quality, keyframes and audio for a destination, and warn when the result runs past its duration or file-size limit. Every number says where it came from and when it was last checked | [docs/cli.md](docs/cli.md#targets) |
-| **Captions from a transcript** — whisper's JSON in, each word picked out as it is said | [examples](examples/README.md#captions) |
-| **Captions as a layer** — one part of a larger document, placed and styled | [examples](examples/README.md#captions-as-a-layer) |
-| **Vertical video** — 16:9 into 9:16 over a blurred copy of itself | [examples](examples/README.md#vertical-video) |
-| **One read, many files** — renditions, a poster, a sprite sheet and speech audio written in a single pass over the source | [examples](examples/README.md#one-read-many-files) |
-| **Cuts that copy** — trims and joins that never touch the picture | [examples](examples/README.md#cuts-that-dont-re-encode) |
-| **Overlays as HTML and CSS** — what geneva draws and what it won't | [examples](examples/README.md#writing-a-card) |
-| **Colour** — BT.601 and BT.709 kept, untagged material guessed out loud, HDR tone-mapped by BT.2446 | [docs/color.md](docs/color.md) |
-| **Scripts and agents** — `--format json`, coded diagnostics that point at the field, deterministic output | [docs/agents.md](docs/agents.md) |
+| | | |
+| --- | --- | --- |
+| **Delivery presets** | `--for tiktok`, `--for web`, `--for email` set size, codec, quality, keyframes and audio for a destination, and warn when the result runs past its duration or file-size limit. Every number says where it came from and when it was last checked | [docs/cli.md](docs/cli.md#targets) |
+| **Captions from a transcript** | whisper's JSON in, each word picked out as it is said | [examples](examples/README.md#captions) |
+| **Captions as a layer** | one part of a larger document, placed and styled | [examples](examples/README.md#captions-as-a-layer) |
+| **Vertical video** | 16:9 into 9:16 over a blurred copy of itself | [examples](examples/README.md#vertical-video) |
+| **One read, many files** | renditions, a poster, a sprite sheet and speech audio written in a single pass over the source | [examples](examples/README.md#one-read-many-files) |
+| **Cuts that copy** | trims and joins that never touch the picture | [examples](examples/README.md#cuts-that-dont-re-encode) |
+| **Overlays as HTML and CSS** | what geneva draws and what it will not | [examples](examples/README.md#writing-a-card) |
+| **Colour** | BT.601 and BT.709 kept, untagged material guessed out loud, HDR tone-mapped by BT.2446 | [docs/color.md](docs/color.md) |
+| **Scripts and agents** | `--format json`, coded diagnostics that point at the field, deterministic output | [docs/agents.md](docs/agents.md) |
 
 ## Commands
 
@@ -203,12 +207,12 @@ document that already works.
 
 ## How this was built
 
-Claude wrote all of it — the Rust, the tests, the docs — running in Claude
-Code, directed and reviewed by one person. The commit trailers say which
-model wrote each commit.
+Claude wrote all of it, the Rust and the tests and the docs, running in
+Claude Code, directed and reviewed by one person. The commit trailers say
+which model wrote each commit.
 
-Better to say so up front than let you work it out. If you're deciding
-whether to trust the code, you should know where it came from; if you're
+Better to say so up front than let you work it out. If you are deciding
+whether to trust the code, you should know where it came from. If you are
 curious what this way of working produces, the repository is the answer,
 bugs and fixes included.
 

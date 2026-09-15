@@ -154,9 +154,9 @@ them freely:
 A printed timeline (`--show-timeline`) always uses the long form.
 
 Motion has a second spelling too. A top-level `keyframes` map holds CSS
-`@keyframes` rules — an offset (`from`, `to`, `60%`) to a declaration
-block setting `transform`, `translate`, `scale`, `rotate` or `opacity` —
-and a clip's `animation` plays them with the CSS shorthand:
+`@keyframes` rules, an offset (`from`, `to`, `60%`) to a declaration block
+setting `transform`, `translate`, `scale`, `rotate` or `opacity`, and a
+clip's `animation` plays them with the CSS shorthand:
 `"slide-in 0.5s ease-out, fade-out 0.3s 3.7s"`. Duration and delay need
 their units; `infinite`, `alternate` and `spring(170, 26)` are
 understood. A rule's transform is laid over the clip's own (translations
@@ -185,10 +185,10 @@ file that moves in a browser moves here. See
 A transcript is a source too: `{ "kind": "captions", "asset": "words" }`
 reads a `.srt`, a `.vtt`, or the `.json` a speech recogniser writes, and
 becomes one clip per cue, so the frames between cues can still be copied.
-Word files go in as they came — whisper's `segments[].words[]`, a bare
+Word files go in as they came: whisper's `segments[].words[]`, a bare
 `{"words": [...]}` or a bare list; `word` or `text` for the word; every
-other key ignored — and their word times let `style.highlight` pick out
-the word being said. What geneva will not do is draw nothing quietly: a
+other key ignored. Their word times let `style.highlight` pick out the
+word being said. What geneva will not do is draw nothing quietly: a
 file with no words in it, or with times in milliseconds, is E453, and a
 `highlight` on a file that times whole cues is W453. `position`
 (`bottom`, `top`, `center`), `margin` and `safe` place the cues, and a

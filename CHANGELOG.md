@@ -5,7 +5,7 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
-## 0.4.3 — 2026-09-14
+## 0.4.3 (2026-09-14)
 
 ### Added
 
@@ -26,8 +26,8 @@ the format version it was written for.
   That costs nothing: the painter reports the rectangle it actually
   marked and the compositor reads only that, which on the lower third
   example is the difference between +35% and +13% against a box drawn
-  tight around the card — and the remaining difference is a drop shadow
-  the tight box was silently clipping.
+  tight around the card. The remaining difference is a drop shadow the
+  tight box was silently clipping.
 
   `box-sizing` is `content-box` by default, as CSS has it. taffy's own
   default is `border-box`, so a `width` with `padding` used to come out
@@ -36,8 +36,8 @@ the format version it was written for.
   Motion comes with it. `@keyframes` in the markup's stylesheet are in
   scope for the clip that draws it, and an `animation` on the outermost
   element is what the clip plays, so a card that slides in a browser
-  slides here — `examples/card.html` does exactly that, and renders byte
-  for byte what the same animation written in the document rendered. The
+  slides here. `examples/card.html` does exactly that, and renders byte for
+  byte what the same animation written in the document rendered. The
   clip's own `animation` replaces the markup's, since only the document
   knows where the clip sits in time (W451 when both are set). An
   `animation` further in is W450: the markup is painted once and the clip
@@ -60,9 +60,9 @@ the format version it was written for.
   A picture or a stylesheet the markup points at is a path, relative to
   the markup, the way it is on a page: `<img src="logo.png">` and
   `<link rel="stylesheet" href="house.css">` find the same files geneva
-  does and a browser does. The rule every asset path follows holds here —
-  no leading `/`, no `..`, no drive letter, no URL — and that, along with
-  a file that is not there, is E452 while the document is validated, so a
+  does and a browser does. The rule every asset path follows holds here:
+  no leading `/`, no `..`, no drive letter, no URL. That, along with a
+  file that is not there, is E452 while the document is validated, so a
   missing picture is an error before anything is drawn rather than a hole
   in the frame. `<link>`, `<meta>`, `<base>` and `<title>` never become
   boxes, so they cannot take a slot in a flex row.
@@ -70,7 +70,7 @@ the format version it was written for.
   It is not a browser, and it says which parts of one it is not: there is
   no inline layout (an element's text is one paragraph, a child element is
   a box), and `opacity` multiplies down the tree instead of grouping. Anything it
-  cannot draw it names rather than ignoring — E451 for markup or a
+  cannot draw it names rather than ignoring: E451 for markup or a
   selector it cannot parse, with the line and column, and W450 for a
   property it does not draw and for an element with a renderer of its own
   (`<iframe>`, `<svg>`, `<canvas>`, `<video>`, `<object>`, `<embed>`),
@@ -78,8 +78,8 @@ the format version it was written for.
   `html` source with both `html` and `asset`, or neither.
 
 - **Motion written the way a stylesheet writes it.** A top-level
-  `keyframes` map holds CSS `@keyframes` rules — an offset (`from`, `to`,
-  `60%`) to a declaration block — and a clip's `animation` field plays
+  `keyframes` map holds CSS `@keyframes` rules, an offset (`from`, `to`,
+  `60%`) to a declaration block, and a clip's `animation` field plays
   them with the CSS shorthand:
 
   ```json
@@ -103,8 +103,8 @@ the format version it was written for.
   the clip's own box when the clip plays it, as CSS resolves one against
   the element. So `translateX(-100%)` slides a card in by exactly its own
   width and survives a change of output size. A clip whose size is only
-  known once its file is open — a video, an image, a text run — has no
-  box to take a share of, and says so (E442). `font-size` and
+  known once its file is open (a video, an image, a text run) has no box
+  to take a share of, and says so (E442). `font-size` and
   `line-height` take percentages too, of the inherited size.
 
   It all lowers to the same keyframe tracks the long form produces, so
@@ -144,8 +144,8 @@ the format version it was written for.
   `seek`, `tokens`, WhisperX's `score` and every other key are ignored.
   Forgiving about keys, strict about structure: a file with no words in
   it anywhere is E453 rather than a caption track that draws nothing, and
-  times that are plainly milliseconds — AssemblyAI and Deepgram write
-  those — are E453 too, with the remedy in the message. Word times are
+  times that are plainly milliseconds, which AssemblyAI and Deepgram
+  write, are E453 too, with the remedy in the message. Word times are
   what lets `style.highlight` pick out the word being said; SubRip and
   WebVTT time whole cues, so a `highlight` on one is W453 rather than a
   silent difference. N453 says how many cues were read and from where.
@@ -225,7 +225,7 @@ the format version it was written for.
   any. Those two documents no longer set `output.duration`; they take the
   length from the file, which `render` and `frame` probe for.
 
-## 0.4.2 — 2026-09-14
+## 0.4.2 (2026-09-14)
 
 Two verbs fewer. `publish` and `sprites` are gone after a day: `publish`
 was `convert --for web` plus pictures into a directory, under a name
@@ -253,7 +253,7 @@ that means "upload", and its one useful rule belongs to `--for`; the
   keep a manifest. A document with an `outputs` map and `render -o DIR`
   gives any bundle with exactly the files listed.
 
-## 0.4.1 — 2026-09-14
+## 0.4.1 (2026-09-14)
 
 ### Added
 
@@ -267,7 +267,7 @@ that means "upload", and its one useful rule belongs to `--for`; the
   for whatever uploads or serves the files: a bucket needs the content
   types set, and the manifest carries them.
 
-## 0.4.0 — 2026-09-14
+## 0.4.0 (2026-09-14)
 
 Timeline format 0.3. Documents saying `"geneva": "0.1"` or `"0.2"` are
 read unchanged.
@@ -308,7 +308,7 @@ read unchanged.
   source's tags); the verbs already do.
 - The JSON Schema moves to `schema/geneva-timeline-0.3.schema.json`.
 
-## 0.3.5 — 2026-09-13
+## 0.3.5 (2026-09-13)
 
 ### Fixes
 
@@ -324,7 +324,7 @@ read unchanged.
 - A silent video (no audio stream) is now copied without audio rather than
   re-encoded; only joining a silent source with a sounding one refuses.
 
-## 0.3.4 — 2026-09-12
+## 0.3.4 (2026-09-12)
 
 ### Changes
 
@@ -339,7 +339,7 @@ read unchanged.
   mastered above 1000 nits are first brought down to 1000 with the EETF.
   The `hdr-to-sdr` golden is regenerated.
 
-## 0.3.3 — 2026-09-12
+## 0.3.3 (2026-09-12)
 
 ### Fixes
 
@@ -351,7 +351,7 @@ read unchanged.
   bt2020, ...), and the output is SDR (...)"). With `--keep-hdr` the
   copy still happens.
 
-## 0.3.2 — 2026-09-12
+## 0.3.2 (2026-09-12)
 
 ### Fixes
 
@@ -365,7 +365,7 @@ read unchanged.
   them (a codec the container cannot hold, a source with no audio,
   sources that differ), the render's notes now say which.
 
-## 0.3.1 — 2026-09-12
+## 0.3.1 (2026-09-12)
 
 Fixes from the first Mac run of 0.3.0.
 
@@ -383,7 +383,7 @@ Fixes from the first Mac run of 0.3.0.
 - `check.sh` ran every step against a missing input file, printing a
   column of failures; it now stops at once and says which file.
 
-## 0.3.0 — 2026-09-12
+## 0.3.0 (2026-09-12)
 
 HDR in and out, an A/V sync corpus that found eight timing bugs, chunked
 encoding across cores, and two encode fields: `tune` and
@@ -469,7 +469,7 @@ optional.
 - The test suite without the media feature (CI's second job) failed on
   a test that needs media; it is gated now.
 
-## 0.2.0 — 2026-09-11
+## 0.2.0 (2026-09-11)
 
 The timeline format reaches 0.2: `crop`, `effects` (a Gaussian blur),
 `mask` and `speed` on clips, all optional, so every 0.1 document still

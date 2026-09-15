@@ -125,7 +125,7 @@ or more of them:
 "animation": "slide-in 0.5s ease-out, fade-in 0.3s, fade-out 0.3s 3.7s"
 ```
 
-A rule maps an offset — `from`, `to` or a percentage — to a declaration
+A rule maps an offset (`from`, `to` or a percentage) to a declaration
 block. The properties a block may set are the ones the renderer animates:
 
 | Property | Effect |
@@ -139,7 +139,7 @@ the element carrying the animation when a rule comes from markup, and the
 clip's own box when the clip's `animation` plays it. So
 `translateX(-100%)` slides a card in by exactly its own width, whatever
 that turns out to be. A clip whose size is only known once its file is
-open — a video, an image, a text run — has no box to take a share of, and
+open (a video, an image, a text run) has no box to take a share of, and
 a percentage there is E442.
 
 A property interpolates between the offsets that set it, and holds its
@@ -456,7 +456,7 @@ Every source has a `kind`.
 | --- | --- | --- |
 | `composition` | yes | Name of an entry under `compositions`. The box is the composition's frame. |
 
-`html` — see [Markup](#markup).
+`html`. See [Markup](#markup).
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
@@ -511,8 +511,8 @@ on one is a `W453` rather than a silent difference.
 
 Word files are read forgivingly: whisper's `{"segments": [{"words": [...]}]}`,
 a bare `{"words": [...]}` or a bare list all work, `word` and `text` are
-both read as the word, and every other key — `probability`, `seek`,
-`tokens`, WhisperX's `score` — is ignored. Times are seconds; times that
+both read as the word, and every other key (`probability`, `seek`,
+`tokens`, WhisperX's `score`) is ignored. Times are seconds; times that
 are plainly milliseconds are an `E453` rather than a caption track that
 starts twenty minutes in.
 
@@ -591,7 +591,7 @@ picture.
 
 The rule every asset path follows applies here too: no leading `/`, no
 `..`, no drive letter, no URL. Anything that would leave the asset root
-is E452, and so is a file that is not there — both checked while the
+is E452, and so is a file that is not there. Both are checked while the
 document is validated, so a missing picture is an error before anything
 is drawn rather than a hole in the frame. `--assets DIR` moves the root,
 and the paths move with it.
@@ -676,8 +676,8 @@ parts that move into clips of their own.
 - There is no `float`, no `z-index`, no grid, no transition and no media
   query. The clip's own `transform` and `animation` move the whole box.
 - **Nothing is fetched over the network.** A path is a file; a URL is
-  E452. Elements with a renderer of their own — `<iframe>`, `<svg>`,
-  `<canvas>`, `<video>`, `<object>`, `<embed>` — are W450.
+  E452. Elements with a renderer of their own (`<iframe>`, `<svg>`,
+  `<canvas>`, `<video>`, `<object>`, `<embed>`) are W450.
 
 Layout and painting do not depend on time, so a markup box is drawn once
 per clip and reused for every frame it is on screen.
@@ -701,7 +701,7 @@ Tracks have `id`, `enabled` and `clips` like layers. Audio clips:
 Subtitle tracks are written to the output as text streams that players
 can show or hide. That is the whole distinction the format draws between
 the two words: a *subtitle* travels alongside the picture as a stream, a
-*caption* is drawn into it. The same `.srt` or `.vtt` can do either — here
+*caption* is drawn into it. The same `.srt` or `.vtt` can do either: here
 as a track, or as a [`captions` source](#sources) on a clip. Each track is
 one subtitle asset, a SubRip `.srt` or WebVTT `.vtt` file.
 

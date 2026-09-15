@@ -44,9 +44,9 @@ geneva subtitles examples/iss.mp4 --burn examples/words.json \
 
 <img src="../docs/captions.gif" alt="Captions over the footage, each word picked out in yellow as it is said" width="640">
 
-geneva groups the words into cues the way a caption editor would — at
-most two lines, about forty characters, nothing on screen for less than a
-beat — and picks out whichever word is current.
+geneva groups the words into cues the way a caption editor would: at most
+two lines, about forty characters, nothing on screen for less than a beat.
+It picks out whichever word is current.
 
 whisper and its variants go in unedited; keys it does not need are
 ignored. A `.srt` or `.vtt` works too, minus the highlight, which needs
@@ -101,8 +101,8 @@ in the right places.
 `position` is `bottom` (default), `top` or `center`; `margin` is the
 distance from that edge. A margin left out defaults to the title-safe
 inset (`safe`, 5% of the height), which is the only difference between the
-two layers above — the English says `"margin": "15%"`, the Arabic takes
-the 36px default.
+two layers above. The English says `"margin": "15%"`; the Arabic takes the
+36px default.
 
 ```json
 "kind": "captions", "asset": "arabic", "position": "top", "margin": "8%"
@@ -126,7 +126,7 @@ geneva render examples/social-reframe.json -o reel.mp4
 ```
 
 Three layers fit a 16:9 clip into a 9:16 frame without cropping anything
-out — the same file twice, then the captions over both:
+out: the same file twice, then the captions over both.
 
 ```json
 "output": { "width": 1080, "height": 1920, "fps": 30 },
@@ -163,8 +163,8 @@ geneva convert talk.mp4 -o reel.mp4 --for tiktok --fill blur
 Everything a web page needs: two or three sizes, a thumbnail, a sprite
 sheet for the scrub preview, and the audio at 16 kHz to feed whisper.
 Listed in one document, the source is read once instead of six times.
-This is `outputs`, not a `--for` preset — the presets pick the settings
-for one destination, this writes many files from one pass.
+This is `outputs`, not a `--for` preset. The presets pick the settings for
+one destination; this writes many files from one pass.
 
 ```json
 "outputs": {
@@ -203,8 +203,8 @@ When it can't copy it says why rather than quietly re-encoding.
 ## Writing a card
 
 `card.html` is ordinary markup. Paths in it are relative to itself, as on
-a page, so `<img src="logo.png">` finds the file next to it — and opening
-it in a browser shows what geneva will draw. Nothing may leave the asset
+a page, so `<img src="logo.png">` finds the file next to it, and opening it
+in a browser shows what geneva will draw. Nothing may leave the asset
 root: no leading `/`, no `..`, no URLs.
 
 It is not a browser. An element's text is one paragraph and a child

@@ -1,8 +1,8 @@
 //! Caption files: the cues a document draws, and where they come from.
 //!
 //! Three shapes arrive here. SubRip and WebVTT carry cues with times and
-//! text, and WebVTT can say where a cue sits. A word file — the JSON a
-//! speech recogniser writes — carries one entry per word, which is what
+//! text, and WebVTT can say where a cue sits. A word file, the JSON a
+//! speech recogniser writes, carries one entry per word, which is what
 //! makes a word-by-word highlight possible; those are grouped into cues
 //! here rather than in the renderer, so the resolver can lay each cue on
 //! the timeline as its own clip and the copy planner can copy the gaps
@@ -190,8 +190,8 @@ pub fn parse_webvtt(text: &str) -> Result<Vec<Cue>, CaptionError> {
 }
 
 /// Reads a WebVTT cue's settings, which follow the timing on the same
-/// line. Anything it does not understand — `vertical`, `region`, a line
-/// given as a row number rather than a percentage — is left alone.
+/// line. Anything it does not understand (`vertical`, `region`, a line
+/// given as a row number rather than a percentage) is left alone.
 fn settings(line: &str) -> Placement {
     let mut p = Placement::default();
     let Some((_, rest)) = line.split_once("-->") else {
@@ -395,8 +395,8 @@ pub fn cues_from_words(words: &[(Word, usize)], rules: Grouping) -> Vec<Cue> {
 ///
 /// The shape is whatever the tool produced: whisper nests `words` inside
 /// `segments`, some tools hand back `{"words": [...]}`, some a bare list.
-/// All three are read, and every key that is not the word or its times —
-/// `probability`, `score`, `confidence`, `speaker`, `tokens` — is
+/// All three are read, and every key that is not the word or its times
+/// (`probability`, `score`, `confidence`, `speaker`, `tokens`) is
 /// ignored, so a file can usually go in as it came out.
 ///
 /// Forgiving about keys, strict about structure: a file with no words in

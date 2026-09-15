@@ -1,7 +1,7 @@
 //! Measuring and painting the display list `geneva-html` produces.
 //!
-//! Layout asks two questions this crate can answer — how big a run of
-//! text is, and how big an image is — and then hands back boxes with
+//! Layout asks two questions this crate can answer, how big a run of text
+//! is and how big an image is, and then hands back boxes with
 //! absolute coordinates. Painting them needs nothing the compositor does
 //! not already do: a rounded rectangle is a signed distance field, and
 //! text goes through the same engine every other text source uses.

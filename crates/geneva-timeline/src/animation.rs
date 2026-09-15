@@ -5,8 +5,8 @@
 //! one or more of them with a duration, a delay and a timing function.
 //! Nothing here interprets selectors or layout; the properties a rule may
 //! set are the four the renderer already animates, and resolution turns
-//! them into ordinary keyframe tracks, so everything downstream — the
-//! compositor, the copy planner, `--show-timeline` — is unchanged.
+//! them into ordinary keyframe tracks, so everything downstream (the
+//! compositor, the copy planner, `--show-timeline`) is unchanged.
 
 use std::fmt;
 
