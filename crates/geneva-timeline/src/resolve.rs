@@ -3094,6 +3094,13 @@ be; write the distance in pixels, or give the source a size",
                         ),
                     );
                 }
+                for rule in &p.unmatched {
+                    self.push(
+                        Diagnostic::warning("W452", spath.clone(), rule.clone()).with_help(
+                            "check the spelling against the markup; a stylesheet linked from the markup is not checked, since it is written for more than one file",
+                        ),
+                    );
+                }
                 // The markup's own motion: `@keyframes` for the clip to
                 // play, and the `animation` its outermost element carries,
                 // so a file that moves in a browser moves here too.

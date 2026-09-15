@@ -247,6 +247,24 @@ the format version it was written for.
 
 ### Fixes
 
+- **`body` and `html` selected nothing.** The markup is wrapped in a root
+  element standing in for the page, but nothing could name it, so
+  `body { display: flex; background: ... }` parsed, matched no element
+  and was discarded without a word. Both names now reach that root. It
+  draws its background and border when someone asks for them, and stays
+  unpainted otherwise, which is what keeps the composited area down to
+  the content. Its size is the box the clip draws into, so padding goes
+  inside that box rather than pushing the root past it.
+
+- **A rule that matched nothing said nothing.** W450 covers a property
+  geneva does not draw and E451 a selector it cannot parse, but a
+  selector that parsed and then matched no element fell between them: a
+  misspelt class name produced an unstyled box and a report reading "ok:
+  no problems found". That is W452 now, naming the selector and how many
+  declarations it wasted. Only the markup's own `<style>` is checked; a
+  stylesheet it links to is written for more than one file, so the rules
+  this one leaves alone are not mistakes.
+
 - `letter_spacing` was a multiple of the font size rather than pixels.
   cosmic-text adds the value to an advance it has already divided by the
   font's units per em, so what it wants is a share of the em; geneva

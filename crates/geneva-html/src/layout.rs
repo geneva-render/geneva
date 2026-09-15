@@ -95,6 +95,10 @@ pub fn layout<M: Measure>(
         width: width.map_or_else(Dimension::auto, Dimension::length),
         height: height.map_or_else(Dimension::auto, Dimension::length),
     };
+    // The size given is the box the markup is drawn into, so padding on
+    // the root goes inside it, the way it does on a page. Content-box
+    // sizing would push the root past the box instead.
+    root_style.box_sizing = BoxSizing::BorderBox;
     let mut styles = styles.to_vec();
     styles[doc.root].layout = root_style;
     let styles = &styles[..];
@@ -257,8 +261,14 @@ fn paint_order(
         crate::dom::NodeKind::Element(_) => Content::Empty,
     };
 
-    // The synthetic root draws nothing of its own.
-    if dom != doc.root {
+    // The root stands in for the page, so it draws only what someone
+    // asked it to draw with a `body` or `html` rule. Left alone it marks
+    // nothing, which is what keeps the painted area down to the content.
+    let root_draws = dom == doc.root
+        && (style.paint.background.is_some()
+            || style.paint.shadow.is_some()
+            || border.iter().any(|w| *w > 0.0));
+    if dom != doc.root || root_draws {
         out.push(Painted {
             rect,
             content_rect,
@@ -336,10 +346,46 @@ mod tests {
     fn lay(html: &str, w: f32, h: f32) -> (Document, Laid) {
         let doc = parse(html).unwrap();
         let sheet = parse_stylesheet(&doc.style).unwrap();
-        let (styles, problems) = crate::style::cascade(&doc, &sheet);
+        let (styles, problems, _) = crate::style::cascade(&doc, &sheet);
         assert!(problems.is_empty(), "{problems:?}");
         let laid = layout(&doc, &styles, Some(w), Some(h), &mut Cells).unwrap();
         (doc, laid)
+    }
+
+    #[test]
+    fn body_styles_the_box_the_markup_is_drawn_into() {
+        let (_, laid) = lay(
+            "<style>body { padding: 20px; background: #2a6fb0; display: flex }\
+             .box { width: 60px; height: 30px }</style><div class=box></div>",
+            400.0,
+            90.0,
+        );
+        // The size given is the box, so padding goes inside it rather than
+        // pushing the root out to 440 by 130.
+        assert_eq!(laid.size, (400.0, 90.0));
+        // The root draws, because someone asked it to.
+        let root = &laid.boxes[0];
+        assert_eq!([root.rect[0], root.rect[1]], [0.0, 0.0]);
+        assert_eq!([root.rect[2], root.rect[3]], [400.0, 90.0]);
+        assert!(root.paint.background.is_some());
+        // The child sits at the padding edge.
+        let child = laid.boxes.iter().find(|b| b.rect[2] == 60.0).unwrap();
+        assert_eq!([child.rect[0], child.rect[1]], [20.0, 20.0]);
+    }
+
+    #[test]
+    fn an_unstyled_root_still_draws_nothing() {
+        // Left alone the root marks no pixels, which is what keeps the
+        // painted area down to the content.
+        let (_, laid) = lay(
+            "<style>.box { width: 60px; height: 30px }</style><div class=box></div>",
+            400.0,
+            90.0,
+        );
+        assert!(
+            laid.boxes.iter().all(|b| b.rect[2] != 400.0),
+            "the root should not be in the paint list"
+        );
     }
 
     #[test]

@@ -26,7 +26,12 @@ pub struct Compound {
 impl Compound {
     fn matches(&self, el: &Element) -> bool {
         if let Some(tag) = &self.tag {
-            if *tag != el.tag {
+            // The wrapper around the markup answers to the names a page
+            // would give it, so `body { ... }` reaches the whole box the
+            // way it does in a browser.
+            let named =
+                *tag == el.tag || (el.tag == ":root" && matches!(tag.as_str(), "html" | "body"));
+            if !named {
                 return false;
             }
         }
@@ -56,6 +61,43 @@ pub struct Selector {
     pub subject: Compound,
     /// Ancestor compounds, nearest first, each with how it is reached.
     pub ancestors: Vec<(Combinator, Compound)>,
+}
+
+impl Compound {
+    /// The compound written out again, close enough to what was typed to
+    /// name it in a message.
+    fn text(&self) -> String {
+        let mut out = self.tag.clone().unwrap_or_else(|| {
+            if self.id.is_none() && self.classes.is_empty() {
+                "*".to_owned()
+            } else {
+                String::new()
+            }
+        });
+        if let Some(id) = &self.id {
+            out.push('#');
+            out.push_str(id);
+        }
+        for c in &self.classes {
+            out.push('.');
+            out.push_str(c);
+        }
+        out
+    }
+}
+
+impl std::fmt::Display for Selector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Ancestors are held nearest first, so they read right to left.
+        for (combinator, compound) in self.ancestors.iter().rev() {
+            f.write_str(&compound.text())?;
+            f.write_str(match combinator {
+                Combinator::Child => " > ",
+                Combinator::Descendant => " ",
+            })?;
+        }
+        f.write_str(&self.subject.text())
+    }
 }
 
 impl Selector {

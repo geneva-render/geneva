@@ -84,6 +84,10 @@ pub struct Prepared {
     /// Declarations that named something geneva does not draw. These do
     /// not stop the document from being drawn; they say what was ignored.
     pub problems: Vec<String>,
+    /// Rules in this markup's own `<style>` that parsed and then matched
+    /// no element, so their declarations reached nothing. Usually a
+    /// misspelt class or a tag the markup does not use.
+    pub unmatched: Vec<String>,
     /// `@keyframes` rules from the stylesheet, untouched.
     pub keyframes: std::collections::BTreeMap<String, KeyframesRule>,
     /// The `animation` on the outermost element. Layout and paint do not
@@ -159,9 +163,14 @@ pub fn prepare(
             sheet.keyframes.extend(more.keyframes);
         }
     }
+    // Where this document's own <style> rules sit in the sheet, so that a
+    // rule someone wrote here can be told apart from one in a stylesheet
+    // shared with other markup.
+    let own_from = sheet.rules.len();
     let own = css::parse_stylesheet(&doc.style).map_err(Error::Css)?;
     sheet.rules.extend(own.rules);
     sheet.keyframes.extend(own.keyframes);
+    let own_to = sheet.rules.len();
     if !extra.trim().is_empty() {
         let more = css::parse_stylesheet(extra).map_err(Error::Css)?;
         sheet.rules.extend(more.rules);
@@ -169,7 +178,32 @@ pub fn prepare(
         // applied after it.
         sheet.keyframes.extend(more.keyframes);
     }
-    let (styles, mut problems) = style::cascade(&doc, &sheet);
+    let (styles, mut problems, used) = style::cascade(&doc, &sheet);
+    // A rule that parses and then matches nothing styles nothing, and
+    // until now said nothing either, which is how a misspelt class name
+    // produced an unstyled box and a clean report. Only this document's
+    // own rules are named: a linked stylesheet is written for more than
+    // one piece of markup, so the rules it does not use here are not
+    // mistakes.
+    let mut unmatched = Vec::new();
+    for (rule, hit) in sheet.rules[own_from..own_to]
+        .iter()
+        .zip(&used[own_from..own_to])
+    {
+        if !hit {
+            let names: Vec<String> = rule.selectors.iter().map(ToString::to_string).collect();
+            let n = rule.declarations.len();
+            unmatched.push(format!(
+                "`{}` matches nothing in this markup, so {}",
+                names.join(", "),
+                if n == 1 {
+                    "its one declaration does nothing".to_owned()
+                } else {
+                    format!("its {n} declarations do nothing")
+                },
+            ));
+        }
+    }
     // Only the outermost element's animation is the clip's; anything
     // deeper would have to move inside a picture that is drawn once.
     let outermost: Vec<NodeId> = doc
@@ -199,6 +233,7 @@ because the markup is drawn once and the clip moves the picture"
         doc,
         styles,
         problems,
+        unmatched,
         keyframes: sheet.keyframes,
         animation,
         animated,
@@ -225,6 +260,64 @@ mod tests {
             p.keyframes["slide-in"]["from"],
             "transform: translateX(-10px)"
         );
+    }
+
+    #[test]
+    fn a_rule_that_matches_nothing_is_named() {
+        let p = prepare(
+            "<style>.crad { color: red } section > p { color: red; margin: 0 } \
+             .card { color: blue }</style><div class=card></div>",
+            "",
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(p.unmatched.len(), 2, "{:?}", p.unmatched);
+        assert!(p.unmatched[0].contains("`.crad`"), "{:?}", p.unmatched);
+        assert!(
+            p.unmatched[0].contains("its one declaration does nothing"),
+            "{:?}",
+            p.unmatched
+        );
+        // The selector is written back out, combinator and all.
+        assert!(
+            p.unmatched[1].contains("`section > p`"),
+            "{:?}",
+            p.unmatched
+        );
+        assert!(
+            p.unmatched[1].contains("its 2 declarations do nothing"),
+            "{:?}",
+            p.unmatched
+        );
+    }
+
+    #[test]
+    fn a_linked_stylesheet_is_not_blamed_for_what_this_file_leaves_alone() {
+        // A house stylesheet covers more than one card, so the rules this
+        // one does not use are not mistakes.
+        let mut linked = BTreeMap::new();
+        linked.insert(
+            "house.css".to_owned(),
+            ".title { color: red } .strap { color: grey }".to_owned(),
+        );
+        let p = prepare(
+            "<link rel=stylesheet href=house.css><div class=title></div>",
+            "",
+            &linked,
+        )
+        .unwrap();
+        assert!(p.unmatched.is_empty(), "{:?}", p.unmatched);
+    }
+
+    #[test]
+    fn body_reaches_the_root_and_is_not_reported_as_unmatched() {
+        let p = prepare(
+            "<style>body { background: #2a6fb0 } html { padding: 4px }</style><div></div>",
+            "",
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(p.unmatched.is_empty(), "{:?}", p.unmatched);
     }
 
     #[test]

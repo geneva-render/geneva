@@ -167,9 +167,12 @@ struct Origin {
 ///
 /// Returns one entry per node id; text nodes get their parent's style,
 /// which is what the renderer needs to draw them.
-pub fn cascade(doc: &Document, sheet: &Stylesheet) -> (Vec<Computed>, Vec<String>) {
+pub fn cascade(doc: &Document, sheet: &Stylesheet) -> (Vec<Computed>, Vec<String>, Vec<bool>) {
     let mut out = vec![Computed::default(); doc.nodes.len()];
     let mut problems = Vec::new();
+    // Which rules reached something, so a caller can name the ones that
+    // parsed and then styled nothing.
+    let mut used = vec![false; sheet.rules.len()];
     let mut stack = vec![(doc.root, Computed::default())];
     while let Some((id, inherited)) = stack.pop() {
         let mut computed = Computed {
@@ -217,6 +220,7 @@ pub fn cascade(doc: &Document, sheet: &Stylesheet) -> (Vec<Computed>, Vec<String
                 else {
                     continue;
                 };
+                used[i] = true;
                 for d in &rule.declarations {
                     declarations.push((
                         Origin {
@@ -271,7 +275,7 @@ pub fn cascade(doc: &Document, sheet: &Stylesheet) -> (Vec<Computed>, Vec<String
         }
         out[id] = computed;
     }
-    (out, problems)
+    (out, problems, used)
 }
 
 /// Applies one declaration. An unknown property is an error rather than
@@ -825,7 +829,7 @@ mod tests {
     fn styled(html: &str) -> (Document, Vec<Computed>, Vec<String>) {
         let doc = parse(html).unwrap();
         let sheet = parse_stylesheet(&doc.style).unwrap();
-        let (styles, problems) = cascade(&doc, &sheet);
+        let (styles, problems, _) = cascade(&doc, &sheet);
         (doc, styles, problems)
     }
 

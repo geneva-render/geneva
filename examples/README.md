@@ -207,9 +207,13 @@ a page, so `<img src="logo.png">` finds the file next to it, and opening it
 in a browser shows what geneva will draw. Nothing may leave the asset
 root: no leading `/`, no `..`, no URLs.
 
+`body` and `html` both mean the box the clip draws into, so a background
+or padding on either works as it does on a page.
+
 It is not a browser. An element's text is one paragraph and a child
 element is a box; there is no `float` or `z-index`; anything geneva
-cannot draw it names rather than skipping. The property list is in
+cannot draw it names rather than skipping, including a rule whose
+selector matches nothing. The property list is in
 [../docs/timeline.md](../docs/timeline.md#markup).
 
 ## Where the footage came from

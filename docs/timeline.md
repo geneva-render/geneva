@@ -677,7 +677,14 @@ parts that move into clips of their own.
   query. The clip's own `transform` and `animation` move the whole box.
 - **Nothing is fetched over the network.** A path is a file; a URL is
   E452. Elements with a renderer of their own (`<iframe>`, `<svg>`,
-  `<canvas>`, `<video>`, `<object>`, `<embed>`) are W450.
+  `<canvas>`, `<video>`, `<object>`, `<embed>`) are W450. A rule in the
+  markup's own `<style>` that matches no element is W452, so a misspelt
+  class name is named rather than quietly doing nothing.
+- `body` and `html` both select the box the markup is drawn into, which
+  is the clip's own box. A `background` or `border` on it fills that box,
+  and `padding` goes inside it, the way it does against a page. Left
+  unstyled the box marks no pixels, so only the content counts towards
+  what is composited.
 
 Layout and painting do not depend on time, so a markup box is drawn once
 per clip and reused for every frame it is on screen.
