@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 
+use geneva_anim::Easing;
 use geneva_color::ColorTags;
 use schemars::JsonSchema;
 use serde::de;
@@ -590,10 +591,18 @@ pub struct Clip {
     /// text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration: Option<Time>,
-    /// A transition from the previous clip in the layer. The clip starts
-    /// early by the transition duration and blends over the previous one.
+    /// How the clip arrives. With a clip before it on the layer, this one
+    /// starts early by the transition duration and the pair blends. As the
+    /// first clip on a layer it opens the piece: a "fade" comes up out of
+    /// its color, a "crossfade" up from whatever is behind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition: Option<Transition>,
+    /// How the clip leaves, when nothing follows it on the layer. A "fade"
+    /// goes out to its color, a "crossfade" out to whatever is behind.
+    /// Where another clip follows, that clip's "transition" already covers
+    /// the join and setting this too is an E307.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition_out: Option<Transition>,
     /// A rectangle of the source to show; the rest is discarded before
     /// "fit" and the transform see the picture, so the clip's box is the
     /// rectangle. Percentages refer to the source's own size.
@@ -726,12 +735,17 @@ impl Crop {
 pub struct Transition {
     /// Transition type.
     pub kind: TransitionKind,
-    /// How long the two clips overlap.
+    /// How long it lasts: the overlap between a pair of clips, or the
+    /// ramp at the head or tail of a layer.
     pub duration: Time,
     /// The color a "fade" passes through. Defaults to black. Ignored by
     /// "crossfade", which never shows a color of its own (W304).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<ColorValue>,
+    /// Shape of the ramp. Defaults to linear; "ease-in-out" is the usual
+    /// choice for a slow dissolve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ease: Option<Easing>,
 }
 
 /// Transition types.

@@ -684,17 +684,17 @@ per clip and reused for every frame it is on screen.
 
 ### Transitions
 
-A `transition` on a clip says how it arrives from the clip before it on
-the same layer. The two overlap for `duration`, and a clip with no
-explicit `start` is moved that much earlier to make the overlap. The
-previous clip must be long enough to cover it (E306), and the first clip
-on a layer has nothing to arrive from (W303).
+A `transition` on a clip says how it arrives; a `transition_out` says how
+it leaves. Between two clips on a layer they overlap for `duration`, and a
+clip with no explicit `start` is moved that much earlier to make the
+overlap, so the previous clip must be long enough to cover it (E306).
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
 | `kind` | yes | | `crossfade` or `fade`. |
-| `duration` | yes | | How long the two clips overlap. |
+| `duration` | yes | | The overlap between a pair of clips, or the ramp at the head or tail of a layer. |
 | `color` | no | `black` | The color a `fade` dips through. On a `crossfade` it is a W304, since nothing would show it. |
+| `ease` | no | `linear` | Shape of the ramp, taking the same values a keyframe's easing takes. `ease-in-out` is the usual choice for a slow dissolve. |
 
 `crossfade` brings the arriving clip up over the one leaving, which stays
 at full opacity underneath. Both are on screen at once, so the picture
@@ -709,16 +709,27 @@ the color covers the frame in between, strongest at the midpoint. Only
 one clip is ever visible. The sound follows the picture: it reaches
 silence at the midpoint and comes back.
 
+At the head or tail of a layer there is no second clip, so the ramp runs
+the whole `duration` rather than handing over in the middle. A `fade`
+opening a layer comes up out of its color and one closing a layer goes
+out to it, which is how a piece fades up from black and fades out again.
+A `crossfade` there has no colour to use, so it fades against whatever is
+behind: the layers below, or `output.background`.
+
+```json
+{ "source": { "kind": "video", "asset": "a" },
+  "transition":     { "kind": "fade", "duration": "1s" },
+  "transition_out": { "kind": "fade", "duration": "1s", "ease": "ease-in-out" } }
+```
+
+Where another clip follows, that clip's `transition` already covers the
+join, and setting `transition_out` as well is an E307. Keep one.
+
 Two things to know. The dip color covers the whole frame for the length
 of the transition, including layers below the one it is on, because it is
 the picture that dips and not one layer of it. And a fade on a layer
 above the first makes the whole composition take the compositing path
 rather than the overlay path, so none of its frames are copied.
-
-```json
-{ "source": { "kind": "video", "asset": "b" },
-  "transition": { "kind": "fade", "duration": "0.5s", "color": "white" } }
-```
 
 ### `audio[]` and `audio[].clips[]`
 

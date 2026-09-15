@@ -755,3 +755,100 @@ fn a_transition_colour_on_a_crossfade_is_a_warning() {
         "{found:?}"
     );
 }
+
+#[test]
+fn a_transition_can_open_and_close_a_layer() {
+    let text = r#"{
+      "geneva": "0.3",
+      "output": { "width": 64, "height": 64, "fps": 25, "duration": "3s" },
+      "layers": [ { "clips": [
+        { "source": { "kind": "solid", "color": "red" }, "duration": "3s",
+          "transition": { "kind": "fade", "duration": "1s" },
+          "transition_out": { "kind": "fade", "duration": "1s" } }
+      ] } ]
+    }"#;
+    let loaded = load(text);
+    assert!(loaded.is_ok(), "{:#?}", loaded.diagnostics);
+    assert!(
+        !codes(&loaded.diagnostics).iter().any(|(c, _)| *c == "W303"),
+        "opening a layer with a transition is no longer a warning"
+    );
+    let clip = &loaded.composition.unwrap().layers[0].clips[0];
+
+    // Opening the layer, nothing waits: the clip comes up across the whole
+    // ramp and the colour clears as it does.
+    let open = clip.transition_in.unwrap();
+    assert!(!open.paired);
+    assert_eq!(open.incoming(Ratio::ZERO), 0.0);
+    assert_eq!(open.incoming(Ratio::new(1, 2)), 0.5);
+    assert_eq!(open.incoming(Ratio::from_int(1)), 1.0);
+    assert_eq!(open.veil(Ratio::ZERO), 1.0);
+    assert_eq!(open.veil(Ratio::new(1, 2)), 0.5);
+
+    // Closing it is the mirror, measured back from the clip's end.
+    let close = clip.transition_out.unwrap();
+    assert!(!close.paired);
+    assert_eq!(close.outgoing(Ratio::ZERO), 0.0);
+    assert_eq!(close.outgoing(Ratio::from_int(1)), 1.0);
+    assert_eq!(close.veil(Ratio::ZERO), 1.0);
+
+    // The clip is not pulled earlier, since there is nothing to overlap.
+    assert_eq!(clip.start, Ratio::ZERO);
+}
+
+#[test]
+fn transition_out_beside_the_next_clips_transition_is_an_error() {
+    let text = r#"{
+      "geneva": "0.3",
+      "output": { "width": 64, "height": 64, "fps": 25, "duration": "4s" },
+      "layers": [ { "clips": [
+        { "source": { "kind": "solid", "color": "red" }, "duration": "2s",
+          "transition_out": { "kind": "fade", "duration": "0.5s" } },
+        { "source": { "kind": "solid", "color": "blue" }, "duration": "2s",
+          "transition": { "kind": "crossfade", "duration": "0.5s" } }
+      ] } ]
+    }"#;
+    let found = errors(text);
+    assert!(
+        found
+            .iter()
+            .any(|(c, p)| *c == "E307" && p == "/layers/0/clips/0/transition_out"),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn an_easing_shapes_the_transition_ramp() {
+    let make = |ease: &str| {
+        let text = format!(
+            r#"{{
+              "geneva": "0.3",
+              "output": {{ "width": 64, "height": 64, "fps": 25, "duration": "2s" }},
+              "layers": [ {{ "clips": [
+                {{ "source": {{ "kind": "solid", "color": "red" }}, "duration": "2s",
+                   "transition": {{ "kind": "crossfade", "duration": "1s", "ease": "{ease}" }} }}
+              ] }} ]
+            }}"#
+        );
+        load(&text).composition.unwrap().layers[0].clips[0]
+            .transition_in
+            .unwrap()
+    };
+    let quarter = Ratio::new(1, 4);
+    let linear = make("linear").incoming(quarter);
+    let eased = make("ease-in-out").incoming(quarter);
+    assert!(
+        (linear - 0.25).abs() < 1e-9,
+        "linear should be flat: {linear}"
+    );
+    assert!(
+        eased < linear - 0.05,
+        "ease-in-out starts slower than linear: {eased} against {linear}"
+    );
+    // Both still start at nothing and finish whole.
+    for ease in ["linear", "ease-in-out"] {
+        let t = make(ease);
+        assert_eq!(t.incoming(Ratio::ZERO), 0.0);
+        assert_eq!(t.incoming(Ratio::from_int(1)), 1.0);
+    }
+}

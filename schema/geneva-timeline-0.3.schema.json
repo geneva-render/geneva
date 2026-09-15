@@ -1161,7 +1161,18 @@
               "type": "null"
             }
           ],
-          "description": "A transition from the previous clip in the layer. The clip starts\nearly by the transition duration and blends over the previous one."
+          "description": "How the clip arrives. With a clip before it on the layer, this one\nstarts early by the transition duration and the pair blends. As the\nfirst clip on a layer it opens the piece: a \"fade\" comes up out of\nits color, a \"crossfade\" up from whatever is behind."
+        },
+        "transition_out": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Transition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the clip leaves, when nothing follows it on the layer. A \"fade\"\ngoes out to its color, a \"crossfade\" out to whatever is behind.\nWhere another clip follows, that clip's \"transition\" already covers\nthe join and setting this too is an E307."
         },
         "crop": {
           "anyOf": [
@@ -2332,7 +2343,7 @@
         },
         "duration": {
           "$ref": "#/$defs/Time",
-          "description": "How long the two clips overlap."
+          "description": "How long it lasts: the overlap between a pair of clips, or the\nramp at the head or tail of a layer."
         },
         "color": {
           "anyOf": [
@@ -2344,6 +2355,17 @@
             }
           ],
           "description": "The color a \"fade\" passes through. Defaults to black. Ignored by\n\"crossfade\", which never shows a color of its own (W304)."
+        },
+        "ease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Easing"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Shape of the ramp. Defaults to linear; \"ease-in-out\" is the usual\nchoice for a slow dissolve."
         }
       },
       "required": [

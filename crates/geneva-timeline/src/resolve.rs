@@ -20,8 +20,8 @@ use crate::ratio::Ratio;
 use crate::schema::{
     ACCEPTED_VERSIONS, Asset, AssetKind, AudioOutput, AudioTrack, BlendMode, BoxSize,
     CaptionPosition, Clip, CompositionDef, Crop, Effect, Encode, FORMAT_VERSION, Fit, Layer, Mask,
-    OutputKind, ShapeKind, Source, TextAlign, TextSource, Timeline, Transform, TransitionKind,
-    VideoCodec, Word,
+    OutputKind, ShapeKind, Source, TextAlign, TextSource, Timeline, Transform, Transition,
+    TransitionKind, VideoCodec, Word,
 };
 use crate::time::Time;
 
@@ -155,8 +155,10 @@ pub struct ResolvedClip {
     pub rotation: Track<f64>,
     /// Opacity over clip-local time.
     pub opacity: Track<f64>,
-    /// Transition from the previous clip.
+    /// Transition from the previous clip, or the one that opens the layer.
     pub transition_in: Option<ResolvedTransition>,
+    /// Transition that closes the layer, when nothing follows this clip.
+    pub transition_out: Option<ResolvedTransition>,
     /// Effects on the placed picture, in order.
     pub effects: Vec<ResolvedEffect>,
     /// The mask, if any.
@@ -171,70 +173,80 @@ pub struct ResolvedClip {
 pub struct ResolvedTransition {
     /// Which transition.
     pub kind: TransitionKind,
-    /// How long the two clips overlap.
+    /// How long it lasts: the overlap between a pair of clips, or the
+    /// ramp at the head or tail of a layer.
     pub duration: Ratio,
     /// Premultiplied linear color for `fade`; unused by `crossfade`.
     pub color: LinearRgba,
+    /// Shape of the ramp.
+    pub ease: Easing,
+    /// Whether there is a clip on the other side. A pair hands over in
+    /// the middle of the overlap; an edge ramps across the whole of it.
+    pub paired: bool,
 }
 
 impl ResolvedTransition {
+    /// The eased ramp `u` in 0 to 1, clamped.
+    fn ramp(&self, u: f64) -> f64 {
+        self.ease.evaluate(u.clamp(0.0, 1.0)).clamp(0.0, 1.0)
+    }
+
+    /// Progress through the transition, 0 at its start and 1 at its end.
+    fn progress(&self, local: Ratio) -> Option<f64> {
+        (self.duration > Ratio::ZERO && local < self.duration)
+            .then(|| (local / self.duration).to_f64().max(0.0))
+    }
+
     /// The opacity of the clip arriving, `local` seconds in.
     pub fn incoming(&self, local: Ratio) -> f64 {
-        let d = self.duration;
-        if d <= Ratio::ZERO || local >= d {
+        let Some(u) = self.progress(local) else {
             return 1.0;
-        }
-        match self.kind {
-            // Both clips are up at once, so the picture dissolves.
-            TransitionKind::Crossfade => (local / d).to_f64().clamp(0.0, 1.0),
-            // The arriving clip waits out the first half, then comes up
-            // from the color over the second.
-            TransitionKind::Fade => {
-                let half = d / Ratio::from_int(2);
-                if local <= half {
-                    0.0
-                } else {
-                    ((local - half) / half).to_f64().clamp(0.0, 1.0)
-                }
-            }
+        };
+        // Only a fade between two clips waits, letting the one leaving
+        // reach the color before this one starts. Everything else ramps
+        // across the whole transition.
+        if self.paired && self.kind == TransitionKind::Fade {
+            self.ramp((u - 0.5) * 2.0)
+        } else {
+            self.ramp(u)
         }
     }
 
     /// The opacity of the clip leaving, `left` seconds before it ends.
     pub fn outgoing(&self, left: Ratio) -> f64 {
-        let d = self.duration;
-        if d <= Ratio::ZERO || left >= d {
+        let Some(u) = self.progress(left) else {
             return 1.0;
-        }
-        match self.kind {
-            // A crossfade leaves it up: the clip arriving covers it, and
-            // fading both would dip the picture towards the background.
-            TransitionKind::Crossfade => 1.0,
-            // A fade takes it down to the color over the first half of
-            // the overlap, which is the second half of what is left.
-            TransitionKind::Fade => {
-                let half = d / Ratio::from_int(2);
-                if left >= half {
-                    ((left - half) / half).to_f64().clamp(0.0, 1.0)
-                } else {
-                    0.0
-                }
-            }
+        };
+        match (self.paired, self.kind) {
+            // The clip arriving covers this one, and fading both would dip
+            // the picture towards the background.
+            (true, TransitionKind::Crossfade) => 1.0,
+            // Down to the color over the first half of the overlap, which
+            // is the second half of what is left.
+            (true, TransitionKind::Fade) => self.ramp((u - 0.5) * 2.0),
+            // Closing a layer, either kind takes the whole ramp.
+            _ => self.ramp(u),
         }
     }
 
-    /// How opaque the dip color is, `local` seconds into the overlap.
-    /// Zero at both ends and one in the middle; a crossfade never shows
-    /// a color at all.
+    /// How opaque the dip color is, `local` seconds in. Between clips it
+    /// peaks in the middle and is clear at both ends; at the head or tail
+    /// of a layer it is full at the edge and clear inside. A crossfade
+    /// never shows a color at all.
     pub fn veil(&self, local: Ratio) -> f64 {
-        let d = self.duration;
-        if self.kind != TransitionKind::Fade || d <= Ratio::ZERO {
+        if self.kind != TransitionKind::Fade {
             return 0.0;
         }
-        let half = d / Ratio::from_int(2);
-        let up = (local / half).to_f64();
-        let down = ((d - local) / half).to_f64();
-        up.min(down).clamp(0.0, 1.0)
+        let Some(u) = self.progress(local) else {
+            return 0.0;
+        };
+        if self.paired {
+            // Up over the first half, down over the second.
+            self.ramp((u * 2.0).min((1.0 - u) * 2.0))
+        } else {
+            // Full where the layer ends, clear where the picture is.
+            self.ramp(1.0 - u)
+        }
     }
 }
 
@@ -1793,41 +1805,71 @@ inset of {safe_px}px"
                 ClipLength::Fixed(l) => ClipLength::Fixed(l / speed),
                 ClipLength::Open => ClipLength::Open,
             };
+            // A transition is resolved the same way wherever it sits; only
+            // whether there is a clip on the other side changes what the
+            // ramps do.
+            let resolve_transition = |me: &mut Self, tr: &Transition, field: &str, paired: bool| {
+                let tpath = cpath.key(field);
+                let duration = me.time(tr.duration, &tpath.key("duration"), "transition duration");
+                let color = tr.color.as_ref().map_or(Color::BLACK, |c| c.0).to_linear();
+                if tr.color.is_some() && tr.kind != TransitionKind::Fade {
+                    me.push(
+                        Diagnostic::warning(
+                            "W304",
+                            tpath.key("color"),
+                            format!(
+                                "{clip_id} has a transition color, but a {:?} transition never shows one",
+                                tr.kind
+                            ),
+                        )
+                        .with_help("use \"kind\": \"fade\" to dip through the color"),
+                    );
+                }
+                let ease = tr.ease.unwrap_or_default();
+                if let Some(reason) = ease.validate() {
+                    me.push(Diagnostic::error("E308", tpath.key("ease"), reason));
+                }
+                ResolvedTransition {
+                    kind: tr.kind,
+                    duration,
+                    color,
+                    ease,
+                    paired,
+                }
+            };
+
             let mut transition_in = None;
             if let Some(tr) = &clip.transition {
-                let tdur = self.time(
-                    tr.duration,
-                    &cpath.key("transition").key("duration"),
-                    "transition duration",
-                );
-                if i == 0 {
+                // The first clip on a layer has nothing before it, so its
+                // transition opens the piece instead of joining a pair and
+                // does not pull the clip earlier.
+                let paired = i > 0;
+                let t = resolve_transition(self, tr, "transition", paired);
+                if paired && clip.start.is_none() {
+                    start = start - t.duration;
+                }
+                transition_in = Some(t);
+            }
+            let mut transition_out = None;
+            if let Some(tr) = &clip.transition_out {
+                let follower = layer
+                    .clips
+                    .get(i + 1)
+                    .is_some_and(|next| next.transition.is_some());
+                if follower {
                     self.push(
-                        Diagnostic::warning("W303", cpath.key("transition"), format!("{clip_id} is the first clip in {id}; its transition has nothing to blend from"))
-                            .with_help("remove the transition or use an opacity keyframe for a fade from the background"),
+                        Diagnostic::error(
+                            "E307",
+                            cpath.key("transition_out"),
+                            format!(
+                                "{clip_id} sets transition_out, but the clip after it already \
+transitions in over the same join"
+                            ),
+                        )
+                        .with_help("keep one of the two; the arriving clip's \"transition\" covers the pair"),
                     );
                 } else {
-                    if clip.start.is_none() {
-                        start = start - tdur;
-                    }
-                    let color = tr.color.as_ref().map_or(Color::BLACK, |c| c.0).to_linear();
-                    if tr.color.is_some() && tr.kind != TransitionKind::Fade {
-                        self.push(
-                            Diagnostic::warning(
-                                "W304",
-                                cpath.key("transition").key("color"),
-                                format!(
-                                    "{clip_id} has a transition color, but a {:?} transition never shows one",
-                                    tr.kind
-                                ),
-                            )
-                            .with_help("use \"kind\": \"fade\" to dip through the color"),
-                        );
-                    }
-                    transition_in = Some(ResolvedTransition {
-                        kind: tr.kind,
-                        duration: tdur,
-                        color,
-                    });
+                    transition_out = Some(resolve_transition(self, tr, "transition_out", false));
                 }
             }
 
@@ -2035,6 +2077,7 @@ inset of {safe_px}px"
                 rotation,
                 opacity,
                 transition_in,
+                transition_out,
                 effects,
                 mask,
                 speed,

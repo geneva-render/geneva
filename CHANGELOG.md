@@ -212,6 +212,20 @@ the format version it was written for.
   above the first layer makes the composition composite rather than copy.
   Both are written down in docs/timeline.md next to the feature.
 
+- **Transitions at the head and tail of a layer.** A transition on the
+  first clip used to be W303, a warning whose help told you to write
+  opacity keyframes by hand. It now opens the piece: over the whole
+  duration a `fade` comes up out of its color and a `crossfade` up from
+  whatever is behind. `transition_out` closes a layer the same way, so a
+  piece fades up from black and out to black without anyone counting
+  keyframes against a clip length that might change. Setting
+  `transition_out` where another clip follows is E307, since that clip's
+  `transition` already covers the join. W303 is retired.
+
+- **`ease` on a transition**, taking what a keyframe's easing takes.
+  Both ramps were linear; `ease-in-out` is the usual choice for a slow
+  dissolve. A malformed curve is E308.
+
 ### Changes
 
 - A multi-output render takes the direct path when the canvas is one video

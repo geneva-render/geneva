@@ -126,6 +126,18 @@ fn walk(
                         shape,
                         speed: clip.speed * speed,
                     });
+                    // A clip that closes the layer takes its own sound
+                    // down; a pair is handled by the clip after it.
+                    if let Some(tr) = clip.transition_out {
+                        if tr.duration > Ratio::ZERO {
+                            let last = out.last_mut().expect("just pushed");
+                            // Either kind ends in silence here, with no
+                            // second voice to cross against, so following
+                            // the amplitude is what the ear expects.
+                            last.fade_out = tr.duration / speed;
+                            last.shape = FadeShape::Linear;
+                        }
+                    }
                     voiced = Some(out.len() - 1);
                 }
                 ResolvedSource::Composition(nested) => {

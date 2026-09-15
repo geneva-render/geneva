@@ -44,7 +44,8 @@ pub use ratio::Ratio;
 pub use resolve::{
     AssetInfo, Composition, NoAssetInfo, ResolvedAsset, ResolvedAudioClip, ResolvedAudioTrack,
     ResolvedClip, ResolvedComposition, ResolvedEffect, ResolvedHtml, ResolvedLayer, ResolvedMask,
-    ResolvedOutput, ResolvedSource, ResolvedSubtitleTrack, ResolvedText, resolve, resolve_with,
+    ResolvedOutput, ResolvedSource, ResolvedSubtitleTrack, ResolvedText, ResolvedTransition,
+    resolve, resolve_with,
 };
 pub use schema::{FORMAT_VERSION, Timeline};
 pub use time::{Fps, Time};

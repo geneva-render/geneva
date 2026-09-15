@@ -385,7 +385,10 @@ fn video_layer_clips(
         let ResolvedSource::Video { asset, in_, audio } = &clip.source else {
             return Ok(None);
         };
-        if clip.start != expected_end || clip.transition_in.is_some() {
+        if clip.start != expected_end
+            || clip.transition_in.is_some()
+            || clip.transition_out.is_some()
+        {
             return Ok(None);
         }
         if !clip.opacity.is_constant() || clip.opacity.sample(0.0) < 1.0 {

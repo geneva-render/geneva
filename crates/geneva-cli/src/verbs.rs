@@ -505,6 +505,7 @@ fn video_clip(
         start: None,
         duration: None,
         transition: None,
+        transition_out: None,
         crop: None,
         fit,
         transform: None,
@@ -811,6 +812,7 @@ pub fn concat(inputs: &[PathBuf], join: &Join, args: &EncodeArgs) -> Result<Comp
                     kind,
                     duration,
                     color,
+                    ease: None,
                 });
             }
         }
@@ -981,6 +983,7 @@ pub fn overlay(
             start,
             duration,
             transition: None,
+            transition_out: None,
             crop: None,
             fit: None,
             transform: Some(Transform {
@@ -1709,6 +1712,7 @@ pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Re
             start: Some(seconds(cue.start)),
             duration: Some(seconds(cue.end - cue.start)),
             transition: None,
+            transition_out: None,
             crop: None,
             fit: None,
             transform: Some(Transform {

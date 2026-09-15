@@ -203,7 +203,11 @@ at constant power. A fade dips through `color` (black by default), one
 clip at a time, the sound going to silence and back. The pair overlaps by
 `duration`, a clip with no `start` is moved earlier to make room, the
 previous clip must cover it (E306), and the first clip on a layer has
-nothing to arrive from (W303). A `color` on a crossfade is W304.
+nothing before it, in which case the transition opens the piece: over the
+whole duration, a fade comes up out of its colour and a crossfade up from
+whatever is behind. `transition_out` closes a layer the same way, and
+setting it where another clip follows is E307. `ease` shapes either ramp.
+A `color` on a crossfade is W304.
 
 ## Things that trip programs up
 

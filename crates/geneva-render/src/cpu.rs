@@ -7,6 +7,7 @@ use geneva_color::{Color, LinearRgba};
 use geneva_timeline::schema::{BlendMode, Fit, ShapeKind, TransitionKind};
 use geneva_timeline::{
     Composition, Ratio, ResolvedClip, ResolvedEffect, ResolvedLayer, ResolvedMask, ResolvedSource,
+    ResolvedTransition,
 };
 use rayon::prelude::*;
 
@@ -274,8 +275,10 @@ impl<A: AssetSource> CpuRenderer<A> {
                     && c.effects.is_empty()
                     // A fade's dip color covers the whole frame, which is
                     // not something a bounded overlay can carry.
-                    && c.transition_in
-                        .is_none_or(|t| t.kind != TransitionKind::Fade)
+                    && [c.transition_in, c.transition_out]
+                        .iter()
+                        .flatten()
+                        .all(|t| t.kind != TransitionKind::Fade)
             })
     }
 
@@ -712,6 +715,10 @@ fn transition_gain(layer: &ResolvedLayer, i: usize, t: Ratio) -> f64 {
     if let Some(tr) = layer.clips.get(i + 1).and_then(|next| next.transition_in) {
         gain *= tr.outgoing(clip.end - t);
     }
+    // Nothing follows, so the clip closes the layer on its own terms.
+    if let Some(tr) = clip.transition_out {
+        gain *= tr.outgoing(clip.end - t);
+    }
     gain
 }
 
@@ -719,18 +726,21 @@ fn transition_gain(layer: &ResolvedLayer, i: usize, t: Ratio) -> f64 {
 /// one wins, so overlapping fades do not cancel each other out.
 fn dip(layers: &[ResolvedLayer], t: Ratio) -> Option<(LinearRgba, f64)> {
     let mut found: Option<(LinearRgba, f64)> = None;
+    let mut strongest = |tr: Option<ResolvedTransition>, local: Ratio| {
+        let Some(tr) = tr else { return };
+        if local < Ratio::ZERO || local >= tr.duration {
+            return;
+        }
+        let a = tr.veil(local);
+        if a > 0.0 && found.is_none_or(|(_, best)| a > best) {
+            found = Some((tr.color, a));
+        }
+    };
     for layer in layers {
         for clip in &layer.clips {
-            let Some(tr) = clip.transition_in else {
-                continue;
-            };
-            if t < clip.start || t >= clip.start + tr.duration {
-                continue;
-            }
-            let a = tr.veil(t - clip.start);
-            if a > 0.0 && found.is_none_or(|(_, best)| a > best) {
-                found = Some((tr.color, a));
-            }
+            strongest(clip.transition_in, t - clip.start);
+            // A closing transition is measured back from the clip's end.
+            strongest(clip.transition_out, clip.end - t);
         }
     }
     found
