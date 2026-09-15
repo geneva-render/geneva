@@ -134,6 +134,9 @@ subset stops.
 
 The captions are one clip in the document and one per cue on the
 timeline. The transcript carries the timing.
+[examples/README.md](examples/README.md#captions) has the one-command
+version, a SubRip or WebVTT file in place of the transcript, and where
+the cues sit.
 
 Nothing is on screen for the first second or the last four, so 135 of the
 300 frames were copied rather than re-encoded.
@@ -164,12 +167,11 @@ brew install x264                # macOS
 
 ## What else it does
 
-Four of these are runnable examples, with their document, command and
+Three of these are runnable examples, with their document, command and
 output. The rest point at the reference.
 
 | | What it does | Where |
 | --- | --- | --- |
-| **Captions from a transcript** | whisper's JSON in, each word picked out as it is said. One command burns them into a file; as a source they are one layer of a larger document, placed and styled | [examples](examples/README.md#captions) |
 | **Cut and join without re-encoding** | the streams are copied rather than decoded and encoded again, so it takes about as long as reading the file | [examples](examples/README.md#cuts-that-dont-re-encode) |
 | **Several outputs in one pass** | renditions, a poster, a sprite sheet and speech audio, from one read of the source | [examples](examples/README.md#one-read-many-files) |
 | **Vertical video reframing** | 16:9 into 9:16, over a blurred copy of itself rather than cropping | [examples](examples/README.md#vertical-video) |
