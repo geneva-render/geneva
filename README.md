@@ -99,7 +99,7 @@ and the whole document that puts it on the footage:
 geneva render examples/lower-third.json -o dragon.mp4
 ```
 
-<img src="docs/demo.gif" alt="A lower third sliding in over footage of a Dragon capsule at the space station" width="480">
+<img src="docs/demo.gif" alt="A lower third sliding in over footage of a Dragon capsule at the space station" width="640">
 
 ```
 note[N600]: smart cut: 165 of 300 frames copied from the source, 135 encoded in 1 run around the cuts and overlays
