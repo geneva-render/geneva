@@ -187,17 +187,16 @@ brew install x264                # macOS
 
 ## What else it does
 
-Most rows below are a runnable example, with its document, its command and
-its output:
+Four of these are runnable examples, with their document, command and
+output. The rest point at the reference.
 
-| | | |
+| | What it does | Where |
 | --- | --- | --- |
-| **Delivery presets** | `--for tiktok`, `--for web`, `--for email` set size, codec, quality, keyframes and audio for a destination, and warn when the result runs past its duration or file-size limit. Every number says where it came from and when it was last checked | [docs/cli.md](docs/cli.md#targets) |
-| **Captions from a transcript** | whisper's JSON in, each word picked out as it is said | [examples](examples/README.md#captions) |
-| **Captions as a layer** | one part of a larger document, placed and styled | [examples](examples/README.md#captions-as-a-layer) |
-| **Vertical video** | 16:9 into 9:16 over a blurred copy of itself | [examples](examples/README.md#vertical-video) |
+| **Captions from a transcript** | whisper's JSON in, each word picked out as it is said. One command burns them into a file; as a source they are one layer of a larger document, placed and styled | [examples](examples/README.md#captions) |
+| **Cuts that copy** | trims and joins that never touch the picture, so they take about as long as reading the file | [examples](examples/README.md#cuts-that-dont-re-encode) |
 | **One read, many files** | renditions, a poster, a sprite sheet and speech audio written in a single pass over the source | [examples](examples/README.md#one-read-many-files) |
-| **Cuts that copy** | trims and joins that never touch the picture | [examples](examples/README.md#cuts-that-dont-re-encode) |
+| **Vertical video** | 16:9 into 9:16 over a blurred copy of itself | [examples](examples/README.md#vertical-video) |
+| **Delivery presets** | `--for tiktok`, `--for web`, `--for email` set size, codec, quality, keyframes and audio for a destination, and warn when the result runs past its duration or file-size limit. Every number says where it came from and when it was last checked | [docs/cli.md](docs/cli.md#targets) |
 | **Transitions** | dissolve or dip through a colour, at a join or at the head and tail of a piece. One field moves the picture and the sound together, rather than a video filter and an audio filter that have to be kept in step | [docs/timeline.md](docs/timeline.md#transitions) |
 | **Colour** | BT.601 and BT.709 kept, untagged material guessed out loud, HDR tone-mapped by BT.2446 | [docs/color.md](docs/color.md) |
 | **Scripts and agents** | `--format json`, coded diagnostics that point at the field, deterministic output | [docs/agents.md](docs/agents.md) |
