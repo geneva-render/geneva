@@ -32,11 +32,11 @@ between versions until 1.0. See [CHANGELOG.md](CHANGELOG.md).
 
 MIT licensed. Linux and macOS. No services, no network access.
 
-## A lower third over footage
+## How it works
 
-Here's a lower third over ten seconds of footage from the space station.
-The card is an HTML file. Open it in a browser and it looks and moves the
-same:
+A name card and captions over ten seconds of footage from the space
+station. The card is an HTML file. Open it in a browser and it looks and
+moves the same:
 
 ```html
 <!-- A lower third. Open this file in a browser: it looks and moves the same. -->
@@ -50,32 +50,41 @@ same:
 
     position: absolute;
     left: 4.4%;
-    bottom: 10%;
-    width: 44%;
+    top: 7.5%;
+    width: 33%;
 
     display: flex;
     flex-direction: column;
-    justify-content: center;
-    gap: 2px;
-    padding: 16px 28px;
+    gap: 6px;
+    padding: 14px 24px;
     box-sizing: border-box;
 
-    background: #0b1016d9;
-    border-radius: 8px;
-    border-left: 5px solid #4ade80;
-    box-shadow: 0 6px 24px #00000066;
+    background: #0a0f14cc;
+    border-left: 5px solid #c4362f;
+    box-shadow: 0 4px 18px #00000059;
   }
-  .card h1 { margin: 0; font: 700 32px Liberation Sans; color: #ffffff }
-  .card p  { margin: 0; font: 400 20px Liberation Sans; color: #9fb0bf }
+  .card h1 {
+    margin: 0;
+    font: 600 29px Liberation Sans;
+    color: #f2f5f7;
+  }
+  .card p {
+    margin: 0;
+    font: 500 13px Liberation Sans;
+    letter-spacing: 1.4px;
+    color: #94a6b6;
+  }
 </style>
 
 <div class="card">
   <h1>Dragon CRS-17</h1>
-  <p>Berthing at the ISS &nbsp;&middot;&nbsp; NASA</p>
+  <p>BERTHING AT THE ISS &nbsp;&middot;&nbsp; NASA</p>
 </div>
 ```
 
-and the whole document that puts it on the footage:
+The captions come from `words.json`, a whisper transcript pasted in as it
+came out. The document says when the card is on screen and what the
+captions look like, and nothing else:
 
 ```json
 {
@@ -83,12 +92,26 @@ and the whole document that puts it on the footage:
   "output": { "width": 1280, "height": 720, "fps": 30 },
 
   "assets": {
-    "iss":  { "src": "iss.mp4" },
-    "card": { "src": "card.html" }
+    "iss":   { "src": "iss.mp4" },
+    "card":  { "src": "card.html" },
+    "words": { "src": "words.json" }
   },
 
   "layers": [
     { "id": "footage", "clips": [ { "source": { "kind": "video", "asset": "iss" } } ] },
+
+    { "id": "captions", "clips": [ {
+        "source": {
+          "kind": "captions", "asset": "words", "margin": "9%",
+          "style": {
+            "font": "500 34px/1.35 Liberation Sans",
+            "color": "#b6c2cd",
+            "highlight": { "color": "#ffffff" },
+            "background": "#0a0f14cc",
+            "padding": "14px",
+            "radius": 3,
+            "max_width": "66%"
+          } } } ] },
 
     { "id": "lower-third", "clips": [ {
         "source": { "kind": "html", "asset": "card" },
@@ -101,33 +124,40 @@ and the whole document that puts it on the footage:
 geneva render examples/lower-third.json -o dragon.mp4
 ```
 
-<img src="docs/demo.gif" alt="A lower third sliding in over footage of a Dragon capsule at the space station" width="640">
+<img src="docs/demo.gif" alt="A name card sliding in at the top left over footage of a Dragon capsule at the space station, with captions below" width="640">
 
 ```
-note[N600]: smart cut: 165 of 300 frames copied from the source, 135 encoded in 1 run around the cuts and overlays
+note[N453]: 2 cues read from "words.json"
+note[N600]: smart cut: 135 of 300 frames copied from the source, 165 encoded in 1 run around the cuts and overlays
 note[N600]: H.264 runs encoded with the system's x264 (build 164) at CRF 18
-wrote dragon.mp4 (300 frames, 10s of video, 3.5s elapsed)
+wrote dragon.mp4 (300 frames, 10s of video, 4.2s elapsed)
 ```
 
-The JSON says only *when*. Everything else is the card's business, and
-everything in the card is real CSS: `display: flex` is flexbox, `padding`
-and `border-left` are the box model, `position: absolute` with `left` and
-`bottom` places it the way it would on a page. geneva cascades the styles
-and lays them out with [taffy](https://github.com/DioxusLabs/taffy), so
-the layout implements the spec rather than guessing at it.
+The JSON says when the card appears and what the captions look like.
+Everything else is the card's business, and everything in the card is CSS:
+`display: flex` is flexbox, `padding` and `border-left` are the box model,
+`position: absolute` with `left` and `top` places it the way it would on a
+page. geneva cascades the styles and lays them out with
+[taffy](https://github.com/DioxusLabs/taffy), so the layout implements the
+spec rather than guessing at it.
 
-There are no pixel coordinates. `left: 4.4%` and `width: 44%` are shares of
+There are no pixel coordinates. `left: 4.4%` and `width: 33%` are shares of
 the frame, and `translate: -100%` is the card's own width, so the slide
 starts off its own edge whatever size the output is. The motion is in the
 same file, as `@keyframes` and an `animation`, taking what CSS takes plus
 `spring(170, 26)`. It is not a browser, and anything it cannot draw is a
 warning that names it rather than a silent difference.
 
-The last line of the report is worth reading twice. The card is on screen
-for four of the ten seconds, so geneva copied the other 165 frames as they
-were and re-encoded only the 135 around it. On a ninety-minute film with a
-watermark on the title card, that is the difference between a coffee and
-an afternoon.
+The captions are one clip in the document and one clip per cue on the
+timeline. The transcript carries the timing, so nothing here says when a
+word lands; `margin` and the style fields say where the cues sit and what
+they look like.
+
+The last line of the report is worth reading twice. Nothing is on screen
+for the first second or the last four, so geneva copied 135 of the 300
+frames as they were and re-encoded only the 165 it had to. On a
+ninety-minute film with a watermark on the title card, that is the
+difference between a coffee and an afternoon.
 
 ## Installing
 

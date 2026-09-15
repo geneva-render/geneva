@@ -18,7 +18,8 @@
 #   sierra2_4a    error diffusion; ordered dither smears thin features
 #
 # Check the result before committing it: the accent bar should be near
-# #4ade80 and the current word near #ffd233.
+# #c4362f, and the word being said should be brighter than the rest of
+# the caption rather than grey with it.
 set -euo pipefail
 
 work=$(mktemp -d)
@@ -38,8 +39,8 @@ gif() {
 
 lower_third() {
   $geneva render examples/lower-third.json -o "$work/demo.mp4"
-  # The window covers the slide-in and the card at rest.
-  gif docs/demo.gif 1.75 2.15 "$work/demo.mp4"
+  # The window covers the card sliding in and two caption cues.
+  gif docs/demo.gif 1.9 2.6 "$work/demo.mp4"
 }
 
 captions() {

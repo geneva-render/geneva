@@ -433,8 +433,11 @@ fn attrs_for(style: &Resolved, metadata: usize) -> Attrs<'_> {
         })
         .metadata(metadata)
         .cache_key_flags(CacheKeyFlags::DISABLE_HINTING);
-    if style.letter_spacing != 0.0 {
-        attrs.letter_spacing_opt = Some(LetterSpacing(style.letter_spacing));
+    // cosmic-text adds this to an advance it has already divided by the
+    // font's units per em, so the value it wants is a share of the em,
+    // not pixels. Every caller here speaks pixels.
+    if style.letter_spacing != 0.0 && style.size > 0.0 {
+        attrs.letter_spacing_opt = Some(LetterSpacing(style.letter_spacing / style.size));
     }
     attrs
 }

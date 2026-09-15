@@ -3,12 +3,26 @@
   "output": { "width": 1280, "height": 720, "fps": 30 },
 
   "assets": {
-    "iss":  { "src": "iss.mp4" },
-    "card": { "src": "card.html" }
+    "iss":   { "src": "iss.mp4" },
+    "card":  { "src": "card.html" },
+    "words": { "src": "words.json" }
   },
 
   "layers": [
     { "id": "footage", "clips": [ { "source": { "kind": "video", "asset": "iss" } } ] },
+
+    { "id": "captions", "clips": [ {
+        "source": {
+          "kind": "captions", "asset": "words", "margin": "9%",
+          "style": {
+            "font": "500 34px/1.35 Liberation Sans",
+            "color": "#b6c2cd",
+            "highlight": { "color": "#ffffff" },
+            "background": "#0a0f14cc",
+            "padding": "14px",
+            "radius": 3,
+            "max_width": "66%"
+          } } } ] },
 
     { "id": "lower-third", "clips": [ {
         "source": { "kind": "html", "asset": "card" },

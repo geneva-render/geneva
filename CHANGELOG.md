@@ -231,6 +231,15 @@ the format version it was written for.
   line reading `--> (document)`. It pointed at nothing and doubled the
   length of every report that was only notes.
 
+### Fixes
+
+- `letter_spacing` was a multiple of the font size rather than pixels.
+  cosmic-text adds the value to an advance it has already divided by the
+  font's units per em, so what it wants is a share of the em; geneva
+  passed pixels straight through. `letter-spacing: 1.6px` on 13px text
+  came out at 20.8px, thirteen times too wide, in markup and in a `text`
+  source alike. There was no test for it, so there is one now.
+
 ### Examples
 
 - `lower-third.json` draws its card from `card.html` and animates it with
@@ -241,6 +250,11 @@ the format version it was written for.
   backdrop and word-timed captions. `renditions.json`: three renditions, a
   poster, a sprite sheet and speech audio from one pass. `lower-third.json`
   gains the name and title it was drawing a plate for.
+- The demo is a broadcast-style name card at the top left with captions
+  under it: a dark plate with a red rule, the name in semibold and the
+  strap in letter-spaced caps, and cues whose current word is white
+  against a cool grey rather than yellow. `lower-third.json` reads the
+  same `words.json` as the captions example.
 - `words.json` is a whisper transcript pasted in as it came out, and
   `captions.json` puts it on the footage with a second caption layer read
   from `ar.srt`, so the example shows both kinds of caption file.

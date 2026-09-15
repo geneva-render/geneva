@@ -5,7 +5,7 @@ footage, so these run as they are.
 
 | File | What it shows | Run it |
 | --- | --- | --- |
-| `lower-third.json` | A name card written as HTML and CSS (`card.html`), sliding in on its own `@keyframes`. | `geneva render examples/lower-third.json -o dragon.mp4` |
+| `lower-third.json` | A name card written as HTML and CSS (`card.html`) sliding in on its own `@keyframes`, with captions from `words.json` under it. | `geneva render examples/lower-third.json -o dragon.mp4` |
 | `card.html` | The card alone. Open it in a browser; it looks and moves the same. | |
 | `words.json` | A whisper transcript, pasted in as it came out. | `geneva subtitles examples/iss.mp4 --burn examples/words.json --highlight "#ffd233" -o out.mp4` |
 | `captions.json` | The same transcript as a layer, plus a second layer from a SubRip file. | `geneva render examples/captions.json -o captioned.mp4` |

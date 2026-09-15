@@ -194,3 +194,21 @@ fn complex_scripts_are_shaped_when_a_font_is_available() {
     let (x0, _, x1, _) = bounds(&f).unwrap();
     assert!(x1 - x0 > 100);
 }
+
+#[test]
+fn letter_spacing_is_pixels_not_ems() {
+    // Six characters, so five gaps. Asking for 6px of tracking should
+    // widen the run by about 30px, whatever the font size. cosmic-text
+    // wants a share of the em here, so passing pixels straight through
+    // scaled the tracking by the font size: at 30px that is 180px per
+    // gap rather than 6, which does not even fit the frame.
+    let plain = r#"{"kind":"text","text":"HHHHHH","font":"sans","size":30}"#;
+    let spaced = r#"{"kind":"text","text":"HHHHHH","font":"sans","size":30,"letter_spacing":6}"#;
+    let a = bounds(&render(plain, Ratio::ZERO)).expect("plain text draws something");
+    let b = bounds(&render(spaced, Ratio::ZERO)).expect("spaced text draws something");
+    let grew = f64::from(b.2 - b.0) - f64::from(a.2 - a.0);
+    assert!(
+        (grew - 30.0).abs() <= 5.0,
+        "five gaps of 6px should add about 30px, got {grew}"
+    );
+}
