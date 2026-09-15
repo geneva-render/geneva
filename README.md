@@ -133,33 +133,18 @@ note[N600]: H.264 runs encoded with the system's x264 (build 164) at CRF 18
 wrote dragon.mp4 (300 frames, 10s of video, 4.2s elapsed)
 ```
 
-The JSON says when the card appears and what the captions look like.
-Everything else is the card's business, and everything in the card is CSS:
-`display: flex` is flexbox, `padding` and `border-left` are the box model,
-`position: absolute` with `left` and `top` places it the way it would on a
-page. geneva cascades the styles and lays them out with
-[taffy](https://github.com/DioxusLabs/taffy), so the layout implements the
-spec rather than guessing at it.
+The document says when things appear. The card says how it looks, in CSS
+that geneva cascades and lays out itself, without a browser. Percentages
+are shares of the frame, so the layout follows the output size. Anything
+geneva cannot draw is a warning that names it;
+[examples/README.md](examples/README.md#writing-a-card) says where the
+subset stops.
 
-There are no pixel coordinates. `left: 4.4%` and `width: 33%` are shares of
-the frame, and `translate: -100%` is the card's own width, so the slide
-starts off its own edge whatever size the output is. The motion is in the
-same file, as `@keyframes` and an `animation`, taking what CSS takes plus
-`spring(170, 26)`. It is not a browser, and anything it cannot draw is a
-warning that names it rather than a silent difference.
-[examples/README.md](examples/README.md#writing-a-card) says what the
-subset covers and where it stops.
+The captions are one clip in the document and one per cue on the
+timeline. The transcript carries the timing.
 
-The captions are one clip in the document and one clip per cue on the
-timeline. The transcript carries the timing, so nothing here says when a
-word lands; `margin` and the style fields say where the cues sit and what
-they look like.
-
-The last line of the report is worth reading twice. Nothing is on screen
-for the first second or the last four, so geneva copied 135 of the 300
-frames as they were and re-encoded only the 165 it had to. On a
-ninety-minute film with a watermark on the title card, that is the
-difference between a coffee and an afternoon.
+Nothing is on screen for the first second or the last four, so 135 of the
+300 frames were copied rather than re-encoded.
 
 ## Installing
 
