@@ -23,14 +23,7 @@ modes. Overlays can be written as HTML and CSS, including flexbox, the box
 model and `@keyframes`, and geneva lays them out without a browser. Colour
 is handled in linear light.
 
-One binary. It uses FFmpeg's libraries to read and write files, so it
-opens what ffmpeg opens.
-
-**Status: 0.4.** The format, the renderer, the commands and the encoders
-all work. There's no GPU rendering yet, and the format still changes
-between versions until 1.0. See [CHANGELOG.md](CHANGELOG.md).
-
-MIT licensed. Linux and macOS. No services, no network access.
+One binary. It reads and writes files with libavformat and libavcodec.
 
 ## How it works
 
@@ -180,7 +173,7 @@ output. The rest point at the reference.
 | **Captions from a transcript** | whisper's JSON in, each word picked out as it is said. One command burns them into a file; as a source they are one layer of a larger document, placed and styled | [examples](examples/README.md#captions) |
 | **Cut and join without re-encoding** | the streams are copied rather than decoded and encoded again, so it takes about as long as reading the file | [examples](examples/README.md#cuts-that-dont-re-encode) |
 | **Several outputs in one pass** | renditions, a poster, a sprite sheet and speech audio, from one read of the source | [examples](examples/README.md#one-read-many-files) |
-| **Vertical video** | 16:9 into 9:16, over a blurred copy of itself rather than cropping | [examples](examples/README.md#vertical-video) |
+| **Vertical video reframing** | 16:9 into 9:16, over a blurred copy of itself rather than cropping | [examples](examples/README.md#vertical-video) |
 | **Presets for a destination** | `--for tiktok`, `--for web`, `--for email` set size, codec, quality, keyframes and audio, and warn when the result runs past its duration or file-size limit. Every number says where it came from and when it was last checked | [docs/cli.md](docs/cli.md#targets) |
 | **Transitions** | dissolve or dip through a colour, at a join or at the head and tail of a piece. One field moves the picture and the sound together, rather than a video filter and an audio filter that have to be kept in step | [docs/timeline.md](docs/timeline.md#transitions) |
 | **Colour** | BT.601 and BT.709 kept, untagged material guessed out loud, HDR tone-mapped by BT.2446 | [docs/color.md](docs/color.md) |
@@ -221,6 +214,7 @@ document that already works.
 | [docs/errors.md](docs/errors.md) | Every error code and what to do about it |
 | [docs/color.md](docs/color.md) | Tags, guessing, the working space, HDR |
 | [docs/architecture.md](docs/architecture.md) | How the renderer, the copy planner and the encoders fit together |
+| [CHANGELOG.md](CHANGELOG.md) | What each version changed, and what the format still does not settle |
 
 ## How this was built
 
