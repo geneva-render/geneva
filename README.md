@@ -1,4 +1,4 @@
-<img src="docs/wordmark-any.png" alt="Geneva" width="240" height="66">
+<img src="docs/wordmark-any.png" alt="Geneva" width="240" height="77">
 
 geneva edits and processes video programmatically. One-line commands cover
 the everyday jobs; a JSON document covers anything more. Both run the same
