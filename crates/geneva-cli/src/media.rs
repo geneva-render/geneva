@@ -369,7 +369,16 @@ pub fn probe_assets(text: &str, root: &Path) -> ProbedAssets {
             geneva_timeline::schema::AssetKind::from_extension(ext)
         });
         let path = root.join(&asset.src);
-        if kind == Some(geneva_timeline::schema::AssetKind::Html) {
+        // Text a document draws rather than muxes: markup, and captions,
+        // which a .srt or .vtt infers as a subtitle.
+        if matches!(
+            kind,
+            Some(
+                geneva_timeline::schema::AssetKind::Html
+                    | geneva_timeline::schema::AssetKind::Captions
+                    | geneva_timeline::schema::AssetKind::Subtitle
+            )
+        ) {
             match std::fs::read_to_string(&path) {
                 Ok(markup) => {
                     out.texts.insert(id.clone(), markup);

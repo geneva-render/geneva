@@ -517,6 +517,9 @@ pub enum AssetKind {
     Font,
     /// A subtitle file (SubRip `.srt` or WebVTT `.vtt`).
     Subtitle,
+    /// A caption file a clip draws: SubRip, WebVTT, or the JSON a
+    /// speech recogniser writes, one entry per word.
+    Captions,
     /// A markup file drawn by the HTML source.
     Html,
 }
@@ -531,6 +534,7 @@ impl AssetKind {
             "ttf" | "otf" | "ttc" => Some(Self::Font),
             "html" | "htm" => Some(Self::Html),
             "srt" | "vtt" => Some(Self::Subtitle),
+            "json" => Some(Self::Captions),
             _ => None,
         }
     }
@@ -543,6 +547,7 @@ impl AssetKind {
             Self::Audio => "audio",
             Self::Font => "font",
             Self::Subtitle => "subtitle",
+            Self::Captions => "captions",
             Self::Html => "html",
         }
     }
@@ -873,6 +878,49 @@ pub enum Source {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         height: Option<BoxSize>,
     },
+    /// Captions from a file: SubRip, WebVTT, or the JSON a speech
+    /// recogniser writes.
+    ///
+    /// The resolver turns the file into one clip per cue, so a caption
+    /// track costs only the frames it is on, and takes its times from
+    /// the file rather than from `start` and `duration`. Where it sits
+    /// comes from `position` and `margin`, inside the title-safe area by
+    /// default; a WebVTT cue that asks for somewhere else is obeyed
+    /// unless the document overrides it.
+    Captions {
+        /// Id of an asset of kind "captions".
+        asset: String,
+        /// Where cues sit. Defaults to the bottom.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        position: Option<CaptionPosition>,
+        /// Distance from the edge. Defaults to the title-safe inset.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        margin: Option<Length>,
+        /// Title-safe inset as a percentage of each side; a cue outside
+        /// it is a note. Defaults to 5; 0 turns the note off.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        safe: Option<f64>,
+        /// Whether a WebVTT file's own placement wins over the fields
+        /// above. Defaults to true; set false to place every cue the
+        /// same way whatever the file says.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        follow_file: Option<bool>,
+        /// Most lines a cue shows at once. Defaults to 2.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_lines: Option<u32>,
+        /// Shortest a cue may be, so that a word lasting a fifth of a
+        /// second is still readable. Defaults to 1.2s.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min_duration: Option<Time>,
+        /// A gap no longer than this between cues is closed rather than
+        /// blinking the caption off and on. Defaults to 0.1s.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        merge_gap: Option<Time>,
+        /// How the captions look: the same fields a text source takes,
+        /// minus the ones that say what the text is.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        style: Option<Box<TextSource>>,
+    },
     /// A reusable composition declared under "compositions".
     Composition {
         /// Name of the composition.
@@ -919,7 +967,7 @@ pub struct Shadow {
 }
 
 /// A text source.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TextSource {
     /// The text to show. Required unless "words" is given, in which case it
@@ -1048,6 +1096,19 @@ impl JsonSchema for BoxSize {
             "anyOf": [length, { "const": "auto" }]
         })
     }
+}
+
+/// Where captions sit in the frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum CaptionPosition {
+    /// Along the bottom, the usual place.
+    #[default]
+    Bottom,
+    /// Along the top, for when the lower third is busy.
+    Top,
+    /// In the middle of the frame.
+    Center,
 }
 
 /// One timed word.

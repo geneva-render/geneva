@@ -1,0 +1,19 @@
+{
+  "text": " Dragon is captured by the station arm",
+  "language": "en",
+  "segments": [
+    { "id": 0, "seek": 0, "start": 1.0, "end": 2.6, "text": " Dragon is captured",
+      "words": [
+        { "word": " Dragon",   "start": 1.0, "end": 1.5, "probability": 0.981 },
+        { "word": " is",       "start": 1.5, "end": 1.8, "probability": 0.914 },
+        { "word": " captured", "start": 1.8, "end": 2.6, "probability": 0.972 }
+      ] },
+    { "id": 1, "seek": 0, "start": 2.6, "end": 4.4, "text": " by the station arm",
+      "words": [
+        { "word": " by",      "start": 2.6, "end": 2.9, "probability": 0.955 },
+        { "word": " the",     "start": 2.9, "end": 3.1, "probability": 0.968 },
+        { "word": " station", "start": 3.1, "end": 3.7, "probability": 0.943 },
+        { "word": " arm",     "start": 3.7, "end": 4.4, "probability": 0.977 }
+      ] }
+  ]
+}

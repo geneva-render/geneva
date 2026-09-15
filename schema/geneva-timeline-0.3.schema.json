@@ -1033,6 +1033,11 @@
         },
         {
           "type": "string",
+          "const": "captions",
+          "description": "A caption file a clip draws: SubRip, WebVTT, or the JSON a\nspeech recogniser writes, one entry per word."
+        },
+        {
+          "type": "string",
           "const": "html",
           "description": "A markup file drawn by the HTML source."
         }
@@ -1636,6 +1641,104 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "asset": {
+              "type": "string",
+              "description": "Id of an asset of kind \"captions\"."
+            },
+            "position": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CaptionPosition"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Where cues sit. Defaults to the bottom."
+            },
+            "margin": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Length"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Distance from the edge. Defaults to the title-safe inset."
+            },
+            "safe": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double",
+              "description": "Title-safe inset as a percentage of each side; a cue outside\nit is a note. Defaults to 5; 0 turns the note off."
+            },
+            "follow_file": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Whether a WebVTT file's own placement wins over the fields\nabove. Defaults to true; set false to place every cue the\nsame way whatever the file says."
+            },
+            "max_lines": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0,
+              "description": "Most lines a cue shows at once. Defaults to 2."
+            },
+            "min_duration": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Shortest a cue may be, so that a word lasting a fifth of a\nsecond is still readable. Defaults to 1.2s."
+            },
+            "merge_gap": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A gap no longer than this between cues is closed rather than\nblinking the caption off and on. Defaults to 0.1s."
+            },
+            "style": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TextSource"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How the captions look: the same fields a text source takes,\nminus the ones that say what the text is."
+            },
+            "kind": {
+              "type": "string",
+              "const": "captions"
+            }
+          },
+          "required": [
+            "kind",
+            "asset"
+          ],
+          "description": "Captions from a file: SubRip, WebVTT, or the JSON a speech\nrecogniser writes.\n\nThe resolver turns the file into one clip per cue, so a caption\ntrack costs only the frames it is on, and takes its times from\nthe file rather than from `start` and `duration`. Where it sits\ncomes from `position` and `margin`, inside the title-safe area by\ndefault; a WebVTT cue that asks for somewhere else is obeyed\nunless the document overrides it."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
             "composition": {
               "type": "string",
               "description": "Name of the composition."
@@ -2029,6 +2132,195 @@
           "const": "auto"
         }
       ]
+    },
+    "CaptionPosition": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "bottom",
+          "description": "Along the bottom, the usual place."
+        },
+        {
+          "type": "string",
+          "const": "top",
+          "description": "Along the top, for when the lower third is busy."
+        },
+        {
+          "type": "string",
+          "const": "center",
+          "description": "In the middle of the frame."
+        }
+      ],
+      "description": "Where captions sit in the frame."
+    },
+    "TextSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The text to show. Required unless \"words\" is given, in which case it\ndefaults to the words joined by spaces."
+        },
+        "words": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Word"
+          },
+          "description": "Timed words for caption-style highlighting. Times are relative to the\nclip start."
+        },
+        "highlight": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextStyle"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Style applied to the word whose time range contains the current\ntime."
+        },
+        "font": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Font: the id of an asset of kind \"font\", a family name available\non the system, or the CSS `font` shorthand (\"600 40px/1.2 Inter\"),\nwhose parts fill in size, weight, italic and line_height unless\nthose are set."
+        },
+        "size": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Font size in pixels. Defaults to 48."
+        },
+        "weight": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Weight from 100 to 900. Defaults to 400."
+        },
+        "italic": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Italic."
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Text color. Defaults to white."
+        },
+        "letter_spacing": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Extra spacing between letters in pixels."
+        },
+        "max_width": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Maximum line width before wrapping. Defaults to the output width."
+        },
+        "align": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextAlign"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Horizontal alignment within the box. Defaults to \"center\"."
+        },
+        "line_height": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Line height as a multiple of the font size. Defaults to 1.2."
+        },
+        "padding": {
+          "description": "Padding between the text and its background box, in pixels.",
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\s*-?\\d+(\\.\\d+)?\\s*(px)?\\s*$"
+            }
+          ]
+        },
+        "background": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Background box color. Defaults to none."
+        },
+        "radius": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Background box corner radius in pixels."
+        },
+        "outline": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Stroke"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Text outline."
+        },
+        "shadow": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Shadow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Drop shadow."
+        }
+      },
+      "description": "A text source."
     },
     "Transition": {
       "type": "object",

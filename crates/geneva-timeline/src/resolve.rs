@@ -19,8 +19,9 @@ use crate::length::{Length, Point, Scale};
 use crate::ratio::Ratio;
 use crate::schema::{
     ACCEPTED_VERSIONS, Asset, AssetKind, AudioOutput, AudioTrack, BlendMode, BoxSize,
-    CompositionDef, Crop, Effect, Encode, FORMAT_VERSION, Fit, Layer, Mask, OutputKind, ShapeKind,
-    Source, TextSource, Timeline, Transform, TransitionKind, VideoCodec,
+    CaptionPosition, Clip, CompositionDef, Crop, Effect, Encode, FORMAT_VERSION, Fit, Layer, Mask,
+    OutputKind, ShapeKind, Source, TextAlign, TextSource, Timeline, Transform, TransitionKind,
+    VideoCodec, Word,
 };
 use crate::time::Time;
 
@@ -1383,6 +1384,283 @@ impl Resolver<'_> {
         }
     }
 
+    /// Reads a caption asset and gathers it into cues. `None` means the
+    /// file could not be read, and a diagnostic says why.
+    #[allow(clippy::too_many_arguments)]
+    fn read_cues(
+        &mut self,
+        asset: &str,
+        spath: &Path,
+        assets: &BTreeMap<String, ResolvedAsset>,
+        max_lines: Option<u32>,
+        min_duration: Option<Time>,
+        merge_gap: Option<Time>,
+        style: &TextSource,
+    ) -> Option<Vec<crate::captions::Cue>> {
+        let apath = spath.key("asset");
+        // A .srt or .vtt infers as a subtitle, which is the same file
+        // whether it is muxed as a stream or drawn into the picture.
+        self.asset_ref(
+            asset,
+            &apath,
+            assets,
+            &[AssetKind::Captions, AssetKind::Subtitle],
+        )?;
+        let src = assets.get(asset).map_or("", |a| a.src.as_str());
+        // Nothing read is either no reader at all, where validation
+        // without files should stay quiet, or a file that is not there,
+        // which is worth saying.
+        let Some(text) = self.info.text(asset, src) else {
+            if self.info.exists(src) == Some(false) {
+                self.push(
+                    Diagnostic::error(
+                        "E453",
+                        apath,
+                        format!("the caption file {src:?} is not there"),
+                    )
+                    .with_value(src),
+                );
+            }
+            return None;
+        };
+
+        let format = std::path::Path::new(src)
+            .extension()
+            .and_then(|e| e.to_str())
+            .and_then(crate::captions::CaptionFormat::from_extension);
+        let Some(format) = format else {
+            self.push(
+                Diagnostic::error(
+                    "E453",
+                    apath,
+                    format!("{src:?} is not a caption file geneva reads"),
+                )
+                .with_help("use .srt, .vtt, or the .json a speech recogniser writes"),
+            );
+            return None;
+        };
+
+        let cues = match format {
+            crate::captions::CaptionFormat::Words => {
+                let words = match crate::captions::parse_words(&text) {
+                    Ok(w) => w,
+                    Err(e) => {
+                        self.push(Diagnostic::error("E453", apath, e.to_string()));
+                        return None;
+                    }
+                };
+                let mut rules = crate::captions::Grouping::default();
+                if let Some(n) = max_lines {
+                    rules.max_lines = n.max(1) as usize;
+                }
+                if let Some(d) = min_duration {
+                    rules.min_duration = self.time(d, &spath.key("min_duration"), "min_duration");
+                }
+                if let Some(d) = merge_gap {
+                    rules.merge_gap = self.time(d, &spath.key("merge_gap"), "merge_gap");
+                }
+                crate::captions::cues_from_words(&words, rules)
+            }
+            _ => {
+                let cues = match crate::captions::parse(&text) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        self.push(Diagnostic::error("E453", apath, e.to_string()));
+                        return None;
+                    }
+                };
+                if style.highlight.is_some() {
+                    self.push(
+                        Diagnostic::warning(
+                            "W453",
+                            spath.key("highlight"),
+                            format!(
+                                "{src:?} has no word times, so nothing is picked out as it is said"
+                            ),
+                        )
+                        .with_help(
+                            "a highlight needs a word file; SubRip and WebVTT time whole cues",
+                        ),
+                    );
+                }
+                cues
+            }
+        };
+
+        if cues.is_empty() {
+            self.push(Diagnostic::warning(
+                "W453",
+                apath,
+                format!("{src:?} has no cues in it"),
+            ));
+            return None;
+        }
+        self.push(Diagnostic::note(
+            "N453",
+            spath.clone(),
+            format!("{} cues read from {src:?}", cues.len()),
+        ));
+        Some(cues)
+    }
+
+    /// Turns every captions clip in a layer into one clip per cue, and
+    /// leaves every other clip alone. The index beside each clip is the
+    /// one it has in the document, so a diagnostic about a cue still
+    /// points at the line someone wrote.
+    fn expand_captions(
+        &mut self,
+        layer: &Layer,
+        path: &Path,
+        assets: &BTreeMap<String, ResolvedAsset>,
+        frame: FrameSize,
+    ) -> Vec<(Clip, usize)> {
+        let mut out: Vec<(Clip, usize)> = Vec::new();
+        for (i, clip) in layer.clips.iter().enumerate() {
+            let Source::Captions {
+                asset,
+                position,
+                margin,
+                safe,
+                follow_file,
+                max_lines,
+                min_duration,
+                merge_gap,
+                style,
+            } = &clip.source
+            else {
+                out.push((clip.clone(), i));
+                continue;
+            };
+            let cpath = path.key("clips").index(i);
+            let spath = cpath.key("source");
+            let style = style.as_deref().cloned().unwrap_or_default();
+            let Some(cues) = self.read_cues(
+                asset,
+                &spath,
+                assets,
+                *max_lines,
+                *min_duration,
+                *merge_gap,
+                &style,
+            ) else {
+                continue;
+            };
+
+            let height = f64::from(frame.height);
+            let safe = safe.unwrap_or(5.0).clamp(0.0, 49.0);
+            let safe_px = height * safe / 100.0;
+            let margin_px = match margin {
+                Some(l) => {
+                    let m = self.positive_length(*l, &spath.key("margin"), height, "margin");
+                    if m < safe_px {
+                        self.push(
+                            Diagnostic::note(
+                                "N453",
+                                spath.key("margin"),
+                                format!(
+                                    "captions sit {m}px from the edge, inside the title-safe \
+inset of {safe_px}px"
+                                ),
+                            )
+                            .with_help("raise \"margin\", or lower \"safe\" to accept it"),
+                        );
+                    }
+                    m
+                }
+                None => safe_px,
+            };
+            let place = position.unwrap_or_default();
+
+            for cue in cues {
+                let mut spec = style.clone();
+                if cue.words.is_empty() {
+                    spec.text = Some(cue.text.clone());
+                    spec.words = None;
+                } else {
+                    // Word times are clip-relative, and the clip starts
+                    // where the cue does.
+                    spec.words = Some(
+                        cue.words
+                            .iter()
+                            .map(|w| Word {
+                                text: w.text.clone(),
+                                start: Time::Seconds((w.start - cue.start).max(Ratio::ZERO)),
+                                end: Some(Time::Seconds((w.end - cue.start).max(Ratio::ZERO))),
+                            })
+                            .collect(),
+                    );
+                    spec.text = Some(cue.text.clone());
+                }
+                let follow = follow_file.unwrap_or(true) && !cue.place.is_empty();
+                if follow {
+                    if let Some(align) = cue.place.align {
+                        spec.align = Some(match align {
+                            crate::captions::Align::Left => TextAlign::Left,
+                            crate::captions::Align::Center => TextAlign::Center,
+                            crate::captions::Align::Right => TextAlign::Right,
+                        });
+                    }
+                    if let Some(size) = cue.place.size {
+                        spec.max_width = Some(Length::Percent(f64::from(size)));
+                    }
+                }
+                let (anchor, y) = match (follow.then_some(cue.place.line).flatten(), place) {
+                    // WebVTT measures its line from the top, as a share of
+                    // the frame, and the box hangs below it.
+                    (Some(line), _) => (
+                        Point {
+                            x: Length::Percent(50.0),
+                            y: Length::Percent(0.0),
+                        },
+                        Length::Percent(f64::from(line)),
+                    ),
+                    (None, CaptionPosition::Bottom) => (
+                        Point {
+                            x: Length::Percent(50.0),
+                            y: Length::Percent(100.0),
+                        },
+                        Length::Px(height - margin_px),
+                    ),
+                    (None, CaptionPosition::Top) => (
+                        Point {
+                            x: Length::Percent(50.0),
+                            y: Length::Percent(0.0),
+                        },
+                        Length::Px(margin_px),
+                    ),
+                    (None, CaptionPosition::Center) => (
+                        Point {
+                            x: Length::Percent(50.0),
+                            y: Length::Percent(50.0),
+                        },
+                        Length::Percent(50.0),
+                    ),
+                };
+                let x = match follow.then_some(cue.place.position).flatten() {
+                    Some(p) => Length::Percent(f64::from(p)),
+                    None => Length::Percent(50.0),
+                };
+
+                out.push((
+                    Clip {
+                        id: clip.id.clone(),
+                        source: Source::Text(Box::new(spec)),
+                        start: Some(Time::Seconds(cue.start)),
+                        duration: Some(Time::Seconds((cue.end - cue.start).max(Ratio::ZERO))),
+                        transform: Some(Transform {
+                            position: Some(Animated::Constant(Point { x, y })),
+                            anchor: Some(anchor),
+                            ..Transform::default()
+                        }),
+                        ..clip.clone()
+                    },
+                    i,
+                ));
+            }
+        }
+        out
+    }
+
     /// Resolves one layer; the flag reports whether any clip took its
     /// length from the frame duration.
     fn resolve_layer(
@@ -1402,10 +1680,17 @@ impl Resolver<'_> {
                 format!("{id} has no clips"),
             ));
         }
+        // A captions clip is one line in the document and a run of clips
+        // on the timeline, one per cue, so the copy planner can copy the
+        // gaps between them. Each carries the index of the clip it came
+        // from, so diagnostics still point at what someone wrote.
+        let source_clips = self.expand_captions(layer, path, assets, frame);
+
         let mut clips: Vec<ResolvedClip> = Vec::new();
         let mut cursor = Ratio::ZERO;
         let mut any_open = false;
-        for (i, clip) in layer.clips.iter().enumerate() {
+        for (clip, i) in &source_clips {
+            let (clip, i) = (clip, *i);
             let cpath = path.key("clips").index(i);
             let clip_id = clip
                 .id
@@ -1790,6 +2075,18 @@ impl Resolver<'_> {
                 ),
                 ClipLength::Open,
             ),
+            // The layer expands these into text clips before anything
+            // here sees them; a captions source that got this far drew a
+            // diagnostic already and has no cues to show.
+            Source::Captions { style, .. } => {
+                let style = style.as_deref().cloned().unwrap_or_default();
+                (
+                    ResolvedSource::Text(Box::new(
+                        self.resolve_text(&style, &spath, assets, frame),
+                    )),
+                    ClipLength::Open,
+                )
+            }
             Source::Composition { composition } => {
                 self.resolve_composition(composition, &spath, assets, open_hint)
             }

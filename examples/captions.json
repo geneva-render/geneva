@@ -1,35 +1,49 @@
 {
   "geneva": "0.3",
-  "output": { "width": 1280, "height": 720, "fps": 30 },
-
-  "assets": { "iss": { "src": "iss.mp4" } },
-
+  "output": {
+    "width": 1280,
+    "height": 720,
+    "fps": 30
+  },
+  "assets": {
+    "iss": {
+      "src": "iss.mp4"
+    },
+    "words": {
+      "src": "words.json"
+    }
+  },
   "layers": [
-    { "id": "footage", "clips": [ { "source": { "kind": "video", "asset": "iss" } } ] },
-
-    { "id": "captions", "clips": [ {
-        "source": {
-          "kind": "text",
-          "words": [ ["Dragon", 0], ["is", "0.5s"], ["captured", "0.8s"], ["by", "1.5s"],
-                     ["the", "1.8s"], ["station", "2s"], ["arm", "2.6s", "3.4s"] ],
-          "font": "700 44px Liberation Sans",
-          "color": "white",
-          "highlight": { "color": "#ffd233" },
-          "outline": "3px #000000cc",
-          "max_width": "80%"
-        },
-        "start": "1s", "duration": "3.4s",
-        "transform": { "position": "50% 80%" } } ] },
-
-    { "id": "translation", "clips": [ {
-        "source": {
-          "kind": "text",
-          "text": "التقاط مركبة دراجون بذراع المحطة",
-          "font": "400 28px Liberation Sans",
-          "color": "#cfd8e3",
-          "outline": "2px #000000aa"
-        },
-        "start": "1s", "duration": "3.4s",
-        "transform": { "position": "50% 88%" } } ] }
+    {
+      "id": "footage",
+      "clips": [
+        {
+          "source": {
+            "kind": "video",
+            "asset": "iss"
+          }
+        }
+      ]
+    },
+    {
+      "id": "captions",
+      "clips": [
+        {
+          "source": {
+            "kind": "captions",
+            "asset": "words",
+            "style": {
+              "font": "700 44px Liberation Sans",
+              "color": "white",
+              "highlight": {
+                "color": "#ffd233"
+              },
+              "outline": "3px #000000cc",
+              "max_width": "80%"
+            }
+          }
+        }
+      ]
+    }
   ]
 }
