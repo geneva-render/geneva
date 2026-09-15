@@ -22,6 +22,7 @@
 
 mod animated;
 mod animation;
+pub mod captions;
 mod color;
 pub mod css;
 mod diagnostic;

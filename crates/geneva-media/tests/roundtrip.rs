@@ -1018,14 +1018,16 @@ fn subtitle_tracks_are_written_as_streams_and_read_back() {
         let back = geneva_media::read_subtitles(&out, 0).unwrap();
         let expected: Vec<Cue> = cues
             .iter()
-            .map(|c| Cue {
-                start: c.start,
-                end: c.end,
-                text: if keeps_tags {
-                    c.text.clone()
-                } else {
-                    geneva_media::subtitles::strip_tags(&c.text)
-                },
+            .map(|c| {
+                Cue::plain(
+                    c.start,
+                    c.end,
+                    if keeps_tags {
+                        c.text.clone()
+                    } else {
+                        geneva_media::subtitles::strip_tags(&c.text)
+                    },
+                )
             })
             .collect();
         assert_eq!(back, expected, "{name}");

@@ -1,23 +1,18 @@
-//! Subtitle files: SubRip (`.srt`) and WebVTT (`.vtt`) parsing and
-//! writing, and the cue payloads the containers store.
+//! Subtitle files as containers store them: writing SubRip and WebVTT,
+//! language codes, and the cue payloads a muxer wants.
+//!
+//! Reading them is [`geneva_timeline::captions`], which is where the
+//! resolver needs it; this module re-exports what it produces so that
+//! nothing here has to know the difference.
 
 use std::fmt::Write as _;
 
 use geneva_timeline::Ratio;
+use geneva_timeline::captions;
 
 use crate::MediaError;
 
-/// One timed piece of text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Cue {
-    /// When the text appears, in seconds.
-    pub start: Ratio,
-    /// When it disappears, in seconds.
-    pub end: Ratio,
-    /// The text, lines separated by `\n`; may carry simple `<i>`-style
-    /// tags as written in the file.
-    pub text: String,
-}
+pub use geneva_timeline::captions::{Cue, stamp};
 
 /// A subtitle file format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,151 +34,27 @@ impl SubtitleFormat {
     }
 }
 
-fn bad(reason: impl Into<String>) -> MediaError {
+fn wrap(e: &captions::CaptionError) -> MediaError {
     MediaError::Codec {
         context: "subtitle file".to_owned(),
-        reason: reason.into(),
+        reason: e.to_string(),
     }
 }
 
 /// Parses SubRip or WebVTT text, telling them apart by the `WEBVTT`
 /// header. Cues come back in file order.
 pub fn parse(text: &str) -> Result<Vec<Cue>, MediaError> {
-    let text = text.trim_start_matches('\u{feff}');
-    if text.trim_start().starts_with("WEBVTT") {
-        parse_webvtt(text)
-    } else {
-        parse_srt(text)
-    }
+    captions::parse(text).map_err(|e| wrap(&e))
 }
 
 /// Parses SubRip text.
 pub fn parse_srt(text: &str) -> Result<Vec<Cue>, MediaError> {
-    let mut cues = Vec::new();
-    for block in blocks(text) {
-        let mut lines = block.iter().copied();
-        let Some(mut line) = lines.next() else {
-            continue;
-        };
-        // The optional index line precedes the timing line.
-        if !line.contains("-->") {
-            line = match lines.next() {
-                Some(l) => l,
-                None => continue,
-            };
-        }
-        let (start, end) = timing(line)?;
-        let body: Vec<&str> = lines.collect();
-        cues.push(Cue {
-            start,
-            end,
-            text: body.join("\n"),
-        });
-    }
-    Ok(cues)
+    captions::parse_srt(text).map_err(|e| wrap(&e))
 }
 
-/// Parses WebVTT text. Header, `NOTE`, `STYLE` and `REGION` blocks are
-/// skipped; cue identifiers and settings are dropped.
+/// Parses WebVTT text.
 pub fn parse_webvtt(text: &str) -> Result<Vec<Cue>, MediaError> {
-    let mut cues = Vec::new();
-    let mut first = true;
-    for block in blocks(text) {
-        if first {
-            first = false;
-            if block.first().is_some_and(|l| l.starts_with("WEBVTT")) {
-                continue;
-            }
-        }
-        let head = block.first().copied().unwrap_or("");
-        if head.starts_with("NOTE") || head.starts_with("STYLE") || head.starts_with("REGION") {
-            continue;
-        }
-        let Some(pos) = block.iter().position(|l| l.contains("-->")) else {
-            continue;
-        };
-        let (start, end) = timing(block[pos])?;
-        cues.push(Cue {
-            start,
-            end,
-            text: block[pos + 1..].join("\n"),
-        });
-    }
-    Ok(cues)
-}
-
-/// Splits text into blank-line-separated blocks of trimmed lines.
-fn blocks(text: &str) -> Vec<Vec<&str>> {
-    let mut out = Vec::new();
-    let mut current: Vec<&str> = Vec::new();
-    for raw in text.lines() {
-        let line = raw.trim_end_matches('\r');
-        if line.trim().is_empty() {
-            if !current.is_empty() {
-                out.push(std::mem::take(&mut current));
-            }
-        } else {
-            current.push(line);
-        }
-    }
-    if !current.is_empty() {
-        out.push(current);
-    }
-    out
-}
-
-/// Parses `start --> end` with either comma or dot milliseconds and an
-/// optional hour field.
-fn timing(line: &str) -> Result<(Ratio, Ratio), MediaError> {
-    let (a, rest) = line
-        .split_once("-->")
-        .ok_or_else(|| bad(format!("expected a timing line, found {line:?}")))?;
-    let b = rest.split_whitespace().next().unwrap_or("");
-    let start = timestamp(a.trim())?;
-    let end = timestamp(b.trim())?;
-    if end < start {
-        return Err(bad(format!("cue ends before it starts: {line:?}")));
-    }
-    Ok((start, end))
-}
-
-/// Parses `hh:mm:ss,mmm`, `hh:mm:ss.mmm` or `mm:ss.mmm`.
-fn timestamp(s: &str) -> Result<Ratio, MediaError> {
-    let err = || bad(format!("bad timestamp {s:?}"));
-    let (clock, millis) = s.split_once([',', '.']).ok_or_else(err)?;
-    let parts: Vec<&str> = clock.split(':').collect();
-    let (h, m, sec) = match parts.as_slice() {
-        [h, m, sec] => (*h, *m, *sec),
-        [m, sec] => ("0", *m, *sec),
-        _ => return Err(err()),
-    };
-    let h: i64 = h.parse().map_err(|_| err())?;
-    let m: i64 = m.parse().map_err(|_| err())?;
-    let sec: i64 = sec.parse().map_err(|_| err())?;
-    let ms_digits = millis.trim();
-    if ms_digits.is_empty() || ms_digits.len() > 3 || !ms_digits.bytes().all(|b| b.is_ascii_digit())
-    {
-        return Err(err());
-    }
-    let mut ms: i64 = ms_digits.parse().map_err(|_| err())?;
-    for _ in ms_digits.len()..3 {
-        ms *= 10;
-    }
-    Ok(Ratio::new(((h * 60 + m) * 60 + sec) * 1000 + ms, 1000))
-}
-
-/// Formats seconds as `hh:mm:ss` plus milliseconds with `sep` before them.
-fn stamp(t: Ratio, sep: char) -> String {
-    let total_ms = (t.to_f64() * 1000.0).round().max(0.0) as i64;
-    let (ms, s) = (total_ms % 1000, total_ms / 1000);
-    format!(
-        "{:02}:{:02}:{:02}{}{:03}",
-        s / 3600,
-        (s / 60) % 60,
-        s % 60,
-        sep,
-        ms
-    )
+    captions::parse_webvtt(text).map_err(|e| wrap(&e))
 }
 
 /// Writes cues as SubRip text.
@@ -320,7 +191,15 @@ mod tests {
         let vtt = "WEBVTT - test\n\nNOTE a note\n\nintro\n00:01.500 --> 00:03.000 line:90%\nHello\nworld\n\n00:01:00.000 --> 00:01:02.250\n<i>Bye</i>\n";
         let a = parse(srt).unwrap();
         let b = parse(vtt).unwrap();
-        assert_eq!(a, b);
+        // The same times and text either way. SubRip cannot say where a
+        // cue sits and WebVTT can, so only the placement differs.
+        assert!(
+            a.iter()
+                .zip(&b)
+                .all(|(x, y)| x.start == y.start && x.end == y.end && x.text == y.text)
+        );
+        assert_eq!(b[0].place.line, Some(90));
+        assert!(a[0].place.is_empty());
         assert_eq!(a.len(), 2);
         assert_eq!(a[0].start, Ratio::new(3, 2));
         assert_eq!(a[0].text, "Hello\nworld");
@@ -330,11 +209,7 @@ mod tests {
 
     #[test]
     fn writers_round_trip() {
-        let cues = vec![Cue {
-            start: Ratio::new(3, 2),
-            end: Ratio::from_int(3),
-            text: "Hi".to_owned(),
-        }];
+        let cues = vec![Cue::plain(Ratio::new(3, 2), Ratio::from_int(3), "Hi")];
         assert_eq!(parse(&write_srt(&cues)).unwrap(), cues);
         assert_eq!(parse(&write_webvtt(&cues)).unwrap(), cues);
         assert!(write_webvtt(&cues).starts_with("WEBVTT"));
@@ -343,16 +218,8 @@ mod tests {
     #[test]
     fn shifting_drops_and_clamps() {
         let mut cues = vec![
-            Cue {
-                start: Ratio::ZERO,
-                end: Ratio::from_int(1),
-                text: "a".into(),
-            },
-            Cue {
-                start: Ratio::from_int(2),
-                end: Ratio::from_int(4),
-                text: "b".into(),
-            },
+            Cue::plain(Ratio::ZERO, Ratio::from_int(1), "a"),
+            Cue::plain(Ratio::from_int(2), Ratio::from_int(4), "b"),
         ];
         shift(&mut cues, Ratio::from_int(-3));
         assert_eq!(cues.len(), 1);

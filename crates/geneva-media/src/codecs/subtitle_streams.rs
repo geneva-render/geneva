@@ -256,7 +256,7 @@ pub fn read_subtitles(path: &Path, nth: usize) -> Result<Vec<Cue>, MediaError> {
         } else {
             start + Ratio::from_int(3)
         };
-        cues.push(Cue { start, end, text });
+        cues.push(Cue::plain(start, end, text));
     }
     Ok(cues)
 }
