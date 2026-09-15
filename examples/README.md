@@ -158,11 +158,13 @@ them under the picture band. For the effect without a document:
 geneva convert talk.mp4 -o reel.mp4 --for tiktok --fill blur
 ```
 
-## Everything a page needs, in one pass
+## One read, many files
 
-Two or three sizes, a thumbnail, a sprite sheet for the scrub preview, and
-the audio at 16 kHz to feed whisper. Listed in one document, the source is
-read once instead of six times.
+Everything a web page needs: two or three sizes, a thumbnail, a sprite
+sheet for the scrub preview, and the audio at 16 kHz to feed whisper.
+Listed in one document, the source is read once instead of six times.
+This is `outputs`, not a `--for` preset — the presets pick the settings
+for one destination, this writes many files from one pass.
 
 ```json
 "outputs": {

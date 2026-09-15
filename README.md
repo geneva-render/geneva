@@ -151,17 +151,16 @@ brew install x264                # macOS
 
 ## What else it does
 
-The same document format covers captions from a transcript, vertical
-reframing, and every file a web page needs from one pass over the source.
-Each of these is a runnable example with its document, its command and its
-output:
+Most rows below are a runnable example, with its document, its command and
+its output:
 
 | | |
 | --- | --- |
+| **Delivery presets** — `--for tiktok`, `--for web`, `--for email` set size, codec, quality, keyframes and audio for a destination, and warn when the result runs past its duration or file-size limit. Every number says where it came from and when it was last checked | [docs/cli.md](docs/cli.md#targets) |
 | **Captions from a transcript** — whisper's JSON in, each word picked out as it is said | [examples](examples/README.md#captions) |
 | **Captions as a layer** — one part of a larger document, placed and styled | [examples](examples/README.md#captions-as-a-layer) |
 | **Vertical video** — 16:9 into 9:16 over a blurred copy of itself | [examples](examples/README.md#vertical-video) |
-| **Everything a page needs** — renditions, poster, sprite sheet and speech audio in one pass | [examples](examples/README.md#everything-a-page-needs-in-one-pass) |
+| **One read, many files** — renditions, a poster, a sprite sheet and speech audio written in a single pass over the source | [examples](examples/README.md#one-read-many-files) |
 | **Cuts that copy** — trims and joins that never touch the picture | [examples](examples/README.md#cuts-that-dont-re-encode) |
 | **Overlays as HTML and CSS** — what geneva draws and what it won't | [examples](examples/README.md#writing-a-card) |
 | **Colour** — BT.601 and BT.709 kept, untagged material guessed out loud, HDR tone-mapped by BT.2446 | [docs/color.md](docs/color.md) |
@@ -186,12 +185,9 @@ geneva frame talk.mp4 -o thumb.jpg                      # first clear frame past
 geneva probe talk.mp4                                   # streams, colour tags, what was guessed
 ```
 
-`--for` sets everything a destination needs at once — size, codec, level,
-quality, bitrate cap, keyframes, fast start, audio. `geneva targets` shows
-the table, with a source and a date for every platform's numbers.
-
-`--show-timeline` on any command prints the JSON instead of rendering,
-which is the quickest way to a document that already works.
+`geneva targets` prints the preset table. `--show-timeline` on any command
+prints the JSON instead of rendering, which is the quickest way to a
+document that already works.
 
 ## Documentation
 
