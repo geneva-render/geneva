@@ -60,9 +60,17 @@ two_layers() {
   printf 'wrote %s (%s)\n' docs/captions.png "$(du -h docs/captions.png | cut -f1)"
 }
 
+# The tall frame, small enough to sit beside the text that explains it.
+reframe() {
+  $geneva frame examples/social-reframe.json --at 2s -o "$work/reframe.png"
+  ffmpeg -v error -y -i "$work/reframe.png" -vf scale=270:-1:flags=lanczos docs/social-reframe.png
+  printf 'wrote %s (%s)\n' docs/social-reframe.png "$(du -h docs/social-reframe.png | cut -f1)"
+}
+
 case "${1:-all}" in
-  all) lower_third; captions; two_layers ;;
+  all) lower_third; captions; two_layers; reframe ;;
   demo | lower-third) lower_third ;;
   captions) captions; two_layers ;;
-  *) echo "usage: $0 [all|lower-third|captions]" >&2; exit 2 ;;
+  reframe | social) reframe ;;
+  *) echo "usage: $0 [all|lower-third|captions|reframe]" >&2; exit 2 ;;
 esac

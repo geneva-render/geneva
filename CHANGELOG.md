@@ -217,6 +217,8 @@ the format version it was written for.
 - `words.json` is a whisper transcript pasted in as it came out, and
   `captions.json` puts it on the footage with a second caption layer read
   from `ar.srt`, so the example shows both kinds of caption file.
+  `social-reframe.json` captions the tall frame from the same transcript,
+  where the only thing that changes is the margin.
   `scripts/demo-gif.sh` renders the README's figures from those files.
 - `examples/talk.mp4`, a four-second 1080p clip rendered by geneva from
   shapes and text, so the examples that need video run without supplying

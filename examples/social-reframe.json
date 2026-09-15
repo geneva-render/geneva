@@ -9,7 +9,7 @@
     }
   },
 
-  "assets": { "iss": { "src": "iss.mp4" } },
+  "assets": { "iss": { "src": "iss.mp4" }, "words": { "src": "words.json" } },
 
   "layers": [
     { "id": "backdrop", "clips": [ {
@@ -23,17 +23,16 @@
 
     { "id": "captions", "clips": [ {
         "source": {
-          "kind": "text",
-          "words": [ ["Every", 0], ["word", "0.4s"], ["lands", "0.8s"], ["on", "1.3s"],
-                     ["its", "1.5s"], ["own", "1.8s"], ["beat", "2.2s", "3s"] ],
-          "font": "700 72px/1.25 Liberation Sans",
-          "color": "white",
-          "highlight": { "color": "#ffd233" },
-          "outline": "4px #000000cc",
-          "max_width": "80%",
-          "align": "center"
-        },
-        "duration": "3s",
-        "transform": { "position": "50% 72%" } } ] }
+          "kind": "captions",
+          "asset": "words",
+          "margin": "28%",
+          "style": {
+            "font": "700 72px/1.25 Liberation Sans",
+            "color": "white",
+            "highlight": { "color": "#ffd233" },
+            "outline": "4px #000000cc",
+            "max_width": "80%"
+          }
+        } } ] }
   ]
 }

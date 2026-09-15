@@ -699,9 +699,11 @@ Tracks have `id`, `enabled` and `clips` like layers. Audio clips:
 ### `subtitles[]`
 
 Subtitle tracks are written to the output as text streams that players
-can show or hide; they are not drawn into the picture (use a `text` source
-for that). Each track is one subtitle asset, a SubRip `.srt` or WebVTT
-`.vtt` file.
+can show or hide. That is the whole distinction the format draws between
+the two words: a *subtitle* travels alongside the picture as a stream, a
+*caption* is drawn into it. The same `.srt` or `.vtt` can do either — here
+as a track, or as a [`captions` source](#sources) on a clip. Each track is
+one subtitle asset, a SubRip `.srt` or WebVTT `.vtt` file.
 
 | Field | Required | Meaning |
 | --- | --- | --- |

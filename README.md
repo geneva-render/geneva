@@ -281,6 +281,17 @@ shadow and a rounded box — and if you know CSS you can write the styles
 the CSS way: `"700 44px Liberation Sans"` for the font, `"3px black"` for
 the outline.
 
+None of this replaces writing words by hand. A `text` source still takes
+a `words` list with the times you choose, which is what you want for
+seven words on a title card. A `captions` source is for a file you were
+given: it does the grouping and the placing for you. Same renderer, same
+style fields.
+
+A caption is drawn into the picture. To carry the same file alongside the
+picture as a selectable track instead, it goes in `subtitles[]`, or
+`geneva subtitles --add` puts it on a finished file — that is the whole
+distinction geneva draws between the two words.
+
 ### Vertical video
 
 <img src="docs/social-reframe.png" alt="The landscape clip on a tall canvas over a blurred copy of itself, with captions" width="240">
@@ -294,7 +305,7 @@ out — the same file twice, then the captions over both:
 
 ```json
 "output": { "width": 1080, "height": 1920, "fps": 30 },
-"assets": { "iss": { "src": "iss.mp4" } },
+"assets": { "iss": { "src": "iss.mp4" }, "words": { "src": "words.json" } },
 
 "layers": [
   { "id": "backdrop", "clips": [ {
@@ -308,25 +319,18 @@ out — the same file twice, then the captions over both:
 
   { "id": "captions", "clips": [ {
       "source": {
-        "kind": "text",
-        "words": [ ["Every", 0], ["word", "0.4s"], ["lands", "0.8s"], ["on", "1.3s"],
-                   ["its", "1.5s"], ["own", "1.8s"], ["beat", "2.2s", "3s"] ],
-        "font": "700 72px/1.25 Liberation Sans", "color": "white",
-        "highlight": { "color": "#ffd233" }, "outline": "4px #000000cc",
-        "max_width": "80%" },
-      "duration": "3s",
-      "transform": { "position": "50% 72%" } } ] }
+        "kind": "captions", "asset": "words", "margin": "28%",
+        "style": { "font": "700 72px/1.25 Liberation Sans", "color": "white",
+                   "highlight": { "color": "#ffd233" },
+                   "outline": "4px #000000cc", "max_width": "80%" } } } ] }
 ]
 ```
 
 The bottom copy fills the tall frame and gets blurred, the top one sits
-whole over it.
-
-Seven words written by hand are a `text` source with `words` on it, timed
-and placed where you want them. A transcript of a whole talk is a
-`captions` source, which does the grouping and the placing for you. Same
-renderer, same style fields; one is a line you wrote, the other is a file
-you were given.
+whole over it, and the captions are the same `words.json` as above — the
+transcript does not care what shape the frame is. `"margin": "28%"` is
+the only number that changed, to sit them under the picture band rather
+than at the bottom of the canvas.
 
 If you only want the effect and not the document, there's a flag for it:
 

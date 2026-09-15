@@ -10,7 +10,7 @@ they are without you supplying any.
 | `card.html` | The card on its own: where it sits, how it looks and how it arrives, with no pixel coordinates in it. Open it in a browser; it looks and moves the same there. | |
 | `words.json` | A whisper transcript, pasted in as it came out: a word and the moment it was said. Nothing in it was edited for geneva. | `geneva subtitles examples/iss.mp4 --burn examples/words.json --highlight "#ffd233" -o captioned.mp4` |
 | `captions.json` | The same transcript as a layer, with the current word picked out, and a second caption layer from a SubRip file (`ar.srt`) to show the text is properly shaped. | `geneva render examples/captions.json -o captioned.mp4` |
-| `social-reframe.json` | A 16:9 clip fitted to a 9:16 frame over a blurred copy of itself, with captions. | `geneva render examples/social-reframe.json -o reel.mp4` |
+| `social-reframe.json` | A 16:9 clip fitted to a 9:16 frame over a blurred copy of itself, with the same `words.json` captions under the picture band. | `geneva render examples/social-reframe.json -o reel.mp4` |
 | `renditions.json` | Three sizes, a thumbnail, a sprite sheet and 16 kHz speech audio, from one pass over the source. | `geneva render examples/renditions.json -o out/` |
 | `shapes.json` | Keyframed position, scale, rotation and opacity, with eased and spring interpolation. | `geneva frame examples/shapes.json --at 1s -o out.png` |
 | `overlay.json` | Crossfades between clips, an image on top, timed captions, an audio bed. Needs media of your own. | `geneva render examples/overlay.json --assets DIR -o out.mp4` |
