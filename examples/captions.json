@@ -6,23 +6,15 @@
     "fps": 30
   },
   "assets": {
-    "iss": {
-      "src": "iss.mp4"
-    },
-    "words": {
-      "src": "words.json"
-    }
+    "iss": { "src": "iss.mp4" },
+    "words": { "src": "words.json" },
+    "arabic": { "src": "ar.srt" }
   },
   "layers": [
     {
       "id": "footage",
       "clips": [
-        {
-          "source": {
-            "kind": "video",
-            "asset": "iss"
-          }
-        }
+        { "source": { "kind": "video", "asset": "iss" } }
       ]
     },
     {
@@ -32,12 +24,28 @@
           "source": {
             "kind": "captions",
             "asset": "words",
+            "margin": "15%",
             "style": {
               "font": "700 44px Liberation Sans",
               "color": "white",
-              "highlight": {
-                "color": "#ffd233"
-              },
+              "highlight": { "color": "#ffd233" },
+              "outline": "3px #000000cc",
+              "max_width": "80%"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "captions-ar",
+      "clips": [
+        {
+          "source": {
+            "kind": "captions",
+            "asset": "arabic",
+            "style": {
+              "font": "400 30px Liberation Sans",
+              "color": "#cfd8e3",
               "outline": "3px #000000cc",
               "max_width": "80%"
             }

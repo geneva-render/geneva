@@ -376,7 +376,8 @@ struct SubtitlesArgs {
     /// Language code for each --add, in the same order; repeatable.
     #[arg(long, value_name = "CODE", requires = "add")]
     language: Vec<String>,
-    /// Subtitle file (.srt or .vtt) to draw into the picture.
+    /// Caption file to draw into the picture: .srt, .vtt, or the .json a
+    /// speech recogniser writes, whose word times allow --highlight.
     #[arg(long, value_name = "FILE", conflicts_with_all = ["add", "extract"])]
     burn: Option<PathBuf>,
     /// Where burned-in subtitles sit.
@@ -398,6 +399,10 @@ struct SubtitlesArgs {
     /// down to half their size; each one shrunk is reported.
     #[arg(long, requires = "burn")]
     fit: bool,
+    /// Color for the word being said, which needs a --burn file with word
+    /// times in it.
+    #[arg(long, value_name = "COLOR", requires = "burn")]
+    highlight: Option<String>,
     #[command(flatten)]
     encode: verbs::EncodeArgs,
 }
@@ -694,6 +699,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     style: args.style.clone(),
                     safe: args.safe,
                     fit: args.fit,
+                    highlight: args.highlight.clone(),
                 };
                 let compiled = verbs::burn_subtitles(&args.input, &opts, &args.encode)?;
                 return run_verb(&compiled, &args.output, &args.encode, cli.format);

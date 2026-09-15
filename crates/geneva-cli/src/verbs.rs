@@ -1308,7 +1308,8 @@ pub enum SubtitlePosition {
 /// Options of `subtitles --burn`.
 #[derive(Debug, Clone)]
 pub struct BurnOptions {
-    /// The subtitle file.
+    /// The caption file: SubRip, WebVTT, or the JSON a speech
+    /// recogniser writes.
     pub file: PathBuf,
     pub position: SubtitlePosition,
     /// Distance from the top or bottom edge in pixels; 5% of the height
@@ -1322,6 +1323,9 @@ pub struct BurnOptions {
     /// Shrink a cue that does not fit the title-safe area (or the frame
     /// when the safe inset is zero) until it does, down to half its size.
     pub fit: bool,
+    /// Color for the word being said, which needs a file with word
+    /// times in it.
+    pub highlight: Option<String>,
 }
 
 /// Lays a cue out the way the renderer will and returns its box size.
@@ -1374,7 +1378,36 @@ fn subtitle_style(height: u32, width: u32) -> serde_json::Value {
 /// How many offending cues are listed one by one before a summary line.
 const LISTED: usize = 10;
 
-/// `subtitles --burn`: the input with the cues of a subtitle file drawn
+/// Reads a caption file as cues. SubRip and WebVTT time whole cues; the
+/// JSON a speech recogniser writes times every word, and those are
+/// gathered into cues here.
+fn burn_cues(file: &Path) -> Result<Vec<geneva_timeline::captions::Cue>> {
+    use geneva_timeline::captions::{CaptionFormat, Grouping, cues_from_words, parse_words};
+
+    let text =
+        std::fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
+    let format = file
+        .extension()
+        .and_then(|e| e.to_str())
+        .and_then(CaptionFormat::from_extension)
+        .with_context(|| {
+            format!(
+                "{} is not a caption file geneva reads; use .srt, .vtt, or the .json a speech recogniser writes",
+                file.display()
+            )
+        })?;
+    match format {
+        CaptionFormat::Words => {
+            let words = parse_words(&text)
+                .with_context(|| format!("reading the words in {}", file.display()))?;
+            Ok(cues_from_words(&words, Grouping::default()))
+        }
+        _ => geneva_media::subtitles::parse(&text)
+            .with_context(|| format!("parsing {}", file.display())),
+    }
+}
+
+/// `subtitles --burn`: the input with the cues of a caption file drawn
 /// into the picture. Every cue becomes a text clip; cues that overlap in
 /// time go to further layers. Each cue's box is measured with the text
 /// engine and reported when it leaves the frame or the title-safe area.
@@ -1386,10 +1419,7 @@ pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Re
             input.display()
         );
     }
-    let text = std::fs::read_to_string(&opts.file)
-        .with_context(|| format!("reading {}", opts.file.display()))?;
-    let cues = geneva_media::subtitles::parse(&text)
-        .with_context(|| format!("parsing {}", opts.file.display()))?;
+    let cues = burn_cues(&opts.file)?;
     let (root, rel) = common_root(&[input.to_owned()])?;
     let (w, h) = (even(src.width), even(src.height));
     let mut tl = base_timeline(w, h, src.fps, encode_block(args));
@@ -1439,6 +1469,16 @@ pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Re
         .context("--style: not a valid text style (see docs/timeline.md, text sources)")?;
     geneva_timeline::css::expand_font(&mut template.style, &mut template.line_height)
         .map_err(|e| anyhow::anyhow!("--style: font: {e}"))?;
+    // `--highlight` is the short way to say what `--style` could say the
+    // long way, and the long way wins when both are there.
+    if let Some(color) = &opts.highlight {
+        let color = serde_json::from_value(serde_json::Value::String(color.clone()))
+            .with_context(|| format!("--highlight: {color:?} is not a color"))?;
+        let style = template.highlight.get_or_insert_with(Default::default);
+        if style.color.is_none() {
+            style.color = Some(color);
+        }
+    }
     // The default margin keeps the cues inside the title-safe area.
     let margin = opts
         .margin
@@ -1491,12 +1531,39 @@ pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Re
     let mut offscreen = 0usize;
     let mut unsafe_cues = 0usize;
     let mut shrunk_cues = 0usize;
+    if template.highlight.is_some() && cues.iter().all(|c| c.words.is_empty()) {
+        diagnostics.push(
+            Diagnostic::warning(
+                "W453",
+                "/layers/1",
+                format!(
+                    "{} has no word times, so nothing is picked out as it is said",
+                    opts.file.display()
+                ),
+            )
+            .with_help("a highlight needs a word file; SubRip and WebVTT time whole cues"),
+        );
+    }
     for (n, cue) in cues.iter().enumerate() {
         if cue.end <= cue.start {
             continue;
         }
         let mut spec = template.clone();
         spec.text = Some(geneva_media::subtitles::strip_tags(&cue.text));
+        if !cue.words.is_empty() {
+            // Word times are clip-relative, and the clip starts where the
+            // cue does.
+            spec.words = Some(
+                cue.words
+                    .iter()
+                    .map(|w| geneva_timeline::schema::Word {
+                        text: w.text.clone(),
+                        start: Time::Seconds((w.start - cue.start).max(Ratio::ZERO)),
+                        end: Some(Time::Seconds((w.end - cue.start).max(Ratio::ZERO))),
+                    })
+                    .collect(),
+            );
+        }
         // Layer assignment: the first layer whose last cue has ended. A
         // cue that lands on a higher layer sits beyond the boxes of the
         // cues still showing on the layers below, away from the edge.

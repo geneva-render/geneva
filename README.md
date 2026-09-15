@@ -153,46 +153,133 @@ difference between a coffee and an afternoon.
 
 ### Captions
 
-<img src="docs/captions.png" alt="A caption over the footage with the current word highlighted, and an Arabic line below it" width="560">
-
-```sh
-geneva render examples/captions.json -o captioned.mp4
-```
-
-The footage goes in as an asset, the captions are a layer on top of it, and
-one file comes out:
+Speech recognisers write a word and the moment it was said. This is
+`whisper --output_format json`, pasted in as it came:
 
 ```json
-"assets": { "iss": { "src": "iss.mp4" } },
+{
+  "text": " Dragon is captured by the station arm",
+  "language": "en",
+  "segments": [
+    { "id": 0, "seek": 0, "start": 1.0, "end": 2.6, "text": " Dragon is captured",
+      "words": [
+        { "word": " Dragon",   "start": 1.0, "end": 1.5, "probability": 0.981 },
+        { "word": " is",       "start": 1.5, "end": 1.8, "probability": 0.914 },
+        { "word": " captured", "start": 1.8, "end": 2.6, "probability": 0.972 }
+      ] },
+    ...
+  ]
+}
+```
+
+```sh
+geneva subtitles examples/iss.mp4 --burn examples/words.json \
+  --highlight "#ffd233" \
+  --style '{ "font": "700 44px Liberation Sans", "outline": "3px #000000cc", "max_width": "80%" }' \
+  -o captioned.mp4
+```
+
+<img src="docs/captions.gif" alt="Captions over the footage, each word picked out in yellow as it is said" width="640">
+
+```
+note[N600]: smart cut: 183 of 300 frames copied from the source, 117 encoded in 1 run around the cuts and overlays
+note[N600]: H.264 runs encoded with the system's x264 (build 164) at CRF 18
+wrote captioned.mp4 (300 frames, 10s of video, 2.4s elapsed)
+```
+
+No mapping step, no intermediate format. geneva reads the words, groups
+them into cues the way a caption editor would — at most two lines, about
+forty characters each, nothing on screen for less than a beat — and picks
+out whichever word is current. That last part is the style every
+short-form platform uses now, and it is only possible because the file
+says when each word lands.
+
+It is forgiving about keys and strict about structure: `probability`,
+`seek`, `tokens`, WhisperX's `score` and anything else it does not need
+are ignored, so whisper, faster-whisper and WhisperX go in unedited, as
+does a bare `[{"word", "start", "end"}, ...]`. What it will not do is
+draw nothing and call it a success. A file it can find no words in is an
+error that says what it looked for, and times that are plainly
+milliseconds — AssemblyAI and Deepgram write those — are an error too,
+rather than a caption that first appears twenty minutes in:
+
+```
+error: reading the words in transcript.json: the times look like milliseconds,
+not seconds: a word starts past 1000. Divide them by 1000; geneva reads
+seconds, as whisper and whisperx write them
+```
+
+`--burn` takes a `.srt` or a `.vtt` too. Those time whole cues rather
+than words, so `--highlight` has nothing to pick out, and geneva says so
+rather than quietly drawing the same thing:
+
+```
+warning[W453]: en.srt has no word times, so nothing is picked out as it is said
+  --> /layers/1
+   = help: a highlight needs a word file; SubRip and WebVTT time whole cues
+```
+
+#### Captions as a layer
+
+`subtitles --burn` is the whole job in one line. When captions are one
+part of something larger they are a source like any other, and the same
+two kinds of file go in:
+
+```json
+"assets": {
+  "iss":    { "src": "iss.mp4"    },
+  "words":  { "src": "words.json" },
+  "arabic": { "src": "ar.srt"     }
+},
 
 "layers": [
   { "id": "footage", "clips": [ { "source": { "kind": "video", "asset": "iss" } } ] },
 
   { "id": "captions", "clips": [ {
       "source": {
-        "kind": "text",
-        "words": [ ["Dragon", 0], ["is", "0.5s"], ["captured", "0.8s"], ["by", "1.5s"],
-                   ["the", "1.8s"], ["station", "2s"], ["arm", "2.6s", "3.4s"] ],
-        "font": "700 44px Liberation Sans",
-        "color": "white",
-        "highlight": { "color": "#ffd233" },
-        "outline": "3px #000000cc",
-        "max_width": "80%"
-      },
-      "start": "1s", "duration": "3.4s",
-      "transform": { "position": "50% 80%" } } ] }
+        "kind": "captions", "asset": "words", "margin": "15%",
+        "style": {
+          "font": "700 44px Liberation Sans", "color": "white",
+          "highlight": { "color": "#ffd233" },
+          "outline": "3px #000000cc", "max_width": "80%"
+        } } } ] },
+
+  { "id": "captions-ar", "clips": [ {
+      "source": {
+        "kind": "captions", "asset": "arabic",
+        "style": { "font": "400 30px Liberation Sans", "color": "#cfd8e3",
+                   "outline": "3px #000000cc", "max_width": "80%" } } } ] }
 ]
 ```
 
-Each word carries when it lands; geneva draws the line and picks out
-whichever one is current, which is the style every short-form platform uses
-now.
+```sh
+geneva render examples/captions.json -o captioned.mp4
+```
 
-The text is properly shaped, so the Arabic line underneath reads right to
-left, and Thai would break in the right places. You get wrapping, an
-outline, a shadow and a rounded box. If you know CSS you can write the
-styles the CSS way: `"700 44px Liberation Sans"` for the font,
-`"3px black"` for the outline.
+<img src="docs/captions.png" alt="A caption over the footage with the current word highlighted, and an Arabic line below it" width="560">
+
+```
+note[N453]: 2 cues read from "words.json"
+  --> /layers/1/clips/0/source
+note[N453]: 2 cues read from "ar.srt"
+  --> /layers/2/clips/0/source
+note[N600]: smart cut: 183 of 300 frames copied from the source, 117 encoded in 1 run around the cuts and overlays
+wrote captioned.mp4 (300 frames, 10s of video, 2.3s elapsed)
+```
+
+One line in the document, one clip per cue on the timeline — which is why
+183 of the 300 frames were still copied rather than composited. There are
+no times and no coordinates to write: the cues carry the timing, and
+`"position"` (`bottom`, `top` or `center`) with `"margin"` says where they
+sit. A margin defaults to the title-safe inset, so captions stay clear of
+the edges a television crops. If a WebVTT file places its own cues,
+geneva follows it; `"follow_file": false` overrules it.
+
+The text is properly shaped, so the Arabic line reads right to left, and
+Thai would break in the right places. You get wrapping, an outline, a
+shadow and a rounded box — and if you know CSS you can write the styles
+the CSS way: `"700 44px Liberation Sans"` for the font, `"3px black"` for
+the outline.
 
 ### Vertical video
 
@@ -219,12 +306,27 @@ out — the same file twice, then the captions over both:
       "source": { "kind": "video", "asset": "iss" },
       "fit": "contain" } ] },
 
-  { "id": "captions", "clips": [ { "source": { "kind": "text", "...": "as above" } } ] }
+  { "id": "captions", "clips": [ {
+      "source": {
+        "kind": "text",
+        "words": [ ["Every", 0], ["word", "0.4s"], ["lands", "0.8s"], ["on", "1.3s"],
+                   ["its", "1.5s"], ["own", "1.8s"], ["beat", "2.2s", "3s"] ],
+        "font": "700 72px/1.25 Liberation Sans", "color": "white",
+        "highlight": { "color": "#ffd233" }, "outline": "4px #000000cc",
+        "max_width": "80%" },
+      "duration": "3s",
+      "transform": { "position": "50% 72%" } } ] }
 ]
 ```
 
 The bottom copy fills the tall frame and gets blurred, the top one sits
 whole over it.
+
+Seven words written by hand are a `text` source with `words` on it, timed
+and placed where you want them. A transcript of a whole talk is a
+`captions` source, which does the grouping and the placing for you. Same
+renderer, same style fields; one is a line you wrote, the other is a file
+you were given.
 
 If you only want the effect and not the document, there's a flag for it:
 

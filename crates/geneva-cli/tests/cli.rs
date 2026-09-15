@@ -836,6 +836,80 @@ fn subtitles_burn_compiles_cues_to_text_clips_and_checks_the_frame() {
 
 #[test]
 #[cfg(feature = "media")]
+fn subtitles_burn_reads_a_word_file_and_picks_out_the_word_being_said() {
+    let dir = tempfile::tempdir().unwrap();
+    let words = dir.path().join("words.json");
+    // Whisper's verbose_json, keys we do not use and all.
+    std::fs::write(
+        &words,
+        r#"{"text": " Hello there", "language": "en", "segments": [
+             {"id": 0, "seek": 0, "start": 0.2, "end": 1.2, "text": " Hello there", "words": [
+               {"word": " Hello", "start": 0.2, "end": 0.7, "probability": 0.98},
+               {"word": " there", "start": 0.7, "end": 1.2, "probability": 0.91}]}]}"#,
+    )
+    .unwrap();
+    let clip = media_dir().join("clip.mp4");
+    let out = dir.path().join("burned.mp4");
+
+    let shown = run_json(
+        &[
+            "subtitles",
+            "--burn",
+            words.to_str().unwrap(),
+            "--highlight",
+            "#ffd233",
+            "--show-timeline",
+            "-o",
+        ],
+        &[&out, &clip],
+    );
+    let src = &shown["layers"][1]["clips"][0]["source"];
+    assert_eq!(src["text"], "Hello there");
+    assert_eq!(src["highlight"]["color"], "#ffd233");
+    // Word times are relative to the clip, which starts where the cue does.
+    assert_eq!(src["words"][0]["text"], "Hello");
+    assert_eq!(src["words"][0]["start"], "0s");
+    assert_eq!(src["words"][1]["start"], "0.5s");
+    assert_eq!(src["words"][1]["end"], "1s");
+    assert_eq!(shown["layers"][1]["clips"][0]["start"], "0.2s");
+
+    // The same flag on a file that times whole cues says so rather than
+    // quietly drawing nothing different.
+    let srt = dir.path().join("en.srt");
+    std::fs::write(&srt, "1\n00:00:00,200 --> 00:00:01,200\nHello there\n").unwrap();
+    let mut cmd = geneva();
+    cmd.args(["--format", "json", "subtitles", "--burn"])
+        .arg(&srt)
+        .args(["--highlight", "yellow", "-o"])
+        .arg(&out)
+        .arg(&clip);
+    let result = cmd.output().unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(
+        doc["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["code"] == "W453"),
+        "{doc}"
+    );
+
+    // A file we cannot find words in is refused, not rendered empty.
+    let junk = dir.path().join("junk.json");
+    std::fs::write(&junk, r#"{"ok": true}"#).unwrap();
+    let mut cmd = geneva();
+    cmd.args(["subtitles", "--burn"])
+        .arg(&junk)
+        .arg("-o")
+        .arg(&out)
+        .arg(&clip);
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("no words"));
+}
+
+#[test]
+#[cfg(feature = "media")]
 fn css_shorthands_expand_into_the_object_form() {
     let dir = tempfile::tempdir().unwrap();
     let srt = dir.path().join("en.srt");

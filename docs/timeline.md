@@ -488,6 +488,37 @@ Every source has a `kind`.
 | `outline` | no | | `{ "color", "width" }`, or the shorthand `"2px black"` (width and color in either order). |
 | `shadow` | no | | `{ "color", "x", "y", "blur" }`, or the `text-shadow` shorthand `"0 2px 8px #0008"` (x, y, optional blur, optional color). |
 
+`captions`
+
+One clip that becomes one clip per cue on the timeline, so the frames
+between cues can still be copied rather than composited.
+
+| Field | Required | Default | Description |
+| --- | --- | --- | --- |
+| `asset` | yes | | Id of an asset of kind `captions` or `subtitle`: a `.srt`, a `.vtt`, or the `.json` a speech recogniser writes. Unreadable, missing or wordless files are an `E453`. |
+| `position` | no | `bottom` | `bottom`, `top` or `center`. |
+| `margin` | no | the title-safe inset | Distance from the top or bottom edge; a length or a percentage of the frame height. |
+| `safe` | no | `5` | Title-safe inset as a percentage of the frame height, used as the default margin and checked against it (`N453`). `0` turns the check off. |
+| `follow_file` | no | `true` | Take `line`, `position`, `align` and `size` from a WebVTT cue that sets them. `false` places every cue the same way. |
+| `max_lines` | no | `2` | Lines per cue, when the cues are grouped from a word file. |
+| `min_duration` | no | `1.2s` | How long a cue stays up at least, when grouping. |
+| `merge_gap` | no | `0.1s` | Gaps up to this are closed rather than left blank, when grouping. |
+| `style` | no | | A `text` source's fields, minus `text` and `words`: `font`, `color`, `highlight`, `outline`, `shadow`, `background`, `max_width`, `align` and the rest. |
+
+A word file gives every cue its `words`, so `style.highlight` picks out
+the word being said. SubRip and WebVTT time whole cues, so a `highlight`
+on one is a `W453` rather than a silent difference.
+
+Word files are read forgivingly: whisper's `{"segments": [{"words": [...]}]}`,
+a bare `{"words": [...]}` or a bare list all work, `word` and `text` are
+both read as the word, and every other key — `probability`, `seek`,
+`tokens`, WhisperX's `score` — is ignored. Times are seconds; times that
+are plainly milliseconds are an `E453` rather than a caption track that
+starts twenty minutes in.
+
+The same file can instead be muxed as a stream rather than drawn into the
+picture: see [`subtitles[]`](#subtitles).
+
 #### CSS shorthands
 
 Where an author would write CSS, the timeline takes the same strings, for

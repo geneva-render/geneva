@@ -1,31 +1,68 @@
 #!/usr/bin/env bash
-# Renders the README's demo GIF from examples/lower-third.json.
+# Renders the README's demo GIFs: the lower third and the captions.
 #
-# The settings are not arbitrary. A GIF has 256 colours for the whole
-# clip, and palettegen spends them on whatever covers the most pixels —
-# here a blue-white video. The card's 5px accent bar is a rounding error
-# by that measure, so with too few colours, or at a width that shrinks it
-# below about two pixels, it quantizes to grey and the demo shows a
-# feature the document does not have.
+#   scripts/demo-gif.sh            both
+#   scripts/demo-gif.sh captions   one of them
+#
+# The encoding settings are not arbitrary. A GIF has 256 colours for the
+# whole clip, and palettegen spends them on whatever covers the most
+# pixels — here a blue-white video. The card's 5px accent bar, and the
+# one highlighted word in a caption, are rounding errors by that measure,
+# so with too few colours, or at a width that shrinks them below about
+# two pixels, they quantize to grey and the demo shows a feature the
+# document does not have.
 #
 #   width 640     keeps the 5px bar at 2.5px after the downscale
 #   192 colours   leaves room for a colour nothing else in the frame needs
 #   stats_mode=diff  weights the palette towards what changes, not the sky
 #   sierra2_4a    error diffusion; ordered dither smears thin features
 #
-# Check the result before committing it: the bar should be near #4ade80.
+# Check the result before committing it: the accent bar should be near
+# #4ade80 and the current word near #ffd233.
 set -euo pipefail
 
-out=${1:-docs/demo.gif}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 cargo build --release -p geneva-cli
-./target/release/geneva render examples/lower-third.json -o "$work/demo.mp4"
+geneva=./target/release/geneva
 
-ffmpeg -v error -y -ss 1.75 -t 2.15 -i "$work/demo.mp4" \
-  -vf "fps=8,scale=640:-1:flags=lanczos,split[s0][s1];\
+# $1 output, $2 start, $3 length, $4 input
+gif() {
+  ffmpeg -v error -y -ss "$2" -t "$3" -i "$4" \
+    -vf "fps=8,scale=640:-1:flags=lanczos,split[s0][s1];\
 [s0]palettegen=max_colors=192:stats_mode=diff[p];\
-[s1][p]paletteuse=dither=sierra2_4a" "$out"
+[s1][p]paletteuse=dither=sierra2_4a" "$1"
+  printf 'wrote %s (%s)\n' "$1" "$(du -h "$1" | cut -f1)"
+}
 
-printf 'wrote %s (%s)\n' "$out" "$(du -h "$out" | cut -f1)"
+lower_third() {
+  $geneva render examples/lower-third.json -o "$work/demo.mp4"
+  # The window covers the slide-in and the card at rest.
+  gif docs/demo.gif 1.75 2.15 "$work/demo.mp4"
+}
+
+captions() {
+  $geneva subtitles examples/iss.mp4 --burn examples/words.json \
+    --highlight '#ffd233' \
+    --style '{ "font": "700 44px Liberation Sans", "outline": "3px #000000cc", "max_width": "80%" }' \
+    -o "$work/captioned.mp4"
+  # The window covers one cue ending and the next one starting, so the
+  # highlight moves across both.
+  gif docs/captions.gif 1.4 2.6 "$work/captioned.mp4"
+}
+
+# The still beside the document form, which has a second caption layer
+# from a SubRip file so the figure shows both kinds of source.
+two_layers() {
+  $geneva frame examples/captions.json --at 2s -o "$work/two.png"
+  ffmpeg -v error -y -i "$work/two.png" -vf scale=760:-1:flags=lanczos docs/captions.png
+  printf 'wrote %s (%s)\n' docs/captions.png "$(du -h docs/captions.png | cut -f1)"
+}
+
+case "${1:-all}" in
+  all) lower_third; captions; two_layers ;;
+  demo | lower-third) lower_third ;;
+  captions) captions; two_layers ;;
+  *) echo "usage: $0 [all|lower-third|captions]" >&2; exit 2 ;;
+esac

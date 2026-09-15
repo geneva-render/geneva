@@ -275,12 +275,12 @@ geneva audio talk.mp4 -o dubbed.mp4 --replace voice.wav
 geneva audio talk.mp4 -o scored.mp4 --mix music.mp3 --gain -12
 ```
 
-### `geneva subtitles <input> -o FILE --add FILE... [--language CODE...] | --burn FILE [--position P] [--margin PX] [--style JSON] [--safe PERCENT] | --extract [--track N]`
+### `geneva subtitles <input> -o FILE --add FILE... [--language CODE...] | --burn FILE [--position P] [--margin PX] [--style JSON] [--highlight COLOR] [--safe PERCENT] | --extract [--track N]`
 
 | Operation | Output |
 | --- | --- |
 | `--add FILE` (repeatable) | The input with each subtitle file (`.srt` or `.vtt`) attached as a text stream; `--language` values pair with the files in order. The picture and sound are copied when nothing else changes. |
-| `--burn FILE` | The input with the cues of one subtitle file drawn into the picture (re-encoded). Each cue becomes a text clip; cues that overlap in time go on further layers. `--position` is `bottom` (default), `top` or `center`; `--margin` is the distance from the edge in pixels (by default the `--safe` inset, at least 5% of the height). `--style` is a JSON object of [text source](timeline.md#sources) fields merged over the default look (white, semi-bold, black outline, soft shadow, sized to the frame, wrapped at 90% of the width), for example `'{"font": "600 40px Inter", "shadow": "0 2px 6px #000a", "background": "#00000080", "padding": "8px"}'` (CSS shorthands or the object forms; see the [timeline reference](timeline.md#css-shorthands)). Tags such as `<i>` are removed. |
+| `--burn FILE` | The input with the cues of one caption file drawn into the picture (re-encoded). The file is a `.srt`, a `.vtt`, or the `.json` a speech recogniser writes, whose word times allow `--highlight COLOR` to pick out the word being said; a file that times whole cues gets a `W453` instead of a silent difference. Words are grouped into cues at most two lines long. Each cue becomes a text clip; cues that overlap in time go on further layers. `--position` is `bottom` (default), `top` or `center`; `--margin` is the distance from the edge in pixels (by default the `--safe` inset, at least 5% of the height). `--style` is a JSON object of [text source](timeline.md#sources) fields merged over the default look (white, semi-bold, black outline, soft shadow, sized to the frame, wrapped at 90% of the width), for example `'{"font": "600 40px Inter", "shadow": "0 2px 6px #000a", "background": "#00000080", "padding": "8px"}'` (CSS shorthands or the object forms; see the [timeline reference](timeline.md#css-shorthands)). Tags such as `<i>` are removed. |
 | `--extract` | The input's subtitle stream number `--track` (0 by default) written as `.srt` or `.vtt`, by the output's extension. Only text subtitles can be extracted. |
 
 Before rendering, every burned-in cue is laid out with the same engine
@@ -299,6 +299,7 @@ shrunk is reported (`N405`).
 geneva subtitles talk.mp4 -o talk-subbed.mkv --add en.srt --add fr.srt --language en --language fr
 geneva subtitles talk.mp4 -o talk-burned.mp4 --burn en.srt
 geneva subtitles talk.mp4 -o talk-burned.mp4 --burn en.srt --position top --style '{"size": 32, "color": "#ffdd00"}'
+geneva subtitles talk.mp4 -o talk-burned.mp4 --burn transcript.json --highlight "#ffd233"
 geneva subtitles talk-subbed.mkv -o fr.vtt --extract --track 1
 ```
 

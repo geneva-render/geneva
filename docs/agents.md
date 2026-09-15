@@ -182,6 +182,20 @@ the clip plays unless the clip sets its own (W451 when both do), so a
 file that moves in a browser moves here. See
 [timeline.md](timeline.md#markup) for the property list.
 
+A transcript is a source too: `{ "kind": "captions", "asset": "words" }`
+reads a `.srt`, a `.vtt`, or the `.json` a speech recogniser writes, and
+becomes one clip per cue, so the frames between cues can still be copied.
+Word files go in as they came — whisper's `segments[].words[]`, a bare
+`{"words": [...]}` or a bare list; `word` or `text` for the word; every
+other key ignored — and their word times let `style.highlight` pick out
+the word being said. What geneva will not do is draw nothing quietly: a
+file with no words in it, or with times in milliseconds, is E453, and a
+`highlight` on a file that times whole cues is W453. `position`
+(`bottom`, `top`, `center`), `margin` and `safe` place the cues, and a
+WebVTT file's own placement is followed unless `follow_file` is false.
+`geneva subtitles --burn FILE [--highlight COLOR]` is the same thing
+without a document.
+
 ## Things that trip programs up
 
 - **Asset paths are relative to a root**, the timeline's directory by

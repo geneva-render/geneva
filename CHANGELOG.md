@@ -118,6 +118,47 @@ the format version it was written for.
   W451 covers two things asking for one motion, and W203 notes a rule
   nothing plays.
 
+- **A transcript is a source.** A clip can take a source of kind
+  `captions` pointing at a `.srt`, a `.vtt`, or the `.json` a speech
+  recogniser writes:
+
+  ```json
+  { "kind": "captions", "asset": "words",
+    "style": { "font": "700 44px Liberation Sans",
+               "highlight": { "color": "#ffd233" } } }
+  ```
+
+  One clip in the document becomes one clip per cue on the timeline, so
+  the frames between cues are still copied rather than composited: on the
+  ten-second example, 183 of 300. The cues carry their own times, so
+  there is nothing to write down; `position` (`bottom`, `top`,
+  `center`), `margin` and `safe` place them, a margin defaults to the
+  title-safe inset, and a WebVTT file's own `line`, `position`, `align`
+  and `size` are followed unless `follow_file` is false. Everything a
+  caption looks like lives under `style`, which takes a text source's
+  fields.
+
+  Word files go in as they came out. whisper's
+  `{"segments": [{"words": [...]}]}`, a bare `{"words": [...]}` and a
+  bare list all read; `word` and `text` both name the word; `probability`,
+  `seek`, `tokens`, WhisperX's `score` and every other key are ignored.
+  Forgiving about keys, strict about structure: a file with no words in
+  it anywhere is E453 rather than a caption track that draws nothing, and
+  times that are plainly milliseconds — AssemblyAI and Deepgram write
+  those — are E453 too, with the remedy in the message. Word times are
+  what lets `style.highlight` pick out the word being said; SubRip and
+  WebVTT time whole cues, so a `highlight` on one is W453 rather than a
+  silent difference. N453 says how many cues were read and from where.
+  This sits beside the `text` source's `words`, which is still the way to
+  write a handful of words by hand.
+
+  `geneva subtitles --burn` takes the same three file types, and gains
+  `--highlight COLOR` for the word being said.
+
+  Parsing moved out of `geneva-media` into `geneva-timeline`, where the
+  resolver needs it; `geneva_media::subtitles` re-exports it, so reading
+  a caption file no longer needs the media libraries at all.
+
 - **Shorter spellings for the three things a document repeats most.** A
   point (`transform.position`, `transform.anchor`) can be a pair or a
   string: `[30, 36]`, `"30 36"`, `"0% 50%"`, or the CSS position keywords
@@ -173,6 +214,10 @@ the format version it was written for.
   backdrop and word-timed captions. `renditions.json`: three renditions, a
   poster, a sprite sheet and speech audio from one pass. `lower-third.json`
   gains the name and title it was drawing a plate for.
+- `words.json` is a whisper transcript pasted in as it came out, and
+  `captions.json` puts it on the footage with a second caption layer read
+  from `ar.srt`, so the example shows both kinds of caption file.
+  `scripts/demo-gif.sh` renders the README's figures from those files.
 - `examples/talk.mp4`, a four-second 1080p clip rendered by geneva from
   shapes and text, so the examples that need video run without supplying
   any. Those two documents no longer set `output.duration`; they take the

@@ -100,6 +100,8 @@ impl fmt::Display for CaptionError {
     }
 }
 
+impl std::error::Error for CaptionError {}
+
 fn bad(reason: impl Into<String>) -> CaptionError {
     CaptionError(reason.into())
 }
