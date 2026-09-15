@@ -124,6 +124,12 @@ pub struct Computed {
     /// The `animation` shorthand, kept as written. Nothing here plays it;
     /// the clip that draws the markup does.
     pub animation: Option<String>,
+    /// Whether `position` was written as `absolute` or `relative`. taffy
+    /// has no `static`, so the style alone cannot say, and `z-index`
+    /// applies only to a box that is positioned or a flex item.
+    pub positioned: bool,
+    /// `z-index`, when it is an integer rather than `auto`.
+    pub z_index: Option<i32>,
 }
 
 /// The user-agent style for the handful of tags that carry one, so a
@@ -181,6 +187,8 @@ pub fn cascade(doc: &Document, sheet: &Stylesheet) -> (Vec<Computed>, Vec<String
             // Only the text properties come down from the parent.
             text: inherited.text.clone(),
             animation: None,
+            positioned: false,
+            z_index: None,
         };
         if let Some(el) = doc.nodes[id].element() {
             // CSS's default is content-box; taffy's is border-box, so it
@@ -298,8 +306,18 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
             c.layout.position = match l {
                 "relative" | "static" => Position::Relative,
                 "absolute" => Position::Absolute,
-                _ => return unsupported(property, v, "relative or absolute"),
+                _ => return unsupported(property, v, "static, relative or absolute"),
             };
+            c.positioned = l != "static";
+        }
+        "z-index" => {
+            c.z_index =
+                match l {
+                    "auto" => None,
+                    _ => Some(l.parse::<i32>().map_err(|_| {
+                        format!("\"z-index\" takes auto or a whole number, not {v:?}")
+                    })?),
+                };
         }
         "box-sizing" => {
             c.layout.box_sizing = match l {

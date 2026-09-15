@@ -88,6 +88,10 @@ pub struct Prepared {
     /// no element, so their declarations reached nothing. Usually a
     /// misspelt class or a tag the markup does not use.
     pub unmatched: Vec<String>,
+    /// Elements that set `z-index` where it does not apply. A browser
+    /// ignores those too, so this says nothing is wrong with the drawing,
+    /// only that the declaration is not doing what it looks like.
+    pub inert: Vec<String>,
     /// `@keyframes` rules from the stylesheet, untouched.
     pub keyframes: std::collections::BTreeMap<String, KeyframesRule>,
     /// The `animation` on the outermost element. Layout and paint do not
@@ -179,6 +183,23 @@ pub fn prepare(
         sheet.keyframes.extend(more.keyframes);
     }
     let (styles, mut problems, used) = style::cascade(&doc, &sheet);
+    // CSS honours z-index on a positioned box or a flex item and ignores
+    // it everywhere else. Matching that keeps a card looking the same in
+    // a browser, but forgetting `position` is the usual way to get z-index
+    // wrong, so the ones that do nothing are named.
+    let mut inert = Vec::new();
+    for (id, computed) in styles.iter().enumerate() {
+        if computed.z_index.is_some() && !layout::takes_z_index(&doc, &styles, id) {
+            let tag = doc.nodes[id]
+                .element()
+                .map_or("a box", |e| e.tag.as_str())
+                .to_owned();
+            inert.push(format!(
+                "<{tag}>: \"z-index\" applies to a positioned box or a flex item, so it does \
+nothing here; a browser ignores it too"
+            ));
+        }
+    }
     // A rule that parses and then matches nothing styles nothing, and
     // until now said nothing either, which is how a misspelt class name
     // produced an unstyled box and a clean report. Only this document's
@@ -234,6 +255,7 @@ because the markup is drawn once and the clip moves the picture"
         styles,
         problems,
         unmatched,
+        inert,
         keyframes: sheet.keyframes,
         animation,
         animated,

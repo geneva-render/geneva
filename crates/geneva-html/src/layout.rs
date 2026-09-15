@@ -219,10 +219,51 @@ fn build(
     Ok(id)
 }
 
+/// The three piles CSS paints a stacking context from, in this order:
+/// what is in flow, then what is positioned without a z-index of its own,
+/// then the contexts that do have one. Negative ones go under the flow
+/// rather than over it.
+#[derive(Default)]
+struct Piles {
+    flow: Vec<Painted>,
+    positioned: Vec<Painted>,
+    contexts: Vec<(i32, usize, Vec<Painted>)>,
+}
+
+impl Piles {
+    /// Flattens the piles into paint order.
+    fn flatten(mut self, own: Option<Painted>, out: &mut Vec<Painted>) {
+        self.contexts.sort_by_key(|(z, order, _)| (*z, *order));
+        let split = self.contexts.partition_point(|(z, _, _)| *z < 0);
+        out.extend(own);
+        for (_, _, boxes) in self.contexts.drain(..split) {
+            out.extend(boxes);
+        }
+        out.append(&mut self.flow);
+        out.append(&mut self.positioned);
+        for (_, _, boxes) in self.contexts.drain(..) {
+            out.extend(boxes);
+        }
+    }
+}
+
+/// Whether `z-index` applies to this box. CSS honours it on a positioned
+/// box or a flex item and ignores it everywhere else, and a card that
+/// looks right here has to look right in a browser.
+pub(crate) fn takes_z_index(doc: &Document, styles: &[Computed], dom: DomId) -> bool {
+    styles[dom].positioned
+        || doc.nodes[dom]
+            .parent
+            .is_some_and(|p| styles[p].layout.display == Display::Flex)
+}
+
 /// Walks the tree in paint order, turning taffy's relative boxes into
 /// absolute ones.
-#[allow(clippy::too_many_arguments)]
-fn paint_order(
+/// What one node contributes: its own box, where its children start, and
+/// the clip they inherit. Laying this out is separate from deciding the
+/// order the boxes are painted in.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn box_of(
     doc: &Document,
     styles: &[Computed],
     tree: &TaffyTree<Leaf>,
@@ -231,10 +272,17 @@ fn paint_order(
     origin: (f32, f32),
     opacity: f32,
     clip: Option<(Rectangle, [f64; 4])>,
-    out: &mut Vec<Painted>,
-) -> Result<(), String> {
+) -> Result<
+    Option<(
+        Option<Painted>,
+        (f32, f32),
+        f32,
+        Option<(Rectangle, [f64; 4])>,
+    )>,
+    String,
+> {
     let Some(id) = map[dom] else {
-        return Ok(());
+        return Ok(None);
     };
     let l = tree.layout(id).map_err(|e| e.to_string())?;
     let x = origin.0 + l.location.x;
@@ -268,28 +316,113 @@ fn paint_order(
         && (style.paint.background.is_some()
             || style.paint.shadow.is_some()
             || border.iter().any(|w| *w > 0.0));
-    if dom != doc.root || root_draws {
-        out.push(Painted {
-            rect,
-            content_rect,
-            content,
-            paint: style.paint.clone(),
-            border,
-            clip,
-            opacity,
-            node: dom,
-        });
-    }
+    let own = (dom != doc.root || root_draws).then(|| Painted {
+        rect,
+        content_rect,
+        content,
+        paint: style.paint.clone(),
+        border,
+        clip,
+        opacity,
+        node: dom,
+    });
 
-    let clip = if style.layout.overflow.x == Overflow::Visible
+    let child_clip = if style.layout.overflow.x == Overflow::Visible
         && style.layout.overflow.y == Overflow::Visible
     {
         clip
     } else {
         Some((rect, style.paint.radius))
     };
-    for child in doc.children(dom) {
-        paint_order(doc, styles, tree, map, *child, (x, y), opacity, clip, out)?;
+    Ok(Some((own, (x, y), opacity, child_clip)))
+}
+
+/// Paints a whole stacking context: the node's own box, then everything
+/// under it in the order CSS paints a context.
+#[allow(clippy::too_many_arguments)]
+fn paint_order(
+    doc: &Document,
+    styles: &[Computed],
+    tree: &TaffyTree<Leaf>,
+    map: &[Option<NodeId>],
+    dom: DomId,
+    origin: (f32, f32),
+    opacity: f32,
+    clip: Option<(Rectangle, [f64; 4])>,
+    out: &mut Vec<Painted>,
+) -> Result<(), String> {
+    let Some((own, at, opacity, child_clip)) =
+        box_of(doc, styles, tree, map, dom, origin, opacity, clip)?
+    else {
+        return Ok(());
+    };
+    let mut piles = Piles::default();
+    for (order, child) in doc.children(dom).iter().enumerate() {
+        sort_into(
+            doc, styles, tree, map, *child, at, opacity, child_clip, order, &mut piles,
+        )?;
+    }
+    piles.flatten(own, out);
+    Ok(())
+}
+
+/// Puts one node into the piles of the context it belongs to. A node with
+/// a z-index of its own opens a context and is painted whole, where its
+/// z-index puts it. A positioned node without one is also painted whole,
+/// so its children stay with it. Anything else joins the flow, and its
+/// children keep filling the same piles, which is how a z-index deeper in
+/// can still rise above an uncle.
+#[allow(clippy::too_many_arguments)]
+fn sort_into(
+    doc: &Document,
+    styles: &[Computed],
+    tree: &TaffyTree<Leaf>,
+    map: &[Option<NodeId>],
+    dom: DomId,
+    origin: (f32, f32),
+    opacity: f32,
+    clip: Option<(Rectangle, [f64; 4])>,
+    order: usize,
+    piles: &mut Piles,
+) -> Result<(), String> {
+    let z = styles[dom]
+        .z_index
+        .filter(|_| takes_z_index(doc, styles, dom));
+    if let Some(z) = z {
+        let mut boxes = Vec::new();
+        paint_order(
+            doc, styles, tree, map, dom, origin, opacity, clip, &mut boxes,
+        )?;
+        piles.contexts.push((z, order, boxes));
+        return Ok(());
+    }
+    if styles[dom].positioned {
+        let mut boxes = Vec::new();
+        paint_order(
+            doc, styles, tree, map, dom, origin, opacity, clip, &mut boxes,
+        )?;
+        piles.positioned.append(&mut boxes);
+        return Ok(());
+    }
+    let Some((own, at, opacity, child_clip)) =
+        box_of(doc, styles, tree, map, dom, origin, opacity, clip)?
+    else {
+        return Ok(());
+    };
+    piles.flow.extend(own);
+    for (i, child) in doc.children(dom).iter().enumerate() {
+        sort_into(
+            doc,
+            styles,
+            tree,
+            map,
+            *child,
+            at,
+            opacity,
+            child_clip,
+            order + i,
+            piles,
+        )?;
     }
     Ok(())
 }
@@ -350,6 +483,77 @@ mod tests {
         assert!(problems.is_empty(), "{problems:?}");
         let laid = layout(&doc, &styles, Some(w), Some(h), &mut Cells).unwrap();
         (doc, laid)
+    }
+
+    /// The order boxes come out in, by class, so paint order is readable.
+    fn order(doc: &Document, laid: &Laid) -> Vec<String> {
+        laid.boxes
+            .iter()
+            .filter_map(|b| doc.nodes[b.node].element())
+            .map(|e| e.classes.join("."))
+            .filter(|c| !c.is_empty())
+            .collect()
+    }
+
+    #[test]
+    fn z_index_lifts_a_box_above_one_written_after_it() {
+        // Without a z-index the later box wins, as it does on a page.
+        let (doc, laid) = lay(
+            "<style>div { position: absolute; width: 50px; height: 50px }</style>\
+             <div class=a></div><div class=b></div>",
+            200.0,
+            100.0,
+        );
+        assert_eq!(order(&doc, &laid), ["a", "b"]);
+
+        // With one, the earlier box is painted last, so it sits on top.
+        let (doc, laid) = lay(
+            "<style>div { position: absolute; width: 50px; height: 50px }\
+             .a { z-index: 5 }</style><div class=a></div><div class=b></div>",
+            200.0,
+            100.0,
+        );
+        assert_eq!(order(&doc, &laid), ["b", "a"]);
+    }
+
+    #[test]
+    fn a_negative_z_index_goes_under_the_flow() {
+        let (doc, laid) = lay(
+            "<style>.back { position: absolute; z-index: -1; width: 50px; height: 50px }\
+             .front { width: 50px; height: 50px }</style>\
+             <div class=back></div><div class=front></div>",
+            200.0,
+            100.0,
+        );
+        // Written first and still painted first, because negative z-index
+        // puts it under everything in flow rather than merely behind its
+        // sibling.
+        assert_eq!(order(&doc, &laid), ["back", "front"]);
+
+        // Flip it: the flow box is written first, and the negative one
+        // still goes under.
+        let (doc, laid) = lay(
+            "<style>.back { position: absolute; z-index: -1; width: 50px; height: 50px }\
+             .front { width: 50px; height: 50px }</style>\
+             <div class=front></div><div class=back></div>",
+            200.0,
+            100.0,
+        );
+        assert_eq!(order(&doc, &laid), ["back", "front"]);
+    }
+
+    #[test]
+    fn a_z_index_deeper_in_still_rises_above_an_uncle() {
+        // The plain wrapper opens no stacking context, so the badge's
+        // z-index is measured against the uncle, not against its siblings.
+        let (doc, laid) = lay(
+            "<style>.badge { position: absolute; z-index: 9; width: 20px; height: 20px }\
+             .uncle { position: absolute; width: 50px; height: 50px }</style>\
+             <div class=wrap><div class=badge></div></div><div class=uncle></div>",
+            200.0,
+            100.0,
+        );
+        assert_eq!(order(&doc, &laid), ["wrap", "uncle", "badge"]);
     }
 
     #[test]

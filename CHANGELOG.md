@@ -245,6 +245,21 @@ the format version it was written for.
   line reading `--> (document)`. It pointed at nothing and doubled the
   length of every report that was only notes.
 
+- **`z-index`.** The painter walked the tree in document order and drew
+  what it found, so the only way to put a box in front was to move it
+  down the markup. It now paints a stacking context the way CSS does:
+  boxes with a `z-index` are painted whole, in the order their numbers
+  give, with negative ones under everything in flow and the rest above
+  the positioned boxes that have no number. A plain box opens no context,
+  so a `z-index` deeper in can still rise above an uncle.
+
+  It applies where CSS applies it, on a positioned box or a flex item,
+  because a card that looks right here has to look right in a browser.
+  Setting it anywhere else does nothing, as it does on a page, and that
+  is W454 rather than silence: forgetting `position` is the usual way to
+  get `z-index` wrong. `opacity` still does not open a stacking context,
+  which is the same thing it already said about not grouping.
+
 ### Fixes
 
 - **`body` and `html` selected nothing.** The markup is wrapped in a root

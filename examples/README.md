@@ -211,7 +211,7 @@ root: no leading `/`, no `..`, no URLs.
 or padding on either works as it does on a page.
 
 It is not a browser. An element's text is one paragraph and a child
-element is a box; there is no `float` or `z-index`; anything geneva
+element is a box; there is no `float` or grid; anything geneva
 cannot draw it names rather than skipping, including a rule whose
 selector matches nothing. The property list is in
 [../docs/timeline.md](../docs/timeline.md#markup).

@@ -3094,6 +3094,13 @@ be; write the distance in pixels, or give the source a size",
                         ),
                     );
                 }
+                for what in &p.inert {
+                    self.push(
+                        Diagnostic::warning("W454", spath.clone(), what.clone()).with_help(
+                            "add \"position: relative\" to the box, or put it in a flex container",
+                        ),
+                    );
+                }
                 for rule in &p.unmatched {
                     self.push(
                         Diagnostic::warning("W452", spath.clone(), rule.clone()).with_help(

@@ -673,13 +673,20 @@ parts that move into clips of their own.
 - **`opacity` does not group.** It multiplies down the tree rather than
   compositing the subtree off-screen first, so overlapping children of a
   half-transparent box show through each other.
-- There is no `float`, no `z-index`, no grid, no transition and no media
+- There is no `float`, no grid, no transition and no media
   query. The clip's own `transform` and `animation` move the whole box.
 - **Nothing is fetched over the network.** A path is a file; a URL is
   E452. Elements with a renderer of their own (`<iframe>`, `<svg>`,
   `<canvas>`, `<video>`, `<object>`, `<embed>`) are W450. A rule in the
   markup's own `<style>` that matches no element is W452, so a misspelt
   class name is named rather than quietly doing nothing.
+- **`z-index` orders the painting**, on a positioned box or a flex item,
+  which is where CSS applies it. A box with one is painted whole, where
+  its number puts it; negative numbers go under everything in flow. A box
+  without one is painted in document order, and one deeper in can still
+  rise above an uncle, since a plain box opens no stacking context of its
+  own. `opacity` does not open one either, per the note above. Setting it
+  where it does not apply is W454 rather than a quiet difference.
 - `body` and `html` both select the box the markup is drawn into, which
   is the clip's own box. A `background` or `border` on it fills that box,
   and `padding` goes inside it, the way it does against a page. Left
