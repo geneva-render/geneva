@@ -3,20 +3,10 @@
   <img src="docs/wordmark.png" alt="Geneva" width="240">
 </picture>
 
-geneva turns a JSON file into a video.
-
-It also handles the quick jobs from the command line. Trim a clip. Join two
-files. Resize, burn in subtitles, pull the audio out. Each of those commands
-writes the same JSON under the hood, and `--show-timeline` prints it, so you
-can grab it and keep editing.
-
-Under the commands there's a real compositor: layers, keyframes, text that
-shapes properly, masks, blend modes. Overlays can be written as HTML and
-CSS — flexbox, the box model, `@keyframes` — and geneva lays them out
-itself, with no browser anywhere. Colour is handled in linear light.
-
-One binary. It uses FFmpeg's libraries to read and write files, so it opens
-what ffmpeg opens.
+geneva edits and processes video programmatically — one-line commands for
+the everyday jobs, a JSON document for anything more. Same engine either
+way: the commands compile to the document, and `--show-timeline` prints
+it, so you can grab it and keep editing.
 
 ```sh
 geneva trim talk.mp4 -o intro.mp4 --to 30s        # copies the streams, no re-encode
@@ -24,9 +14,17 @@ geneva subtitles talk.mp4 -o subbed.mp4 --burn transcript.json --highlight "#ffd
 geneva render job.json -o out/                    # everything the document asks for
 ```
 
-**Status: 0.4.** The format, the renderer, the commands and the encoders all
-work. There's no GPU rendering yet. The format still changes between
-versions, and will until 1.0. See [CHANGELOG.md](CHANGELOG.md).
+Underneath is a real compositor: layers, keyframes, text that shapes
+properly, masks, blend modes. Overlays can be written as HTML and CSS —
+flexbox, the box model, `@keyframes` — and geneva lays them out itself,
+with no browser anywhere. Colour is handled in linear light.
+
+One binary. It uses FFmpeg's libraries to read and write files, so it
+opens what ffmpeg opens.
+
+**Status: 0.4.** The format, the renderer, the commands and the encoders
+all work. There's no GPU rendering yet, and the format still changes
+between versions until 1.0. See [CHANGELOG.md](CHANGELOG.md).
 
 MIT licensed. Linux and macOS. No services, no network access.
 
@@ -110,45 +108,21 @@ wrote dragon.mp4 (300 frames, 10s of video, 3.5s elapsed)
 The JSON says only *when*. Everything else is the card's business, and
 everything in the card is real CSS: `display: flex` is flexbox, `padding`
 and `border-left` are the box model, `position: absolute` with `left` and
-`bottom` puts it on the picture the way it would put it on a page. Nothing
-measures the text for you — the plate is as tall as the two lines inside it
-because that's what a column of flex items does. Geneva parses the markup,
-cascades the styles and lays it out with
-[taffy](https://github.com/DioxusLabs/taffy), so the layout is an
-implementation of the spec rather than a guess at it.
+`bottom` places it the way it would on a page. geneva cascades the styles
+and lays them out with [taffy](https://github.com/DioxusLabs/taffy), so
+the layout implements the spec rather than guessing at it.
 
-There isn't a pixel coordinate anywhere. `left: 4.4%` and `width: 44%` are
-shares of the frame, and `translate: -100%` is the card's own width, so the
-slide starts exactly off its own edge — resize the output and the card
-follows.
+There isn't a pixel coordinate anywhere: `left: 4.4%` and `width: 44%` are
+shares of the frame, and `translate: -100%` is the card's own width, so
+the slide starts exactly off its own edge. The motion is in the same file
+— `@keyframes` and an `animation`, taking what CSS takes, plus
+`spring(170, 26)`, which CSS hasn't got. It is not a browser, and anything
+it can't draw is a warning that names it rather than a silent difference.
 
-The motion lives in the same file: `@keyframes` and an `animation` on the
-card. A slide in, a fade in over the first 0.3 seconds, a fade out starting
-at 3.7. The shorthand takes what CSS takes — a duration, a delay, a timing
-function, `infinite`, `alternate` — plus `spring(170, 26)`, which CSS
-hasn't got.
-
-It is not a browser, and it says so when it matters. There's no inline
-layout — an element's text is one paragraph and a child element is a box —
-and anything it can't draw is a warning that names it, not a silent
-difference.
-
-Underneath it's all keyframes, so anything you can't say in CSS you can say
-in the document instead, on any clip and not just markup:
-
-```json
-"transform": {
-  "position": { "keyframes": [ [0, "-600 648", "ease-out"], ["0.5s", "56 648"] ] }
-}
-```
-
-Any number you can set, you can animate, either way round.
-
-The last line of the report is the part worth looking at twice. The card is
-only on screen for four of the ten seconds. geneva worked out that the rest
-of the video is untouched, so it copied 165 frames straight through as they
-were and only re-encoded the 135 around the card. Ten seconds took three. On
-a ninety-minute film with a watermark on the title card, that's the
+The last line of the report is the part worth looking at twice. The card
+is on screen for four of the ten seconds, so geneva copied the other 165
+frames straight through and re-encoded only the 135 around it. On a
+ninety-minute film with a watermark on the title card, that's the
 difference between a coffee and an afternoon.
 
 ## Installing
@@ -177,183 +151,21 @@ brew install x264                # macOS
 
 ## What else it does
 
-### Captions
+The same document format covers captions from a transcript, vertical
+reframing, and every file a web page needs from one pass over the source.
+Each of these is a runnable example with its document, its command and its
+output:
 
-Speech recognisers write a word and the moment it was said. This is
-`whisper --output_format json`, pasted in as it came:
-
-```json
-{
-  "text": " Dragon is captured by the station arm",
-  "language": "en",
-  "segments": [
-    { "id": 0, "seek": 0, "start": 1.0, "end": 2.6, "text": " Dragon is captured",
-      "words": [
-        { "word": " Dragon",   "start": 1.0, "end": 1.5, "probability": 0.981 },
-        { "word": " is",       "start": 1.5, "end": 1.8, "probability": 0.914 },
-        { "word": " captured", "start": 1.8, "end": 2.6, "probability": 0.972 }
-      ] },
-    ...
-  ]
-}
-```
-
-```sh
-geneva subtitles examples/iss.mp4 --burn examples/words.json \
-  --highlight "#ffd233" \
-  --style '{ "font": "700 44px Liberation Sans", "outline": "3px #000000cc", "max_width": "80%" }' \
-  -o captioned.mp4
-```
-
-<img src="docs/captions.gif" alt="Captions over the footage, each word picked out in yellow as it is said" width="640">
-
-No mapping step, no intermediate format. geneva reads the words, groups
-them into cues the way a caption editor would — at most two lines, about
-forty characters each, nothing on screen for less than a beat — and picks
-out whichever word is current. That last part is the style every
-short-form platform uses now, and it is only possible because the file
-says when each word lands.
-
-whisper and its variants go in as they came out: keys geneva does not
-need are ignored, and a `.srt` or `.vtt` works too, minus the highlight
-that whole-cue timing cannot support. What it will not do is draw nothing
-and call it a success — a file it can find no words in, or one timed in
-milliseconds, is an error that says so.
-
-Captions are also a source, so they can be one layer of something larger,
-placed with `position` and `margin` and styled with anything a text
-source takes. The text is properly shaped, so an Arabic line reads right
-to left and Thai breaks in the right places.
-[examples/README.md](examples/README.md#captions-as-a-layer) has that
-version, with the placement rules and the diagnostics.
-
-### Vertical video
-
-<img src="docs/social-reframe.png" alt="The landscape clip on a tall canvas over a blurred copy of itself, with captions" width="240">
-
-```sh
-geneva render examples/social-reframe.json -o reel.mp4
-```
-
-Three layers make a 16:9 clip fit a 9:16 frame without cropping anything
-out — the same file twice, then the captions over both:
-
-```json
-"output": { "width": 1080, "height": 1920, "fps": 30 },
-"assets": { "iss": { "src": "iss.mp4" }, "words": { "src": "words.json" } },
-
-"layers": [
-  { "id": "backdrop", "clips": [ {
-      "source": { "kind": "video", "asset": "iss", "audio": false },
-      "fit": "cover",
-      "effects": [ { "kind": "blur", "radius": 45 } ] } ] },
-
-  { "id": "picture", "clips": [ {
-      "source": { "kind": "video", "asset": "iss" },
-      "fit": "contain" } ] },
-
-  { "id": "captions", "clips": [ {
-      "source": {
-        "kind": "captions", "asset": "words", "margin": "28%",
-        "style": { "font": "700 72px/1.25 Liberation Sans", "color": "white",
-                   "highlight": { "color": "#ffd233" },
-                   "outline": "4px #000000cc", "max_width": "80%" } } } ] }
-]
-```
-
-The bottom copy fills the tall frame and gets blurred, the top one sits
-whole over it, and the captions are the same `words.json` as above — the
-transcript does not care what shape the frame is. `"margin": "28%"` is
-the only number that changed, to sit them under the picture band rather
-than at the bottom of the canvas.
-
-If you only want the effect and not the document, there's a flag for it:
-
-```sh
-geneva convert talk.mp4 -o reel.mp4 --for tiktok --fill blur
-```
-
-### Everything a page needs, in one go
-
-A video on a web page usually needs the same pile of files: two or three
-sizes, a thumbnail, a sprite sheet for the scrub preview, and the audio on
-its own at 16 kHz to feed whisper. List them in one document and geneva
-reads the source once instead of six times.
-
-```json
-"outputs": {
-  "720p":    { "kind": "video" },
-  "480p":    { "kind": "video", "height": 480, "encode": { "video": { "crf": 23 } } },
-  "360p":    { "kind": "video", "height": 360, "encode": { "video": { "crf": 25 } } },
-  "poster":  { "kind": "poster", "width": 960 },
-  "preview": { "kind": "sprites", "every": "2s", "columns": 5 },
-  "speech":  { "kind": "audio", "path": "speech.wav", "audio": { "sample_rate": 16000, "channels": 1 } }
-}
-```
-
-```sh
-geneva render examples/renditions.json -o out/
-```
-
-geneva picks the thumbnail rather than grabbing frame one. It skips the
-opening, then takes the first frame that isn't dark and has some movement
-behind it, so you don't end up with a black frame or a blurry one. The
-sprite sheet comes with the WebVTT file that players expect.
-
-### Cuts that don't re-encode
-
-The same trick from the worked example applies to plain cuts. A trim or a
-join that leaves the picture alone copies the packets instead of
-re-encoding, which takes about as long as reading the file. You don't have
-to know when that's safe, and you don't have to remember `-c copy`.
-
-```
-$ geneva trim talk.mp4 -o cut.mp4 --from 0.5s --to 1.5s
-note[N600]: the video stream is used as is, so it is copied without re-encoding
-note[N600]: cut at 0.5s moved to the keyframe at 0.48s
-wrote cut.mp4 (1s, streams copied without re-encoding, 0.0s elapsed)
-```
-
-When it can't copy it says why — *the audio of talk.mp4 is aac, which wav
-cannot hold* — rather than quietly re-encoding.
-
-### Colour
-
-Standard-definition footage stays BT.601 and HD stays BT.709, and the tags
-end up in the file you write. If the source has no tags, geneva guesses
-from the size and tells you what it guessed.
-
-```
-$ geneva probe clip.mp4
-  video: h264 720×576 @ 25 fps, yuv420p
-    color: primaries untagged, transfer untagged, matrix untagged, range untagged
-    assumed: matrix bt601, primaries bt601-625, transfer bt709, range limited (untagged material below HD resolution)
-```
-
-An HDR clip off a phone comes back to SDR through ITU-R BT.2446 method A,
-which is the conversion the spec asks for, so you don't get the blown-out
-highlights a naive curve gives you. `--keep-hdr` keeps it HDR instead.
-
-### Running it from a script
-
-Add `--format json` and stdout becomes one JSON document. Progress goes to
-stderr, one object per line, so you can follow a long render and still read
-the result at the end.
-
-geneva checks a document before it decodes anything. Every problem comes
-with a code, a pointer to the spot in your JSON, the bad value and a fix.
-Misspell a field and you get an error, not silence.
-
-```
-$ geneva validate job.json
-error[E301]: clip 0 of layer 0 lasts 6s but its source range is only 2s
-  --> /layers/0/clips/0/duration = "6s"
-   = help: shorten the duration or widen the in/out range
-```
-
-Renders are deterministic. Same document, same assets, same version, same
-frames, so you can cache by input hash. [docs/agents.md](docs/agents.md)
-has the rest for scripts and agents.
+| | |
+| --- | --- |
+| **Captions from a transcript** — whisper's JSON in, each word picked out as it is said | [examples](examples/README.md#captions) |
+| **Captions as a layer** — one part of a larger document, placed and styled | [examples](examples/README.md#captions-as-a-layer) |
+| **Vertical video** — 16:9 into 9:16 over a blurred copy of itself | [examples](examples/README.md#vertical-video) |
+| **Everything a page needs** — renditions, poster, sprite sheet and speech audio in one pass | [examples](examples/README.md#everything-a-page-needs-in-one-pass) |
+| **Cuts that copy** — trims and joins that never touch the picture | [examples](examples/README.md#cuts-that-dont-re-encode) |
+| **Overlays as HTML and CSS** — what geneva draws and what it won't | [examples](examples/README.md#writing-a-card) |
+| **Colour** — BT.601 and BT.709 kept, untagged material guessed out loud, HDR tone-mapped by BT.2446 | [docs/color.md](docs/color.md) |
+| **Scripts and agents** — `--format json`, coded diagnostics that point at the field, deterministic output | [docs/agents.md](docs/agents.md) |
 
 ## Commands
 
@@ -374,14 +186,12 @@ geneva frame talk.mp4 -o thumb.jpg                      # first clear frame past
 geneva probe talk.mp4                                   # streams, colour tags, what was guessed
 ```
 
-`--for` sets everything a destination needs at once: the size ceiling, the
-codec, the level, the quality, the bitrate cap, the keyframe interval, fast
-start and the audio settings. Run `geneva targets` to see the table, with a
-source and a date for every platform's numbers.
+`--for` sets everything a destination needs at once — size, codec, level,
+quality, bitrate cap, keyframes, fast start, audio. `geneva targets` shows
+the table, with a source and a date for every platform's numbers.
 
-Add `--show-timeline` to any command and it prints the JSON instead of
-rendering. That's the quickest way to a document that already works. Run the
-command, keep the JSON, edit it, render it.
+`--show-timeline` on any command prints the JSON instead of rendering,
+which is the quickest way to a document that already works.
 
 ## Documentation
 
@@ -397,14 +207,14 @@ command, keep the JSON, edit it, render it.
 
 ## How this was built
 
-Claude wrote all of it, running in Claude Code, directed and reviewed by one
-person. That covers the Rust, the tests, these docs and the design notes
-behind them. The commit trailers say which model wrote each commit.
+Claude wrote all of it — the Rust, the tests, the docs — running in Claude
+Code, directed and reviewed by one person. The commit trailers say which
+model wrote each commit.
 
-It seems better to say that up front than to let you work it out. If you're
-deciding whether to trust the code, you should know where it came from. And
-if you're curious what this way of working actually produces, the repository
-is the answer, bugs and fixes included.
+Better to say so up front than let you work it out. If you're deciding
+whether to trust the code, you should know where it came from; if you're
+curious what this way of working produces, the repository is the answer,
+bugs and fixes included.
 
 ## Building from source
 
@@ -416,8 +226,7 @@ cargo build --release
 You'll need a C and C++ toolchain, cmake, meson, ninja, nasm, pkg-config and
 clang. [CONTRIBUTING.md](CONTRIBUTING.md) lists the packages per platform and
 explains how to run the tests;
-[docs/architecture.md](docs/architecture.md) maps the crates. Third-party components and their licences are
-in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+[docs/architecture.md](docs/architecture.md) maps the crates.
 
 ## Licence
 
