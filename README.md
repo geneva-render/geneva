@@ -32,7 +32,7 @@ between versions until 1.0. See [CHANGELOG.md](CHANGELOG.md).
 
 MIT licensed. Linux and macOS. No services, no network access.
 
-## A worked example
+## A lower third over footage
 
 Here's a lower third over ten seconds of footage from the space station.
 The card is an HTML file. Open it in a browser and it looks and moves the
