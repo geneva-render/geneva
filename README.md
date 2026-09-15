@@ -21,9 +21,8 @@ geneva render job.json -o out/                    # everything the document asks
 Underneath is a compositor: layers, keyframes, shaped text, masks, blend
 modes. Overlays can be written as HTML and CSS, including flexbox, the box
 model and `@keyframes`, and geneva lays them out without a browser. Colour
-is handled in linear light.
-
-One binary. It reads and writes files with libavformat and libavcodec.
+is handled in linear light, and files are read and written with
+libavformat and libavcodec.
 
 ## How it works
 
