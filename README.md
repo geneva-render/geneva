@@ -217,14 +217,10 @@ document that already works.
 
 ## How this was built
 
-Claude wrote all of it, the Rust and the tests and the docs, running in
-Claude Code, directed and reviewed by one person. The commit trailers say
-which model wrote each commit.
-
-Better to say so up front than let you work it out. If you are deciding
-whether to trust the code, you should know where it came from. If you are
-curious what this way of working produces, the repository is the answer,
-bugs and fixes included.
+I built this with Claude, which wrote effectively all of the code, the
+tests and the docs. If you are deciding whether to trust it you should
+know where it came from, so I would rather say it than have you work it
+out. The commit trailers name the model behind each commit.
 
 ## Building from source
 
