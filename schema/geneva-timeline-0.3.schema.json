@@ -2333,6 +2333,17 @@
         "duration": {
           "$ref": "#/$defs/Time",
           "description": "How long the two clips overlap."
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The color a \"fade\" passes through. Defaults to black. Ignored by\n\"crossfade\", which never shows a color of its own (W304)."
         }
       },
       "required": [
@@ -2346,7 +2357,12 @@
         {
           "type": "string",
           "const": "crossfade",
-          "description": "Fade the incoming clip in over the outgoing one."
+          "description": "Fade the incoming clip in over the outgoing one. Both are visible\nat once, and the sound crosses at constant power."
+        },
+        {
+          "type": "string",
+          "const": "fade",
+          "description": "Dip through a color: the outgoing clip fades to it over the first\nhalf of the overlap, the incoming clip out of it over the second.\nOnly one is ever visible, and the sound goes to silence and back."
         }
       ],
       "description": "Transition types."

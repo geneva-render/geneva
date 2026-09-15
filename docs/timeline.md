@@ -316,7 +316,7 @@ contain other compositions up to 8 levels deep, and never themselves (E207).
 | `source` | yes | | What to show; see below. |
 | `start` | no | end of the previous clip | Timeline time the clip appears. |
 | `duration` | no | see timing rules | How long it lasts. |
-| `transition` | no | | `{ "kind": "crossfade", "duration": ... }` from the previous clip. |
+| `transition` | no | | How this clip arrives from the one before it. See [Transitions](#transitions). |
 | `crop` | no | the whole source | A rectangle of the source that becomes the clip's box; see below. |
 | `fit` | no | `contain` for video, `none` otherwise | `none`, `contain`, `cover`, `fill`: how the source box is sized to the frame before the transform. |
 | `effects` | no | `[]` | Effects on the placed picture, in order; see below. |
@@ -682,6 +682,44 @@ parts that move into clips of their own.
 Layout and painting do not depend on time, so a markup box is drawn once
 per clip and reused for every frame it is on screen.
 
+### Transitions
+
+A `transition` on a clip says how it arrives from the clip before it on
+the same layer. The two overlap for `duration`, and a clip with no
+explicit `start` is moved that much earlier to make the overlap. The
+previous clip must be long enough to cover it (E306), and the first clip
+on a layer has nothing to arrive from (W303).
+
+| Field | Required | Default | Description |
+| --- | --- | --- | --- |
+| `kind` | yes | | `crossfade` or `fade`. |
+| `duration` | yes | | How long the two clips overlap. |
+| `color` | no | `black` | The color a `fade` dips through. On a `crossfade` it is a W304, since nothing would show it. |
+
+`crossfade` brings the arriving clip up over the one leaving, which stays
+at full opacity underneath. Both are on screen at once, so the picture
+dissolves. The sound crosses at constant power (each gain is the square
+root of its linear ramp), which holds the level across the overlap; a
+linear pair would dip about 3 dB in the middle on material that is not
+correlated.
+
+`fade` dips through a color instead. The leaving clip fades out over the
+first half of the overlap, the arriving one fades in over the second, and
+the color covers the frame in between, strongest at the midpoint. Only
+one clip is ever visible. The sound follows the picture: it reaches
+silence at the midpoint and comes back.
+
+Two things to know. The dip color covers the whole frame for the length
+of the transition, including layers below the one it is on, because it is
+the picture that dips and not one layer of it. And a fade on a layer
+above the first makes the whole composition take the compositing path
+rather than the overlay path, so none of its frames are copied.
+
+```json
+{ "source": { "kind": "video", "asset": "b" },
+  "transition": { "kind": "fade", "duration": "0.5s", "color": "white" } }
+```
+
 ### `audio[]` and `audio[].clips[]`
 
 Tracks have `id`, `enabled` and `clips` like layers. Audio clips:
@@ -768,7 +806,7 @@ and every entry is written from one pass over the composition.
 
 The CPU reference renderer draws every source kind: `solid`, `shape`,
 `image`, `video`, `text` and `composition`, with every transform, opacity,
-blend mode and transition. `geneva render` mixes audio tracks and the audio
+blend mode and transition, in picture and in sound alike. `geneva render` mixes audio tracks and the audio
 of video clips. Hardware encoders are not used yet; `encode.video.hardware`
 is accepted and ignored.
 

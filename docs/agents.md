@@ -196,6 +196,15 @@ WebVTT file's own placement is followed unless `follow_file` is false.
 `geneva subtitles --burn FILE [--highlight COLOR]` is the same thing
 without a document.
 
+A clip's `transition` says how it arrives from the clip before it on the
+same layer: `{"kind": "crossfade" | "fade", "duration": ..., "color": ...}`.
+A crossfade dissolves, with both clips up at once and the sound crossing
+at constant power. A fade dips through `color` (black by default), one
+clip at a time, the sound going to silence and back. The pair overlaps by
+`duration`, a clip with no `start` is moved earlier to make room, the
+previous clip must cover it (E306), and the first clip on a layer has
+nothing to arrive from (W303). A `color` on a crossfade is W304.
+
 ## Things that trip programs up
 
 - **Asset paths are relative to a root**, the timeline's directory by

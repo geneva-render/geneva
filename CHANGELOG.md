@@ -185,6 +185,33 @@ the format version it was written for.
   stderr with regular expressions for this. A run that copies its streams
   or writes audio alone renders no frames and says nothing.
 
+- **A `fade` transition, and a crossfade that reaches the sound.** A
+  clip's `transition` takes a second kind:
+
+  ```json
+  "transition": { "kind": "fade", "duration": "0.6s", "color": "white" }
+  ```
+
+  `crossfade` dissolves, both clips up at once. `fade` dips through a
+  color, black unless the transition names one, with the leaving clip
+  gone before the arriving one appears. `color` on a crossfade is W304,
+  since nothing would show it. `geneva concat` gains `--fade TIME` and
+  `--fade-color COLOR` beside `--crossfade`.
+
+  The sound follows the picture now, which it did not before. A crossfade
+  used to leave the audio alone: both clips played at full gain through
+  the overlap and summed, measured at +3 dB on two tones, so a join was
+  louder than either side of it and two pieces of dialogue ran together.
+  Transitions now reach the mixer. A crossfade crosses at constant power,
+  each gain the square root of its linear ramp, which holds the level
+  across the overlap to within a few tenths of a decibel. A fade goes to
+  silence at the midpoint and back. Explicit `fade_in` and `fade_out` on
+  an audio clip stay linear, which is what a fade to silence wants.
+
+  The dip color covers the whole frame, layers below included, and a fade
+  above the first layer makes the composition composite rather than copy.
+  Both are written down in docs/timeline.md next to the feature.
+
 ### Changes
 
 - A multi-output render takes the direct path when the canvas is one video

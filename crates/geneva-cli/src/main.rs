@@ -277,9 +277,18 @@ struct ConcatArgs {
     /// Output file. The extension selects the container.
     #[arg(short, long, value_name = "FILE")]
     output: PathBuf,
-    /// Cross-fade between inputs over this long instead of cutting.
-    #[arg(long, value_name = "TIME")]
+    /// Cross-fade between inputs over this long instead of cutting. Both
+    /// clips are visible at once and the sound crosses at constant power.
+    #[arg(long, value_name = "TIME", conflicts_with = "fade")]
     crossfade: Option<String>,
+    /// Dip through a color between inputs over this long instead of
+    /// cutting. Only one clip is visible at a time and the sound goes to
+    /// silence and back.
+    #[arg(long, value_name = "TIME")]
+    fade: Option<String>,
+    /// The color --fade dips through. Black by default.
+    #[arg(long, value_name = "COLOR", requires = "fade")]
+    fade_color: Option<String>,
     #[command(flatten)]
     encode: verbs::EncodeArgs,
 }
@@ -615,11 +624,18 @@ fn run(cli: Cli) -> Result<ExitCode> {
             run_verb(&compiled, &args.output, &args.encode, cli.format)
         }
         Command::Concat(args) => {
-            let compiled = verbs::concat(
-                &args.inputs,
-                parse_time("--crossfade", args.crossfade.as_deref())?,
-                &args.encode,
-            )?;
+            let transition = match (&args.crossfade, &args.fade) {
+                (Some(_), _) => parse_time("--crossfade", args.crossfade.as_deref())?
+                    .map(|d| (verbs::TransitionKind::Crossfade, d)),
+                (_, Some(_)) => parse_time("--fade", args.fade.as_deref())?
+                    .map(|d| (verbs::TransitionKind::Fade, d)),
+                _ => None,
+            };
+            let join = verbs::Join {
+                transition,
+                color: args.fade_color.clone(),
+            };
+            let compiled = verbs::concat(&args.inputs, &join, &args.encode)?;
             run_verb(&compiled, &args.output, &args.encode, cli.format)
         }
         Command::Overlay(args) => {

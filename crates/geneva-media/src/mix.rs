@@ -8,6 +8,7 @@
 use std::path::Path;
 
 use geneva_anim::Track;
+use geneva_timeline::schema::TransitionKind;
 use geneva_timeline::{Composition, Ratio, ResolvedLayer, ResolvedSource};
 
 use crate::MediaError;
@@ -15,6 +16,23 @@ use crate::codecs::{AudioReader, AudioStream};
 
 /// Gain is sampled once per block of this many frames.
 const GAIN_BLOCK: usize = 64;
+
+/// The shape of a voice's fades.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FadeShape {
+    /// Gain moves with time. Right for a fade to or from silence, where
+    /// the ear follows the amplitude down to nothing.
+    Linear,
+    /// Gain is the square root of the linear ramp, so two voices crossing
+    /// with opposite ramps sum to constant power. Right for a crossfade,
+    /// where a linear pair would dip about 3 dB in the middle on material
+    /// that is not correlated.
+    EqualPower,
+    /// Silent for half the ramp and linear over the other half. Right for
+    /// a `fade`, where the two clips never sound together: one reaches
+    /// silence before the other leaves it.
+    Dip,
+}
 
 /// One thing to mix.
 struct Voice {
@@ -25,8 +43,21 @@ struct Voice {
     gain_db: Track<f64>,
     fade_in: Ratio,
     fade_out: Ratio,
+    shape: FadeShape,
     /// How fast the source plays; the pitch follows.
     speed: Ratio,
+}
+
+impl FadeShape {
+    /// Maps a ramp that runs 0 to 1 onto the gain to apply.
+    fn gain(self, ramp: f64) -> f64 {
+        let ramp = ramp.clamp(0.0, 1.0);
+        match self {
+            Self::Linear => ramp,
+            Self::EqualPower => ramp.sqrt(),
+            Self::Dip => ((ramp - 0.5) * 2.0).clamp(0.0, 1.0),
+        }
+    }
 }
 
 /// Adds the audible video clips of `layers`, recursing into compositions.
@@ -41,12 +72,38 @@ fn walk(
     out: &mut Vec<Voice>,
 ) {
     for layer in layers {
+        // Where the previous clip of this layer put its voice, so that a
+        // transition can fade it out while the next one fades in. A clip
+        // that makes no sound leaves this empty, and the clip after it
+        // has nothing to cross with.
+        let mut previous: Option<usize> = None;
         for clip in &layer.clips {
             let start = clip.start / speed + offset;
             let end = (clip.end / speed + offset).min(limit);
             if end <= start {
+                previous = None;
                 continue;
             }
+            // A transition overlaps this clip with the one before it, so
+            // the pair crosses: this one up, that one down, over the same
+            // stretch.
+            let (cross, shape) = match clip.transition_in {
+                Some(tr) if tr.duration > Ratio::ZERO => (
+                    tr.duration / speed,
+                    match tr.kind {
+                        TransitionKind::Crossfade => FadeShape::EqualPower,
+                        TransitionKind::Fade => FadeShape::Dip,
+                    },
+                ),
+                _ => (Ratio::ZERO, FadeShape::Linear),
+            };
+            if cross > Ratio::ZERO {
+                if let Some(prev) = previous {
+                    out[prev].fade_out = cross;
+                    out[prev].shape = shape;
+                }
+            }
+            let mut voiced = None;
             match &clip.source {
                 ResolvedSource::Video {
                     asset,
@@ -64,16 +121,19 @@ fn walk(
                         start,
                         end,
                         gain_db: Track::constant(0.0),
-                        fade_in: Ratio::ZERO,
+                        fade_in: cross,
                         fade_out: Ratio::ZERO,
+                        shape,
                         speed: clip.speed * speed,
                     });
+                    voiced = Some(out.len() - 1);
                 }
                 ResolvedSource::Composition(nested) => {
                     walk(comp, &nested.layers, start, clip.speed * speed, end, out);
                 }
                 _ => {}
             }
+            previous = voiced;
         }
     }
 }
@@ -97,6 +157,7 @@ fn voices(comp: &Composition) -> Vec<Voice> {
                 gain_db: c.gain_db.clone(),
                 fade_in: c.fade_in,
                 fade_out: c.fade_out,
+                shape: FadeShape::Linear,
                 speed: c.speed,
             });
         }
@@ -245,10 +306,10 @@ impl Mixer {
                     let db = voice.gain_db.sample(t);
                     let mut g = 10f64.powf(db / 20.0);
                     if fade_in > 0.0 && t < fade_in {
-                        g *= t / fade_in;
+                        g *= voice.shape.gain(t / fade_in);
                     }
                     if fade_out > 0.0 && t > len_secs - fade_out {
-                        g *= ((len_secs - t) / fade_out).max(0.0);
+                        g *= voice.shape.gain((len_secs - t) / fade_out);
                     }
                     block_gain = g as f32;
                 }
@@ -273,4 +334,37 @@ pub fn mix(comp: &Composition, root: &Path, rate: u32) -> Result<Vec<f32>, Media
         out.extend_from_slice(&block);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_equal_power_pair_sums_to_constant_power() {
+        // Two voices crossing with opposite ramps. Their gains squared
+        // add to one at every point, so uncorrelated material keeps its
+        // level across the overlap instead of rising in the middle.
+        for i in 0..=100 {
+            let x = f64::from(i) / 100.0;
+            let up = FadeShape::EqualPower.gain(x);
+            let down = FadeShape::EqualPower.gain(1.0 - x);
+            assert!(
+                (up * up + down * down - 1.0).abs() < 1e-12,
+                "at {x}: {up}^2 + {down}^2 is not 1"
+            );
+        }
+    }
+
+    #[test]
+    fn a_linear_fade_still_moves_with_time() {
+        // Explicit fades on an audio clip go to silence, where following
+        // the amplitude is what the ear expects.
+        assert!((FadeShape::Linear.gain(0.5) - 0.5).abs() < 1e-12);
+        assert_eq!(FadeShape::Linear.gain(0.0), 0.0);
+        assert_eq!(FadeShape::Linear.gain(1.0), 1.0);
+        // Out of range on either side is clamped, not extrapolated.
+        assert_eq!(FadeShape::EqualPower.gain(-0.5), 0.0);
+        assert_eq!(FadeShape::EqualPower.gain(2.0), 1.0);
+    }
 }

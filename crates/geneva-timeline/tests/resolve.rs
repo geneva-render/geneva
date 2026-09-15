@@ -692,3 +692,66 @@ fn outputs_need_format_0_3_and_are_absent_by_default() {
     ));
     assert!(l.composition.unwrap().outputs.is_empty());
 }
+
+#[test]
+fn a_fade_shows_one_clip_at_a_time_and_a_crossfade_shows_both() {
+    let text = r##"{
+      "geneva": "0.3",
+      "output": { "width": 64, "height": 64, "fps": 25 },
+      "layers": [ { "clips": [
+        { "source": { "kind": "solid", "color": "red" }, "duration": "2s" },
+        { "source": { "kind": "solid", "color": "blue" }, "duration": "2s",
+          "transition": { "kind": "fade", "duration": "1s", "color": "#404040" } }
+      ] } ]
+    }"##;
+    let comp = load(text).composition.unwrap();
+    let tr = comp.layers[0].clips[1].transition_in.unwrap();
+    assert_eq!(tr.duration, Ratio::from_int(1));
+
+    // A fade hands over in the middle: the outgoing clip is gone before
+    // the incoming one appears, so they are never on screen together.
+    let half = Ratio::new(1, 2);
+    assert_eq!(tr.incoming(Ratio::ZERO), 0.0);
+    assert_eq!(tr.incoming(half), 0.0);
+    assert_eq!(tr.incoming(Ratio::from_int(1)), 1.0);
+    assert_eq!(tr.outgoing(Ratio::ZERO), 0.0);
+    assert_eq!(tr.outgoing(half), 0.0);
+    assert_eq!(tr.outgoing(Ratio::from_int(1)), 1.0);
+    for i in 0..=20 {
+        let local = Ratio::new(i, 20);
+        let both = tr.incoming(local) * tr.outgoing(Ratio::from_int(1) - local);
+        assert_eq!(both, 0.0, "both clips are up at {local}s of the fade");
+    }
+    // The dip colour peaks in the middle and is clear at both ends.
+    assert_eq!(tr.veil(Ratio::ZERO), 0.0);
+    assert_eq!(tr.veil(half), 1.0);
+    assert_eq!(tr.veil(Ratio::from_int(1)), 0.0);
+
+    // A crossfade keeps the outgoing clip up and brings the other over it.
+    let text = text.replace(r#""kind": "fade""#, r#""kind": "crossfade""#);
+    let comp = load(&text).composition.unwrap();
+    let tr = comp.layers[0].clips[1].transition_in.unwrap();
+    assert_eq!(tr.incoming(half), 0.5);
+    assert_eq!(tr.outgoing(half), 1.0);
+    assert_eq!(tr.veil(half), 0.0, "a crossfade shows no colour of its own");
+}
+
+#[test]
+fn a_transition_colour_on_a_crossfade_is_a_warning() {
+    let text = r#"{
+      "geneva": "0.3",
+      "output": { "width": 64, "height": 64, "fps": 25 },
+      "layers": [ { "clips": [
+        { "source": { "kind": "solid", "color": "red" }, "duration": "2s" },
+        { "source": { "kind": "solid", "color": "blue" }, "duration": "2s",
+          "transition": { "kind": "crossfade", "duration": "1s", "color": "white" } }
+      ] } ]
+    }"#;
+    let found = codes(&load(text).diagnostics);
+    assert!(
+        found
+            .iter()
+            .any(|(c, p)| *c == "W304" && p == "/layers/0/clips/1/transition/color"),
+        "{found:?}"
+    );
+}

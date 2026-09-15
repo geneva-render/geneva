@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use geneva_color::{Color, LinearRgba};
-use geneva_timeline::schema::{BlendMode, Fit, ShapeKind};
+use geneva_timeline::schema::{BlendMode, Fit, ShapeKind, TransitionKind};
 use geneva_timeline::{
     Composition, Ratio, ResolvedClip, ResolvedEffect, ResolvedLayer, ResolvedMask, ResolvedSource,
 };
@@ -269,7 +269,14 @@ impl<A: AssetSource> CpuRenderer<A> {
             .iter()
             .skip(1)
             .flat_map(|l| l.clips.iter())
-            .all(|c| c.blend == BlendMode::Normal && c.effects.is_empty())
+            .all(|c| {
+                c.blend == BlendMode::Normal
+                    && c.effects.is_empty()
+                    // A fade's dip color covers the whole frame, which is
+                    // not something a bounded overlay can carry.
+                    && c.transition_in
+                        .is_none_or(|t| t.kind != TransitionKind::Fade)
+            })
     }
 
     /// Draws the clips above the first layer that are visible at `t` onto
@@ -289,14 +296,13 @@ impl<A: AssetSource> CpuRenderer<A> {
         let mut items: Vec<(Paint<'static>, Placement, f32, BlendMode)> = Vec::new();
         let mut bounds: Option<[u32; 4]> = None;
         for layer in layers {
-            for clip in layer.clips.iter().filter(|c| c.start <= t && t < c.end) {
+            for (i, clip) in layer.clips.iter().enumerate() {
+                if clip.start > t || t >= clip.end {
+                    continue;
+                }
                 let local = (t - clip.start).to_f64();
                 let mut opacity = clip.opacity.sample(local).clamp(0.0, 1.0);
-                if let Some((_, fade)) = clip.transition_in {
-                    if fade > Ratio::ZERO && t < clip.start + fade {
-                        opacity *= ((t - clip.start) / fade).to_f64();
-                    }
-                }
+                opacity *= transition_gain(layer, i, t);
                 if opacity <= 0.0 {
                     continue;
                 }
@@ -393,17 +399,18 @@ impl<A: AssetSource> CpuRenderer<A> {
         frame: &mut Frame,
     ) -> Result<(), RenderError> {
         frame.reset(width, height, background);
-        let visible = layers
-            .iter()
-            .flat_map(|layer| layer.clips.iter().filter(|c| c.start <= t && t < c.end));
-        for clip in visible {
+        let visible = layers.iter().flat_map(|layer| {
+            layer
+                .clips
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.start <= t && t < c.end)
+                .map(move |(i, c)| (layer, i, c))
+        });
+        for (layer, i, clip) in visible {
             let local = (t - clip.start).to_f64();
             let mut opacity = clip.opacity.sample(local).clamp(0.0, 1.0);
-            if let Some((_, fade)) = clip.transition_in {
-                if fade > Ratio::ZERO && t < clip.start + fade {
-                    opacity *= ((t - clip.start) / fade).to_f64();
-                }
-            }
+            opacity *= transition_gain(layer, i, t);
             if opacity <= 0.0 {
                 continue;
             }
@@ -463,6 +470,11 @@ impl<A: AssetSource> CpuRenderer<A> {
             let pixels = owned_pixels(paint);
             self.recycle(pixels);
             self.recycle(scratch);
+        }
+        // A fade dips the picture through a color, so the veil goes over
+        // everything the layers drew.
+        if let Some((color, alpha)) = dip(layers, t) {
+            frame.veil(color, alpha);
         }
         Ok(())
     }
@@ -687,6 +699,43 @@ impl Paint<'_> {
 /// The part of a paint a clip shows, `[x, y, width, height]` in the
 /// paint's own pixels: all of it, or its crop; `None` when the crop
 /// leaves nothing.
+/// What a clip's transitions do to its opacity at output time `t`: its
+/// own transition brings it in, and the transition on the clip after it
+/// takes it out. A crossfade leaves the outgoing clip alone, since the
+/// one arriving covers it; a fade takes it down to the dip color.
+fn transition_gain(layer: &ResolvedLayer, i: usize, t: Ratio) -> f64 {
+    let clip = &layer.clips[i];
+    let mut gain = 1.0;
+    if let Some(tr) = clip.transition_in {
+        gain *= tr.incoming(t - clip.start);
+    }
+    if let Some(tr) = layer.clips.get(i + 1).and_then(|next| next.transition_in) {
+        gain *= tr.outgoing(clip.end - t);
+    }
+    gain
+}
+
+/// The dip color showing at `t`, if any clip is mid-fade. The strongest
+/// one wins, so overlapping fades do not cancel each other out.
+fn dip(layers: &[ResolvedLayer], t: Ratio) -> Option<(LinearRgba, f64)> {
+    let mut found: Option<(LinearRgba, f64)> = None;
+    for layer in layers {
+        for clip in &layer.clips {
+            let Some(tr) = clip.transition_in else {
+                continue;
+            };
+            if t < clip.start || t >= clip.start + tr.duration {
+                continue;
+            }
+            let a = tr.veil(t - clip.start);
+            if a > 0.0 && found.is_none_or(|(_, best)| a > best) {
+                found = Some((tr.color, a));
+            }
+        }
+    }
+    found
+}
+
 fn window_of(clip: &ResolvedClip, (w, h): (f64, f64)) -> Option<[f64; 4]> {
     match clip.crop {
         None => Some([0.0, 0.0, w, h]),

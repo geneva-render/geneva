@@ -274,6 +274,52 @@ fn mixing_applies_gain_and_skips_muted_video_audio() {
 }
 
 #[test]
+fn a_crossfade_holds_the_level_across_the_overlap() {
+    // Two copies of the same clip, the second crossfading in over the
+    // last half second of the first. The picture dissolves; the sound has
+    // to cross too, and at constant power rather than summing to +3 dB.
+    let root = clip().parent().unwrap().to_path_buf();
+    let text = r#"{
+      "geneva": "0.1",
+      "output": { "width": 64, "height": 64, "fps": 25, "duration": "3s" },
+      "assets": { "clip": { "src": "clip.mp4" } },
+      "layers": [ { "clips": [
+        { "source": { "kind": "video", "asset": "clip" }, "duration": "2s" },
+        { "source": { "kind": "video", "asset": "clip" }, "duration": "1.5s",
+          "transition": { "kind": "crossfade", "duration": "0.5s" } }
+      ] } ]
+    }"#;
+    let comp = load(text).composition.unwrap();
+    let mixed = mix::mix(&comp, &root, 48000).unwrap();
+
+    let window = |from: f64, to: f64| {
+        let a = (from * 48000.0) as usize * 2;
+        let b = (to * 48000.0) as usize * 2;
+        rms(&mixed[a.min(mixed.len())..b.min(mixed.len())])
+    };
+    let before = window(0.6, 1.4);
+    assert!(before > 0.0, "the clip should make some sound");
+
+    // Both clips are the same recording, so the two voices are perfectly
+    // correlated and their gains add rather than their powers. That makes
+    // the midpoint of the overlap arithmetic rather than acoustics:
+    //
+    //   both at full gain   1    + 1    = 2.000  ->  +6.02 dB
+    //   equal power         √0.5 + √0.5 = 1.414  ->  +3.01 dB
+    //   linear              0.5  + 0.5  = 1.000  ->   0.00 dB
+    //
+    // Before the transition reached the mixer this was the first case.
+    // The exact shape of the ramp is checked in mix.rs; what matters here
+    // is that the fades arrive at all.
+    let db = 20.0 * (window(1.72, 1.78) / before).log10();
+    assert!(
+        db < 4.0,
+        "the middle of the overlap is {db:.2} dB above the steady level, which is \
+both clips at full gain; the pair should be crossing"
+    );
+}
+
+#[test]
 fn audio_lands_at_its_timeline_position_in_the_output_file() {
     // A tone placed at 1s on an otherwise silent timeline must start at 1s
     // in the muxed file, which checks audio/video alignment end to end.

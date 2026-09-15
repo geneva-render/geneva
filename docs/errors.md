@@ -66,6 +66,7 @@ result is not what was intended. Notes are informational.
 | W301 | A clip starts after or runs past the output duration; it is cut. |
 | W302 | A layer or track has no clips. |
 | W303 | The first clip of a layer has a transition, which has nothing to blend from. |
+| W304 | A transition has a `color` but its kind never shows one. Only `fade` dips through a color. |
 | W304 | An audio clip's fades add up to more than its length. |
 | W305 | `out` is past the end of the file; the clip ends where the file ends. |
 

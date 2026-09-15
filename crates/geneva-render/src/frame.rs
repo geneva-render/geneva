@@ -40,6 +40,23 @@ impl Frame {
         }
     }
 
+    /// Blends `color` over every pixel at `alpha`, which is how a `fade`
+    /// transition dips the picture through a color. Alpha of zero leaves
+    /// the frame alone and one replaces it.
+    pub fn veil(&mut self, color: LinearRgba, alpha: f64) {
+        let a = alpha.clamp(0.0, 1.0) as f32;
+        if a <= 0.0 {
+            return;
+        }
+        let keep = 1.0 - a;
+        for p in &mut self.pixels {
+            p.r = p.r * keep + color.r * a;
+            p.g = p.g * keep + color.g * a;
+            p.b = p.b * keep + color.b * a;
+            p.a = p.a * keep + color.a * a;
+        }
+    }
+
     /// An empty frame that owns `pixels` as its buffer, so that a buffer
     /// can be used again by [`reset`](Self::reset) without a new
     /// allocation.

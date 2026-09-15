@@ -231,16 +231,24 @@ geneva trim talk.mp4 -o intro.mp4 --to 30s
 geneva trim talk.mp4 -o clip.mp4 --from 1:02:10 --duration 45s --exact
 ```
 
-### `geneva concat <input>... -o FILE [--crossfade TIME]`
+### `geneva concat <input>... -o FILE [--crossfade TIME | --fade TIME [--fade-color COLOR]]`
 
 Joins inputs back to back. Sources with identical stream parameters are
 joined by copying packets; anything else is rendered, with inputs of a
-different shape fitted inside the first one's frame. `--crossfade` blends
-each pair over the given time and always renders.
+different shape fitted inside the first one's frame. Either transition
+overlaps each pair over the given time and always renders.
+
+`--crossfade` dissolves: both clips are on screen at once, and the sound
+crosses at constant power so the level holds across the overlap.
+
+`--fade` dips through a color instead, black unless `--fade-color` says
+otherwise. One clip is visible at a time, and the sound reaches silence
+at the midpoint and comes back.
 
 ```sh
 geneva concat part1.mp4 part2.mp4 part3.mp4 -o all.mp4
 geneva concat a.mp4 b.mp4 -o ab.mp4 --crossfade 0.5s
+geneva concat a.mp4 b.mp4 -o ab.mp4 --fade 0.6s --fade-color white
 ```
 
 ### `geneva overlay <input> <overlay> -o FILE [options]`

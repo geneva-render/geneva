@@ -10,10 +10,11 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use geneva_color::{ColorTags, ResolvedTags};
+pub use geneva_timeline::schema::TransitionKind;
 use geneva_timeline::schema::{
     Asset, AudioClip, AudioTrack, AutoChunks, Chunks, Clip, Crop, Encode, Fit, Layer, Output,
     OutputKind, OutputSpec, Source, SubtitleTrack, TextSource, Timeline, Transform, Transition,
-    TransitionKind, VideoCodec, VideoEncode, VideoProfile, VideoTune,
+    VideoCodec, VideoEncode, VideoProfile, VideoTune,
 };
 use geneva_timeline::{Animated, Diagnostic, Fps, Length, Point, Ratio, Scale, Time};
 
@@ -751,10 +752,26 @@ pub fn trim(
 }
 
 /// `concat`: inputs back to back, optionally cross-faded.
-pub fn concat(inputs: &[PathBuf], crossfade: Option<Time>, args: &EncodeArgs) -> Result<Compiled> {
+/// How `concat` joins one clip to the next.
+#[derive(Debug, Clone)]
+pub struct Join {
+    /// Which transition, and how long the clips overlap.
+    pub transition: Option<(TransitionKind, Time)>,
+    /// The color a `fade` dips through; black by default.
+    pub color: Option<String>,
+}
+
+pub fn concat(inputs: &[PathBuf], join: &Join, args: &EncodeArgs) -> Result<Compiled> {
     if inputs.len() < 2 {
         bail!("concat needs at least two inputs");
     }
+    let color = match &join.color {
+        Some(c) => Some(
+            serde_json::from_value(serde_json::Value::String(c.clone()))
+                .with_context(|| format!("--fade-color: {c:?} is not a color"))?,
+        ),
+        None => None,
+    };
     let probed: Vec<Input> = inputs
         .iter()
         .map(|p| Input::probe(p))
@@ -789,10 +806,11 @@ pub fn concat(inputs: &[PathBuf], crossfade: Option<Time>, args: &EncodeArgs) ->
             if same_shape { None } else { Some(Fit::Contain) },
         );
         if i > 0 {
-            if let Some(d) = crossfade {
+            if let Some((kind, duration)) = join.transition {
                 clip.transition = Some(Transition {
-                    kind: TransitionKind::Crossfade,
-                    duration: d,
+                    kind,
+                    duration,
+                    color,
                 });
             }
         }

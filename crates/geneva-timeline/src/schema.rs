@@ -728,14 +728,23 @@ pub struct Transition {
     pub kind: TransitionKind,
     /// How long the two clips overlap.
     pub duration: Time,
+    /// The color a "fade" passes through. Defaults to black. Ignored by
+    /// "crossfade", which never shows a color of its own (W304).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorValue>,
 }
 
 /// Transition types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum TransitionKind {
-    /// Fade the incoming clip in over the outgoing one.
+    /// Fade the incoming clip in over the outgoing one. Both are visible
+    /// at once, and the sound crosses at constant power.
     Crossfade,
+    /// Dip through a color: the outgoing clip fades to it over the first
+    /// half of the overlap, the incoming clip out of it over the second.
+    /// Only one is ever visible, and the sound goes to silence and back.
+    Fade,
 }
 
 /// How a source is sized to the output frame.

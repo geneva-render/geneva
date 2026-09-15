@@ -155,14 +155,87 @@ pub struct ResolvedClip {
     pub rotation: Track<f64>,
     /// Opacity over clip-local time.
     pub opacity: Track<f64>,
-    /// Transition from the previous clip, with its duration.
-    pub transition_in: Option<(TransitionKind, Ratio)>,
+    /// Transition from the previous clip.
+    pub transition_in: Option<ResolvedTransition>,
     /// Effects on the placed picture, in order.
     pub effects: Vec<ResolvedEffect>,
     /// The mask, if any.
     pub mask: Option<ResolvedMask>,
     /// How fast the source plays; 1 is natural speed.
     pub speed: Ratio,
+}
+
+/// A transition into a clip, with its length in seconds and the color a
+/// `fade` passes through.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ResolvedTransition {
+    /// Which transition.
+    pub kind: TransitionKind,
+    /// How long the two clips overlap.
+    pub duration: Ratio,
+    /// Premultiplied linear color for `fade`; unused by `crossfade`.
+    pub color: LinearRgba,
+}
+
+impl ResolvedTransition {
+    /// The opacity of the clip arriving, `local` seconds in.
+    pub fn incoming(&self, local: Ratio) -> f64 {
+        let d = self.duration;
+        if d <= Ratio::ZERO || local >= d {
+            return 1.0;
+        }
+        match self.kind {
+            // Both clips are up at once, so the picture dissolves.
+            TransitionKind::Crossfade => (local / d).to_f64().clamp(0.0, 1.0),
+            // The arriving clip waits out the first half, then comes up
+            // from the color over the second.
+            TransitionKind::Fade => {
+                let half = d / Ratio::from_int(2);
+                if local <= half {
+                    0.0
+                } else {
+                    ((local - half) / half).to_f64().clamp(0.0, 1.0)
+                }
+            }
+        }
+    }
+
+    /// The opacity of the clip leaving, `left` seconds before it ends.
+    pub fn outgoing(&self, left: Ratio) -> f64 {
+        let d = self.duration;
+        if d <= Ratio::ZERO || left >= d {
+            return 1.0;
+        }
+        match self.kind {
+            // A crossfade leaves it up: the clip arriving covers it, and
+            // fading both would dip the picture towards the background.
+            TransitionKind::Crossfade => 1.0,
+            // A fade takes it down to the color over the first half of
+            // the overlap, which is the second half of what is left.
+            TransitionKind::Fade => {
+                let half = d / Ratio::from_int(2);
+                if left >= half {
+                    ((left - half) / half).to_f64().clamp(0.0, 1.0)
+                } else {
+                    0.0
+                }
+            }
+        }
+    }
+
+    /// How opaque the dip color is, `local` seconds into the overlap.
+    /// Zero at both ends and one in the middle; a crossfade never shows
+    /// a color at all.
+    pub fn veil(&self, local: Ratio) -> f64 {
+        let d = self.duration;
+        if self.kind != TransitionKind::Fade || d <= Ratio::ZERO {
+            return 0.0;
+        }
+        let half = d / Ratio::from_int(2);
+        let up = (local / half).to_f64();
+        let down = ((d - local) / half).to_f64();
+        up.min(down).clamp(0.0, 1.0)
+    }
 }
 
 /// A mask with its values checked; lengths stay as written, since the
@@ -1736,7 +1809,25 @@ inset of {safe_px}px"
                     if clip.start.is_none() {
                         start = start - tdur;
                     }
-                    transition_in = Some((tr.kind, tdur));
+                    let color = tr.color.as_ref().map_or(Color::BLACK, |c| c.0).to_linear();
+                    if tr.color.is_some() && tr.kind != TransitionKind::Fade {
+                        self.push(
+                            Diagnostic::warning(
+                                "W304",
+                                cpath.key("transition").key("color"),
+                                format!(
+                                    "{clip_id} has a transition color, but a {:?} transition never shows one",
+                                    tr.kind
+                                ),
+                            )
+                            .with_help("use \"kind\": \"fade\" to dip through the color"),
+                        );
+                    }
+                    transition_in = Some(ResolvedTransition {
+                        kind: tr.kind,
+                        duration: tdur,
+                        color,
+                    });
                 }
             }
 
@@ -1787,7 +1878,8 @@ inset of {safe_px}px"
                 let overlap = prev.end - start;
                 if overlap > Ratio::ZERO {
                     match transition_in {
-                        Some((_, tdur)) if overlap <= tdur => {
+                        Some(tr) if overlap <= tr.duration => {
+                            let tdur = tr.duration;
                             if overlap < tdur {
                                 self.push(
                                     Diagnostic::error("E306", cpath.key("transition").key("duration"), format!("{clip_id} needs {tdur}s of overlap for its transition but {} only covers {overlap}s of it", prev.id))
@@ -1804,7 +1896,7 @@ inset of {safe_px}px"
                         }
                     }
                 }
-                if let Some((_, tdur)) = transition_in {
+                if let Some(tdur) = transition_in.map(|t| t.duration) {
                     if start < prev.start {
                         self.push(
                             Diagnostic::error(
