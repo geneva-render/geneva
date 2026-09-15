@@ -1,6 +1,7 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/wordmark-dark.png">
-  <img src="docs/wordmark.png" alt="Geneva" width="240">
+  <source media="(prefers-color-scheme: light)" srcset="docs/wordmark.png">
+  <img src="docs/wordmark-any.png" alt="Geneva" width="240" height="66">
 </picture>
 
 geneva edits and processes video programmatically. One-line commands cover
