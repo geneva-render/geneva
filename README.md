@@ -178,10 +178,10 @@ output. The rest point at the reference.
 | | What it does | Where |
 | --- | --- | --- |
 | **Captions from a transcript** | whisper's JSON in, each word picked out as it is said. One command burns them into a file; as a source they are one layer of a larger document, placed and styled | [examples](examples/README.md#captions) |
-| **Cuts that copy** | trims and joins that never touch the picture, so they take about as long as reading the file | [examples](examples/README.md#cuts-that-dont-re-encode) |
-| **One read, many files** | renditions, a poster, a sprite sheet and speech audio written in a single pass over the source | [examples](examples/README.md#one-read-many-files) |
-| **Vertical video** | 16:9 into 9:16 over a blurred copy of itself | [examples](examples/README.md#vertical-video) |
-| **Delivery presets** | `--for tiktok`, `--for web`, `--for email` set size, codec, quality, keyframes and audio for a destination, and warn when the result runs past its duration or file-size limit. Every number says where it came from and when it was last checked | [docs/cli.md](docs/cli.md#targets) |
+| **Cut and join without re-encoding** | the streams are copied rather than decoded and encoded again, so it takes about as long as reading the file | [examples](examples/README.md#cuts-that-dont-re-encode) |
+| **Several outputs in one pass** | renditions, a poster, a sprite sheet and speech audio, from one read of the source | [examples](examples/README.md#one-read-many-files) |
+| **Vertical video** | 16:9 into 9:16, over a blurred copy of itself rather than cropping | [examples](examples/README.md#vertical-video) |
+| **Presets for a destination** | `--for tiktok`, `--for web`, `--for email` set size, codec, quality, keyframes and audio, and warn when the result runs past its duration or file-size limit. Every number says where it came from and when it was last checked | [docs/cli.md](docs/cli.md#targets) |
 | **Transitions** | dissolve or dip through a colour, at a join or at the head and tail of a piece. One field moves the picture and the sound together, rather than a video filter and an audio filter that have to be kept in step | [docs/timeline.md](docs/timeline.md#transitions) |
 | **Colour** | BT.601 and BT.709 kept, untagged material guessed out loud, HDR tone-mapped by BT.2446 | [docs/color.md](docs/color.md) |
 | **Scripts and agents** | `--format json`, coded diagnostics that point at the field, deterministic output | [docs/agents.md](docs/agents.md) |
