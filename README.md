@@ -20,7 +20,7 @@ what ffmpeg opens.
 
 ```sh
 geneva trim talk.mp4 -o intro.mp4 --to 30s        # copies the streams, no re-encode
-geneva convert talk.mp4 -o web.mp4 --for web      # one flag instead of fifteen
+geneva subtitles talk.mp4 -o subbed.mp4 --burn transcript.json --highlight "#ffd233"
 geneva render job.json -o out/                    # everything the document asks for
 ```
 
@@ -151,6 +151,32 @@ were and only re-encoded the 135 around the card. Ten seconds took three. On
 a ninety-minute film with a watermark on the title card, that's the
 difference between a coffee and an afternoon.
 
+## Installing
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/geneva-render/geneva/main/scripts/install.sh | sh
+```
+
+That grabs the right build for your machine and puts it in `/usr/local/bin`,
+or `~/.local/bin` if the first isn't writable (`GENEVA_PREFIX` overrides).
+The [releases page](https://github.com/geneva-render/geneva/releases) has
+the archives, each with the same `install.sh` inside, plus a `check.sh`
+that times the everyday commands on a file of yours against ffmpeg doing
+the same job. Linux needs glibc 2.35 or newer; macOS needs 12 or newer on
+Apple silicon. Codecs, containers and font shaping are built in.
+
+The one thing worth knowing is H.264. geneva bundles OpenH264, which makes
+bigger files than x264 at the same quality, and doesn't bundle x264
+itself because x264 is GPL — but it will use the copy on your system, and
+it always says which encoder it used.
+
+```sh
+sudo apt install libx264-164     # Debian 12, Ubuntu 24.04 (libx264-163 on 22.04)
+brew install x264                # macOS
+```
+
+## What else it does
+
 ### Captions
 
 Speech recognisers write a word and the moment it was said. This is
@@ -181,12 +207,6 @@ geneva subtitles examples/iss.mp4 --burn examples/words.json \
 
 <img src="docs/captions.gif" alt="Captions over the footage, each word picked out in yellow as it is said" width="640">
 
-```
-note[N600]: smart cut: 183 of 300 frames copied from the source, 117 encoded in 1 run around the cuts and overlays
-note[N600]: H.264 runs encoded with the system's x264 (build 164) at CRF 18
-wrote captioned.mp4 (300 frames, 10s of video, 2.4s elapsed)
-```
-
 No mapping step, no intermediate format. geneva reads the words, groups
 them into cues the way a caption editor would — at most two lines, about
 forty characters each, nothing on screen for less than a beat — and picks
@@ -194,103 +214,18 @@ out whichever word is current. That last part is the style every
 short-form platform uses now, and it is only possible because the file
 says when each word lands.
 
-It is forgiving about keys and strict about structure: `probability`,
-`seek`, `tokens`, WhisperX's `score` and anything else it does not need
-are ignored, so whisper, faster-whisper and WhisperX go in unedited, as
-does a bare `[{"word", "start", "end"}, ...]`. What it will not do is
-draw nothing and call it a success. A file it can find no words in is an
-error that says what it looked for, and times that are plainly
-milliseconds — AssemblyAI and Deepgram write those — are an error too,
-rather than a caption that first appears twenty minutes in:
+whisper and its variants go in as they came out: keys geneva does not
+need are ignored, and a `.srt` or `.vtt` works too, minus the highlight
+that whole-cue timing cannot support. What it will not do is draw nothing
+and call it a success — a file it can find no words in, or one timed in
+milliseconds, is an error that says so.
 
-```
-error: reading the words in transcript.json: the times look like milliseconds,
-not seconds: a word starts past 1000. Divide them by 1000; geneva reads
-seconds, as whisper and whisperx write them
-```
-
-`--burn` takes a `.srt` or a `.vtt` too. Those time whole cues rather
-than words, so `--highlight` has nothing to pick out, and geneva says so
-rather than quietly drawing the same thing:
-
-```
-warning[W453]: en.srt has no word times, so nothing is picked out as it is said
-  --> /layers/1
-   = help: a highlight needs a word file; SubRip and WebVTT time whole cues
-```
-
-#### Captions as a layer
-
-`subtitles --burn` is the whole job in one line. When captions are one
-part of something larger they are a source like any other, and the same
-two kinds of file go in:
-
-```json
-"assets": {
-  "iss":    { "src": "iss.mp4"    },
-  "words":  { "src": "words.json" },
-  "arabic": { "src": "ar.srt"     }
-},
-
-"layers": [
-  { "id": "footage", "clips": [ { "source": { "kind": "video", "asset": "iss" } } ] },
-
-  { "id": "captions", "clips": [ {
-      "source": {
-        "kind": "captions", "asset": "words", "margin": "15%",
-        "style": {
-          "font": "700 44px Liberation Sans", "color": "white",
-          "highlight": { "color": "#ffd233" },
-          "outline": "3px #000000cc", "max_width": "80%"
-        } } } ] },
-
-  { "id": "captions-ar", "clips": [ {
-      "source": {
-        "kind": "captions", "asset": "arabic",
-        "style": { "font": "400 30px Liberation Sans", "color": "#cfd8e3",
-                   "outline": "3px #000000cc", "max_width": "80%" } } } ] }
-]
-```
-
-```sh
-geneva render examples/captions.json -o captioned.mp4
-```
-
-<img src="docs/captions.png" alt="A caption over the footage with the current word highlighted, and an Arabic line below it" width="560">
-
-```
-note[N453]: 2 cues read from "words.json"
-  --> /layers/1/clips/0/source
-note[N453]: 2 cues read from "ar.srt"
-  --> /layers/2/clips/0/source
-note[N600]: smart cut: 183 of 300 frames copied from the source, 117 encoded in 1 run around the cuts and overlays
-wrote captioned.mp4 (300 frames, 10s of video, 2.3s elapsed)
-```
-
-One line in the document, one clip per cue on the timeline — which is why
-183 of the 300 frames were still copied rather than composited. There are
-no times and no coordinates to write: the cues carry the timing, and
-`"position"` (`bottom`, `top` or `center`) with `"margin"` says where they
-sit. A margin defaults to the title-safe inset, so captions stay clear of
-the edges a television crops. If a WebVTT file places its own cues,
-geneva follows it; `"follow_file": false` overrules it.
-
-The text is properly shaped, so the Arabic line reads right to left, and
-Thai would break in the right places. You get wrapping, an outline, a
-shadow and a rounded box — and if you know CSS you can write the styles
-the CSS way: `"700 44px Liberation Sans"` for the font, `"3px black"` for
-the outline.
-
-None of this replaces writing words by hand. A `text` source still takes
-a `words` list with the times you choose, which is what you want for
-seven words on a title card. A `captions` source is for a file you were
-given: it does the grouping and the placing for you. Same renderer, same
-style fields.
-
-A caption is drawn into the picture. To carry the same file alongside the
-picture as a selectable track instead, it goes in `subtitles[]`, or
-`geneva subtitles --add` puts it on a finished file — that is the whole
-distinction geneva draws between the two words.
+Captions are also a source, so they can be one layer of something larger,
+placed with `position` and `margin` and styled with anything a text
+source takes. The text is properly shaped, so an Arabic line reads right
+to left and Thai breaks in the right places.
+[examples/README.md](examples/README.md#captions-as-a-layer) has that
+version, with the placement rules and the diagnostics.
 
 ### Vertical video
 
@@ -379,11 +314,8 @@ note[N600]: cut at 0.5s moved to the keyframe at 0.48s
 wrote cut.mp4 (1s, streams copied without re-encoding, 0.0s elapsed)
 ```
 
-When it can't copy, it says why rather than quietly re-encoding:
-
-```
-note[N600]: not copied without re-encoding: the audio of talk.mp4 is aac, which wav cannot hold
-```
+When it can't copy it says why — *the audio of talk.mp4 is aac, which wav
+cannot hold* — rather than quietly re-encoding.
 
 ### Colour
 
@@ -451,42 +383,11 @@ Add `--show-timeline` to any command and it prints the JSON instead of
 rendering. That's the quickest way to a document that already works. Run the
 command, keep the JSON, edit it, render it.
 
-## Installing
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/geneva-render/geneva/main/scripts/install.sh | sh
-```
-
-That grabs the right build for your machine and puts it in `/usr/local/bin`,
-or `~/.local/bin` if the first isn't writable. Set `GENEVA_PREFIX` to
-override. You can also download an archive from the
-[releases page](https://github.com/geneva-render/geneva/releases) and run the
-`install.sh` inside it. On macOS the installer clears the quarantine flag, so
-you won't get a Gatekeeper dialog.
-
-The archive also carries `check.sh`. Point it at one of your own files and
-it runs the everyday commands on it and times each one, next to ffmpeg
-doing the same job if you have ffmpeg installed.
-
-Linux builds need glibc 2.35 or newer, so Ubuntu 22.04, Debian 12 or RHEL 9
-and up. macOS builds need macOS 12 or newer on Apple silicon. Codecs,
-containers and font shaping are all built in.
-
-One thing to know about H.264. geneva bundles OpenH264, which makes bigger
-files than x264 at the same quality. It doesn't bundle x264 itself, because
-x264 is GPL, but it will use the copy on your system if you have one, and it
-says which encoder it used. Hardware encoders come first when they're
-available.
-
-```sh
-sudo apt install libx264-164     # Debian 12, Ubuntu 24.04 (libx264-163 on 22.04)
-brew install x264                # macOS
-```
-
 ## Documentation
 
 | Page | What's in it |
 | --- | --- |
+| [examples/README.md](examples/README.md) | Every example file, worked through with its document, its command and its output |
 | [docs/timeline.md](docs/timeline.md) | The format: every field, its default and its rules |
 | [docs/cli.md](docs/cli.md) | Every command and flag, the `--for` targets, containers and codecs |
 | [docs/agents.md](docs/agents.md) | The short version, for scripts and AI agents |
@@ -514,23 +415,9 @@ cargo build --release
 
 You'll need a C and C++ toolchain, cmake, meson, ninja, nasm, pkg-config and
 clang. [CONTRIBUTING.md](CONTRIBUTING.md) lists the packages per platform and
-explains how to run the tests. Third-party components and their licences are
+explains how to run the tests;
+[docs/architecture.md](docs/architecture.md) maps the crates. Third-party components and their licences are
 in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
-
-## What's where
-
-| Path | What it holds |
-| --- | --- |
-| `crates/geneva-timeline` | The format: types, parsing, validation, resolution, JSON Schema |
-| `crates/geneva-render` | The compositor |
-| `crates/geneva-color` | Colour tags, guessing, transfer functions, matrices, linear light |
-| `crates/geneva-anim` | Keyframes and easing |
-| `crates/geneva-media` | Probing, decoding, encoding, the copy planner, smart cut, mixing |
-| `crates/geneva-golden` | Image comparison and the golden-frame tests |
-| `crates/geneva-cli` | The `geneva` command |
-| `schema/` | Published JSON Schema, one file per format version |
-| `tests/golden/` | Golden scenes, their reference frames and fonts |
-| `tests/media/` | Small test files, including the fourteen timing traps |
 
 ## Licence
 
