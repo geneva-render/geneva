@@ -27,6 +27,7 @@ use std::fmt;
 pub use css::{CssError, KeyframesRule, Stylesheet};
 pub use dom::{Document, Element, HtmlError, Node, NodeId, NodeKind};
 pub use layout::{Content, Laid, Measure, Painted};
+pub use style::declared_box;
 pub use style::{Computed, Paint, Shadow, Text, TextAlign};
 
 /// Why a document did not parse, and where.
@@ -118,13 +119,49 @@ impl Prepared {
     }
 }
 
+/// Every `src` an `<img>` in a prepared document names, in document
+/// order. Like a stylesheet link, this crate does not read them.
+pub fn image_sources(prepared: &Prepared) -> Vec<String> {
+    prepared
+        .doc
+        .nodes
+        .iter()
+        .filter_map(|n| n.element())
+        .filter(|e| e.tag == "img")
+        .filter_map(|e| e.attrs.get("src").cloned())
+        .collect()
+}
+
+/// The `href` of every `<link rel="stylesheet">` in some markup, so that
+/// a caller can read them before preparing it. This crate never touches
+/// the filesystem.
+pub fn stylesheet_links(html: &str) -> Result<Vec<String>, Error> {
+    dom::parse(html).map(|d| d.links).map_err(Error::Html)
+}
+
 /// Parses markup and styles and computes every node's style.
 ///
-/// `extra` is a stylesheet from outside the markup; it is applied after
-/// any `<style>` element, so it wins ties at equal specificity.
-pub fn prepare(html: &str, extra: &str) -> Result<Prepared, Error> {
+/// `linked` holds the contents of the document's `<link
+/// rel="stylesheet">` hrefs, which are applied in document order before
+/// its `<style>` elements. `extra` is a stylesheet from outside the
+/// markup, applied last, so it wins ties at equal specificity.
+pub fn prepare(
+    html: &str,
+    extra: &str,
+    linked: &std::collections::BTreeMap<String, String>,
+) -> Result<Prepared, Error> {
     let doc = dom::parse(html).map_err(Error::Html)?;
-    let mut sheet = css::parse_stylesheet(&doc.style).map_err(Error::Css)?;
+    let mut sheet = css::Stylesheet::default();
+    for href in &doc.links {
+        if let Some(text) = linked.get(href) {
+            let more = css::parse_stylesheet(text).map_err(Error::Css)?;
+            sheet.rules.extend(more.rules);
+            sheet.keyframes.extend(more.keyframes);
+        }
+    }
+    let own = css::parse_stylesheet(&doc.style).map_err(Error::Css)?;
+    sheet.rules.extend(own.rules);
+    sheet.keyframes.extend(own.keyframes);
     if !extra.trim().is_empty() {
         let more = css::parse_stylesheet(extra).map_err(Error::Css)?;
         sheet.rules.extend(more.rules);
@@ -170,6 +207,8 @@ because the markup is drawn once and the clip moves the picture"
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     const CARD: &str = "<style>\
@@ -179,7 +218,7 @@ mod tests {
 
     #[test]
     fn the_outermost_animation_is_hoisted_with_its_rules() {
-        let p = prepare(CARD, "").unwrap();
+        let p = prepare(CARD, "", &BTreeMap::new()).unwrap();
         assert!(p.problems.is_empty(), "{:?}", p.problems);
         assert_eq!(p.animation.as_deref(), Some("slide-in 0.5s ease-out"));
         assert_eq!(
@@ -194,6 +233,7 @@ mod tests {
             "<style>@keyframes a { from { opacity: 0 } to { opacity: 1 } } \
              p { animation: a 1s }</style><div><p>hi</p></div>",
             "",
+            &BTreeMap::new(),
         )
         .unwrap();
         assert!(p.animation.is_none());
@@ -212,6 +252,7 @@ mod tests {
         let p = prepare(
             "<style>@keyframes a { from { translate: -100% } to { translate: 0 } }              .c { animation: a 1s; width: 50%; height: 40px; padding: 10px;              border-left: 6px solid red }</style><div class='c'></div>",
             "",
+            &BTreeMap::new(),
         )
         .unwrap();
         assert_eq!(p.animated_box(1000.0, 500.0), (Some(526.0), Some(60.0)));
@@ -219,6 +260,7 @@ mod tests {
         let p = prepare(
             "<style>@keyframes a { from { opacity: 0 } to { opacity: 1 } }              .c { animation: a 1s; width: 50%; padding: 10px; box-sizing: border-box }             </style><div class='c'></div>",
             "",
+            &BTreeMap::new(),
         )
         .unwrap();
         // Border-box takes the width as written, and the height is left to
@@ -227,10 +269,38 @@ mod tests {
     }
 
     #[test]
+    fn a_linked_stylesheet_is_read_when_its_text_is_supplied() {
+        let html = "<link rel='stylesheet' href='house.css'><div class='card'>x</div>";
+        assert_eq!(stylesheet_links(html).unwrap(), ["house.css"]);
+
+        let mut linked = BTreeMap::new();
+        linked.insert(
+            "house.css".to_owned(),
+            ".card { color: #ff8800; padding: 7px }".to_owned(),
+        );
+        let p = prepare(html, "", &linked).unwrap();
+        assert!(p.problems.is_empty(), "{:?}", p.problems);
+        let card = p.doc.children(p.doc.root)[0];
+        assert_eq!(p.styles[card].text.color.to_hex(), "#ff8800");
+
+        // A <style> in the markup comes after the link, so it wins ties.
+        let p = prepare(
+            "<link rel='stylesheet' href='house.css'><style>.card { color: #00ff00 }</style>\
+             <div class='card'>x</div>",
+            "",
+            &linked,
+        )
+        .unwrap();
+        let card = p.doc.children(p.doc.root)[0];
+        assert_eq!(p.styles[card].text.color.to_hex(), "#00ff00");
+    }
+
+    #[test]
     fn rules_can_come_from_the_css_field_too() {
         let p = prepare(
             "<div class='card'></div>",
             "@keyframes fade { from { opacity: 0 } to { opacity: 1 } } .card { animation: fade 1s }",
+            &BTreeMap::new(),
         )
         .unwrap();
         assert_eq!(p.animation.as_deref(), Some("fade 1s"));

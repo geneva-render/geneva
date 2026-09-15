@@ -170,8 +170,10 @@ markup in `html` or in an asset of kind `html`, plus optional `css`, a
 `width` (default: the frame) and a `height` (default: fits the content).
 It is a strict HTML parser, a CSS subset with type, class and id
 selectors and the descendant and child combinators, and flexbox and block
-layout from taffy. Refer to images by asset id, not by path
-(`<img src="logo">`). There is no inline layout: an element's text is one
+layout from taffy. Pictures and stylesheets take paths relative to the
+markup, as on a page (`<img src="logo.png">`, `<link rel="stylesheet"
+href="house.css">`); a path that leaves the asset root, or a file that
+is not there, is E452 at validation. There is no inline layout: an element's text is one
 paragraph and a child element is a box. Anything geneva cannot draw is
 named rather than ignored: E451 for markup or a selector it cannot parse,
 W450 for a property it does not draw. `@keyframes` in the markup are in

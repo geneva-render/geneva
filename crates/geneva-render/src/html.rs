@@ -105,19 +105,7 @@ impl Measure for Context<'_> {
 /// Parses the markup and its styles. Problems the resolver already
 /// reported are dropped here; this is the second read of the same text.
 pub fn prepare(html: &ResolvedHtml) -> Result<Prepared, String> {
-    geneva_html::prepare(&html.html, &html.css).map_err(|e| e.to_string())
-}
-
-/// Every asset id an `<img>` in the document names.
-pub fn image_sources(prepared: &Prepared) -> Vec<String> {
-    prepared
-        .doc
-        .nodes
-        .iter()
-        .filter_map(|n| n.element())
-        .filter(|e| e.tag == "img")
-        .filter_map(|e| e.attrs.get("src").cloned())
-        .collect()
+    geneva_html::prepare(&html.html, &html.css, &html.linked).map_err(|e| e.to_string())
 }
 
 /// Parses, lays out and paints an HTML source.

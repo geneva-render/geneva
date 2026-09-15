@@ -165,6 +165,15 @@ pub trait AssetSource {
     /// Loads the image asset with the given id.
     fn image(&mut self, comp: &Composition, id: &str) -> Result<&Image, RenderError>;
 
+    /// Loads a picture by its path under the asset root, for markup that
+    /// points at one the way a page does.
+    fn image_at(&mut self, path: &str) -> Result<&Image, RenderError> {
+        Err(RenderError::Asset {
+            id: path.to_owned(),
+            reason: "this asset source cannot load pictures by path".to_owned(),
+        })
+    }
+
     /// Returns the bytes of a font asset.
     fn font(&mut self, comp: &Composition, id: &str) -> Result<Arc<Vec<u8>>, RenderError> {
         let _ = comp;
@@ -215,6 +224,24 @@ impl FileAssets {
     }
 }
 
+/// Reads and converts a picture. Untagged images are sRGB; a tagged one,
+/// or one with more than eight bits, goes through its tags at full depth.
+fn decode(path: &std::path::Path, id: &str, color: ColorTags) -> Result<Image, RenderError> {
+    let decoded = image::open(path).map_err(|e| RenderError::Asset {
+        id: id.to_owned(),
+        reason: format!("{} ({e})", path.display()),
+    })?;
+    let tags = image_tags(color);
+    let deep = decoded.color().bits_per_pixel() > 32;
+    Ok(if tags == ResolvedTags::SRGB && !deep {
+        let rgba = decoded.to_rgba8();
+        Image::from_rgba8(rgba.width(), rgba.height(), rgba.as_raw())
+    } else {
+        let rgba = decoded.to_rgba16();
+        Image::from_rgba16(rgba.width(), rgba.height(), rgba.as_raw(), tags)
+    })
+}
+
 impl AssetSource for FileAssets {
     fn font(&mut self, comp: &Composition, id: &str) -> Result<Arc<Vec<u8>>, RenderError> {
         if let Some(data) = self.fonts.get(id) {
@@ -234,28 +261,25 @@ impl AssetSource for FileAssets {
         Ok(data)
     }
 
+    fn image_at(&mut self, path: &str) -> Result<&Image, RenderError> {
+        // Keyed by path, which cannot collide with an asset id: an id
+        // never contains a slash and a picture in markup is always under
+        // the markup's own directory.
+        let key = format!("path:{path}");
+        if !self.images.contains_key(&key) {
+            let img = decode(&self.root.join(path), path, ColorTags::default())?;
+            self.images.insert(key.clone(), img);
+        }
+        Ok(&self.images[&key])
+    }
+
     fn image(&mut self, comp: &Composition, id: &str) -> Result<&Image, RenderError> {
         if !self.images.contains_key(id) {
             let asset = comp.assets.get(id).ok_or_else(|| RenderError::Asset {
                 id: id.to_owned(),
                 reason: "not declared in the composition".to_owned(),
             })?;
-            let path = self.root.join(&asset.src);
-            let decoded = image::open(&path).map_err(|e| RenderError::Asset {
-                id: id.to_owned(),
-                reason: format!("{} ({e})", path.display()),
-            })?;
-            // Untagged images are sRGB. A tagged image, or one with more
-            // than 8 bits, goes through its tags at full depth.
-            let tags = image_tags(asset.color);
-            let deep = decoded.color().bits_per_pixel() > 32;
-            let img = if tags == ResolvedTags::SRGB && !deep {
-                let rgba = decoded.to_rgba8();
-                Image::from_rgba8(rgba.width(), rgba.height(), rgba.as_raw())
-            } else {
-                let rgba = decoded.to_rgba16();
-                Image::from_rgba16(rgba.width(), rgba.height(), rgba.as_raw(), tags)
-            };
+            let img = decode(&self.root.join(&asset.src), id, asset.color)?;
             self.images.insert(id.to_owned(), img);
         }
         Ok(&self.images[id])

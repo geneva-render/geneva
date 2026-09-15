@@ -18,7 +18,23 @@ they are without you supplying any.
 `render` and `frame` open the media to find out how long it is, so a clip
 with no `duration` takes its length from the file. Plain `geneva validate`
 doesn't open anything, so add `--probe` when a document leaves lengths to
-the media.
+the media, or when it draws markup: `--probe` is what reads an `html`
+asset, the stylesheets it links to and the pictures it points at, so a
+missing one is an error rather than a gap in the picture.
+
+## Writing a card
+
+A file like `card.html` is ordinary markup. Paths in it are relative to
+itself, as they are on a page, so `<img src="logo.png">` and
+`<link rel="stylesheet" href="house.css">` find the files next to it —
+and open the file in a browser and you see what geneva will draw. The
+one rule is the one every asset path follows: nothing outside the asset
+root, so no leading `/`, no `..` and no URLs.
+
+What it is not is a browser. An element's text is one paragraph and a
+child element is a box, there is no `float` or `z-index`, and anything
+geneva cannot draw it names rather than skipping quietly. The property
+list is in [../docs/timeline.md](../docs/timeline.md#markup).
 
 ```sh
 geneva validate examples/renditions.json --probe

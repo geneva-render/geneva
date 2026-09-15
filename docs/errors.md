@@ -92,8 +92,9 @@ result is not what was intended. Notes are informational.
 | W440 | An animation rule sets nothing at an offset, or has fewer than two offsets, so nothing interpolates. |
 | E450 | An `html` source has both `html` and `asset`, or neither. |
 | E451 | The markup or its styles did not parse. The message says what is wrong and the location points at it: a tag that closes the wrong element, an unclosed element, a selector or at-rule geneva does not support, a declaration block that is never closed. |
+| E452 | A file the markup points at — an `<img src>` or a stylesheet `<link href>` — is not there, or its path leaves the asset root (a leading `/`, a `..`, a drive letter or a URL). Paths inside markup are relative to the markup itself. |
 | W451 | Two things ask for the same motion: a clip's `animation` and one in the markup it draws (the clip's is played), or a rule name that is in both the document's `keyframes` and the markup's (the document's is played). |
-| W450 | The markup names something geneva does not draw: a property it has no support for, a `<link rel="stylesheet">` it will not fetch, or an element with its own renderer (`<iframe>`, `<svg>`, `<canvas>`, `<video>`, `<object>`, `<embed>`). It is skipped and the rest is drawn; the message names it. |
+| W450 | The markup names something geneva does not draw: a property it has no support for, or an element with its own renderer (`<iframe>`, `<svg>`, `<canvas>`, `<video>`, `<object>`, `<embed>`). It is skipped and the rest is drawn; the message names it. |
 | W401 | Output width or height is odd; most codecs need even dimensions. |
 | W402 | `subtitles --burn` found no cues in the file; the picture is written unchanged. |
 | W403 | A burned-in subtitle cue extends off-screen. The message gives the box size and by how much it leaves the frame; the path names the clip. |

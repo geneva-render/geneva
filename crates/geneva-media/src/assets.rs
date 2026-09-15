@@ -67,6 +67,10 @@ impl AssetSource for MediaAssets {
         self.images.image(comp, id)
     }
 
+    fn image_at(&mut self, path: &str) -> Result<&Image, RenderError> {
+        self.images.image_at(path)
+    }
+
     fn font(
         &mut self,
         comp: &Composition,

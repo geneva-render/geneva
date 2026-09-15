@@ -57,15 +57,24 @@ the format version it was written for.
   way a card sizes itself to its text. Layout and paint do not depend on
   time, so a box is drawn once per clip whatever its length.
 
+  A picture or a stylesheet the markup points at is a path, relative to
+  the markup, the way it is on a page: `<img src="logo.png">` and
+  `<link rel="stylesheet" href="house.css">` find the same files geneva
+  does and a browser does. The rule every asset path follows holds here —
+  no leading `/`, no `..`, no drive letter, no URL — and that, along with
+  a file that is not there, is E452 while the document is validated, so a
+  missing picture is an error before anything is drawn rather than a hole
+  in the frame. `<link>`, `<meta>`, `<base>` and `<title>` never become
+  boxes, so they cannot take a slot in a flex row.
+
   It is not a browser, and it says which parts of one it is not: there is
   no inline layout (an element's text is one paragraph, a child element is
-  a box), `<img src="logo">` names an asset rather than a path, and
-  `opacity` multiplies down the tree instead of grouping. Anything it
+  a box), and `opacity` multiplies down the tree instead of grouping. Anything it
   cannot draw it names rather than ignoring — E451 for markup or a
   selector it cannot parse, with the line and column, and W450 for a
-  property it does not draw, for a `<link rel="stylesheet">` it will not
-  fetch, and for an element with a renderer of its own (`<iframe>`,
-  `<svg>`, `<canvas>`, `<video>`, `<object>`, `<embed>`). E450 covers an
+  property it does not draw and for an element with a renderer of its own
+  (`<iframe>`, `<svg>`, `<canvas>`, `<video>`, `<object>`, `<embed>`),
+  E452 for a file it points at. E450 covers an
   `html` source with both `html` and `asset`, or neither.
 
 - **Motion written the way a stylesheet writes it.** A top-level

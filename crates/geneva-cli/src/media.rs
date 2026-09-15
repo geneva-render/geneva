@@ -316,6 +316,9 @@ pub fn scale_picture(rgba: &[u8], width: u32, height: u32, to: (u32, u32)) -> Ve
 /// Facts learned by opening the timeline's media assets.
 #[derive(Default)]
 pub struct ProbedAssets {
+    /// The asset root, so that a path written inside markup can be read
+    /// and checked the way a browser would resolve it.
+    root: std::path::PathBuf,
     durations: std::collections::HashMap<String, Ratio>,
     /// Markup read from html assets, so the resolver checks it before
     /// anything is rendered.
@@ -338,11 +341,22 @@ impl AssetInfo for ProbedAssets {
     fn text(&self, asset_id: &str, _: &str) -> Option<String> {
         self.texts.get(asset_id).cloned()
     }
+
+    fn read(&self, path: &str) -> Option<String> {
+        std::fs::read_to_string(self.root.join(path)).ok()
+    }
+
+    fn exists(&self, path: &str) -> Option<bool> {
+        Some(self.root.join(path).is_file())
+    }
 }
 
 /// Opens every video and audio asset declared in `text` under `root`.
 pub fn probe_assets(text: &str, root: &Path) -> ProbedAssets {
-    let mut out = ProbedAssets::default();
+    let mut out = ProbedAssets {
+        root: root.to_path_buf(),
+        ..ProbedAssets::default()
+    };
     let Ok(timeline) = geneva_timeline::parse(text) else {
         return out;
     };

@@ -550,13 +550,33 @@ A surface the size of the frame costs no more than a small one to
 composite: the painter reports the rectangle it actually marked, and the
 compositor reads that rather than the whole surface.
 
+### Files it points at
+
+`<img src="logo.png">` and `<link rel="stylesheet" href="house.css">`
+take paths, relative to the markup itself, as they are on a page. A card
+kept in `cards/lower-third.html` finds `cards/logo.png` with
+`src="logo.png"`, and opening that file in a browser shows the same
+picture.
+
+The rule every asset path follows applies here too: no leading `/`, no
+`..`, no drive letter, no URL. Anything that would leave the asset root
+is E452, and so is a file that is not there — both checked while the
+document is validated, so a missing picture is an error before anything
+is drawn rather than a hole in the frame. `--assets DIR` moves the root,
+and the paths move with it.
+
+`<link>`, `<meta>`, `<base>` and `<title>` belong in the head and draw
+nothing; they never become boxes, so they cannot take a slot in a flex
+row.
+
 ### What it parses
 
 Markup must be well formed: every element that is not void
 (`br`, `hr`, `img`, `input`, `link`, `meta` and the rest) is closed, or
 closes itself with `/>`. There is no tag inference and no error recovery;
-a mismatch is E451 with a line and column. `<style>` is collected,
-comments and doctypes are skipped, `<script>` is an error. Named entities
+a mismatch is E451 with a line and column. `<style>` is collected, a stylesheet
+`<link>` is read, comments and doctypes are skipped, `<script>` is an
+error. Named entities
 cover the common set (`&amp;`, `&nbsp;`, `&middot;`, `&mdash;`, …) along
 with `&#39;` and `&#x41;`.
 
@@ -619,18 +639,14 @@ parts that move into clips of their own.
 - **No inline layout.** An element's text is one paragraph, and a child
   element is a box of its own, so a `<span>` inside a sentence becomes a
   block rather than flowing with the words around it.
-- **`<img>` names an asset**, not a path: `<img src="logo">` draws the
-  asset whose id is `logo`, the way every other reference in the format
-  works. Layers never carry file paths.
 - **`opacity` does not group.** It multiplies down the tree rather than
   compositing the subtree off-screen first, so overlapping children of a
   half-transparent box show through each other.
 - There is no `float`, no `z-index`, no grid, no transition and no media
   query. The clip's own `transform` and `animation` move the whole box.
-- **Nothing is fetched.** A `<link rel="stylesheet">` is W450, not a
-  request: put the rules in a `<style>` element or in the source's `css`.
-  Elements with a renderer of their own — `<iframe>`, `<svg>`, `<canvas>`,
-  `<video>`, `<object>`, `<embed>` — are W450 too.
+- **Nothing is fetched over the network.** A path is a file; a URL is
+  E452. Elements with a renderer of their own — `<iframe>`, `<svg>`,
+  `<canvas>`, `<video>`, `<object>`, `<embed>` — are W450.
 
 Layout and painting do not depend on time, so a markup box is drawn once
 per clip and reused for every frame it is on screen.

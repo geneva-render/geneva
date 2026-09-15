@@ -293,6 +293,13 @@ pub struct ResolvedHtml {
     pub html: String,
     /// The stylesheet applied after any `<style>` in the markup.
     pub css: String,
+    /// The directory the markup's own paths are relative to, under the
+    /// asset root: the markup file's directory, or the root itself for
+    /// markup written in the document.
+    pub base: String,
+    /// The linked stylesheets, by href, read while resolving so that a
+    /// missing one is an error before anything is drawn.
+    pub linked: BTreeMap<String, String>,
     /// Box width in pixels, or `None` to fit the content.
     pub width: Option<f64>,
     /// Box height in pixels, or `None` to fit the content.
@@ -359,6 +366,22 @@ pub trait AssetInfo {
     /// validation without files still works.
     fn text(&self, asset_id: &str, src: &str) -> Option<String> {
         let _ = (asset_id, src);
+        None
+    }
+
+    /// The contents of a file under the asset root, for a stylesheet a
+    /// piece of markup links to. `None` means nothing was read, which is
+    /// not the same as an empty file.
+    fn read(&self, path: &str) -> Option<String> {
+        let _ = path;
+        None
+    }
+
+    /// Whether a file under the asset root is there, for a picture markup
+    /// points at. `None` where the caller cannot tell, so validation
+    /// without files stays quiet.
+    fn exists(&self, path: &str) -> Option<bool> {
+        let _ = path;
         None
     }
 }
@@ -1234,18 +1257,25 @@ impl Resolver<'_> {
         assets
     }
 
-    fn check_asset_path(&mut self, asset: &Asset, path: &Path) {
-        let src = asset.src.as_str();
+    /// Whether a relative path stays under the asset root. The rule is
+    /// the same wherever a path appears: no root, no drive, no "..".
+    fn escapes_root(src: &str) -> bool {
         let p = std::path::Path::new(src);
-        let escapes = p.is_absolute()
+        p.is_absolute()
             || src.starts_with('/')
             || src.starts_with('\\')
+            || src.contains("://")
             || p.components().any(|c| {
                 matches!(
                     c,
                     std::path::Component::ParentDir | std::path::Component::Prefix(_)
                 )
-            });
+            })
+    }
+
+    fn check_asset_path(&mut self, asset: &Asset, path: &Path) {
+        let src = asset.src.as_str();
+        let escapes = Self::escapes_root(src);
         if src.trim().is_empty() {
             self.push(Diagnostic::error(
                 "E202",
@@ -2519,6 +2549,10 @@ be; write the distance in pixels, or give the source a size",
         let h = side(self, height, "height", f64::from(frame.height));
         let css = css.unwrap_or_default().to_owned();
 
+        // Paths inside markup are relative to the markup itself, the way
+        // they are on a page, so a card that opens in a browser finds the
+        // same files geneva does.
+        let mut base = String::new();
         let markup = match (html, asset) {
             (Some(_), Some(_)) => {
                 self.push(
@@ -2543,12 +2577,18 @@ be; write the distance in pixels, or give the source a size",
                     // Without a reader the markup is checked at render
                     // time; `validate --probe` supplies one.
                     let src = assets.get(id).map_or("", |a| a.src.as_str());
+                    base = std::path::Path::new(src)
+                        .parent()
+                        .map(|p| p.to_string_lossy().replace('\\', "/"))
+                        .unwrap_or_default();
                     match self.info.text(id, src) {
                         Some(t) => Some(t),
                         None => {
                             return ResolvedSource::Html(Box::new(ResolvedHtml {
                                 html: String::new(),
                                 css,
+                                base,
+                                linked: BTreeMap::new(),
                                 width: w,
                                 height: h,
                             }));
@@ -2571,12 +2611,49 @@ be; write the distance in pixels, or give the source a size",
             }
         };
 
+        let markup = markup.unwrap_or_default();
+
+        // Stylesheets the markup links to are read here, so a missing one
+        // is an error before anything is drawn.
+        let mut linked = BTreeMap::new();
+        if let Ok(hrefs) = geneva_html::stylesheet_links(&markup) {
+            for href in hrefs {
+                let Some(path) = self.markup_path(&base, &href, spath, "stylesheet") else {
+                    continue;
+                };
+                match self.info.read(&path) {
+                    Some(text) => {
+                        linked.insert(href, text);
+                    }
+                    // Nothing read is either no reader at all (validation
+                    // without files) or a file that is not there; only the
+                    // reader can tell the two apart.
+                    None => {
+                        if self.info.exists(&path) == Some(false) {
+                            self.push(
+                                Diagnostic::error(
+                                    "E452",
+                                    spath.clone(),
+                                    format!(
+                                        "the stylesheet {href:?} the markup links to is not there"
+                                    ),
+                                )
+                                .with_value(path)
+                                .with_help(
+                                    "the path is relative to the markup, as it is in a browser",
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         // The parsed tree is checked here and thrown away: taffy's style
         // is not Sync, and a resolved composition crosses threads. The
         // renderer parses it again once per clip and caches the picture.
-        let markup = markup.unwrap_or_default();
         self.from_markup = None;
-        match geneva_html::prepare(&markup, &css) {
+        match geneva_html::prepare(&markup, &css, &linked) {
             Ok(p) => {
                 for problem in &p.problems {
                     self.push(
@@ -2597,6 +2674,24 @@ be; write the distance in pixels, or give the source a size",
                     w.unwrap_or(f64::from(frame.width)) as f32,
                     h.unwrap_or(f64::from(frame.height)) as f32,
                 );
+                // Pictures the markup points at: checked here, loaded
+                // when it is drawn.
+                for src in geneva_html::image_sources(&p) {
+                    let Some(path) = self.markup_path(&base, &src, spath, "picture") else {
+                        continue;
+                    };
+                    if self.info.exists(&path) == Some(false) {
+                        self.push(
+                            Diagnostic::error(
+                                "E452",
+                                spath.clone(),
+                                format!("the picture {src:?} the markup draws is not there"),
+                            )
+                            .with_value(path)
+                            .with_help("the path is relative to the markup, as it is in a browser"),
+                        );
+                    }
+                }
                 self.from_markup = Some(Markup {
                     rules,
                     animation: p.animation,
@@ -2619,9 +2714,44 @@ be; write the distance in pixels, or give the source a size",
         ResolvedSource::Html(Box::new(ResolvedHtml {
             html: markup,
             css,
+            base,
+            linked,
             width: w,
             height: h,
         }))
+    }
+
+    /// A path written inside markup, joined to the markup's own directory
+    /// and checked against the rule every asset path follows.
+    fn markup_path(&mut self, base: &str, src: &str, spath: &Path, what: &str) -> Option<String> {
+        if src.trim().is_empty() {
+            self.push(Diagnostic::error(
+                "E452",
+                spath.clone(),
+                format!("a {what} in the markup has an empty path"),
+            ));
+            return None;
+        }
+        if Self::escapes_root(src) {
+            self.push(
+                Diagnostic::error(
+                    "E452",
+                    spath.clone(),
+                    format!("the {what} path {src:?} leaves the asset root"),
+                )
+                .with_value(src)
+                .with_help(
+                    "markup takes a path relative to itself, without \"..\", a leading \"/\" \
+or a URL; pass --assets to choose the root",
+                ),
+            );
+            return None;
+        }
+        Some(if base.is_empty() {
+            src.to_owned()
+        } else {
+            format!("{}/{src}", base.trim_end_matches('/'))
+        })
     }
 
     fn resolve_transform(

@@ -89,6 +89,10 @@ pub struct Document {
     pub root: NodeId,
     /// The text of every `<style>` element, joined in document order.
     pub style: String,
+    /// The `href` of every `<link rel="stylesheet">`, in document order.
+    /// This crate does not read them; whoever calls it supplies their
+    /// contents.
+    pub links: Vec<String>,
 }
 
 impl Document {
@@ -138,6 +142,7 @@ pub fn parse(source: &str) -> Result<Document, HtmlError> {
         pos: 0,
         nodes: Vec::new(),
         style: String::new(),
+        links: Vec::new(),
         self_closing: false,
     }
     .run()
@@ -149,6 +154,7 @@ struct Parser<'a> {
     pos: usize,
     nodes: Vec<Node>,
     style: String,
+    links: Vec<String>,
     /// Set by `take_element` and read straight after it, because every
     /// other caller of it ignores whether the tag closed itself.
     self_closing: bool,
@@ -216,6 +222,29 @@ impl Parser<'_> {
                 self.pos = start;
                 return Err(self.error("<script> is not run or drawn; remove it".to_owned()));
             }
+            // Metadata belongs in the head and draws nothing; it never
+            // becomes a node, so it cannot take a slot in a flex row or
+            // stand in front of the element an animation belongs to.
+            if matches!(element.tag.as_str(), "link" | "meta" | "base") {
+                if element.tag == "link"
+                    && element
+                        .attrs
+                        .get("rel")
+                        .is_some_and(|r| r.eq_ignore_ascii_case("stylesheet"))
+                {
+                    if let Some(href) = element.attrs.get("href") {
+                        self.links.push(href.clone());
+                    }
+                }
+                if !element.is_void() && !self.self_closing {
+                    self.skip_to(">", "an unclosed tag")?;
+                }
+                continue;
+            }
+            if element.tag == "title" {
+                self.take_raw_text("title")?;
+                continue;
+            }
             let void = element.is_void();
             let closed = self.self_closing;
             let parent = *open.last().unwrap_or(&root);
@@ -231,6 +260,7 @@ impl Parser<'_> {
             nodes: self.nodes,
             root,
             style: self.style,
+            links: self.links,
         })
     }
 
@@ -528,6 +558,20 @@ mod tests {
         assert!(d.style.contains(".a { color: red }"));
         assert!(d.style.contains("b{}"));
         assert_eq!(d.children(d.root).len(), 1);
+    }
+
+    #[test]
+    fn collects_stylesheet_links_and_keeps_metadata_out_of_the_tree() {
+        let d = doc(
+            "<link rel='stylesheet' href='house.css'><link rel=icon href=x.png>\
+                     <meta charset=utf-8><title>ignored</title>\
+                     <link rel=STYLESHEET href='more.css'><div></div>",
+        );
+        assert_eq!(d.links, ["house.css", "more.css"]);
+        // Only the div is a node; metadata would otherwise take a slot in
+        // a flex row and stand in front of the outermost element.
+        assert_eq!(d.children(d.root).len(), 1);
+        assert_eq!(d.nodes[d.children(d.root)[0]].element().unwrap().tag, "div");
     }
 
     #[test]

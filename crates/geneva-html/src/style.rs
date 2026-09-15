@@ -140,20 +140,11 @@ fn user_agent(tag: &str) -> &'static str {
     }
 }
 
-/// An element that would load something in a browser and loads nothing
-/// here, named so that the difference is visible.
+/// An element that a browser would render with something of its own and
+/// geneva does not draw, named so that the difference is visible. A
+/// `<link rel="stylesheet">` is not here: those are read.
 fn unfollowed(el: &crate::dom::Element) -> Option<String> {
     match el.tag.as_str() {
-        "link" => {
-            let rel = el.attrs.get("rel").map_or("", String::as_str);
-            rel.eq_ignore_ascii_case("stylesheet").then(|| {
-                let href = el.attrs.get("href").map_or("", String::as_str);
-                format!(
-                    "<link rel=\"stylesheet\" href=\"{href}\">: geneva does not fetch \
-stylesheets; put the rules in a <style> element or in the source's \"css\""
-                )
-            })
-        }
         "iframe" | "object" | "embed" | "video" | "canvas" | "svg" => Some(format!(
             "<{}> is not drawn; geneva draws boxes, text and images",
             el.tag
@@ -979,17 +970,6 @@ mod unfollowed_tests {
         let doc = parse(html).unwrap();
         let sheet = parse_stylesheet(&doc.style).unwrap();
         cascade(&doc, &sheet).1
-    }
-
-    #[test]
-    fn a_stylesheet_link_is_named_rather_than_ignored() {
-        let p = problems("<link rel='stylesheet' href='house.css'><div></div>");
-        assert_eq!(p.len(), 1);
-        assert!(p[0].contains("house.css"), "{p:?}");
-        assert!(p[0].contains("does not fetch"), "{p:?}");
-
-        // A link that is not a stylesheet loads nothing in a browser either.
-        assert!(problems("<link rel='icon' href='x.png'>").is_empty());
     }
 
     #[test]

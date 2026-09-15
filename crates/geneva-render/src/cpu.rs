@@ -214,9 +214,17 @@ impl<A: AssetSource> CpuRenderer<A> {
                             id: clip.path.clone(),
                             reason,
                         })?;
+                    // A picture in markup is a path relative to the
+                    // markup, as it is on a page; the resolver has already
+                    // checked the shape and that the file is there.
                     let mut images = HashMap::new();
-                    for src in crate::html::image_sources(&prepared) {
-                        if let Ok(image) = self.assets.image(comp, &src) {
+                    for src in geneva_html::image_sources(&prepared) {
+                        let path = if html.base.is_empty() {
+                            src.clone()
+                        } else {
+                            format!("{}/{src}", html.base.trim_end_matches('/'))
+                        };
+                        if let Ok(image) = self.assets.image_at(&path) {
                             images.insert(src, image.clone());
                         }
                     }
