@@ -14,6 +14,11 @@ sentence wants one, it wants restructuring: use a full stop, a colon, a
 semicolon, or brackets. Do not swap the character for a hyphen and leave
 the sentence as it was.
 
+**ASCII quotes and apostrophes.** `'` and `"`, not `’` `‘` `”` `“`. Web
+editors substitute the curly forms silently, so check after editing
+outside the repository. The typographic ellipsis `…` is fine where it
+stands for omitted content.
+
 **Matter of fact.** State what the thing does and what it does not. No
 salesmanship, no "real" or "properly" or "with no browser anywhere", no
 punchlines, no telling the reader what to be impressed by. If a number

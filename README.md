@@ -1,6 +1,6 @@
 <img src="docs/wordmark-any.png" alt="Geneva" width="240" height="77">
 
-geneva is a programmatic video editor, built as an alternative to the ffmpeg command line. It’s designed to work well with AI agents, too.
+geneva is a programmatic video editor, built as an alternative to the ffmpeg command line. It's designed to work well with AI agents, too.
 
 Simple jobs take one line. More complex ones go in as JSON + optional assets, so you can read, diff, validate and check into git.
 
