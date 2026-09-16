@@ -1,13 +1,15 @@
 <img src="docs/wordmark-any.png" alt="Geneva" width="240" height="77">
 
-geneva edits and processes video programmatically. One-line commands cover
-the everyday jobs; a JSON document covers anything more. Both run the same
-engine, and the document is a file you can read, diff and check into a
-repository.
+geneva is a video editor for the command line, built as an alternative to
+`ffmpeg`. It is designed to work well with AI agents, too.
 
-It reads the job before it decodes anything, so a mistake is an error that
-names the field rather than a bad file an hour later, and it reports what
-it did on the way through.
+Simple jobs take one line. More complex ones go in JSON, using the same
+engine. The JSON is just a file you can read, diff, validate and check
+into git.
+
+geneva validates the job before decoding anything, so bad options fail
+immediately instead of an hour into the render. It also reports what it
+is doing as it runs.
 
 ```sh
 geneva trim talk.mp4 -o intro.mp4 --to 30s        # copies the streams, no re-encode
@@ -15,16 +17,15 @@ geneva subtitles talk.mp4 -o subbed.mp4 --burn transcript.json --highlight "#ffd
 geneva render job.json -o out/                    # everything the document asks for
 ```
 
-Underneath is a compositor: layers, keyframes, shaped text, masks, blend
-modes. Overlays can be written as HTML and CSS, including flexbox, the box
-model and `@keyframes`, and geneva lays them out without a browser. Colour
-is handled in linear light, and files are read and written with
-libavformat and libavcodec.
+Under the hood is a compositor: layers, keyframes, shaped text, masks and
+blend modes. Overlays use HTML and CSS, including flexbox, the box model
+and `@keyframes`, without a browser. Colour is handled in linear light,
+and video goes through libavformat and libavcodec.
 
 ## How it works
 
-A name card and captions over ten seconds of footage from the space
-station. The card is an HTML file. Open it in a browser and it looks and
+Here is a name card and captions over ten seconds of space-station
+footage. The card is an HTML file. Open it in a browser and it looks and
 moves the same:
 
 ```html
@@ -52,11 +53,13 @@ moves the same:
     border-left: 5px solid #c4362f;
     box-shadow: 0 4px 18px #00000059;
   }
+
   .card h1 {
     margin: 0;
     font: 600 29px Liberation Sans;
     color: #f2f5f7;
   }
+
   .card p {
     margin: 0;
     font: 500 13px Liberation Sans;
@@ -71,9 +74,8 @@ moves the same:
 </div>
 ```
 
-The captions come from `words.json`, a whisper transcript pasted in as it
-came out. The document says when the card is on screen and what the
-captions look like, and nothing else:
+The captions come from `words.json`, a Whisper transcript pasted in
+as-is. The JSON ties the footage, card and captions together:
 
 ```json
 {
@@ -115,28 +117,29 @@ geneva render examples/lower-third.json -o dragon.mp4
 
 <img src="docs/demo.gif" alt="A name card sliding in at the top left over footage of a Dragon capsule at the space station, with captions below" width="640" height="360">
 
-```
+```text
 note[N453]: 2 cues read from "words.json"
 note[N600]: smart cut: 135 of 300 frames copied from the source, 165 encoded in 1 run around the cuts and overlays
 note[N600]: H.264 runs encoded with the system's x264 (build 164) at CRF 18
 wrote dragon.mp4 (300 frames, 10s of video, 4.2s elapsed)
 ```
 
-The document says when things appear. The card says how it looks, in CSS
-that geneva cascades and lays out itself, without a browser. Percentages
-are shares of the frame, so the layout follows the output size. Anything
-geneva cannot draw is a warning that names it;
-[examples/README.md](examples/README.md#writing-a-card) says where the
-subset stops.
+The document controls when things appear. The HTML controls how they
+look. geneva handles the CSS layout itself, without a browser.
+Percentages are relative to the frame, so the layout scales with the
+output.
 
-The captions are one clip in the document and one per cue on the
-timeline. The transcript carries the timing.
-[examples/README.md](examples/README.md#captions) has the one-command
-version, a SubRip or WebVTT file in place of the transcript, and where
-the cues sit.
+Unsupported CSS produces a warning that names it. See
+[examples/README.md](examples/README.md#writing-a-card) for the supported
+subset.
 
-Nothing is on screen for the first second or the last four, so 135 of the
-300 frames were copied rather than re-encoded.
+Captions are one clip in the document and one clip per cue on the
+timeline. The transcript carries the timing. See
+[examples/README.md](examples/README.md#captions) for the one-command
+version, SubRip and WebVTT input, and cue layout.
+
+Because nothing is on screen for the first second or the last four, 135
+of the 300 frames are copied instead of re-encoded.
 
 ## Installing
 
@@ -144,22 +147,15 @@ Nothing is on screen for the first second or the last four, so 135 of the
 curl -fsSL https://raw.githubusercontent.com/geneva-render/geneva/main/scripts/install.sh | sh
 ```
 
-It picks the build for your machine and installs it to `/usr/local/bin`,
-or to `~/.local/bin` if that is not writable. Set `GENEVA_PREFIX` to
-choose somewhere else.
-
-The [releases page](https://github.com/geneva-render/geneva/releases) has
-the archives if you would rather download one yourself. Each carries the
-same `install.sh`, and a `check.sh` that runs the everyday commands on a
-file of yours and times them against ffmpeg.
-
-Linux needs glibc 2.35 or newer. macOS needs 12 or newer, on Apple
+The archives are on the [releases
+page](https://github.com/geneva-render/geneva/releases) if you would
+rather pick one yourself. Linux needs glibc 2.35+, macOS 12+ on Apple
 silicon. Codecs, containers and font shaping are built in.
 
-One thing to know about H.264. geneva bundles OpenH264, which at the same
-quality makes bigger files than x264. It does not bundle x264, which is
-GPL, but it will use your system's copy if you have one, and it always
-says which encoder it used.
+One thing to know about H.264: geneva bundles OpenH264, which produces
+larger files than x264 at the same quality. It does not bundle x264
+because it is GPL, but it will use your system copy if available and
+always reports which encoder it used.
 
 ```sh
 sudo apt install libx264-164     # Debian 12, Ubuntu 24.04 (libx264-163 on 22.04)
@@ -170,13 +166,13 @@ brew install x264                # macOS
 
 | | What it does | Where |
 | --- | --- | --- |
-| **Cut and join without re-encoding** | the streams are copied rather than decoded and encoded again, so it takes about as long as reading the file | [examples](examples/README.md#cuts-that-dont-re-encode) |
-| **Several outputs in one pass** | renditions, a poster, a sprite sheet and speech audio, from one read of the source | [examples](examples/README.md#one-read-many-files) |
-| **Vertical video reframing** | 16:9 into 9:16, over a blurred copy of itself rather than cropping | [examples](examples/README.md#vertical-video) |
-| **Presets for a destination** | `--for tiktok`, `--for web`, `--for email` set size, codec, quality, keyframes and audio, and warn when the result runs past its duration or file-size limit. Every number says where it came from and when it was last checked | [docs/cli.md](docs/cli.md#targets) |
-| **Transitions** | dissolve or dip through a colour, at a join or at the head and tail of a piece. One field moves the picture and the sound together, rather than a video filter and an audio filter that have to be kept in step | [docs/timeline.md](docs/timeline.md#transitions) |
-| **Colour** | BT.601 and BT.709 kept, untagged material guessed out loud, HDR tone-mapped by BT.2446 | [docs/color.md](docs/color.md) |
-| **Scripts and agents** | `--format json`, coded diagnostics that point at the field, deterministic output | [docs/agents.md](docs/agents.md) |
+| **Cut and join without re-encoding** | Copies the streams instead of decoding and encoding them again | [examples](examples/README.md#cuts-that-dont-re-encode) |
+| **Several outputs in one pass** | Renditions, a poster, a sprite sheet and speech audio from one read | [examples](examples/README.md#one-read-many-files) |
+| **Vertical video reframing** | Turns 16:9 into 9:16 over a blurred copy instead of cropping | [examples](examples/README.md#vertical-video) |
+| **Destination presets** | `--for tiktok`, `--for web`, `--for email` set size, codec, quality, keyframes and audio, and warn when limits are exceeded | [docs/cli.md](docs/cli.md#targets) |
+| **Transitions** | Dissolve or dip through a colour at joins or clip boundaries, with picture and sound kept together | [docs/timeline.md](docs/timeline.md#transitions) |
+| **Colour** | Preserves BT.601/BT.709, reports guesses for untagged material, and tone-maps HDR with BT.2446 | [docs/color.md](docs/color.md) |
+| **Scripts and agents** | `--format json`, field-level diagnostics, deterministic output | [docs/agents.md](docs/agents.md) |
 
 ## Commands
 
@@ -198,26 +194,28 @@ geneva frame talk.mp4 -o thumb.jpg                      # first clear frame past
 geneva probe talk.mp4                                   # streams, colour tags, what was guessed
 ```
 
-`geneva targets` prints the preset table. `--show-timeline` on any command
-prints the JSON instead of rendering, which is the quickest way to a
-document that already works.
+`geneva targets` prints the preset table. Add `--show-timeline` to any
+command to print its JSON instead of rendering it. It is the quickest way
+to get a working document.
 
 ## Documentation
 
 | Page | What's in it |
 | --- | --- |
-| [examples/README.md](examples/README.md) | Every example file, worked through with its document, its command and its output |
-| [docs/timeline.md](docs/timeline.md) | The format: every field, its default and its rules |
-| [docs/cli.md](docs/cli.md) | Every command and flag, the `--for` targets, containers and codecs |
-| [docs/agents.md](docs/agents.md) | The short version, for scripts and AI agents |
-| [docs/errors.md](docs/errors.md) | Every error code and what to do about it |
-| [docs/color.md](docs/color.md) | Tags, guessing, the working space, HDR |
-| [docs/architecture.md](docs/architecture.md) | How the renderer, the copy planner and the encoders fit together |
-| [CHANGELOG.md](CHANGELOG.md) | What each version changed, and what the format still does not settle |
+| [examples/README.md](examples/README.md) | Examples with their document, command and output |
+| [docs/timeline.md](docs/timeline.md) | The format, fields, defaults and rules |
+| [docs/cli.md](docs/cli.md) | Commands, flags, targets, containers and codecs |
+| [docs/agents.md](docs/agents.md) | The short version for scripts and AI agents |
+| [docs/errors.md](docs/errors.md) | Error codes and what to do about them |
+| [docs/color.md](docs/color.md) | Colour tags, guessing, working space and HDR |
+| [docs/architecture.md](docs/architecture.md) | Renderer, copy planner and encoders |
+| [CHANGELOG.md](CHANGELOG.md) | Version changes and unresolved format decisions |
 
 ## How this was built
 
-This was built almost entirely with Fable/Opus, which wrote the code, tests, and docs under my guidance. I’m being upfront about that, and you can decide for yourself whether you trust the code.
+This was built almost entirely with Fable/Opus, which wrote the code,
+tests and docs under my guidance. I am being upfront about that so you
+can decide how much you trust the code.
 
 ## Building from source
 
@@ -226,14 +224,16 @@ scripts/build-media-libs.sh   # builds the media libraries once, 10 to 20 minute
 cargo build --release
 ```
 
-You'll need a C and C++ toolchain, cmake, meson, ninja, nasm, pkg-config and
-clang. [CONTRIBUTING.md](CONTRIBUTING.md) lists the packages per platform and
-explains how to run the tests;
+You will need a C/C++ toolchain, cmake, meson, ninja, nasm, pkg-config
+and clang. [CONTRIBUTING.md](CONTRIBUTING.md) lists the packages for each
+platform and explains how to run the tests.
 [docs/architecture.md](docs/architecture.md) maps the crates.
 
 ## Licence
 
-MIT. 
+MIT.
+
 See [LICENSE](LICENSE).
-The bundled third-party components and their
-licences are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+Bundled third-party components and their licences are listed in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
