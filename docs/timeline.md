@@ -629,8 +629,8 @@ author overrides freely: `h1`, `h2`, `h3`, `b`, `strong`, `i`, `em`,
 | Spacing | `margin`, `padding` and their per-side forms and one-to-four-value shorthands |
 | Flex | `flex-direction`, `flex-wrap`, `justify-content`, `align-items`, `align-self`, `align-content`, `gap`, `row-gap`, `column-gap`, `flex-grow`, `flex-shrink`, `flex-basis`, `flex` |
 | Border | `border`, `border-top`, `border-right`, `border-bottom`, `border-left`, `border-width`, `border-color`, `border-style` (`solid`, `none`), `border-radius` |
-| Paint | `background`, `background-color`, `opacity`, `box-shadow` (one, not inset) |
-| Text | `color`, `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space` |
+| Paint | `background`, `background-color` (a colour or a gradient), `opacity`, `box-shadow` (one, not inset) |
+| Text | `color`, `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space`, `text-shadow` (one, not a list) |
 
 Lengths are `px`, `em`, `rem` and `%`; `em` is the element's own font
 size, settled before anything else uses it, and a percentage `font-size`
@@ -641,6 +641,43 @@ padding and border are added to a width rather than taken out of it.
 Colours are the ones the rest of the format takes. Anything else is W450:
 the declaration is skipped and the message names it, so the rest of the
 document still draws.
+
+### Gradients
+
+`background` takes `linear-gradient()` and `radial-gradient()` as well as
+a colour.
+
+```css
+background: linear-gradient(160deg, #07100C, #123a2c);
+background: linear-gradient(to bottom right, #00EEE1, #FFD233 70%);
+background: radial-gradient(circle at 30% 40%, #00EEE1, #00EEE100);
+```
+
+A linear gradient takes an angle (`deg`, `turn` or `rad`), or `to` and a
+side or corner, and runs down the box when it says neither. A corner's
+angle depends on the box's proportions, as in CSS, so a wide box points
+the ramp more sideways. A radial gradient is a circle or an ellipse, `at`
+a position given in percentages or keywords, centred when it says
+neither.
+
+Stops are a colour and an optional position. Positions left out are
+spread evenly, the first at the start and the last at the end, and one
+that runs backwards is pulled up to the one before it so the ramp never
+reverses. A colour may carry two positions, which is a band of flat
+colour between them.
+
+Colours are mixed in linear light, which is the space the rest of geneva
+composites in. A browser mixes the encoded values instead, so a ramp from
+black to white is lighter here at its midpoint than the same CSS in a
+browser. Ramps between saturated colours do not pass through the muddy
+middle a browser gives them.
+
+What is not drawn, each named rather than skipped: `conic-gradient`, any
+`repeating-` gradient, the size keywords (`closest-side` and the rest; a
+radial gradient is always sized to the farthest corner), colour hints,
+and `url()` background images. A gradient is clipped to its own box, as
+in CSS, so a radial that has not reached its last stop by the edge stops
+there with a visible edge.
 
 ### Motion
 
@@ -667,6 +704,10 @@ parts that move into clips of their own.
 
 ### What it does not do
 
+- **A `text-shadow` does not move the text.** It is drawn behind the
+  glyphs and spills outside the box, as on a page, but layout is done as
+  though it were not there. It is clipped at the edge of the clip's own
+  box, so a glow on text at the very edge of a card is cut off.
 - **No inline layout.** An element's text is one paragraph, and a child
   element is a box of its own, so a `<span>` inside a sentence becomes a
   block rather than flowing with the words around it.

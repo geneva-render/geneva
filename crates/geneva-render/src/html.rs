@@ -10,8 +10,9 @@ use std::collections::HashMap;
 
 use geneva_color::{Color, LinearRgba};
 use geneva_html::layout::Rectangle;
+use geneva_html::style::{Background, Direction, Stop};
 use geneva_html::{Content, Laid, Measure, Painted, Prepared, Text};
-use geneva_timeline::schema::{TextAlign, TextSource, TextStyle};
+use geneva_timeline::schema::{Shadow, TextAlign, TextSource, TextStyle};
 use geneva_timeline::{ResolvedHtml, ResolvedText};
 
 use crate::assets::Image;
@@ -57,7 +58,12 @@ fn as_text_source(text: &str, style: &Text, max_width: f64) -> ResolvedText {
             background: None,
             radius: None,
             outline: None,
-            shadow: None,
+            shadow: style.shadow.map(|s| Shadow {
+                color: Some(s.color.into()),
+                x: s.x,
+                y: s.y,
+                blur: s.blur,
+            }),
         },
     }
 }
@@ -88,7 +94,12 @@ impl Measure for Context<'_> {
         if let Some(size) = self.memo.get(&key) {
             return *size;
         }
-        let source = as_text_source(text, style, f64::from(limit));
+        // A shadow pads the rendered image, so measuring with one would
+        // move the text it is drawn behind. CSS lays text out as though
+        // the shadow were not there, and so does this.
+        let mut plain = style.clone();
+        plain.shadow = None;
+        let source = as_text_source(text, &plain, f64::from(limit));
         let image = self.text.render(&source, 0.0);
         let size = (image.width as f32, image.height as f32);
         self.memo.insert(key, size);
@@ -137,12 +148,15 @@ fn painted_bounds(laid: &Laid) -> Option<[f64; 4]> {
         if painted.opacity <= 0.0 {
             continue;
         }
-        // A shadow reaches outside its box; everything else a box draws,
-        // its text included, is inside it.
-        let grow = painted
-            .paint
-            .shadow
-            .map_or(0.0, |s| s.blur.abs() + s.x.abs().max(s.y.abs()) + 1.0);
+        // A shadow reaches outside its box, on the box itself or on its
+        // text. Everything else a box draws is inside it.
+        let reach = |s: &geneva_html::style::Shadow| s.blur.abs() + s.x.abs().max(s.y.abs()) + 1.0;
+        let box_shadow = painted.paint.shadow.as_ref().map_or(0.0, reach);
+        let text_shadow = match &painted.content {
+            Content::Text { style, .. } => style.shadow.as_ref().map_or(0.0, reach),
+            _ => 0.0,
+        };
+        let grow = box_shadow.max(text_shadow);
         let r = [
             f64::from(painted.rect[0]) - grow,
             f64::from(painted.rect[1]) - grow,
@@ -300,13 +314,153 @@ fn side(b: &Painted, px: f64, py: f64) -> usize {
     best
 }
 
+/// A background resolved against one box, so the per-pixel work is a
+/// projection and a lookup rather than parsing geometry again.
+enum Fill {
+    Flat(LinearRgba),
+    /// Stops premultiplied in linear light, which is what `LinearRgba`
+    /// already is, so interpolating them component by component is the
+    /// correct blend rather than an approximation of it.
+    Ramp {
+        /// Where the ramp starts, in pixels.
+        origin: (f64, f64),
+        /// The direction and length of the gradient line. For a radial
+        /// fill these are the two radii instead.
+        axis: (f64, f64),
+        radial: bool,
+        stops: Vec<(f64, LinearRgba)>,
+    },
+}
+
+impl Fill {
+    fn new(background: &Background, rect: Rectangle) -> Self {
+        let (x, y, w, h) = (
+            f64::from(rect[0]),
+            f64::from(rect[1]),
+            f64::from(rect[2]).max(1.0),
+            f64::from(rect[3]).max(1.0),
+        );
+        match background {
+            Background::Color(c) => Self::Flat(c.to_linear()),
+            Background::Linear { direction, stops } => {
+                let degrees = match *direction {
+                    Direction::Angle(d) => d,
+                    // A corner's angle depends on the box: the gradient
+                    // line has to be perpendicular to the diagonal, so a
+                    // wide box points the ramp more sideways.
+                    Direction::Corner { top, right } => {
+                        let corner = w.atan2(h).to_degrees();
+                        match (top, right) {
+                            (true, true) => corner,
+                            (true, false) => 360.0 - corner,
+                            (false, true) => 180.0 - corner,
+                            (false, false) => 180.0 + corner,
+                        }
+                    }
+                };
+                let radians = degrees.to_radians();
+                // CSS measures clockwise from "to top", and y grows down.
+                let (dx, dy) = (radians.sin(), -radians.cos());
+                let length = (w * dx).abs() + (h * dy).abs();
+                Self::Ramp {
+                    origin: (x + w / 2.0, y + h / 2.0),
+                    axis: (dx * length.max(1.0), dy * length.max(1.0)),
+                    radial: false,
+                    stops: ramp(stops),
+                }
+            }
+            Background::Radial { circle, at, stops } => {
+                let centre = (x + w * at.0, y + h * at.1);
+                // Sized to the farthest corner, which is what CSS does
+                // when nothing says otherwise.
+                let side_x = (centre.0 - x).max(x + w - centre.0);
+                let side_y = (centre.1 - y).max(y + h - centre.1);
+                let (rx, ry) = if *circle {
+                    let r = side_x.hypot(side_y).max(1.0);
+                    (r, r)
+                } else {
+                    // The ellipse keeps the box's proportions and is
+                    // scaled out until it touches that corner.
+                    let k = std::f64::consts::SQRT_2;
+                    ((side_x * k).max(1.0), (side_y * k).max(1.0))
+                };
+                Self::Ramp {
+                    origin: centre,
+                    axis: (rx, ry),
+                    radial: true,
+                    stops: ramp(stops),
+                }
+            }
+        }
+    }
+
+    fn at(&self, px: f64, py: f64) -> LinearRgba {
+        match self {
+            Self::Flat(c) => *c,
+            Self::Ramp {
+                origin,
+                axis,
+                radial,
+                stops,
+            } => {
+                let (ox, oy) = *origin;
+                let t = if *radial {
+                    ((px - ox) / axis.0).hypot((py - oy) / axis.1)
+                } else {
+                    let length2 = axis.0 * axis.0 + axis.1 * axis.1;
+                    ((px - ox) * axis.0 + (py - oy) * axis.1) / length2 + 0.5
+                };
+                sample(stops, t.clamp(0.0, 1.0))
+            }
+        }
+    }
+}
+
+/// Stops as (position, premultiplied linear colour).
+fn ramp(stops: &[Stop]) -> Vec<(f64, LinearRgba)> {
+    stops
+        .iter()
+        .map(|s| (s.at.unwrap_or(0.0), s.color.to_linear()))
+        .collect()
+}
+
+fn sample(stops: &[(f64, LinearRgba)], t: f64) -> LinearRgba {
+    let Some(first) = stops.first() else {
+        return LinearRgba::TRANSPARENT;
+    };
+    if t <= first.0 {
+        return first.1;
+    }
+    for pair in stops.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        if t <= b.0 {
+            let span = b.0 - a.0;
+            // Two stops at the same place are a hard edge, not a
+            // division by zero.
+            let k = if span <= f64::EPSILON {
+                1.0
+            } else {
+                (t - a.0) / span
+            } as f32;
+            return LinearRgba {
+                r: a.1.r + (b.1.r - a.1.r) * k,
+                g: a.1.g + (b.1.g - a.1.g) * k,
+                b: a.1.b + (b.1.b - a.1.b) * k,
+                a: a.1.a + (b.1.a - a.1.a) * k,
+            };
+        }
+    }
+    stops[stops.len() - 1].1
+}
+
 fn paint_box(image: &mut Image, b: &Painted) {
     let has_border =
         b.border.iter().any(|w| *w > 0.0) && b.paint.border_color.iter().any(|c| c.a > 0.0);
-    let background = b.paint.background.filter(|c| c.a > 0.0);
+    let background = b.paint.background.as_ref().filter(|bg| bg.visible());
     if background.is_none() && !has_border {
         return;
     }
+    let fill = background.map(|bg| Fill::new(bg, b.rect));
     let (inner_rect, inner_radius) = inner(b);
     let (x0, y0, x1, y1) = bounds(image, b.rect, 1.0);
     for y in y0..y1 {
@@ -321,8 +475,8 @@ fn paint_box(image: &mut Image, b: &Painted) {
                 continue;
             }
             let hole = coverage(px, py, inner_rect, inner_radius);
-            if let Some(bg) = background {
-                blend(image, x, y, bg.to_linear(), outer * clip * b.opacity);
+            if let Some(fill) = &fill {
+                blend(image, x, y, fill.at(px, py), outer * clip * b.opacity);
             }
             if has_border && outer > hole {
                 let colour = b.paint.border_color[side(b, px, py)];
@@ -394,14 +548,19 @@ fn paint_text(image: &mut Image, b: &Painted, run: &str, style: &Text, engine: &
     let box_width = f64::from(b.content_rect[2]).max(1.0);
     let source = as_text_source(run, style, box_width);
     let drawn = engine.render(&source, 0.0);
-    let slack = box_width - f64::from(drawn.width);
-    let dx = f64::from(b.content_rect[0])
+    // The engine leaves room around the glyphs for a stroke and a
+    // shadow. Layout did not count it, so painting takes it back off:
+    // the glyphs land where they would have with no shadow, and the
+    // shadow spills outside the box the way it does on a page.
+    let inset = crate::text::inset_for(&source.spec);
+    let slack = box_width - (f64::from(drawn.width) - 2.0 * inset);
+    let dx = f64::from(b.content_rect[0]) - inset
         + match style.align {
             geneva_html::TextAlign::Left => 0.0,
             geneva_html::TextAlign::Center => slack / 2.0,
             geneva_html::TextAlign::Right => slack,
         };
-    let dy = f64::from(b.content_rect[1]);
+    let dy = f64::from(b.content_rect[1]) - inset;
     blit(image, b, &drawn, dx, dy, 1.0);
 }
 

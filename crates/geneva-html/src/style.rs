@@ -46,11 +46,73 @@ pub struct Shadow {
     pub color: Color,
 }
 
+/// One colour stop of a gradient.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Stop {
+    /// The colour at this point.
+    pub color: Color,
+    /// Where it sits along the gradient line, 0 to 1. `None` is spaced
+    /// evenly between the stops that do say, as CSS does it.
+    pub at: Option<f64>,
+}
+
+/// Which way a linear gradient runs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Direction {
+    /// A CSS angle in degrees: 0 points up, 90 points right.
+    Angle(f64),
+    /// A corner. Its angle depends on the box's proportions, so it is
+    /// worked out when the box is painted rather than when it is parsed.
+    Corner {
+        /// Towards the top edge rather than the bottom.
+        top: bool,
+        /// Towards the right edge rather than the left.
+        right: bool,
+    },
+}
+
+/// What fills a box behind its content.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Background {
+    /// One flat colour.
+    Color(Color),
+    /// A linear ramp across the box.
+    Linear {
+        /// Which way it runs.
+        direction: Direction,
+        /// Its stops, in order.
+        stops: Vec<Stop>,
+    },
+    /// A ramp outward from a point.
+    Radial {
+        /// A circle rather than an ellipse fitted to the box.
+        circle: bool,
+        /// The centre, as a fraction of the box's width and height.
+        at: (f64, f64),
+        /// Its stops, in order.
+        stops: Vec<Stop>,
+    },
+}
+
+impl Background {
+    /// Whether it marks any pixel at all, so a fully transparent fill
+    /// costs nothing to skip.
+    #[must_use]
+    pub fn visible(&self) -> bool {
+        match self {
+            Self::Color(c) => c.a > 0.0,
+            Self::Linear { stops, .. } | Self::Radial { stops, .. } => {
+                stops.iter().any(|s| s.color.a > 0.0)
+            }
+        }
+    }
+}
+
 /// What painting needs after layout.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Paint {
     /// Background fill, if any.
-    pub background: Option<Color>,
+    pub background: Option<Background>,
     /// Border colour per side, in CSS order: top, right, bottom, left.
     pub border_color: [Color; 4],
     /// Corner radii in pixels: top-left, top-right, bottom-right, bottom-left.
@@ -94,6 +156,8 @@ pub struct Text {
     pub align: TextAlign,
     /// Whether runs of whitespace and newlines are kept.
     pub pre: bool,
+    /// A shadow drawn behind the glyphs.
+    pub shadow: Option<Shadow>,
 }
 
 impl Default for Text {
@@ -108,6 +172,7 @@ impl Default for Text {
             letter_spacing: 0.0,
             align: TextAlign::Left,
             pre: false,
+            shadow: None,
         }
     }
 }
@@ -418,11 +483,12 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
         "order" => {} // Ordering is not implemented; the source order stands.
 
         "animation" => c.animation = Some(v.to_owned()),
-        "background" | "background-color" => c.paint.background = Some(color(v)?),
+        "background" | "background-color" => c.paint.background = Some(background(v, em)?),
         "opacity" => c.paint.opacity = number(v)?.clamp(0.0, 1.0),
-        "box-shadow" => c.paint.shadow = shadow(v, em)?,
+        "box-shadow" => c.paint.shadow = shadow(v, em, "box-shadow")?,
 
         "color" => c.text.color = color(v)?,
+        "text-shadow" => c.text.shadow = shadow(v, em, "text-shadow")?,
         "font-family" => c.text.family = Some(family(v)),
         "font-size" => c.text.size = size_or_percent(v, em)?,
         "font-weight" => {
@@ -806,15 +872,283 @@ fn font_shorthand(value: &str, em: f64, c: &mut Computed) -> Result<(), String> 
 
 /// `box-shadow: 0 2px 8px #0008`. `inset` and multiple shadows are not
 /// drawn.
-fn shadow(value: &str, em: f64) -> Result<Option<Shadow>, String> {
+/// A background: one colour, or a gradient.
+fn background(value: &str, em: f64) -> Result<Background, String> {
+    let _ = em;
+    let v = value.trim();
+    let lower = v.to_ascii_lowercase();
+    if let Some(rest) = function(&lower, v, "linear-gradient") {
+        return linear_gradient(rest);
+    }
+    if let Some(rest) = function(&lower, v, "radial-gradient") {
+        return radial_gradient(rest);
+    }
+    if lower.starts_with("repeating-") || lower.starts_with("conic-gradient") {
+        return Err(format!(
+            "{v:?}: geneva draws linear-gradient and radial-gradient, not this one"
+        ));
+    }
+    if lower.starts_with("url(") {
+        return Err(format!("{v:?}: a background image is not drawn"));
+    }
+    Ok(Background::Color(color(v)?))
+}
+
+/// The inside of `name(...)`, keeping the original case of the argument.
+fn function<'a>(lower: &str, value: &'a str, name: &str) -> Option<&'a str> {
+    let head = format!("{name}(");
+    if !lower.starts_with(&head) || !lower.ends_with(')') {
+        return None;
+    }
+    Some(&value[head.len()..value.len() - 1])
+}
+
+/// Splits on commas that are not inside brackets, so `rgba(0, 0, 0, .5)`
+/// stays in one piece.
+fn top_level_commas(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    for (i, ch) in text.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(text[start..i].trim());
+                start = i + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    out.push(text[start..].trim());
+    out
+}
+
+fn linear_gradient(args: &str) -> Result<Background, String> {
+    let parts = top_level_commas(args);
+    let (direction, rest) = match parts.first() {
+        Some(first) if is_direction(first) => (parse_direction(first)?, &parts[1..]),
+        // CSS defaults to a ramp running down the box.
+        _ => (Direction::Angle(180.0), &parts[..]),
+    };
+    Ok(Background::Linear {
+        direction,
+        stops: stops(rest)?,
+    })
+}
+
+fn radial_gradient(args: &str) -> Result<Background, String> {
+    let parts = top_level_commas(args);
+    let (mut circle, mut at) = (false, (0.5, 0.5));
+    let rest = match parts.first() {
+        Some(first) if is_radial_shape(first) => {
+            let lower = first.to_ascii_lowercase();
+            for word in [
+                "closest-side",
+                "closest-corner",
+                "farthest-side",
+                "farthest-corner",
+            ] {
+                if lower.contains(word) {
+                    return Err(format!(
+                        "{first:?}: a radial-gradient is sized to the farthest corner; {word} is not drawn"
+                    ));
+                }
+            }
+            circle = lower.starts_with("circle");
+            if let Some(position) = lower.split(" at ").nth(1) {
+                at = position_fraction(position)?;
+            }
+            &parts[1..]
+        }
+        _ => &parts[..],
+    };
+    Ok(Background::Radial {
+        circle,
+        at,
+        stops: stops(rest)?,
+    })
+}
+
+fn is_direction(first: &str) -> bool {
+    let l = first.to_ascii_lowercase();
+    l.starts_with("to ") || l.ends_with("deg") || l.ends_with("turn") || l.ends_with("rad")
+}
+
+fn is_radial_shape(first: &str) -> bool {
+    let l = first.to_ascii_lowercase();
+    l.starts_with("circle") || l.starts_with("ellipse") || l.starts_with("at ")
+}
+
+fn parse_direction(text: &str) -> Result<Direction, String> {
+    let l = text.trim().to_ascii_lowercase();
+    if let Some(sides) = l.strip_prefix("to ") {
+        let (mut top, mut right, mut bottom, mut left) = (false, false, false, false);
+        for word in sides.split_whitespace() {
+            match word {
+                "top" => top = true,
+                "right" => right = true,
+                "bottom" => bottom = true,
+                "left" => left = true,
+                _ => return Err(format!("{text:?}: expected to top, right, bottom or left")),
+            }
+        }
+        return Ok(match (top, right, bottom, left) {
+            (true, false, false, false) => Direction::Angle(0.0),
+            (false, true, false, false) => Direction::Angle(90.0),
+            (false, false, true, false) => Direction::Angle(180.0),
+            (false, false, false, true) => Direction::Angle(270.0),
+            (true, right @ (true | false), false, _) if right || left => {
+                Direction::Corner { top: true, right }
+            }
+            (false, right @ (true | false), true, _) if right || left => {
+                Direction::Corner { top: false, right }
+            }
+            _ => return Err(format!("{text:?}: expected a side or a corner")),
+        });
+    }
+    let degrees = if let Some(n) = l.strip_suffix("deg") {
+        n.trim().parse::<f64>().map_err(|_| angle_error(text))?
+    } else if let Some(n) = l.strip_suffix("turn") {
+        n.trim().parse::<f64>().map_err(|_| angle_error(text))? * 360.0
+    } else if let Some(n) = l.strip_suffix("rad") {
+        n.trim()
+            .parse::<f64>()
+            .map_err(|_| angle_error(text))?
+            .to_degrees()
+    } else {
+        return Err(angle_error(text));
+    };
+    Ok(Direction::Angle(degrees))
+}
+
+fn angle_error(text: &str) -> String {
+    format!("{text:?}: expected an angle such as 45deg, or a side such as to right")
+}
+
+/// A `50% 40%` position, as fractions of the box.
+fn position_fraction(text: &str) -> Result<(f64, f64), String> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let axis = |word: &str, vertical: bool| -> Result<f64, String> {
+        Ok(match word {
+            "left" | "top" => 0.0,
+            "center" => 0.5,
+            "right" | "bottom" => 1.0,
+            other => match percent(other) {
+                Some(p) => p / 100.0,
+                None => {
+                    let _ = vertical;
+                    return Err(format!("{other:?}: expected a percentage or a keyword"));
+                }
+            },
+        })
+    };
+    match words.len() {
+        1 => {
+            let a = axis(words[0], false)?;
+            Ok((a, 0.5))
+        }
+        2 => Ok((axis(words[0], false)?, axis(words[1], true)?)),
+        _ => Err(format!("{text:?}: expected a position such as 50% 40%")),
+    }
+}
+
+/// Colour stops, with the positions CSS leaves out filled in: the first
+/// at 0, the last at 1, and the rest spread evenly between the ones that
+/// do say. A position that goes backwards is pulled up to the one before
+/// it, as CSS does, so the ramp never runs in reverse.
+fn stops(parts: &[&str]) -> Result<Vec<Stop>, String> {
+    if parts.len() < 2 {
+        return Err("a gradient needs at least two colour stops".to_owned());
+    }
+    let mut out = Vec::with_capacity(parts.len());
+    for part in parts {
+        // A colour can carry spaces of its own, as `rgba(0, 238, 225, .5)`
+        // does once its commas have been protected, so the positions are
+        // taken off the end and whatever is left is the colour.
+        let mut rest = part.trim();
+        let mut positions = Vec::new();
+        while let Some((head, tail)) = rest.rsplit_once(char::is_whitespace) {
+            match percent(tail.trim()) {
+                Some(v) if positions.len() < 2 => {
+                    positions.push(v / 100.0);
+                    rest = head.trim_end();
+                }
+                _ => break,
+            }
+        }
+        positions.reverse();
+        if rest.is_empty() {
+            return Err(format!("{part:?}: expected a colour"));
+        }
+        let fill = color(rest)?;
+        match positions.len() {
+            // CSS lets one colour carry two positions, which is the same
+            // as writing it twice: a band of flat colour between them.
+            2 => {
+                out.push(Stop {
+                    color: fill,
+                    at: Some(positions[0]),
+                });
+                out.push(Stop {
+                    color: fill,
+                    at: Some(positions[1]),
+                });
+            }
+            1 => out.push(Stop {
+                color: fill,
+                at: Some(positions[0]),
+            }),
+            _ => out.push(Stop {
+                color: fill,
+                at: None,
+            }),
+        }
+    }
+    if out[0].at.is_none() {
+        out[0].at = Some(0.0);
+    }
+    let last = out.len() - 1;
+    if out[last].at.is_none() {
+        out[last].at = Some(1.0);
+    }
+    let mut i = 0;
+    while i < out.len() {
+        if out[i].at.is_some() {
+            i += 1;
+            continue;
+        }
+        let before = i - 1;
+        let mut after = i;
+        while out[after].at.is_none() {
+            after += 1;
+        }
+        let from = out[before].at.unwrap_or(0.0);
+        let to = out[after].at.unwrap_or(1.0);
+        let step = (to - from) / (after - before) as f64;
+        for (n, slot) in out[i..after].iter_mut().enumerate() {
+            slot.at = Some(from + step * (n + 1) as f64);
+        }
+        i = after;
+    }
+    let mut running = f64::NEG_INFINITY;
+    for stop in &mut out {
+        let at = stop.at.unwrap_or(0.0).max(running);
+        stop.at = Some(at);
+        running = at;
+    }
+    Ok(out)
+}
+
+fn shadow(value: &str, em: f64, property: &str) -> Result<Option<Shadow>, String> {
     if value.trim().eq_ignore_ascii_case("none") {
         return Ok(None);
     }
     if value.contains(',') {
-        return Err("only one box-shadow is drawn".to_owned());
+        return Err(format!("only one {property} is drawn"));
     }
     if value.to_ascii_lowercase().contains("inset") {
-        return Err("an inset box-shadow is not drawn".to_owned());
+        return Err(format!("an inset {property} is not drawn"));
     }
     let p = parts(value);
     let mut lengths = Vec::new();
@@ -979,6 +1313,151 @@ mod tests {
         let h1 = doc.children(doc.root)[0];
         assert_eq!(styles[h1].text.weight, 400);
         assert_eq!(styles[h1].text.size, 32.0);
+    }
+
+    #[test]
+    fn a_text_shadow_is_read_onto_the_text_not_the_box() {
+        let (doc, styles, problems) =
+            styled("<style>p { text-shadow: 2px 3px 9px #00EEE1 }</style><p>hi</p>");
+        assert!(problems.is_empty(), "{problems:?}");
+        let p = doc.children(doc.root)[0];
+        let shadow = styles[p].text.shadow.expect("a text shadow");
+        assert_eq!((shadow.x, shadow.y, shadow.blur), (2.0, 3.0, 9.0));
+        assert_eq!(shadow.color.to_hex(), "#00eee1");
+        assert!(styles[p].paint.shadow.is_none(), "the box keeps its own");
+    }
+
+    #[test]
+    fn a_linear_gradient_keeps_its_angle_and_stops() {
+        let (doc, styles, problems) = styled(
+            "<style>p { background: linear-gradient(45deg, #ff0000, #0000ff 80%) }</style><p>hi</p>",
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let p = doc.children(doc.root)[0];
+        let Some(Background::Linear { direction, stops }) = &styles[p].paint.background else {
+            panic!(
+                "expected a linear gradient, got {:?}",
+                styles[p].paint.background
+            );
+        };
+        assert_eq!(*direction, Direction::Angle(45.0));
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].at, Some(0.0));
+        assert_eq!(stops[1].at, Some(0.8));
+    }
+
+    #[test]
+    fn a_gradient_with_no_direction_runs_down_the_box() {
+        let (doc, styles, _) =
+            styled("<style>p { background: linear-gradient(#000000, #ffffff) }</style><p>hi</p>");
+        let p = doc.children(doc.root)[0];
+        let Some(Background::Linear { direction, .. }) = &styles[p].paint.background else {
+            panic!("expected a linear gradient");
+        };
+        assert_eq!(*direction, Direction::Angle(180.0));
+    }
+
+    #[test]
+    fn a_corner_waits_for_the_box_to_know_its_angle() {
+        let (doc, styles, _) = styled(
+            "<style>p { background: linear-gradient(to bottom right, #000000, #ffffff) }</style><p>hi</p>",
+        );
+        let p = doc.children(doc.root)[0];
+        let Some(Background::Linear { direction, .. }) = &styles[p].paint.background else {
+            panic!("expected a linear gradient");
+        };
+        assert_eq!(
+            *direction,
+            Direction::Corner {
+                top: false,
+                right: true
+            }
+        );
+    }
+
+    #[test]
+    fn stops_that_say_nothing_are_spread_evenly() {
+        let (doc, styles, _) = styled(
+            "<style>p { background: linear-gradient(#000000, #111111, #222222, #ffffff) }</style><p>hi</p>",
+        );
+        let p = doc.children(doc.root)[0];
+        let Some(Background::Linear { stops, .. }) = &styles[p].paint.background else {
+            panic!("expected a linear gradient");
+        };
+        let at: Vec<f64> = stops.iter().map(|s| s.at.unwrap_or(-1.0)).collect();
+        assert_eq!(at, vec![0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0]);
+    }
+
+    #[test]
+    fn a_stop_that_goes_backwards_is_pulled_up_to_the_one_before_it() {
+        let (doc, styles, _) = styled(
+            "<style>p { background: linear-gradient(#000000 60%, #ffffff 20%) }</style><p>hi</p>",
+        );
+        let p = doc.children(doc.root)[0];
+        let Some(Background::Linear { stops, .. }) = &styles[p].paint.background else {
+            panic!("expected a linear gradient");
+        };
+        assert_eq!(stops[0].at, Some(0.6));
+        assert_eq!(stops[1].at, Some(0.6), "never runs in reverse");
+    }
+
+    #[test]
+    fn a_radial_gradient_keeps_its_shape_and_centre() {
+        let (doc, styles, _) = styled(
+            "<style>p { background: radial-gradient(circle at 30% 70%, #ffffff, #00000000) }</style><p>hi</p>",
+        );
+        let p = doc.children(doc.root)[0];
+        let Some(Background::Radial { circle, at, .. }) = &styles[p].paint.background else {
+            panic!("expected a radial gradient");
+        };
+        assert!(*circle);
+        assert_eq!(*at, (0.3, 0.7));
+    }
+
+    #[test]
+    fn a_colour_is_still_a_colour() {
+        let (doc, styles, _) = styled("<style>p { background: #123456 }</style><p>hi</p>");
+        let p = doc.children(doc.root)[0];
+        let Some(Background::Color(c)) = &styles[p].paint.background else {
+            panic!("expected a flat colour");
+        };
+        assert_eq!(c.to_hex(), "#123456");
+    }
+
+    #[test]
+    fn the_gradients_geneva_does_not_draw_are_named() {
+        for value in [
+            "conic-gradient(#000000, #ffffff)",
+            "repeating-linear-gradient(45deg, #000000, #ffffff)",
+            "radial-gradient(circle closest-side, #000000, #ffffff)",
+        ] {
+            let (_, _, problems) = styled(&format!(
+                "<style>p {{ background: {value} }}</style><p>hi</p>"
+            ));
+            assert_eq!(problems.len(), 1, "{value} should be reported once");
+        }
+    }
+
+    #[test]
+    fn a_gradient_needs_two_stops() {
+        let (_, _, problems) =
+            styled("<style>p { background: linear-gradient(45deg, #ff0000) }</style><p>hi</p>");
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("two colour stops"), "{problems:?}");
+    }
+
+    #[test]
+    fn a_colour_with_commas_survives_the_split() {
+        let (doc, styles, problems) = styled(
+            "<style>p { background: linear-gradient(90deg, rgba(0, 238, 225, 0.5), #ffffff) }</style><p>hi</p>",
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let p = doc.children(doc.root)[0];
+        let Some(Background::Linear { stops, .. }) = &styles[p].paint.background else {
+            panic!("expected a linear gradient");
+        };
+        assert_eq!(stops.len(), 2);
+        assert!((f64::from(stops[0].color.a) - 0.5).abs() < 0.01);
     }
 }
 

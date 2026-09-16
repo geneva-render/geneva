@@ -111,3 +111,84 @@ fn an_unsupported_property_is_a_warning_and_the_rest_still_draws() {
     assert!(l.is_ok(), "{:?}", l.diagnostics);
     assert!(l.diagnostics.iter().any(|d| d.code == "W450"));
 }
+
+#[test]
+fn a_linear_gradient_runs_the_way_its_angle_points() {
+    let f = frame(
+        r#""layers":[{"clips":[{"source":{"kind":"html","width":200,"height":100,
+        "html":"<div class='g'></div>",
+        "css":".g { height: 100%; background: linear-gradient(to right, #ff0000, #0000ff) }"},
+        "transform":{"anchor":"top left","position":"0 0"}}]}]"#,
+    );
+    let left = at(&f, 2, 50);
+    let right = at(&f, 197, 50);
+    assert!(left.r > 0.9 && left.b < 0.1, "{left:?}");
+    assert!(right.b > 0.9 && right.r < 0.1, "{right:?}");
+    let middle = at(&f, 100, 50);
+    assert!(
+        middle.r > 0.3 && middle.b > 0.3,
+        "the middle mixes both ends: {middle:?}"
+    );
+}
+
+#[test]
+fn a_gradient_interpolates_in_linear_light() {
+    let f = frame(
+        r#""layers":[{"clips":[{"source":{"kind":"html","width":200,"height":100,
+        "html":"<div class='g'></div>",
+        "css":".g { height: 100%; background: linear-gradient(to right, #000000, #ffffff) }"},
+        "transform":{"anchor":"top left","position":"0 0"}}]}]"#,
+    );
+    // Halfway along black to white is half the light, not half the sRGB
+    // number. A browser interpolates the encoded value and lands near
+    // 0.21 here; geneva composites in linear light throughout.
+    let middle = at(&f, 100, 50);
+    assert!(
+        (middle.r - 0.5).abs() < 0.03,
+        "expected about half the light, got {middle:?}"
+    );
+}
+
+#[test]
+fn a_radial_gradient_is_brightest_at_its_centre() {
+    let f = frame(
+        r#""layers":[{"clips":[{"source":{"kind":"html","width":200,"height":100,
+        "html":"<div class='g'></div>",
+        "css":".g { height: 100%; background: radial-gradient(circle at 50% 50%, #ffffff, #000000) }"},
+        "transform":{"anchor":"top left","position":"0 0"}}]}]"#,
+    );
+    let centre = at(&f, 100, 50);
+    let corner = at(&f, 3, 3);
+    assert!(centre.r > 0.9, "{centre:?}");
+    assert!(corner.r < 0.1, "{corner:?}");
+}
+
+#[test]
+fn a_text_shadow_does_not_move_the_text() {
+    // The engine pads the rendered image to make room for a shadow. If
+    // that padding reached layout, adding a glow would shift the words.
+    let ink = |css: &str| {
+        let f = frame(&format!(
+            r#""layers":[{{"clips":[{{"source":{{"kind":"html","width":200,"height":100,
+            "html":"<p>Hi</p>","css":"{css}"}},
+            "transform":{{"anchor":"top left","position":"0 0"}}}}]}}]"#
+        ));
+        let mut box_ = (u32::MAX, u32::MAX, 0u32, 0u32);
+        for y in 0..100 {
+            for x in 0..200 {
+                // The glyphs are the only fully opaque thing; a blurred
+                // shadow never reaches this.
+                if at(&f, x, y).a > 0.95 {
+                    box_ = (box_.0.min(x), box_.1.min(y), box_.2.max(x), box_.3.max(y));
+                }
+            }
+        }
+        box_
+    };
+    let plain = ink("p { margin: 0; font: 700 40px Liberation Sans; color: #ffffff }");
+    let glow = ink(
+        "p { margin: 0; font: 700 40px Liberation Sans; color: #ffffff; text-shadow: 0 0 12px #00ff00 }",
+    );
+    assert_ne!(plain, (u32::MAX, u32::MAX, 0, 0), "nothing was drawn");
+    assert_eq!(plain, glow, "the glyphs moved when a shadow was added");
+}

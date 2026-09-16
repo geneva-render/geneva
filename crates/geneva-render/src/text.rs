@@ -15,7 +15,7 @@ use cosmic_text::{
 };
 use geneva_color::{Color, LinearRgba};
 use geneva_timeline::ResolvedText;
-use geneva_timeline::schema::{TextAlign, TextStyle};
+use geneva_timeline::schema::{TextAlign, TextSource, TextStyle};
 use swash::scale::{Render, ScaleContext, Source, StrikeWith};
 use swash::zeno::{Format, Stroke, Style as ZenoStyle, Vector};
 
@@ -39,6 +39,20 @@ impl Default for TextEngine {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The room `render` leaves around the glyphs for a stroke and a shadow,
+/// on every side. A caller that has to place the image where the glyphs
+/// alone would have gone subtracts this, and one that lays text out
+/// ignores it: neither a stroke nor a shadow changes where text sits.
+#[must_use]
+pub fn inset_for(spec: &TextSource) -> f64 {
+    let outline = spec.outline.as_ref().map_or(0.0, |o| o.width.max(0.0));
+    let (dx, dy, blur) = spec
+        .shadow
+        .as_ref()
+        .map_or((0.0, 0.0, 0.0), |s| (s.x, s.y, s.blur.max(0.0)));
+    outline + blur + dx.abs().max(dy.abs())
 }
 
 impl TextEngine {
@@ -158,8 +172,9 @@ impl TextEngine {
         let (shadow_dx, shadow_dy, shadow_blur) = shadow.map_or((0.0, 0.0, 0.0), |s| {
             (s.x as f32, s.y as f32, s.blur.max(0.0) as f32)
         });
-        // Room for strokes and shadows around the text.
-        let extra = outline_w + shadow_blur + shadow_dx.abs().max(shadow_dy.abs());
+        // Room for strokes and shadows around the text, worked out in one
+        // place so a caller can subtract exactly what was added.
+        let extra = inset_for(spec) as f32;
         let inset = padding + extra;
         let text_w = (max_x - min_x).max(0.0);
         let width = (text_w + 2.0 * inset).ceil().max(1.0) as u32;

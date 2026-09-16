@@ -5,6 +5,26 @@ semantic versioning once it reaches 1.0; until then minor versions may
 change the timeline format, and the `geneva` field in every document names
 the format version it was written for.
 
+## Unreleased
+
+### Added
+
+- **Gradients in markup.** `background` takes `linear-gradient()` and
+  `radial-gradient()` as well as a colour: an angle or a `to` side or
+  corner, stops with optional positions, and a circle or ellipse `at` a
+  position. Colours are mixed in linear light, the space the rest of
+  geneva composites in, so a ramp is lighter at its midpoint than the
+  same CSS in a browser and a ramp between saturated colours does not
+  pass through a muddy middle. `conic-gradient`, `repeating-` gradients,
+  the radial size keywords and `url()` images are each named as
+  undrawn (W450) rather than skipped; a radial is always sized to the
+  farthest corner.
+- **`text-shadow` in markup.** One shadow, drawn behind the glyphs
+  through the same path a text clip's `shadow` already used. It does not
+  affect layout: the engine pads the image it renders to make room, and
+  painting takes that padding back off, so adding a glow leaves the words
+  where they were. It is clipped at the edge of the clip's own box.
+
 ## 0.4.3 (2026-09-14)
 
 ### Added
