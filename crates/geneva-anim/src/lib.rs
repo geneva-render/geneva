@@ -13,5 +13,5 @@
 mod easing;
 mod track;
 
-pub use easing::{Easing, NamedEasing, Spring};
+pub use easing::{Easing, NamedEasing, Spring, StepPosition};
 pub use track::{Interpolate, Keyframe, Track};

@@ -134,7 +134,7 @@ impl<T> Animated<T> {
                     .map(|k| KeyframeSpec {
                         t: k.t,
                         v: f(&k.v),
-                        ease: k.ease,
+                        ease: k.ease.clone(),
                     })
                     .collect(),
             ),

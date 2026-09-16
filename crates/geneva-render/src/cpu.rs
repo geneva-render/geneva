@@ -317,8 +317,8 @@ impl<A: AssetSource> CpuRenderer<A> {
                     && c.effects.is_empty()
                     // A fade's dip color covers the whole frame, which is
                     // not something a bounded overlay can carry.
-                    && [c.transition_in, c.transition_out]
-                        .iter()
+                    && [&c.transition_in, &c.transition_out]
+                        .into_iter()
                         .flatten()
                         .all(|t| t.kind != TransitionKind::Fade)
             })
@@ -751,14 +751,18 @@ impl Paint<'_> {
 fn transition_gain(layer: &ResolvedLayer, i: usize, t: Ratio) -> f64 {
     let clip = &layer.clips[i];
     let mut gain = 1.0;
-    if let Some(tr) = clip.transition_in {
+    if let Some(tr) = &clip.transition_in {
         gain *= tr.incoming(t - clip.start);
     }
-    if let Some(tr) = layer.clips.get(i + 1).and_then(|next| next.transition_in) {
+    if let Some(tr) = layer
+        .clips
+        .get(i + 1)
+        .and_then(|next| next.transition_in.as_ref())
+    {
         gain *= tr.outgoing(clip.end - t);
     }
     // Nothing follows, so the clip closes the layer on its own terms.
-    if let Some(tr) = clip.transition_out {
+    if let Some(tr) = &clip.transition_out {
         gain *= tr.outgoing(clip.end - t);
     }
     gain
@@ -768,7 +772,7 @@ fn transition_gain(layer: &ResolvedLayer, i: usize, t: Ratio) -> f64 {
 /// one wins, so overlapping fades do not cancel each other out.
 fn dip(layers: &[ResolvedLayer], t: Ratio) -> Option<(LinearRgba, f64)> {
     let mut found: Option<(LinearRgba, f64)> = None;
-    let mut strongest = |tr: Option<ResolvedTransition>, local: Ratio| {
+    let mut strongest = |tr: Option<&ResolvedTransition>, local: Ratio| {
         let Some(tr) = tr else { return };
         if local < Ratio::ZERO || local >= tr.duration {
             return;
@@ -780,9 +784,9 @@ fn dip(layers: &[ResolvedLayer], t: Ratio) -> Option<(LinearRgba, f64)> {
     };
     for layer in layers {
         for clip in &layer.clips {
-            strongest(clip.transition_in, t - clip.start);
+            strongest(clip.transition_in.as_ref(), t - clip.start);
             // A closing transition is measured back from the clip's end.
-            strongest(clip.transition_out, clip.end - t);
+            strongest(clip.transition_out.as_ref(), clip.end - t);
         }
     }
     found

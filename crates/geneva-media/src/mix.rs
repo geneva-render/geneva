@@ -87,7 +87,7 @@ fn walk(
             // A transition overlaps this clip with the one before it, so
             // the pair crosses: this one up, that one down, over the same
             // stretch.
-            let (cross, shape) = match clip.transition_in {
+            let (cross, shape) = match &clip.transition_in {
                 Some(tr) if tr.duration > Ratio::ZERO => (
                     tr.duration / speed,
                     match tr.kind {
@@ -128,7 +128,7 @@ fn walk(
                     });
                     // A clip that closes the layer takes its own sound
                     // down; a pair is handled by the clip after it.
-                    if let Some(tr) = clip.transition_out {
+                    if let Some(tr) = &clip.transition_out {
                         if tr.duration > Ratio::ZERO {
                             let last = out.last_mut().expect("just pushed");
                             // Either kind ends in silence here, with no

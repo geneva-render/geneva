@@ -104,7 +104,12 @@ A keyframe can also be written as its fields in order, `[t, v]` or
 - `ease` applies to the segment that starts at that keyframe. It is one of
   the names `linear` (default), `ease`, `ease-in`, `ease-out`,
   `ease-in-out`, `hold` (jump at the next keyframe); an object
-  `{ "cubic-bezier": [x1, y1, x2, y2] }` with CSS semantics; or an object
+  `{ "cubic-bezier": [x1, y1, x2, y2] }` with CSS semantics; an object
+  `{ "steps": [n, "jump-end"] }` (a staircase of `n` equal steps, the
+  position one of `jump-start`, `jump-end`, `jump-none`, `jump-both`, as
+  CSS `steps()`); an object `{ "linear": [[0, 0], [0.3, 0.8], [1, 1]] }`
+  (straight lines through `[input, output]` points, inputs from 0 to 1 in
+  order, as CSS `linear()`); or an object
   `{ "spring": { "stiffness": 170, "damping": 26, "mass": 1 } }`. A spring
   is solved analytically and rescaled so it settles exactly at the next
   keyframe; its parameters shape the overshoot and bounce, not the duration.
@@ -161,7 +166,7 @@ geneva understands:
 | rule name | required | A key of the document's `keyframes` (E440). |
 | duration | required | A time with its unit: `0.5s`, `500ms`. Must be more than zero. |
 | delay | `0s` | The second time in the entry. |
-| timing function | `linear` | `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, `step-end`, `cubic-bezier(x1, y1, x2, y2)`, or geneva's own `spring(stiffness[, damping[, mass]])`. It applies between each pair of offsets. |
+| timing function | `linear` | `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, `step-end`, `cubic-bezier(x1, y1, x2, y2)`, `steps(n[, position])`, `linear(...)` with its points as CSS writes them (`linear(0, .5 30%, 1)`), or geneva's own `spring(stiffness[, damping[, mass]])`. It applies between each pair of offsets. |
 | iteration count | `1` | A number, or `infinite`, which runs until the clip ends. |
 | direction | `normal` | `normal`, `reverse`, `alternate`, `alternate-reverse`. |
 
@@ -630,7 +635,7 @@ author overrides freely: `h1`, `h2`, `h3`, `b`, `strong`, `i`, `em`,
 | Spacing | `margin`, `padding` and their per-side forms and one-to-four-value shorthands |
 | Flex | `flex-direction`, `flex-wrap`, `justify-content`, `align-items`, `align-self`, `align-content`, `gap`, `row-gap`, `column-gap`, `flex-grow`, `flex-shrink`, `flex-basis`, `flex` |
 | Border | `border`, `border-top`, `border-right`, `border-bottom`, `border-left`, `border-width`, `border-color`, `border-style` (`solid`, `none`), `border-radius` |
-| Paint | `background`, `background-color` (a colour or a gradient), `background-size`, `background-position`, `background-clip` (`text` or `border-box`, with or without `-webkit-`), `opacity`, `filter` (`blur()` only), `box-shadow` (one, not inset) |
+| Paint | `background`, `background-color` (a colour or a gradient), `background-size`, `background-position`, `background-clip` (`text` or `border-box`, with or without `-webkit-`), `opacity`, `filter` (`blur()` only), `clip-path` (`polygon()` only, or `none`), `box-shadow` (one, not inset) |
 | Text | `color`, `-webkit-text-fill-color` (read as `color`), `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space`, `text-shadow` (one, not a list) |
 | Motion | `animation` and its longhands `animation-name`, `-duration`, `-delay`, `-timing-function`, `-iteration-count`, `-direction`, `-fill-mode` |
 
@@ -725,10 +730,13 @@ rules under it, or the style, leave the element at; `animation-delay`,
 `-duration`, `-iteration-count`, `-direction` and `-fill-mode` are read
 as longhands too, comma lists and all. A keyframe inside sets
 `transform`, `opacity`, `filter: blur()`, `color`, `text-shadow`,
-`letter-spacing`, `width`, `height`, `max-width`, `min-width` or
-`background-position`; anything else is E442. `color` and `text-shadow`
-reach the element's text and the descendants that inherited them.
-`steps()` and `linear()` timing functions are not read yet.
+`letter-spacing`, `width`, `height`, `max-width`, `min-width`,
+`background-position` or `clip-path`; anything else is E442. `color` and
+`text-shadow` reach the element's text and the descendants that
+inherited them. Two polygons with the same number of points mix point by
+point; any other pair, as in CSS, is a step at the halfway mark. A length
+and a percentage do not mix either (a browser folds them into a `calc()`;
+here the change is a step), except that a zero mixes with either.
 
 A markup box whose elements do not move is laid out and painted once per
 clip and reused for every frame. One with an animation inside is painted
@@ -751,9 +759,12 @@ inside it costs a paint per frame and one layout.
   painted into a buffer of its own with its children at their own
   opacity, and the buffer is laid onto the picture at the box's, so
   overlapping children do not show through each other. The same buffer
-  carries `filter: blur()`, which is the only filter drawn. A group is
-  painted whole where CSS puts a stacking context, so a child inside one
-  cannot rise above a box outside it with `z-index`.
+  carries `filter: blur()`, which is the only filter drawn, and
+  `clip-path: polygon()`, which is the only clip path: its points are
+  lengths or shares of the border box, may lie outside it, and cut the
+  box and its children after the blur and before any transform. A group
+  is painted whole where CSS puts a stacking context, so a child inside
+  one cannot rise above a box outside it with `z-index`.
 - There is no `float`, no grid, no transition and no media
   query. The clip's own `transform` and `animation` move the whole box.
 - **Nothing is fetched over the network.** A path is a file; a URL is

@@ -171,7 +171,7 @@ pub struct ResolvedClip {
 
 /// A transition into a clip, with its length in seconds and the color a
 /// `fade` passes through.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedTransition {
     /// Which transition.
     pub kind: TransitionKind,
@@ -731,7 +731,7 @@ struct AnimationKnots {
 }
 
 impl AnimationKnots {
-    fn push(&mut self, time: f64, v: &AnimValues, easing: Easing) {
+    fn push(&mut self, time: f64, v: &AnimValues, easing: &Easing) {
         if let Some(value) = v.translate {
             // Percentages are resolved before this point, so whatever is
             // left is a distance in pixels.
@@ -742,28 +742,28 @@ impl AnimationKnots {
             self.translate.push(Keyframe {
                 time,
                 value,
-                easing,
+                easing: easing.clone(),
             });
         }
         if let Some(value) = v.scale {
             self.scale.push(Keyframe {
                 time,
                 value,
-                easing,
+                easing: easing.clone(),
             });
         }
         if let Some(value) = v.rotate {
             self.rotate.push(Keyframe {
                 time,
                 value,
-                easing,
+                easing: easing.clone(),
             });
         }
         if let Some(value) = v.opacity {
             self.opacity.push(Keyframe {
                 time,
                 value,
-                easing,
+                easing: easing.clone(),
             });
         }
     }
@@ -853,7 +853,7 @@ fn expand(a: &Animation, steps: &[(f64, AnimValues)], length: f64, out: &mut Ani
             mine.push(
                 a.delay + (f64::from(i) + progress) * a.duration,
                 v,
-                a.easing,
+                &a.easing,
             );
         }
     }
@@ -2041,7 +2041,7 @@ inset of {safe_px}px"
                         .with_help("use \"kind\": \"fade\" to dip through the color"),
                     );
                 }
-                let ease = tr.ease.unwrap_or_default();
+                let ease = tr.ease.clone().unwrap_or_default();
                 if let Some(reason) = ease.validate() {
                     me.push(Diagnostic::error("E308", tpath.key("ease"), reason));
                 }
@@ -2135,7 +2135,7 @@ transitions in over the same join"
             if let Some(prev) = clips.last() {
                 let overlap = prev.end - start;
                 if overlap > Ratio::ZERO {
-                    match transition_in {
+                    match &transition_in {
                         Some(tr) if overlap <= tr.duration => {
                             let tdur = tr.duration;
                             if overlap < tdur {
@@ -2154,7 +2154,7 @@ transitions in over the same join"
                         }
                     }
                 }
-                if let Some(tdur) = transition_in.map(|t| t.duration) {
+                if let Some(tdur) = transition_in.as_ref().map(|t| t.duration) {
                     if start < prev.start {
                         self.push(
                             Diagnostic::error(
@@ -3162,7 +3162,7 @@ its own holds a value rather than moving it",
             let steps: Vec<(f64, AnimValues)> = steps
                 .iter()
                 .map(|(offset, v)| {
-                    let mut v = *v;
+                    let mut v = v.clone();
                     if let Some([x, y]) = v.translate {
                         match (x.to_px(clip_box.0), y.to_px(clip_box.1)) {
                             (Some(px), Some(py)) => {
@@ -3254,7 +3254,7 @@ be; write the distance in pixels, or give the source a size",
             .map(|k| Keyframe {
                 time: k.time,
                 value: combine(start, k.value),
-                easing: k.easing,
+                easing: k.easing.clone(),
             })
             .collect();
         Track::new(keys).unwrap_or(base)
@@ -3693,7 +3693,7 @@ or a URL; pass --assets to choose the root",
                     out.push(Keyframe {
                         time: t.to_f64(),
                         value: map(&k.v),
-                        easing: k.ease.unwrap_or_default(),
+                        easing: k.ease.clone().unwrap_or_default(),
                     });
                 }
                 let first = out[0].value.clone();

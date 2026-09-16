@@ -520,6 +520,11 @@ fn composite(
         let (w, h) = (layer.image.width as usize, layer.image.height as usize);
         crate::blur::blur_pixels(&mut layer.image.pixels, w, h, group.blur);
     }
+    // CSS clips after filtering and before the transform, so the polygon
+    // is applied in the buffer, where the group's own pixels are.
+    if let Some(points) = &group.clip_path {
+        mask_polygon(&mut layer.image, layer.origin, points);
+    }
     let opacity = group.opacity.clamp(0.0, 1.0);
     let clip = |px: f64, py: f64| -> f32 {
         group
@@ -598,6 +603,70 @@ fn composite(
                 (dy + dst_origin.1) as f64 + 0.5,
             );
             over(dst, dx as usize, dy as usize, texel, opacity * clip(px, py));
+        }
+    }
+}
+
+/// Keeps what is inside the polygon, given in the surface's pixels, of a
+/// buffer whose top-left pixel sits at `origin`. Coverage is measured on
+/// four scanlines per row with exact horizontal overlap, and the fill
+/// rule is nonzero, as CSS's is.
+fn mask_polygon(image: &mut Image, origin: (i64, i64), points: &[(f64, f64)]) {
+    const SUB: usize = 4;
+    let (w, h) = (image.width as usize, image.height as usize);
+    if points.len() < 3 {
+        image.pixels.fill(LinearRgba::TRANSPARENT);
+        return;
+    }
+    let mut coverage = vec![0f32; w];
+    let mut crossings: Vec<(f64, i32)> = Vec::new();
+    for y in 0..h {
+        coverage.fill(0.0);
+        for s in 0..SUB {
+            let sy = origin.1 as f64 + y as f64 + (s as f64 + 0.5) / SUB as f64;
+            crossings.clear();
+            for i in 0..points.len() {
+                let (x0, y0) = points[i];
+                let (x1, y1) = points[(i + 1) % points.len()];
+                if (y0 <= sy) == (y1 <= sy) {
+                    continue;
+                }
+                let t = (sy - y0) / (y1 - y0);
+                crossings.push((x0 + t * (x1 - x0), if y1 > y0 { 1 } else { -1 }));
+            }
+            crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut winding = 0;
+            let mut start = 0.0;
+            for (x, dir) in &crossings {
+                let was = winding;
+                winding += dir;
+                if was == 0 && winding != 0 {
+                    start = *x;
+                } else if was != 0 && winding == 0 {
+                    // A span across [start, x], in buffer pixels.
+                    let a = (start - origin.0 as f64).clamp(0.0, w as f64);
+                    let b = (x - origin.0 as f64).clamp(0.0, w as f64);
+                    let (first, last) = (a.floor() as usize, b.ceil() as usize);
+                    for (px, c) in coverage
+                        .iter_mut()
+                        .enumerate()
+                        .take(last.min(w))
+                        .skip(first)
+                    {
+                        let overlap = b.min(px as f64 + 1.0) - a.max(px as f64);
+                        if overlap > 0.0 {
+                            *c += overlap as f32 / SUB as f32;
+                        }
+                    }
+                }
+            }
+        }
+        let row = &mut image.pixels[y * w..(y + 1) * w];
+        for (p, c) in row.iter_mut().zip(&coverage) {
+            let c = c.clamp(0.0, 1.0);
+            if c < 1.0 {
+                *p = p.scaled(c);
+            }
         }
     }
 }

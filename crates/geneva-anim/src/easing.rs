@@ -110,11 +110,31 @@ impl Default for Spring {
     }
 }
 
+/// Where a staircase jumps: the second argument of CSS `steps()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum StepPosition {
+    /// The first jump is at the start, so the segment never shows its
+    /// starting value.
+    #[serde(alias = "start")]
+    JumpStart,
+    /// The last jump is at the end, so the segment never shows its final
+    /// value until then. CSS's default.
+    #[default]
+    #[serde(alias = "end")]
+    JumpEnd,
+    /// Both ends are held: `n` steps make `n - 1` jumps.
+    JumpNone,
+    /// Neither end is held: `n` steps make `n + 1` jumps.
+    JumpBoth,
+}
+
 /// An easing curve applied to the segment that starts at a keyframe.
 ///
-/// In JSON an easing is either a preset name (`"ease-out"`), an object with a
-/// `cubic-bezier` array, or an object with a `spring` block.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+/// In JSON an easing is either a preset name (`"ease-out"`), an object with
+/// a `cubic-bezier` array, a `spring` block, a `steps` pair or a `linear`
+/// list of points.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum Easing {
     /// A named preset.
@@ -129,6 +149,17 @@ pub enum Easing {
     Spring {
         /// Spring parameters.
         spring: Spring,
+    },
+    /// A staircase of equal steps, as CSS `steps(n, position)`.
+    Steps {
+        /// How many steps, and where the jumps fall.
+        steps: (u32, StepPosition),
+    },
+    /// Straight lines through points, as CSS `linear()`: each point is
+    /// `[input, output]`, inputs from 0 to 1 in order.
+    Linear {
+        /// The points, at least two.
+        linear: Vec<[f64; 2]>,
     },
 }
 
@@ -157,6 +188,28 @@ impl Easing {
                     None
                 } else {
                     Some("spring stiffness, damping and mass must be positive".to_owned())
+                }
+            }
+            Self::Steps {
+                steps: (n, position),
+            } => {
+                if *n == 0 {
+                    Some("steps takes at least one step".to_owned())
+                } else if *n == 1 && *position == StepPosition::JumpNone {
+                    Some("steps with jump-none takes at least two steps".to_owned())
+                } else {
+                    None
+                }
+            }
+            Self::Linear { linear } => {
+                if linear.len() < 2 {
+                    Some("linear takes at least two points".to_owned())
+                } else if linear.iter().any(|[x, _]| !(0.0..=1.0).contains(x)) {
+                    Some("linear inputs must be between 0 and 1".to_owned())
+                } else if linear.windows(2).any(|w| w[1][0] < w[0][0]) {
+                    Some("linear inputs must not go backwards".to_owned())
+                } else {
+                    None
                 }
             }
         }
@@ -189,8 +242,49 @@ impl Easing {
                     spring.displacement(u * spring.settle_time())
                 }
             }
+            Self::Steps {
+                steps: (n, position),
+            } => {
+                if u >= 1.0 {
+                    return 1.0;
+                }
+                let n = f64::from((*n).max(1));
+                let k = (u * n).floor();
+                let v = match position {
+                    StepPosition::JumpEnd => k / n,
+                    StepPosition::JumpStart => (k + 1.0) / n,
+                    StepPosition::JumpNone => k / (n - 1.0).max(1.0),
+                    StepPosition::JumpBoth => (k + 1.0) / (n + 1.0),
+                };
+                v.min(1.0)
+            }
+            Self::Linear { linear } => piecewise(linear, u),
         }
     }
+}
+
+/// The output of a `linear()` curve at `u`: a straight line between the
+/// points on either side of it, the nearest point beyond the ends, and a
+/// jump where two points share an input.
+fn piecewise(points: &[[f64; 2]], u: f64) -> f64 {
+    let Some(first) = points.first() else {
+        return u;
+    };
+    if u <= first[0] {
+        return first[1];
+    }
+    for pair in points.windows(2) {
+        let ([x0, y0], [x1, y1]) = (pair[0], pair[1]);
+        if u <= x1 {
+            let span = x1 - x0;
+            return if span <= 0.0 {
+                y1
+            } else {
+                y0 + (y1 - y0) * (u - x0) / span
+            };
+        }
+    }
+    points[points.len() - 1][1]
 }
 
 fn cubic_bezier(points: [f64; 4], u: f64) -> f64 {
@@ -246,11 +340,63 @@ mod tests {
             Easing::Spring {
                 spring: Spring::default(),
             },
+            Easing::Steps {
+                steps: (4, StepPosition::JumpEnd),
+            },
+            Easing::Linear {
+                linear: vec![[0.0, 0.0], [0.3, 0.8], [1.0, 1.0]],
+            },
         ];
         for curve in curves {
             assert_eq!(curve.evaluate(0.0), 0.0, "{curve:?}");
             assert_eq!(curve.evaluate(1.0), 1.0, "{curve:?}");
         }
+    }
+
+    #[test]
+    fn steps_jump_where_css_says() {
+        let end = Easing::Steps {
+            steps: (2, StepPosition::JumpEnd),
+        };
+        assert_eq!(end.evaluate(0.25), 0.0);
+        assert_eq!(end.evaluate(0.5), 0.5);
+        assert_eq!(end.evaluate(0.99), 0.5);
+        let start = Easing::Steps {
+            steps: (2, StepPosition::JumpStart),
+        };
+        assert_eq!(start.evaluate(0.0), 0.5);
+        assert_eq!(start.evaluate(0.5), 1.0);
+        let none = Easing::Steps {
+            steps: (3, StepPosition::JumpNone),
+        };
+        assert_eq!(none.evaluate(0.0), 0.0);
+        assert_eq!(none.evaluate(0.5), 0.5);
+        assert_eq!(none.evaluate(0.99), 1.0);
+        assert!(
+            Easing::Steps {
+                steps: (1, StepPosition::JumpNone)
+            }
+            .validate()
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn linear_runs_straight_between_its_points() {
+        let e = Easing::Linear {
+            linear: vec![[0.0, 0.0], [0.5, 0.8], [0.5, 0.9], [1.0, 1.0]],
+        };
+        assert!((e.evaluate(0.25) - 0.4).abs() < 1e-12);
+        assert!((e.evaluate(0.5) - 0.8).abs() < 1e-12);
+        assert!((e.evaluate(0.75) - 0.95).abs() < 1e-12);
+        assert!(
+            Easing::Linear {
+                linear: vec![[0.0, 0.0], [0.7, 1.0], [0.3, 0.5]]
+            }
+            .validate()
+            .is_some(),
+            "inputs out of order"
+        );
     }
 
     #[test]

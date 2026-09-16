@@ -1869,9 +1869,56 @@
             "spring"
           ],
           "description": "A damped spring, rescaled to settle at the end of the segment."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "steps": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                },
+                {
+                  "$ref": "#/$defs/StepPosition"
+                }
+              ],
+              "minItems": 2,
+              "maxItems": 2,
+              "description": "How many steps, and where the jumps fall."
+            }
+          },
+          "required": [
+            "steps"
+          ],
+          "description": "A staircase of equal steps, as CSS `steps(n, position)`."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "linear": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "description": "The points, at least two."
+            }
+          },
+          "required": [
+            "linear"
+          ],
+          "description": "Straight lines through points, as CSS `linear()`: each point is\n`[input, output]`, inputs from 0 to 1 in order."
         }
       ],
-      "description": "An easing curve applied to the segment that starts at a keyframe.\n\nIn JSON an easing is either a preset name (`\"ease-out\"`), an object with a\n`cubic-bezier` array, or an object with a `spring` block."
+      "description": "An easing curve applied to the segment that starts at a keyframe.\n\nIn JSON an easing is either a preset name (`\"ease-out\"`), an object with\na `cubic-bezier` array, a `spring` block, a `steps` pair or a `linear`\nlist of points."
     },
     "NamedEasing": {
       "oneOf": [
@@ -1932,6 +1979,31 @@
         }
       },
       "description": "Parameters of a damped spring.\n\nThe spring is solved analytically and rescaled so that it settles exactly\nat the end of the keyframe segment; the parameters control the shape of\nthe motion (overshoot and bounce), not its duration."
+    },
+    "StepPosition": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "jump-start",
+          "description": "The first jump is at the start, so the segment never shows its\nstarting value."
+        },
+        {
+          "type": "string",
+          "const": "jump-end",
+          "description": "The last jump is at the end, so the segment never shows its final\nvalue until then. CSS's default."
+        },
+        {
+          "type": "string",
+          "const": "jump-none",
+          "description": "Both ends are held: `n` steps make `n - 1` jumps."
+        },
+        {
+          "type": "string",
+          "const": "jump-both",
+          "description": "Neither end is held: `n` steps make `n + 1` jumps."
+        }
+      ],
+      "description": "Where a staircase jumps: the second argument of CSS `steps()`."
     },
     "ShapeKind": {
       "oneOf": [

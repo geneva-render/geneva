@@ -19,6 +19,16 @@ the format version it was written for.
   the radial size keywords and `url()` images are each named as
   undrawn (W450) rather than skipped; a radial is always sized to the
   farthest corner.
+- **`steps()` and `linear()` timing functions.** Both are read where a
+  timing function goes: in a CSS `animation`, and as `{ "steps": [n,
+  "jump-end"] }` and `{ "linear": [[input, output], ...] }` on a
+  keyframe's `ease`. `linear()` spreads the inputs it is not given the
+  way CSS does.
+- **`clip-path: polygon()` in markup.** A box and its children are cut to
+  the polygon, with anti-aliased edges and the nonzero fill rule; points
+  may lie outside the box. It animates on an element inside the
+  outermost one, point by point when the counts match. Other shapes are
+  W450.
 - **Animations on elements inside markup.** An `animation` on an element
   inside the outermost one is played by the renderer: the element is
   composited as a group with the transform, opacity and `filter: blur()`

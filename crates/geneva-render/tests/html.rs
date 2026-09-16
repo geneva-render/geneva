@@ -405,3 +405,47 @@ fn a_colour_animation_reaches_the_text() {
     assert!(r0 > b0 * 10.0, "red at the start: {r0} {b0}");
     assert!(b1 > r1 * 10.0, "blue at the end: {r1} {b1}");
 }
+
+#[test]
+fn a_clip_path_polygon_keeps_only_what_is_inside_it() {
+    // A white box clipped to its left half, by a diagonal so that a row
+    // near the top and one near the bottom disagree about where the edge
+    // is.
+    let f = markup_at(
+        "<div class='stage'><div class='box'></div></div>",
+        ".stage { position: relative; width: 200px; height: 100px } \
+         .box { position: absolute; inset: 0; background: #ffffff; \
+                clip-path: polygon(0 0, 50% 0, 100% 100%, 0 100%) }",
+        0,
+    );
+    assert!(at(&f, 20, 50).a > 0.99, "well inside");
+    assert!(at(&f, 180, 10).a < 0.01, "outside, top right");
+    assert!(at(&f, 120, 10).a < 0.01, "right of the edge near the top");
+    assert!(at(&f, 120, 90).a > 0.99, "left of the edge near the bottom");
+    // On the edge itself the coverage is partial: anti-aliased, not a
+    // staircase.
+    let edge = at(&f, 150, 50).a;
+    assert!(edge > 0.05 && edge < 0.95, "{edge}");
+}
+
+#[test]
+fn an_animated_clip_path_rolls_the_box_away() {
+    let f = |tenths| {
+        markup_at(
+            "<div class='stage'><div class='sheet'></div></div>",
+            "@keyframes roll { to { clip-path: polygon(0 0, 100% 0, 100% 0, 0 0) } } \
+             .stage { position: relative; width: 200px; height: 100px } \
+             .sheet { position: absolute; inset: 0; background: #ffffff; \
+                      clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); \
+                      animation: roll 1s linear forwards }",
+            tenths,
+        )
+    };
+    assert!(at(&f(0), 100, 90).a > 0.99, "whole at the start");
+    assert!(
+        at(&f(5), 100, 25).a > 0.99,
+        "halfway, the top half is still there"
+    );
+    assert!(at(&f(5), 100, 75).a < 0.01, "and the bottom half has gone");
+    assert!(at(&f(15), 100, 5).a < 0.01, "nothing left at the end");
+}

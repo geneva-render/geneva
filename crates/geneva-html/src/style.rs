@@ -181,6 +181,10 @@ pub struct Paint {
     /// `filter: blur()`, in pixels of standard deviation, over everything
     /// the box and its children draw. Zero is no blur.
     pub blur: f64,
+    /// `clip-path: polygon()`: the points, each a share or a length of
+    /// the border box, outside which the box and its children draw
+    /// nothing.
+    pub clip_path: Option<Vec<(Extent, Extent)>>,
 }
 
 impl Default for Paint {
@@ -195,6 +199,7 @@ impl Default for Paint {
             shadow: None,
             opacity: 1.0,
             blur: 0.0,
+            clip_path: None,
         }
     }
 }
@@ -284,6 +289,8 @@ pub struct Overrides {
     pub min_width: Option<Extent>,
     /// `background-position`.
     pub background_position: Option<(Extent, Extent)>,
+    /// `clip-path`: a polygon's points, or empty for `none`.
+    pub clip_path: Option<Vec<(Extent, Extent)>>,
 }
 
 impl Overrides {
@@ -528,6 +535,9 @@ pub fn overridden(
         if let Some(v) = o.background_position {
             target.paint.background_position = v;
         }
+        if let Some(v) = &o.clip_path {
+            target.paint.clip_path = (!v.is_empty()).then(|| v.clone());
+        }
         text_override(&mut out[*id].text, &before.text, o);
         // The element's own text style went to its descendants when the
         // cascade ran; the same values are updated there.
@@ -740,6 +750,25 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
                 .get_or_insert_with(AnimationSpec::default)
                 .longhands
                 .push((property.to_owned(), v.to_owned()));
+        }
+        "clip-path" => {
+            c.paint.clip_path = if l == "none" {
+                None
+            } else if let Some(args) = function(l, v, "polygon") {
+                let points: Vec<(Extent, Extent)> = top_level_commas(args)
+                    .iter()
+                    .map(|pair| match parts(pair).as_slice() {
+                        [x, y] => Ok((extent(x, em)?, extent(y, em)?)),
+                        _ => Err(format!("{pair:?}: a polygon point is two values")),
+                    })
+                    .collect::<Result<_, _>>()?;
+                if points.len() < 3 {
+                    return Err(format!("{v:?}: a polygon takes at least three points"));
+                }
+                Some(points)
+            } else {
+                return unsupported(property, v, "none or polygon(x y, ...)");
+            };
         }
         "filter" => {
             c.paint.blur = if l == "none" {
@@ -1172,6 +1201,14 @@ pub fn background(value: &str) -> Result<Background, String> {
         return Err(format!("{v:?}: a background image is not drawn"));
     }
     Ok(Background::Color(color(v)?))
+}
+
+/// A length or a percentage as an [`Extent`].
+fn extent(token: &str, em: f64) -> Result<Extent, String> {
+    match percent(token) {
+        Some(p) => Ok(Extent::Percent(p)),
+        None => pixels(token, em).map(Extent::Px),
+    }
 }
 
 /// `background-size`: one or two of `auto`, a length or a percentage.

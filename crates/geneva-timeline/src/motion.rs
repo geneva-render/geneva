@@ -171,6 +171,17 @@ impl NodeMotion {
                 |v| v.background_position.map(|[x, y]| (ext(x), ext(y))),
                 |a, b, u| (extent_lerp(a.0, b.0, u), extent_lerp(a.1, b.1, u)),
             ),
+            clip_path: stacked(
+                plays,
+                t,
+                base.paint.clip_path.clone().unwrap_or_default(),
+                |v| {
+                    v.clip_path
+                        .as_ref()
+                        .map(|p| p.iter().map(|[x, y]| (ext(*x), ext(*y))).collect())
+                },
+                polygon_lerp,
+            ),
         };
         let transform = stacked(
             plays,
@@ -190,7 +201,7 @@ impl NodeMotion {
 /// playing reads the value under it for an endpoint its rule leaves
 /// out, so a rule with only `to` starts from wherever the ones below it
 /// (or the style) left the element. `None` when no animation touches it.
-fn stacked<V: Copy>(
+fn stacked<V: Clone>(
     plays: &[Play],
     t: f64,
     base: V,
@@ -212,10 +223,10 @@ fn stacked<V: Copy>(
             continue;
         }
         if keys[0].0 > 0.0 {
-            keys.insert(0, (0.0, value));
+            keys.insert(0, (0.0, value.clone()));
         }
         if keys[keys.len() - 1].0 < 1.0 {
-            keys.push((1.0, value));
+            keys.push((1.0, value.clone()));
         }
         value = interpolate(&keys, p, &play.animation.easing, &lerp);
         touched = true;
@@ -224,24 +235,40 @@ fn stacked<V: Copy>(
 }
 
 /// The value at progress `p` between the keyframes around it, eased.
-fn interpolate<V: Copy>(
+fn interpolate<V: Clone>(
     keys: &[(f64, V)],
     p: f64,
     easing: &Easing,
     lerp: &impl Fn(V, V, f64) -> V,
 ) -> V {
     if p <= keys[0].0 {
-        return keys[0].1;
+        return keys[0].1.clone();
     }
     for pair in keys.windows(2) {
-        let ((a, va), (b, vb)) = (pair[0], pair[1]);
-        if p <= b {
+        let ((a, va), (b, vb)) = (&pair[0], &pair[1]);
+        if p <= *b {
             let span = b - a;
             let u = if span <= 0.0 { 1.0 } else { (p - a) / span };
-            return lerp(va, vb, easing.evaluate(u));
+            return lerp(va.clone(), vb.clone(), easing.evaluate(u));
         }
     }
-    keys[keys.len() - 1].1
+    keys[keys.len() - 1].1.clone()
+}
+
+/// Polygons with the same number of points mix point by point; any other
+/// pair, or `none` against a polygon, is a step, as CSS makes it.
+fn polygon_lerp(
+    a: Vec<(Extent, Extent)>,
+    b: Vec<(Extent, Extent)>,
+    u: f64,
+) -> Vec<(Extent, Extent)> {
+    if a.len() != b.len() || a.is_empty() {
+        return step(a, b, u);
+    }
+    a.iter()
+        .zip(&b)
+        .map(|(p, q)| (extent_lerp(p.0, q.0, u), extent_lerp(p.1, q.1, u)))
+        .collect()
 }
 
 fn lerp(a: f64, b: f64, u: f64) -> f64 {
@@ -294,11 +321,14 @@ fn shadow_lerp(a: Option<Shadow>, b: Option<Shadow>, u: f64) -> Option<Shadow> {
 }
 
 /// Lengths of one kind mix; a length and a percentage, or either and
-/// `auto`, cannot, so the change is a step.
+/// `auto`, cannot, so the change is a step. Zero is zero in any unit, so
+/// it mixes with either.
 fn extent_lerp(a: Extent, b: Extent, u: f64) -> Extent {
     match (a, b) {
         (Extent::Px(x), Extent::Px(y)) => Extent::Px(lerp(x, y, u)),
         (Extent::Percent(x), Extent::Percent(y)) => Extent::Percent(lerp(x, y, u)),
+        (Extent::Px(0.0), Extent::Percent(y)) => Extent::Percent(lerp(0.0, y, u)),
+        (Extent::Percent(x), Extent::Px(0.0)) => Extent::Percent(lerp(x, 0.0, u)),
         _ => step(a, b, u),
     }
 }

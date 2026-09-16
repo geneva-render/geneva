@@ -714,7 +714,7 @@ fn a_fade_shows_one_clip_at_a_time_and_a_crossfade_shows_both() {
       ] } ]
     }"##;
     let comp = load(text).composition.unwrap();
-    let tr = comp.layers[0].clips[1].transition_in.unwrap();
+    let tr = comp.layers[0].clips[1].transition_in.clone().unwrap();
     assert_eq!(tr.duration, Ratio::from_int(1));
 
     // A fade hands over in the middle: the outgoing clip is gone before
@@ -739,7 +739,7 @@ fn a_fade_shows_one_clip_at_a_time_and_a_crossfade_shows_both() {
     // A crossfade keeps the outgoing clip up and brings the other over it.
     let text = text.replace(r#""kind": "fade""#, r#""kind": "crossfade""#);
     let comp = load(&text).composition.unwrap();
-    let tr = comp.layers[0].clips[1].transition_in.unwrap();
+    let tr = comp.layers[0].clips[1].transition_in.clone().unwrap();
     assert_eq!(tr.incoming(half), 0.5);
     assert_eq!(tr.outgoing(half), 1.0);
     assert_eq!(tr.veil(half), 0.0, "a crossfade shows no colour of its own");
@@ -786,7 +786,7 @@ fn a_transition_can_open_and_close_a_layer() {
 
     // Opening the layer, nothing waits: the clip comes up across the whole
     // ramp and the colour clears as it does.
-    let open = clip.transition_in.unwrap();
+    let open = clip.transition_in.clone().unwrap();
     assert!(!open.paired);
     assert_eq!(open.incoming(Ratio::ZERO), 0.0);
     assert_eq!(open.incoming(Ratio::new(1, 2)), 0.5);
@@ -795,7 +795,7 @@ fn a_transition_can_open_and_close_a_layer() {
     assert_eq!(open.veil(Ratio::new(1, 2)), 0.5);
 
     // Closing it is the mirror, measured back from the clip's end.
-    let close = clip.transition_out.unwrap();
+    let close = clip.transition_out.clone().unwrap();
     assert!(!close.paired);
     assert_eq!(close.outgoing(Ratio::ZERO), 0.0);
     assert_eq!(close.outgoing(Ratio::from_int(1)), 1.0);
@@ -841,6 +841,7 @@ fn an_easing_shapes_the_transition_ramp() {
         );
         load(&text).composition.unwrap().layers[0].clips[0]
             .transition_in
+            .clone()
             .unwrap()
     };
     let quarter = Ratio::new(1, 4);

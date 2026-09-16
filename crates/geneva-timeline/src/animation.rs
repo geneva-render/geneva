@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
-use geneva_anim::{Easing, NamedEasing, Spring};
+use geneva_anim::{Easing, NamedEasing, Spring, StepPosition};
 use geneva_color::Color;
 
 /// Which way round each run of an animation plays.
@@ -117,7 +117,7 @@ impl Shift {
 /// The properties one offset of a rule sets. Each is `None` when the
 /// declaration block says nothing about it, which is how CSS decides
 /// between which offsets a property interpolates.
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Values {
     /// Added to the clip's position.
     pub translate: Option<[Shift; 2]>,
@@ -146,6 +146,8 @@ pub struct Values {
     pub min_width: Option<Shift>,
     /// `background-position`.
     pub background_position: Option<[Shift; 2]>,
+    /// `clip-path`: a polygon's points, or empty for `none`.
+    pub clip_path: Option<Vec<[Shift; 2]>>,
 }
 
 /// A `text-shadow` in a keyframe.
@@ -163,23 +165,24 @@ pub struct TextShadow {
 
 impl Values {
     /// Whether the block sets nothing at all.
-    pub fn is_empty(self) -> bool {
-        self == Self::default()
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
     }
 
     /// Whether it sets something a clip cannot play: anything past
     /// transform and opacity belongs to an element inside markup.
-    pub fn beyond_a_clip(self) -> bool {
+    pub fn beyond_a_clip(&self) -> bool {
         self.blur.is_some()
             || self.color.is_some()
             || self.text_shadow.is_some()
             || self.moves_layout()
             || self.background_position.is_some()
+            || self.clip_path.is_some()
     }
 
     /// Whether it changes where boxes land, so the markup is laid out
     /// again at each frame it plays.
-    pub fn moves_layout(self) -> bool {
+    pub fn moves_layout(&self) -> bool {
         self.letter_spacing.is_some()
             || self.width.is_some()
             || self.height.is_some()
@@ -338,7 +341,123 @@ fn easing(token: &str) -> Option<Result<Easing, String>> {
     if let Some(args) = call(token, "spring") {
         return Some(spring(&args));
     }
+    if let Some(args) = call(token, "steps") {
+        return Some(steps(&args));
+    }
+    if let Some(args) = call(token, "linear") {
+        return Some(linear_points(&args));
+    }
     None
+}
+
+/// `steps(n[, position])`.
+fn steps(args: &[&str]) -> Result<Easing, String> {
+    let (count, position) = match args {
+        [n] => (n, StepPosition::default()),
+        [n, p] => (
+            n,
+            match *p {
+                "jump-start" | "start" => StepPosition::JumpStart,
+                "jump-end" | "end" => StepPosition::JumpEnd,
+                "jump-none" => StepPosition::JumpNone,
+                "jump-both" => StepPosition::JumpBoth,
+                _ => {
+                    return Err(format!(
+                        "{p:?} is not a step position; use jump-start, jump-end, jump-none or jump-both"
+                    ));
+                }
+            },
+        ),
+        _ => return Err("steps takes a count and optionally a position".to_owned()),
+    };
+    let n: u32 = count
+        .parse()
+        .ok()
+        .filter(|n| *n > 0)
+        .ok_or_else(|| format!("steps takes a whole number of steps, not {count:?}"))?;
+    let e = Easing::Steps {
+        steps: (n, position),
+    };
+    match e.validate() {
+        Some(why) => Err(why),
+        None => Ok(e),
+    }
+}
+
+/// `linear(<output> [<input>%]{0,2}, ...)`: each entry an output with up
+/// to two inputs. An entry with none is spread evenly between the
+/// entries around it that have one, the first at 0% and the last at
+/// 100%, as CSS spreads them.
+fn linear_points(args: &[&str]) -> Result<Easing, String> {
+    let mut points: Vec<(Option<f64>, f64)> = Vec::new();
+    for entry in args {
+        let t = tokens(entry);
+        let (Some(y), rest) = (t.first(), t.get(1..).unwrap_or(&[])) else {
+            return Err("linear has an empty entry".to_owned());
+        };
+        let y = number(y)?;
+        if rest.len() > 2 {
+            return Err(format!(
+                "{entry:?}: a linear entry takes at most two inputs"
+            ));
+        }
+        let xs: Vec<f64> = rest
+            .iter()
+            .map(|p| {
+                p.strip_suffix('%')
+                    .and_then(|b| b.parse::<f64>().ok())
+                    .map(|v| v / 100.0)
+                    .ok_or_else(|| format!("{p:?} is not a percentage"))
+            })
+            .collect::<Result<_, _>>()?;
+        if xs.is_empty() {
+            points.push((None, y));
+        }
+        for x in xs {
+            points.push((Some(x), y));
+        }
+    }
+    if points.len() < 2 {
+        return Err("linear takes at least two points".to_owned());
+    }
+    let last = points.len() - 1;
+    points[0].0.get_or_insert(0.0);
+    points[last].0.get_or_insert(1.0);
+    // Inputs never go backwards, then the gaps are spread evenly.
+    let mut highest = 0.0f64;
+    for p in &mut points {
+        if let Some(x) = p.0.as_mut() {
+            *x = x.max(highest);
+            highest = *x;
+        }
+    }
+    let mut i = 0;
+    while i < points.len() {
+        if points[i].0.is_some() {
+            i += 1;
+            continue;
+        }
+        let from = i - 1;
+        let to = (i..points.len())
+            .find(|j| points[*j].0.is_some())
+            .expect("the last point has an input");
+        let (x0, x1) = (points[from].0.unwrap_or(0.0), points[to].0.unwrap_or(1.0));
+        let gaps = (to - from) as f64;
+        for (k, p) in points[from + 1..to].iter_mut().enumerate() {
+            p.0 = Some(x0 + (x1 - x0) * (k + 1) as f64 / gaps);
+        }
+        i = to;
+    }
+    let e = Easing::Linear {
+        linear: points
+            .into_iter()
+            .map(|(x, y)| [x.unwrap_or(0.0), y])
+            .collect(),
+    };
+    match e.validate() {
+        Some(why) => Err(why),
+        None => Ok(e),
+    }
 }
 
 fn cubic_bezier(args: &[&str]) -> Result<Easing, String> {
@@ -687,11 +806,12 @@ pub fn parse_declarations(block: &str) -> Result<Values, String> {
             "max-width" => v.max_width = Some(pixels(value)?),
             "min-width" => v.min_width = Some(pixels(value)?),
             "background-position" => v.background_position = Some(position_pair(value)?),
+            "clip-path" => v.clip_path = Some(clip_polygon(value)?),
             _ => {
                 return Err(format!(
                     "{property:?} cannot be animated; a keyframe sets transform, translate, \
 scale, rotate, opacity, filter, color, text-shadow, letter-spacing, width, height, \
-max-width, min-width or background-position"
+max-width, min-width, background-position or clip-path"
                 ));
             }
         }
@@ -734,6 +854,30 @@ fn text_shadow(value: &str) -> Result<Option<TextShadow>, String> {
             "{value:?}: a text-shadow is \"<x> <y> [blur] [color]\" or none"
         )),
     }
+}
+
+/// `clip-path` in a keyframe: `none`, or `polygon()` with its points as
+/// pairs of lengths or percentages.
+fn clip_polygon(value: &str) -> Result<Vec<[Shift; 2]>, String> {
+    if value == "none" {
+        return Ok(Vec::new());
+    }
+    let Some(args) = call(value, "polygon") else {
+        return Err(format!(
+            "{value:?} is not a clip-path geneva draws; use none or polygon(x y, ...)"
+        ));
+    };
+    let points: Vec<[Shift; 2]> = args
+        .iter()
+        .map(|pair| match tokens(pair).as_slice() {
+            [x, y] => Ok([pixels(x)?, pixels(y)?]),
+            _ => Err(format!("{pair:?}: a polygon point is two values")),
+        })
+        .collect::<Result<_, _>>()?;
+    if points.len() < 3 {
+        return Err(format!("{value:?}: a polygon takes at least three points"));
+    }
+    Ok(points)
 }
 
 /// `background-position` in a keyframe: one or two lengths, percentages
@@ -979,6 +1123,51 @@ mod tests {
         ] {
             assert!(parse_declarations(bad).is_err(), "{bad:?} should not parse");
         }
+    }
+
+    #[test]
+    fn steps_and_linear_are_timing_functions() {
+        let a = parse_animations("blink 1s steps(1, end)").unwrap();
+        assert_eq!(
+            a[0].easing,
+            Easing::Steps {
+                steps: (1, StepPosition::JumpEnd)
+            }
+        );
+        let a = parse_animations("go 1s steps(3, jump-none)").unwrap();
+        assert_eq!(
+            a[0].easing,
+            Easing::Steps {
+                steps: (3, StepPosition::JumpNone)
+            }
+        );
+        // Inputs left out are spread evenly; two on one entry are two
+        // points.
+        let a = parse_animations("go 1s linear(0, .5 30% 60%, .8, 1)").unwrap();
+        assert_eq!(
+            a[0].easing,
+            Easing::Linear {
+                linear: vec![[0.0, 0.0], [0.3, 0.5], [0.6, 0.5], [0.8, 0.8], [1.0, 1.0]]
+            }
+        );
+        assert!(parse_animations("go 1s steps(0)").is_err());
+        assert!(parse_animations("go 1s linear(1)").is_err());
+    }
+
+    #[test]
+    fn a_clip_path_polygon_is_a_keyframe_value() {
+        let v =
+            parse_declarations("clip-path: polygon(0% 0%, 100% 0%, 100% 200%, 0 260%)").unwrap();
+        let p = v.clip_path.expect("a polygon");
+        assert_eq!(p.len(), 4);
+        assert_eq!(p[2], [Shift::Percent(100.0), Shift::Percent(200.0)]);
+        assert_eq!(p[3], [Shift::Px(0.0), Shift::Percent(260.0)]);
+        assert_eq!(
+            parse_declarations("clip-path: none").unwrap().clip_path,
+            Some(Vec::new())
+        );
+        assert!(parse_declarations("clip-path: circle(50%)").is_err());
+        assert!(parse_declarations("clip-path: polygon(0 0, 1px 1px)").is_err());
     }
 
     #[test]

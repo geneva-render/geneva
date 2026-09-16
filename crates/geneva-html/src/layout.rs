@@ -86,6 +86,9 @@ pub struct Group {
     /// The clip an ancestor outside the group imposes, applied to the
     /// composited picture rather than to the boxes inside.
     pub clip: Option<(Rectangle, [f64; 4])>,
+    /// `clip-path: polygon()` in the surface's pixels, applied to the
+    /// group's picture before its transform.
+    pub clip_path: Option<Vec<(f64, f64)>>,
 }
 
 /// The laid-out document.
@@ -227,6 +230,7 @@ impl Walk<'_> {
         self.doc.nodes[dom].element().is_some()
             && (style.paint.opacity < 1.0
                 || style.paint.blur > 0.0
+                || style.paint.clip_path.is_some()
                 || (style.animation.is_some() && self.played_by_clip != Some(dom)))
     }
 
@@ -245,18 +249,31 @@ impl Walk<'_> {
         };
         let l = self.tree.layout(id).map_err(|e| e.to_string())?;
         let style = &self.styles[dom];
+        let rect = [
+            origin.0 + l.location.x,
+            origin.1 + l.location.y,
+            l.size.width,
+            l.size.height,
+        ];
+        let clip_path = style.paint.clip_path.as_ref().map(|points| {
+            points
+                .iter()
+                .map(|(x, y)| {
+                    (
+                        f64::from(rect[0]) + x.size(f64::from(rect[2])),
+                        f64::from(rect[1]) + y.size(f64::from(rect[3])),
+                    )
+                })
+                .collect()
+        });
         self.groups.push(Group {
             node: dom,
             parent,
-            rect: [
-                origin.0 + l.location.x,
-                origin.1 + l.location.y,
-                l.size.width,
-                l.size.height,
-            ],
+            rect,
             opacity: style.paint.opacity as f32,
             blur: style.paint.blur,
             clip: None,
+            clip_path,
         });
         Ok(Some(self.groups.len() - 1))
     }
