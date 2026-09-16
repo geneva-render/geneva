@@ -989,6 +989,30 @@ pub struct Shadow {
     pub blur: Animated<f64>,
 }
 
+/// A gradient that fills the glyphs: an object, or the gradient string
+/// alone (see [`css`](crate::css)).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TextFill {
+    /// The colour or gradient, in CSS: `"linear-gradient(90deg, #7A51CF,
+    /// #C28072)"`, `"radial-gradient(circle at 30% 40%, white, black)"`.
+    pub gradient: String,
+    /// The width in pixels of the tile the gradient is drawn on, which
+    /// repeats across the text. Defaults to the text's own width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    /// The tile's height in pixels. Defaults to the text's own height.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    /// Where the tile starts, in pixels from the left of the text's box.
+    /// Takes keyframes, which is how a gradient sweeps across the text.
+    #[serde(default)]
+    pub x: Animated<f64>,
+    /// Where the tile starts, in pixels from the top of the text's box.
+    /// Takes keyframes.
+    #[serde(default)]
+    pub y: Animated<f64>,
+}
+
 /// A text source.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1250,6 +1274,10 @@ pub struct TextStyle {
     /// Text color. Defaults to white. Takes keyframes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<Animated<ColorValue>>,
+    /// A gradient that fills the glyphs in place of `color`: an object,
+    /// or the gradient string alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<TextFill>,
     /// Extra spacing between letters in pixels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub letter_spacing: Option<f64>,

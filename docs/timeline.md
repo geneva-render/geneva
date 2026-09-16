@@ -478,6 +478,7 @@ Every source has a `kind`.
 | `weight` | no | `400` | 100 to 900. |
 | `italic` | no | `false` | |
 | `color` | no | `white` | Animatable. |
+| `fill` | no | | A gradient over the glyphs in place of `color`: `"linear-gradient(90deg, #7A51CF, #C28072)"` or `"radial-gradient(...)"` as CSS writes them (see [Gradients](#gradients)), or `{ "gradient", "width", "height", "x", "y" }`. The gradient is drawn on a tile the size of the text's box unless `width` and `height` say otherwise, and the tile repeats. `x` and `y` are where the tile starts, in pixels from the box's top left, and are animatable: a tile twice the text's width with `x` keyframed from `0` to minus the text's width sweeps the gradient across. A `highlight` keeps the base fill unless it sets a `color` or a `fill` of its own. An outline or shadow keeps its own colour. |
 | `letter_spacing` | no | `0` | Pixels. |
 | `max_width` | no | output width | Wrap width. |
 | `align` | no | `center` | `left`, `center`, `right`. |
@@ -629,8 +630,8 @@ author overrides freely: `h1`, `h2`, `h3`, `b`, `strong`, `i`, `em`,
 | Spacing | `margin`, `padding` and their per-side forms and one-to-four-value shorthands |
 | Flex | `flex-direction`, `flex-wrap`, `justify-content`, `align-items`, `align-self`, `align-content`, `gap`, `row-gap`, `column-gap`, `flex-grow`, `flex-shrink`, `flex-basis`, `flex` |
 | Border | `border`, `border-top`, `border-right`, `border-bottom`, `border-left`, `border-width`, `border-color`, `border-style` (`solid`, `none`), `border-radius` |
-| Paint | `background`, `background-color` (a colour or a gradient), `opacity`, `box-shadow` (one, not inset) |
-| Text | `color`, `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space`, `text-shadow` (one, not a list) |
+| Paint | `background`, `background-color` (a colour or a gradient), `background-size`, `background-position`, `background-clip` (`text` or `border-box`, with or without `-webkit-`), `opacity`, `box-shadow` (one, not inset) |
+| Text | `color`, `-webkit-text-fill-color` (read as `color`), `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space`, `text-shadow` (one, not a list) |
 
 Lengths are `px`, `em`, `rem` and `%`; `em` is the element's own font
 size, settled before anything else uses it, and a percentage `font-size`
@@ -672,10 +673,24 @@ black to white is lighter here at its midpoint than the same CSS in a
 browser. Ramps between saturated colours do not pass through the muddy
 middle a browser gives them.
 
+A background is drawn on a tile that repeats across the box, as in CSS:
+`background-size` is the tile, one or two of a length, a percentage or
+`auto`, and `background-position` is where it starts, lengths,
+percentages or the side keywords. `cover`, `contain` and more than one
+layer are named as undrawn.
+
+`background-clip: text` (and `-webkit-background-clip: text`) fills the
+element's glyphs, and its descendants', with the background instead of
+the box, the way a browser does with `-webkit-text-fill-color:
+transparent`. The tile is sized against each text run's own box rather
+than the element's, which is the same box for an element that holds one
+line of text and differs for one whose text wraps. This is the markup
+form of a text clip's `fill`.
+
 What is not drawn, each named rather than skipped: `conic-gradient`, any
 `repeating-` gradient, the size keywords (`closest-side` and the rest; a
 radial gradient is always sized to the farthest corner), colour hints,
-and `url()` background images. A gradient is clipped to its own box, as
+and `url()` background images. A gradient is clipped to its own tile, as
 in CSS, so a radial that has not reached its last stop by the edge stops
 there with a visible edge.
 

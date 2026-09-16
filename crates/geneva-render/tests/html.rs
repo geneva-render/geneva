@@ -192,3 +192,46 @@ fn a_text_shadow_does_not_move_the_text() {
     assert_ne!(plain, (u32::MAX, u32::MAX, 0, 0), "nothing was drawn");
     assert_eq!(plain, glow, "the glyphs moved when a shadow was added");
 }
+
+#[test]
+fn a_background_clipped_to_text_fills_the_glyphs_and_not_the_box() {
+    let f = frame(
+        r#""layers":[{"clips":[{"source":{"kind":"html","width":200,"height":100,
+        "html":"<p>HHHHH</p>",
+        "css":"p { margin: 0; font: 700 60px Liberation Sans; color: #00ff00; background: linear-gradient(90deg, #ff0000, #0000ff); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent }"},
+        "transform":{"anchor":"top left","position":"0 0"}}]}]"#,
+    );
+    let mut reds = 0;
+    let mut blues = 0;
+    let mut greens = 0;
+    let mut opaque = 0;
+    for y in 0..100 {
+        for x in 0..200 {
+            let p = at(&f, x, y);
+            if p.a > 0.95 {
+                opaque += 1;
+                if p.r > 0.7 && p.b < 0.3 {
+                    reds += 1;
+                }
+                if p.b > 0.7 && p.r < 0.3 {
+                    blues += 1;
+                }
+                if p.g > 0.3 {
+                    greens += 1;
+                }
+            }
+        }
+    }
+    assert!(opaque > 0, "the glyphs were drawn");
+    // The line box would be fully opaque if the box were painted; glyphs
+    // cover far less of it.
+    assert!(
+        opaque < 200 * 60 / 2,
+        "the box itself is not painted ({opaque} px)"
+    );
+    assert!(
+        reds > 0 && blues > 0,
+        "red at one end, blue at the other ({reds}, {blues})"
+    );
+    assert_eq!(greens, 0, "the colour gives way to the fill");
+}

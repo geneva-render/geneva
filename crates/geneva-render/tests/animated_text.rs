@@ -86,3 +86,70 @@ fn a_constant_style_still_reads_as_it_did() {
     let c = fill(&frame_at(clip, 10));
     assert!(c.g > 0.9 && c.r < 0.1 && c.b < 0.1, "{c:?}");
 }
+
+/// The mean colour of the opaque pixels on one side of the frame's middle.
+fn half(f: &geneva_render::Frame, left: bool) -> LinearRgba {
+    let (mut sum, mut n) = ([0.0f32; 3], 0.0f32);
+    for y in 0..120 {
+        for x in 0..240 {
+            let p = f.get(x, y);
+            if p.a > 0.95 && ((x < 120) == left) {
+                sum[0] += p.r;
+                sum[1] += p.g;
+                sum[2] += p.b;
+                n += 1.0;
+            }
+        }
+    }
+    assert!(n > 0.0, "nothing opaque on that side");
+    LinearRgba {
+        r: sum[0] / n,
+        g: sum[1] / n,
+        b: sum[2] / n,
+        a: 1.0,
+    }
+}
+
+#[test]
+fn a_gradient_fills_the_glyphs_across_the_text() {
+    let clip = r##""source":{"kind":"text","text":"HHHH","font":"700 48px Liberation Sans",
+        "fill":"linear-gradient(90deg, #ff0000, #0000ff)"},"duration":"2s""##;
+    let f = frame_at(clip, 5);
+    let (l, r) = (half(&f, true), half(&f, false));
+    assert!(
+        l.r > r.r && r.b > l.b,
+        "left {l:?} should be redder, right {r:?} bluer"
+    );
+    assert!(
+        l.g < 0.05 && r.g < 0.05,
+        "nothing green in a red-to-blue ramp"
+    );
+}
+
+#[test]
+fn a_sweeping_fill_moves_with_its_keyframes() {
+    // A tile twice as wide as it needs to be, red on its left half and
+    // blue on its right: the text shows one half, then the other.
+    let clip = r##""source":{"kind":"text","text":"HHHH","font":"700 48px Liberation Sans",
+        "fill":{"gradient":"linear-gradient(90deg, #ff0000 0%, #ff0000 50%, #0000ff 50%, #0000ff 100%)",
+        "width":400,"x":{"keyframes":[[0,0],["1.5s",-200]]}}},"duration":"2s""##;
+    let start = fill(&frame_at(clip, 0));
+    let end = fill(&frame_at(clip, 19));
+    assert!(start.r > 0.9 && start.b < 0.1, "red first: {start:?}");
+    assert!(end.b > 0.9 && end.r < 0.1, "blue once swept: {end:?}");
+}
+
+#[test]
+fn a_fill_that_does_not_parse_is_named() {
+    let text = r##"{"geneva":"0.3","output":{"width":240,"height":120,"fps":30,"duration":"2s"},
+        "layers":[{"clips":[{"source":{"kind":"text","text":"Hi","fill":"conic-gradient(red, blue)"},
+        "duration":"2s"}]}]}"##;
+    let l = load(text);
+    assert!(!l.is_ok());
+    let d = l
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "E103")
+        .expect("an E103");
+    assert!(d.path.ends_with("/fill/gradient"), "{}", d.path);
+}

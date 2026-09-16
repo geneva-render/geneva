@@ -28,7 +28,9 @@ pub use css::{CssError, KeyframesRule, Stylesheet};
 pub use dom::{Document, Element, HtmlError, Node, NodeId, NodeKind};
 pub use layout::{Content, Laid, Measure, Painted};
 pub use style::declared_box;
-pub use style::{Computed, Paint, Shadow, Text, TextAlign};
+pub use style::{
+    Background, Computed, Direction, Extent, Paint, Shadow, Stop, Text, TextAlign, TextFill,
+};
 
 /// Why a document did not parse, and where.
 #[derive(Debug, Clone, PartialEq, Eq)]

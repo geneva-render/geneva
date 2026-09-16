@@ -14,6 +14,7 @@
 mod assets;
 mod blur;
 mod cpu;
+mod fill;
 mod frame;
 mod html;
 mod text;

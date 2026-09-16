@@ -20,8 +20,8 @@ use crate::ratio::Ratio;
 use crate::schema::{
     ACCEPTED_VERSIONS, Asset, AssetKind, AudioOutput, AudioTrack, BlendMode, BoxSize,
     CaptionPosition, Clip, CompositionDef, Crop, Effect, Encode, FORMAT_VERSION, Fit, Layer, Mask,
-    OutputKind, ShapeKind, Source, TextAlign, TextSource, Timeline, Transform, Transition,
-    TransitionKind, VideoCodec, Word,
+    OutputKind, ShapeKind, Source, TextAlign, TextFill, TextSource, TextStyle, Timeline, Transform,
+    Transition, TransitionKind, VideoCodec, Word,
 };
 use crate::time::Time;
 
@@ -375,6 +375,47 @@ pub struct ShadowTrack {
     pub reach: f64,
 }
 
+/// A gradient over the glyphs, with its tile's offset as tracks over
+/// clip-local time.
+#[derive(Debug, Clone)]
+pub struct FillTrack {
+    /// The colour or gradient.
+    pub background: geneva_html::Background,
+    /// The tile's width in pixels; the text's own when `None`.
+    pub width: Option<f64>,
+    /// The tile's height in pixels; the text's own when `None`.
+    pub height: Option<f64>,
+    /// Where the tile starts, in pixels from the left of the text's box.
+    pub x: Track<f64>,
+    /// Where the tile starts, in pixels from the top of the text's box.
+    pub y: Track<f64>,
+}
+
+impl FillTrack {
+    /// A fill whose tile stays at `(x, y)`.
+    #[must_use]
+    pub fn constant(
+        background: geneva_html::Background,
+        size: (Option<f64>, Option<f64>),
+        x: f64,
+        y: f64,
+    ) -> Self {
+        Self {
+            background,
+            width: size.0,
+            height: size.1,
+            x: Track::constant(x),
+            y: Track::constant(y),
+        }
+    }
+
+    /// Whether the tile stays put over the clip.
+    #[must_use]
+    pub fn is_constant(&self) -> bool {
+        self.x.is_constant() && self.y.is_constant()
+    }
+}
+
 /// Text content with defaults applied.
 #[derive(Debug, Clone)]
 pub struct ResolvedText {
@@ -390,6 +431,11 @@ pub struct ResolvedText {
     pub color: Track<LinearRgba>,
     /// The highlight's colour, when there is a highlight.
     pub highlight_color: Option<Track<LinearRgba>>,
+    /// A gradient over the glyphs, in place of the colour.
+    pub fill: Option<FillTrack>,
+    /// The highlight's gradient. A highlight keeps the base fill unless
+    /// it sets a `color` or a `fill` of its own.
+    pub highlight_fill: Option<FillTrack>,
     /// The shadow, when there is one.
     pub shadow: Option<ShadowTrack>,
 }
@@ -424,6 +470,25 @@ impl ResolvedText {
                 reach: blur + x.abs().max(y.abs()),
             }
         });
+        // A gradient that does not parse is dropped here; the resolver
+        // is where it is named.
+        let fill_of = |f: &TextFill| {
+            geneva_html::style::background(&f.gradient)
+                .ok()
+                .map(|background| FillTrack {
+                    background,
+                    width: f.width.filter(|w| *w > 0.0),
+                    height: f.height.filter(|h| *h > 0.0),
+                    x: Track::constant(first(&f.x)),
+                    y: Track::constant(first(&f.y)),
+                })
+        };
+        let fill = spec.style.fill.as_ref().and_then(fill_of);
+        let highlight_fill = spec
+            .highlight
+            .as_ref()
+            .and_then(|h| highlight_fill_spec(h, &spec.style))
+            .and_then(fill_of);
         Self {
             text,
             words: Vec::new(),
@@ -431,6 +496,8 @@ impl ResolvedText {
             spec,
             color,
             highlight_color,
+            fill,
+            highlight_fill,
             shadow,
         }
     }
@@ -441,6 +508,11 @@ impl ResolvedText {
     pub fn is_static(&self) -> bool {
         self.color.is_constant()
             && self.highlight_color.as_ref().is_none_or(Track::is_constant)
+            && self.fill.as_ref().is_none_or(FillTrack::is_constant)
+            && self
+                .highlight_fill
+                .as_ref()
+                .is_none_or(FillTrack::is_constant)
             && self.shadow.as_ref().is_none_or(|s| {
                 s.color.is_constant()
                     && s.x.is_constant()
@@ -448,6 +520,19 @@ impl ResolvedText {
                     && s.blur.is_constant()
             })
     }
+}
+
+/// The fill a highlight draws with: its own, or the base style's when it
+/// sets neither a fill nor a colour. A highlight that names a colour
+/// means that colour, so the base gradient does not paint over it.
+fn highlight_fill_spec<'a>(h: &'a TextStyle, base: &'a TextStyle) -> Option<&'a TextFill> {
+    h.fill.as_ref().or_else(|| {
+        if h.color.is_none() {
+            base.fill.as_ref()
+        } else {
+            None
+        }
+    })
 }
 
 /// What a shadow is when it names no colour: half-transparent black.
@@ -2776,6 +2861,21 @@ transitions in over the same join"
             let a = h.color.as_ref().or(text.style.color.as_ref());
             self.track_color(a, &spath.key("highlight").key("color"), Color::WHITE)
         });
+        let fill = text
+            .style
+            .fill
+            .as_ref()
+            .and_then(|f| self.resolve_fill(f, &spath.key("fill")));
+        let highlight_fill = text.highlight.as_ref().and_then(|h| {
+            let f = highlight_fill_spec(h, &text.style)?;
+            // The base fill was already checked under its own path.
+            let p = if h.fill.is_some() {
+                spath.key("highlight").key("fill")
+            } else {
+                spath.key("fill")
+            };
+            self.resolve_fill(f, &p)
+        });
         let shadow = text.shadow.as_ref().map(|sh| {
             let p = spath.key("shadow");
             let x = self.track_f64(Some(&sh.x), &p.key("x"), 0.0, Ratio::ZERO, None, "shadow x");
@@ -2804,8 +2904,50 @@ transitions in over the same join"
             spec: text.clone(),
             color,
             highlight_color,
+            fill,
+            highlight_fill,
             shadow,
         }
+    }
+
+    /// A text fill's gradient parsed and its offsets as tracks. A gradient
+    /// that does not parse is an E103 and no fill; a tile with no area is
+    /// an E402.
+    fn resolve_fill(&mut self, f: &TextFill, path: &Path) -> Option<FillTrack> {
+        let background = match geneva_html::style::background(&f.gradient) {
+            Ok(bg) => bg,
+            Err(e) => {
+                self.push(
+                    Diagnostic::error("E103", path.key("gradient"), e)
+                        .with_value(json!(f.gradient))
+                        .with_help("a fill is linear-gradient(...), radial-gradient(...) or a colour, as CSS writes them"),
+                );
+                return None;
+            }
+        };
+        for (name, v) in [("width", f.width), ("height", f.height)] {
+            if let Some(v) = v {
+                if v.partial_cmp(&0.0) != Some(Ordering::Greater) {
+                    self.push(
+                        Diagnostic::error(
+                            "E402",
+                            path.key(name),
+                            format!("fill {name} must be greater than 0"),
+                        )
+                        .with_value(v),
+                    );
+                }
+            }
+        }
+        let x = self.track_f64(Some(&f.x), &path.key("x"), 0.0, Ratio::ZERO, None, "fill x");
+        let y = self.track_f64(Some(&f.y), &path.key("y"), 0.0, Ratio::ZERO, None, "fill y");
+        Some(FillTrack {
+            background,
+            width: f.width.filter(|w| *w > 0.0),
+            height: f.height.filter(|h| *h > 0.0),
+            x,
+            y,
+        })
     }
 
     /// Parses every `@keyframes` rule once, so a rule used by ten clips

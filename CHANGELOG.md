@@ -19,6 +19,15 @@ the format version it was written for.
   the radial size keywords and `url()` images are each named as
   undrawn (W450) rather than skipped; a radial is always sized to the
   farthest corner.
+- **Gradient text fill.** A text source's `fill` draws its glyphs with a
+  `linear-gradient()` or `radial-gradient()` in place of `color`, as the
+  string alone or as `{ "gradient", "width", "height", "x", "y" }`. The
+  gradient sits on a tile that repeats across the text; `x` and `y`, the
+  tile's start, are animatable, so a wide tile with a keyframed `x`
+  sweeps the gradient across the text. In markup, `background-clip: text`
+  does the same with an element's `background`, and `background-size` and
+  `background-position` place the tile, on boxes as well as text.
+  `-webkit-background-clip` and `-webkit-text-fill-color` are read too.
 - **Animatable text colour and shadow.** A `text` source's `color`,
   and a `shadow`'s `color`, `x`, `y` and `blur`, take keyframes like any
   other animatable value; the `text-shadow` shorthand stays a constant.

@@ -1375,6 +1375,12 @@ fn scale_style(spec: &mut TextSource, template: &TextSource, ratio: f64) {
         sh.y = t.y.map(|v| v * ratio);
         sh.blur = t.blur.map(|v| v * ratio);
     }
+    if let (Some(f), Some(t)) = (spec.style.fill.as_mut(), template.style.fill.as_ref()) {
+        f.width = t.width.map(|v| v * ratio);
+        f.height = t.height.map(|v| v * ratio);
+        f.x = t.x.map(|v| v * ratio);
+        f.y = t.y.map(|v| v * ratio);
+    }
 }
 
 /// The default look of burned-in subtitles for a frame `height` pixels

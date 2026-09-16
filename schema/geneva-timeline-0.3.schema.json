@@ -1490,6 +1490,17 @@
               ],
               "description": "Text color. Defaults to white. Takes keyframes."
             },
+            "fill": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TextFill"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A gradient that fills the glyphs in place of `color`: an object,\nor the gradient string alone."
+            },
             "letter_spacing": {
               "type": [
                 "number",
@@ -2056,6 +2067,17 @@
           ],
           "description": "Text color. Defaults to white. Takes keyframes."
         },
+        "fill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextFill"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A gradient that fills the glyphs in place of `color`: an object,\nor the gradient string alone."
+        },
         "letter_spacing": {
           "type": [
             "number",
@@ -2066,6 +2088,110 @@
         }
       },
       "description": "Font and color properties of text."
+    },
+    "TextFill": {
+      "title": "TextFill",
+      "description": "A gradient that fills the glyphs: an object with gradient, width, height, x and y, or the gradient string alone, such as \"linear-gradient(90deg, #7A51CF, #C28072)\".",
+      "anyOf": [
+        {
+          "description": "The object form of a text fill.",
+          "type": "object",
+          "properties": {
+            "gradient": {
+              "description": "The colour or gradient, in CSS.",
+              "type": "string"
+            },
+            "width": {
+              "description": "The tile's width in pixels. Defaults to the text's own width.",
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "height": {
+              "description": "The tile's height in pixels. Defaults to the text's own height.",
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "x": {
+              "description": "Where the tile starts, in pixels from the left of the text's box.\nTakes keyframes.",
+              "$ref": "#/$defs/Animated_double",
+              "default": 0.0
+            },
+            "y": {
+              "description": "Where the tile starts, in pixels from the top of the text's box.\nTakes keyframes.",
+              "$ref": "#/$defs/Animated_double",
+              "default": 0.0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "gradient"
+          ]
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "Animated_double": {
+      "description": "Either a constant value or {\"keyframes\": [...]} with values interpolated over time.",
+      "anyOf": [
+        {
+          "type": "number",
+          "format": "double"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "keyframes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Keyframe_double"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "keyframes"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Keyframe_double": {
+      "description": "One keyframe: {\"t\": .., \"v\": .., \"ease\": ..} or the same three in order as [t, v] or [t, v, ease].",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "$ref": "#/$defs/Time"
+            },
+            "v": {
+              "type": "number",
+              "format": "double"
+            },
+            "ease": {
+              "$ref": "#/$defs/Easing"
+            }
+          },
+          "required": [
+            "t",
+            "v"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3
+        }
+      ]
     },
     "TextAlign": {
       "oneOf": [
@@ -2126,61 +2252,6 @@
         },
         {
           "type": "string"
-        }
-      ]
-    },
-    "Animated_double": {
-      "description": "Either a constant value or {\"keyframes\": [...]} with values interpolated over time.",
-      "anyOf": [
-        {
-          "type": "number",
-          "format": "double"
-        },
-        {
-          "type": "object",
-          "properties": {
-            "keyframes": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/Keyframe_double"
-              },
-              "minItems": 1
-            }
-          },
-          "required": [
-            "keyframes"
-          ],
-          "additionalProperties": false
-        }
-      ]
-    },
-    "Keyframe_double": {
-      "description": "One keyframe: {\"t\": .., \"v\": .., \"ease\": ..} or the same three in order as [t, v] or [t, v, ease].",
-      "anyOf": [
-        {
-          "type": "object",
-          "properties": {
-            "t": {
-              "$ref": "#/$defs/Time"
-            },
-            "v": {
-              "type": "number",
-              "format": "double"
-            },
-            "ease": {
-              "$ref": "#/$defs/Easing"
-            }
-          },
-          "required": [
-            "t",
-            "v"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "array",
-          "minItems": 2,
-          "maxItems": 3
         }
       ]
     },
@@ -2290,6 +2361,17 @@
             }
           ],
           "description": "Text color. Defaults to white. Takes keyframes."
+        },
+        "fill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextFill"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A gradient that fills the glyphs in place of `color`: an object,\nor the gradient string alone."
         },
         "letter_spacing": {
           "type": [

@@ -108,11 +108,68 @@ impl Background {
     }
 }
 
+/// A `background-size` or `background-position` value along one axis.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Extent {
+    /// The box's own extent for a size; the start of the box for a
+    /// position.
+    Auto,
+    /// Pixels.
+    Px(f64),
+    /// A share of the box for a size. For a position, CSS's rule: a
+    /// share of the room left once the tile is subtracted from the box,
+    /// so `50%` centres the tile and `100%` lands it against the far edge.
+    Percent(f64),
+}
+
+impl Extent {
+    /// The size of a tile along one axis, given the box's.
+    #[must_use]
+    pub fn size(self, of: f64) -> f64 {
+        match self {
+            Self::Auto => of,
+            Self::Px(v) => v,
+            Self::Percent(p) => of * p / 100.0,
+        }
+    }
+
+    /// Where a tile starts along one axis, given the box's extent and
+    /// the tile's.
+    #[must_use]
+    pub fn position(self, of: f64, tile: f64) -> f64 {
+        match self {
+            Self::Auto => 0.0,
+            Self::Px(v) => v,
+            Self::Percent(p) => (of - tile) * p / 100.0,
+        }
+    }
+}
+
+/// A background that fills the glyphs rather than the box, which is
+/// what `background-clip: text` asks for.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextFill {
+    /// The colour or gradient.
+    pub background: Background,
+    /// The tile's size: `background-size`.
+    pub size: (Extent, Extent),
+    /// Where the tile starts: `background-position`.
+    pub position: (Extent, Extent),
+}
+
 /// What painting needs after layout.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Paint {
     /// Background fill, if any.
     pub background: Option<Background>,
+    /// The size of the background's tile: `background-size`. It repeats
+    /// across the box, as in CSS.
+    pub background_size: (Extent, Extent),
+    /// Where the background's tile starts: `background-position`.
+    pub background_position: (Extent, Extent),
+    /// `background-clip: text`. The cascade moves such a background onto
+    /// the text as a [`TextFill`], so the box itself draws none.
+    pub clip_text: bool,
     /// Border colour per side, in CSS order: top, right, bottom, left.
     pub border_color: [Color; 4],
     /// Corner radii in pixels: top-left, top-right, bottom-right, bottom-left.
@@ -127,6 +184,9 @@ impl Default for Paint {
     fn default() -> Self {
         Self {
             background: None,
+            background_size: (Extent::Auto, Extent::Auto),
+            background_position: (Extent::Px(0.0), Extent::Px(0.0)),
+            clip_text: false,
             border_color: [Color::from_rgba8(0, 0, 0, 0); 4],
             radius: [0.0; 4],
             shadow: None,
@@ -158,6 +218,10 @@ pub struct Text {
     pub pre: bool,
     /// A shadow drawn behind the glyphs.
     pub shadow: Option<Shadow>,
+    /// A background clipped to the glyphs, from an ancestor's
+    /// `background-clip: text`. It stands in for `color` while it is set.
+    /// Boxed so a style with no fill stays small.
+    pub fill: Option<Box<TextFill>>,
 }
 
 impl Default for Text {
@@ -173,6 +237,7 @@ impl Default for Text {
             align: TextAlign::Left,
             pre: false,
             shadow: None,
+            fill: None,
         }
     }
 }
@@ -342,6 +407,18 @@ pub fn cascade(doc: &Document, sheet: &Stylesheet) -> (Vec<Computed>, Vec<String
                 }
             }
             computed.text.size = em;
+            // `background-clip: text` fills the glyphs, this element's
+            // and its descendants', with what would have filled the
+            // box. The text properties are what come down to them.
+            if computed.paint.clip_text {
+                if let Some(bg) = computed.paint.background.take() {
+                    computed.text.fill = Some(Box::new(TextFill {
+                        background: bg,
+                        size: computed.paint.background_size,
+                        position: computed.paint.background_position,
+                    }));
+                }
+            }
         }
         for child in doc.children(id).iter().rev() {
             stack.push((*child, computed.clone()));
@@ -483,11 +560,20 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
         "order" => {} // Ordering is not implemented; the source order stands.
 
         "animation" => c.animation = Some(v.to_owned()),
-        "background" | "background-color" => c.paint.background = Some(background(v, em)?),
+        "background" | "background-color" => c.paint.background = Some(background(v)?),
+        "background-size" => c.paint.background_size = background_size(v, em)?,
+        "background-position" => c.paint.background_position = background_position(v, em)?,
+        "background-clip" | "-webkit-background-clip" => {
+            c.paint.clip_text = match l {
+                "text" => true,
+                "border-box" => false,
+                _ => return unsupported(property, v, "text or border-box"),
+            };
+        }
         "opacity" => c.paint.opacity = number(v)?.clamp(0.0, 1.0),
         "box-shadow" => c.paint.shadow = shadow(v, em, "box-shadow")?,
 
-        "color" => c.text.color = color(v)?,
+        "color" | "-webkit-text-fill-color" => c.text.color = color(v)?,
         "text-shadow" => c.text.shadow = shadow(v, em, "text-shadow")?,
         "font-family" => c.text.family = Some(family(v)),
         "font-size" => c.text.size = size_or_percent(v, em)?,
@@ -873,8 +959,12 @@ fn font_shorthand(value: &str, em: f64, c: &mut Computed) -> Result<(), String> 
 /// `box-shadow: 0 2px 8px #0008`. `inset` and multiple shadows are not
 /// drawn.
 /// A background: one colour, or a gradient.
-fn background(value: &str, em: f64) -> Result<Background, String> {
-    let _ = em;
+///
+/// # Errors
+///
+/// Names what it could not read: a gradient geneva does not draw, a
+/// `url()`, or a colour that is not one.
+pub fn background(value: &str) -> Result<Background, String> {
     let v = value.trim();
     let lower = v.to_ascii_lowercase();
     if let Some(rest) = function(&lower, v, "linear-gradient") {
@@ -892,6 +982,70 @@ fn background(value: &str, em: f64) -> Result<Background, String> {
         return Err(format!("{v:?}: a background image is not drawn"));
     }
     Ok(Background::Color(color(v)?))
+}
+
+/// `background-size`: one or two of `auto`, a length or a percentage.
+/// One value sets the width and leaves the height `auto`. The keywords
+/// `cover` and `contain`, and more than one layer, are not drawn.
+fn background_size(value: &str, em: f64) -> Result<(Extent, Extent), String> {
+    if value.contains(',') {
+        return Err(format!(
+            "{value:?}: one background layer is drawn, not a list"
+        ));
+    }
+    let one = |t: &str| -> Result<Extent, String> {
+        let l = t.to_ascii_lowercase();
+        match l.as_str() {
+            "auto" => Ok(Extent::Auto),
+            "cover" | "contain" => Err(format!(
+                "{value:?}: {t} is not drawn; give a length or a percentage"
+            )),
+            _ => match percent(t) {
+                Some(p) => Ok(Extent::Percent(p)),
+                None => pixels(t, em).map(Extent::Px),
+            },
+        }
+    };
+    match parts(value).as_slice() {
+        [w] => Ok((one(w)?, Extent::Auto)),
+        [w, h] => Ok((one(w)?, one(h)?)),
+        _ => Err(format!("{value:?}: a size is one or two values")),
+    }
+}
+
+/// `background-position`: one or two of a length, a percentage or a side
+/// keyword. One value sets the horizontal and centres the vertical, as
+/// CSS does. More than one layer is not drawn.
+fn background_position(value: &str, em: f64) -> Result<(Extent, Extent), String> {
+    if value.contains(',') {
+        return Err(format!(
+            "{value:?}: one background layer is drawn, not a list"
+        ));
+    }
+    let one = |t: &str| -> Result<Extent, String> {
+        match t.to_ascii_lowercase().as_str() {
+            "left" | "top" => Ok(Extent::Percent(0.0)),
+            "center" => Ok(Extent::Percent(50.0)),
+            "right" | "bottom" => Ok(Extent::Percent(100.0)),
+            _ => match percent(t) {
+                Some(p) => Ok(Extent::Percent(p)),
+                None => pixels(t, em).map(Extent::Px),
+            },
+        }
+    };
+    let p = parts(value);
+    // A lone side keyword names its axis; `top` alone is the vertical.
+    let vertical_first = p.len() == 1
+        && matches!(p[0].to_ascii_lowercase().as_str(), "top" | "bottom")
+        || p.len() == 2 && matches!(p[0].to_ascii_lowercase().as_str(), "top" | "bottom")
+        || p.len() == 2 && matches!(p[1].to_ascii_lowercase().as_str(), "left" | "right");
+    match p.as_slice() {
+        [a] if vertical_first => Ok((Extent::Percent(50.0), one(a)?)),
+        [a] => Ok((one(a)?, Extent::Percent(50.0))),
+        [a, b] if vertical_first => Ok((one(b)?, one(a)?)),
+        [a, b] => Ok((one(a)?, one(b)?)),
+        _ => Err(format!("{value:?}: a position is one or two values")),
+    }
 }
 
 /// The inside of `name(...)`, keeping the original case of the argument.
@@ -1325,6 +1479,52 @@ mod tests {
         assert_eq!((shadow.x, shadow.y, shadow.blur), (2.0, 3.0, 9.0));
         assert_eq!(shadow.color.to_hex(), "#00eee1");
         assert!(styles[p].paint.shadow.is_none(), "the box keeps its own");
+    }
+
+    #[test]
+    fn a_clipped_background_moves_onto_the_text() {
+        let (doc, styles, problems) = styled(
+            "<style>p { background: linear-gradient(90deg, #ff0000, #0000ff); \
+             -webkit-background-clip: text; background-clip: text; \
+             -webkit-text-fill-color: transparent }</style><p>hi</p>",
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let p = doc.children(doc.root)[0];
+        assert!(styles[p].paint.background.is_none(), "the box draws none");
+        let text = doc.children(p)[0];
+        let fill = styles[text]
+            .text
+            .fill
+            .as_ref()
+            .expect("the text has the fill");
+        assert!(matches!(fill.background, Background::Linear { .. }));
+        assert_eq!(styles[text].text.color.a, 0.0);
+    }
+
+    #[test]
+    fn a_background_size_and_position_are_read() {
+        let (doc, styles, problems) = styled(
+            "<style>p { background: #ff0000; background-size: 971px 100%; \
+             background-position: -20px 0 } q { background-position: center }</style>\
+             <p>hi</p><q>x</q>",
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let p = doc.children(doc.root)[0];
+        assert_eq!(
+            styles[p].paint.background_size,
+            (Extent::Px(971.0), Extent::Percent(100.0))
+        );
+        assert_eq!(
+            styles[p].paint.background_position,
+            (Extent::Px(-20.0), Extent::Px(0.0))
+        );
+        let q = doc.children(doc.root)[1];
+        assert_eq!(
+            styles[q].paint.background_position,
+            (Extent::Percent(50.0), Extent::Percent(50.0))
+        );
+        let (_, _, problems) = styled("<style>p { background-size: cover }</style><p>hi</p>");
+        assert_eq!(problems.len(), 1, "{problems:?}");
     }
 
     #[test]

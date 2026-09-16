@@ -14,12 +14,13 @@ use cosmic_text::{
     Style, SwashCache, SwashContent, Wrap,
 };
 use geneva_color::{Color, LinearRgba};
-use geneva_timeline::ResolvedText;
 use geneva_timeline::schema::{TextAlign, TextStyle};
+use geneva_timeline::{FillTrack, ResolvedText};
 use swash::scale::{Render, ScaleContext, Source, StrikeWith};
 use swash::zeno::{Format, Stroke, Style as ZenoStyle, Vector};
 
 use crate::assets::Image;
+use crate::fill::Fill;
 
 /// Default font size in pixels.
 const DEFAULT_SIZE: f64 = 48.0;
@@ -212,11 +213,43 @@ impl TextEngine {
             );
         }
 
+        // A gradient's tile sits on the text's box, the image less the
+        // room left for strokes and shadows, and moves by the offset
+        // sampled at this moment.
+        let text_box = (
+            f64::from(extra),
+            f64::from(extra),
+            f64::from(width) - 2.0 * f64::from(extra),
+            f64::from(height) - 2.0 * f64::from(extra),
+        );
+        let fill_now = |f: &FillTrack| {
+            Fill::new(
+                &f.background,
+                (
+                    text_box.0 + f.x.sample(t),
+                    text_box.1 + f.y.sample(t),
+                    f.width.unwrap_or(text_box.2),
+                    f.height.unwrap_or(text_box.3),
+                ),
+            )
+        };
+        // One per entry in `styles`: the base, then the highlight's.
+        let fills: Vec<Option<Fill>> = (0..styles.len())
+            .map(|i| {
+                if i == 0 {
+                    text.fill.as_ref().map(fill_now)
+                } else {
+                    text.highlight_fill.as_ref().map(fill_now)
+                }
+            })
+            .collect();
+
         // Glyph placements, computed once and reused for every pass.
         let mut placed: Vec<PlacedGlyph> = Vec::new();
         for run in buffer.layout_runs() {
             for g in run.glyphs.iter() {
                 let physical = g.physical((origin_x, origin_y + run.line_y), 1.0);
+                let style = g.metadata.min(styles.len() - 1);
                 placed.push(PlacedGlyph {
                     cache_key: physical.cache_key,
                     x: physical.x,
@@ -225,7 +258,8 @@ impl TextEngine {
                     glyph_id: g.glyph_id,
                     font_size: g.font_size,
                     weight: g.font_weight,
-                    color: styles[g.metadata.min(styles.len() - 1)].color,
+                    color: styles[style].color,
+                    style,
                 });
             }
         }
@@ -253,7 +287,7 @@ impl TextEngine {
             mask.composite(&mut image, color);
         }
         for g in &placed {
-            self.fill_into(&mut image, g);
+            self.fill_into(&mut image, g, fills[g.style].as_ref());
         }
         image
     }
@@ -294,8 +328,10 @@ impl TextEngine {
         }
     }
 
-    /// Draws a glyph's filled coverage (or color bitmap) into the image.
-    fn fill_into(&mut self, image: &mut Image, g: &PlacedGlyph) {
+    /// Draws a glyph's filled coverage (or color bitmap) into the image,
+    /// in its colour or, with a `fill`, the gradient's colour under each
+    /// pixel.
+    fn fill_into(&mut self, image: &mut Image, g: &PlacedGlyph, fill: Option<&Fill>) {
         let Some(swash_image) = self.cache.get_image(&mut self.fonts, g.cache_key).as_ref() else {
             return;
         };
@@ -305,18 +341,16 @@ impl TextEngine {
             swash_image.placement.width as usize,
             swash_image.placement.height as usize,
         );
+        let colour_at =
+            |x: i32, y: i32| fill.map_or(g.color, |f| f.at(f64::from(x) + 0.5, f64::from(y) + 0.5));
         match swash_image.content {
             SwashContent::Mask => {
                 for row in 0..h {
                     for col in 0..w {
                         let coverage = f32::from(swash_image.data[row * w + col]) / 255.0;
                         if coverage > 0.0 {
-                            blend_pixel(
-                                image,
-                                left + col as i32,
-                                top + row as i32,
-                                g.color.scaled(coverage),
-                            );
+                            let (x, y) = (left + col as i32, top + row as i32);
+                            blend_pixel(image, x, y, colour_at(x, y).scaled(coverage));
                         }
                     }
                 }
@@ -339,12 +373,8 @@ impl TextEngine {
                         let coverage =
                             (f32::from(p[0]) + f32::from(p[1]) + f32::from(p[2])) / (3.0 * 255.0);
                         if coverage > 0.0 {
-                            blend_pixel(
-                                image,
-                                left + col as i32,
-                                top + row as i32,
-                                g.color.scaled(coverage),
-                            );
+                            let (x, y) = (left + col as i32, top + row as i32);
+                            blend_pixel(image, x, y, colour_at(x, y).scaled(coverage));
                         }
                     }
                 }
@@ -461,6 +491,8 @@ struct PlacedGlyph {
     font_size: f32,
     weight: Weight,
     color: LinearRgba,
+    /// Which entry of the render's style list it was shaped with.
+    style: usize,
 }
 
 /// A coverage buffer used for shadows and outlines.

@@ -10,12 +10,13 @@ use std::collections::HashMap;
 
 use geneva_color::{Color, LinearRgba};
 use geneva_html::layout::Rectangle;
-use geneva_html::style::{Background, Direction, Stop};
+use geneva_html::style::{Extent, TextFill};
 use geneva_html::{Content, Laid, Measure, Painted, Prepared, Text};
 use geneva_timeline::schema::{Shadow, TextAlign, TextSource, TextStyle};
-use geneva_timeline::{Animated, ResolvedHtml, ResolvedText};
+use geneva_timeline::{Animated, FillTrack, ResolvedHtml, ResolvedText};
 
 use crate::assets::Image;
+use crate::fill::Fill;
 use crate::text::TextEngine;
 
 /// The engine and the images an HTML box needs, gathered before layout so
@@ -43,6 +44,7 @@ fn as_text_source(text: &str, style: &Text, max_width: f64) -> ResolvedText {
                 weight: Some(style.weight),
                 italic: Some(style.italic),
                 color: Some(Animated::Constant(style.color.into())),
+                fill: None,
                 letter_spacing: Some(style.letter_spacing),
             },
             max_width: None,
@@ -313,143 +315,21 @@ fn side(b: &Painted, px: f64, py: f64) -> usize {
     best
 }
 
-/// A background resolved against one box, so the per-pixel work is a
-/// projection and a lookup rather than parsing geometry again.
-enum Fill {
-    Flat(LinearRgba),
-    /// Stops premultiplied in linear light, which is what `LinearRgba`
-    /// already is, so interpolating them component by component is the
-    /// correct blend rather than an approximation of it.
-    Ramp {
-        /// Where the ramp starts, in pixels.
-        origin: (f64, f64),
-        /// The direction and length of the gradient line. For a radial
-        /// fill these are the two radii instead.
-        axis: (f64, f64),
-        radial: bool,
-        stops: Vec<(f64, LinearRgba)>,
-    },
-}
-
-impl Fill {
-    fn new(background: &Background, rect: Rectangle) -> Self {
-        let (x, y, w, h) = (
-            f64::from(rect[0]),
-            f64::from(rect[1]),
-            f64::from(rect[2]).max(1.0),
-            f64::from(rect[3]).max(1.0),
-        );
-        match background {
-            Background::Color(c) => Self::Flat(c.to_linear()),
-            Background::Linear { direction, stops } => {
-                let degrees = match *direction {
-                    Direction::Angle(d) => d,
-                    // A corner's angle depends on the box: the gradient
-                    // line has to be perpendicular to the diagonal, so a
-                    // wide box points the ramp more sideways.
-                    Direction::Corner { top, right } => {
-                        let corner = w.atan2(h).to_degrees();
-                        match (top, right) {
-                            (true, true) => corner,
-                            (true, false) => 360.0 - corner,
-                            (false, true) => 180.0 - corner,
-                            (false, false) => 180.0 + corner,
-                        }
-                    }
-                };
-                let radians = degrees.to_radians();
-                // CSS measures clockwise from "to top", and y grows down.
-                let (dx, dy) = (radians.sin(), -radians.cos());
-                let length = (w * dx).abs() + (h * dy).abs();
-                Self::Ramp {
-                    origin: (x + w / 2.0, y + h / 2.0),
-                    axis: (dx * length.max(1.0), dy * length.max(1.0)),
-                    radial: false,
-                    stops: ramp(stops),
-                }
-            }
-            Background::Radial { circle, at, stops } => {
-                let centre = (x + w * at.0, y + h * at.1);
-                // Sized to the farthest corner, which is what CSS does
-                // when nothing says otherwise.
-                let side_x = (centre.0 - x).max(x + w - centre.0);
-                let side_y = (centre.1 - y).max(y + h - centre.1);
-                let (rx, ry) = if *circle {
-                    let r = side_x.hypot(side_y).max(1.0);
-                    (r, r)
-                } else {
-                    // The ellipse keeps the box's proportions and is
-                    // scaled out until it touches that corner.
-                    let k = std::f64::consts::SQRT_2;
-                    ((side_x * k).max(1.0), (side_y * k).max(1.0))
-                };
-                Self::Ramp {
-                    origin: centre,
-                    axis: (rx, ry),
-                    radial: true,
-                    stops: ramp(stops),
-                }
-            }
-        }
-    }
-
-    fn at(&self, px: f64, py: f64) -> LinearRgba {
-        match self {
-            Self::Flat(c) => *c,
-            Self::Ramp {
-                origin,
-                axis,
-                radial,
-                stops,
-            } => {
-                let (ox, oy) = *origin;
-                let t = if *radial {
-                    ((px - ox) / axis.0).hypot((py - oy) / axis.1)
-                } else {
-                    let length2 = axis.0 * axis.0 + axis.1 * axis.1;
-                    ((px - ox) * axis.0 + (py - oy) * axis.1) / length2 + 0.5
-                };
-                sample(stops, t.clamp(0.0, 1.0))
-            }
-        }
-    }
-}
-
-/// Stops as (position, premultiplied linear colour).
-fn ramp(stops: &[Stop]) -> Vec<(f64, LinearRgba)> {
-    stops
-        .iter()
-        .map(|s| (s.at.unwrap_or(0.0), s.color.to_linear()))
-        .collect()
-}
-
-fn sample(stops: &[(f64, LinearRgba)], t: f64) -> LinearRgba {
-    let Some(first) = stops.first() else {
-        return LinearRgba::TRANSPARENT;
-    };
-    if t <= first.0 {
-        return first.1;
-    }
-    for pair in stops.windows(2) {
-        let (a, b) = (pair[0], pair[1]);
-        if t <= b.0 {
-            let span = b.0 - a.0;
-            // Two stops at the same place are a hard edge, not a
-            // division by zero.
-            let k = if span <= f64::EPSILON {
-                1.0
-            } else {
-                (t - a.0) / span
-            } as f32;
-            return LinearRgba {
-                r: a.1.r + (b.1.r - a.1.r) * k,
-                g: a.1.g + (b.1.g - a.1.g) * k,
-                b: a.1.b + (b.1.b - a.1.b) * k,
-                a: a.1.a + (b.1.a - a.1.a) * k,
-            };
-        }
-    }
-    stops[stops.len() - 1].1
+/// The tile a background repeats over a box: its `background-size`
+/// placed at its `background-position`.
+fn tile(
+    rect: Rectangle,
+    size: (Extent, Extent),
+    position: (Extent, Extent),
+) -> (f64, f64, f64, f64) {
+    let (w, h) = (f64::from(rect[2]), f64::from(rect[3]));
+    let (tw, th) = (size.0.size(w).max(1.0), size.1.size(h).max(1.0));
+    (
+        f64::from(rect[0]) + position.0.position(w, tw),
+        f64::from(rect[1]) + position.1.position(h, th),
+        tw,
+        th,
+    )
 }
 
 fn paint_box(image: &mut Image, b: &Painted) {
@@ -459,7 +339,12 @@ fn paint_box(image: &mut Image, b: &Painted) {
     if background.is_none() && !has_border {
         return;
     }
-    let fill = background.map(|bg| Fill::new(bg, b.rect));
+    let fill = background.map(|bg| {
+        Fill::new(
+            bg,
+            tile(b.rect, b.paint.background_size, b.paint.background_position),
+        )
+    });
     let (inner_rect, inner_radius) = inner(b);
     let (x0, y0, x1, y1) = bounds(image, b.rect, 1.0);
     for y in y0..y1 {
@@ -545,22 +430,50 @@ fn paint_text(image: &mut Image, b: &Painted, run: &str, style: &Text, engine: &
         return;
     }
     let box_width = f64::from(b.content_rect[2]).max(1.0);
-    let source = as_text_source(run, style, box_width);
+    let mut source = as_text_source(run, style, box_width);
+    let inset = crate::text::inset_for(&source);
+    // Where the glyphs sit in the run's box: aligned text that is
+    // narrower than its box is shifted along it by a share of the slack.
+    let shift = |drawn_width: f64| {
+        let slack = box_width - (drawn_width - 2.0 * inset);
+        match style.align {
+            geneva_html::TextAlign::Left => 0.0,
+            geneva_html::TextAlign::Center => slack / 2.0,
+            geneva_html::TextAlign::Right => slack,
+        }
+    };
+    if let Some(fill) = &style.fill {
+        // The tile sits on the run's box, and the engine's on the text's
+        // own, so an aligned run needs its width first to place one on
+        // the other. A left-aligned run has no slack to measure.
+        let along = match style.align {
+            geneva_html::TextAlign::Left => 0.0,
+            _ => shift(f64::from(engine.render(&source, 0.0).width)),
+        };
+        source.fill = Some(fill_track(fill, b.content_rect, along));
+    }
     let drawn = engine.render(&source, 0.0);
     // The engine leaves room around the glyphs for a stroke and a
     // shadow. Layout did not count it, so painting takes it back off:
     // the glyphs land where they would have with no shadow, and the
     // shadow spills outside the box the way it does on a page.
-    let inset = crate::text::inset_for(&source);
-    let slack = box_width - (f64::from(drawn.width) - 2.0 * inset);
-    let dx = f64::from(b.content_rect[0]) - inset
-        + match style.align {
-            geneva_html::TextAlign::Left => 0.0,
-            geneva_html::TextAlign::Center => slack / 2.0,
-            geneva_html::TextAlign::Right => slack,
-        };
+    let dx = f64::from(b.content_rect[0]) - inset + shift(f64::from(drawn.width));
     let dy = f64::from(b.content_rect[1]) - inset;
     blit(image, b, &drawn, dx, dy, 1.0);
+}
+
+/// A markup text fill as the engine takes it: the tile sized against the
+/// run's box and placed from the text's own, which starts `along` pixels
+/// into the run.
+fn fill_track(fill: &TextFill, rect: Rectangle, along: f64) -> FillTrack {
+    let (w, h) = (f64::from(rect[2]).max(1.0), f64::from(rect[3]).max(1.0));
+    let (tw, th) = (fill.size.0.size(w).max(1.0), fill.size.1.size(h).max(1.0));
+    FillTrack::constant(
+        fill.background.clone(),
+        (Some(tw), Some(th)),
+        fill.position.0.position(w, tw) - along,
+        fill.position.1.position(h, th),
+    )
 }
 
 fn paint_image(image: &mut Image, b: &Painted, source: &Image) {

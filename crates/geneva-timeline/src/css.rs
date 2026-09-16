@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::animated::Animated;
 use crate::color::ColorValue;
-use crate::schema::{Shadow, Stroke, TextStyle};
+use crate::schema::{Shadow, Stroke, TextFill, TextStyle};
 
 /// Splits on whitespace, keeping parenthesized groups such as
 /// `rgba(0, 0, 0, 0.5)` and quoted names together.
@@ -317,6 +317,28 @@ pub struct ShadowFields {
     pub blur: Animated<f64>,
 }
 
+/// The object form of a text fill.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TextFillFields {
+    /// The colour or gradient, in CSS.
+    pub gradient: String,
+    /// The tile's width in pixels. Defaults to the text's own width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    /// The tile's height in pixels. Defaults to the text's own height.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    /// Where the tile starts, in pixels from the left of the text's box.
+    /// Takes keyframes.
+    #[serde(default)]
+    pub x: Animated<f64>,
+    /// Where the tile starts, in pixels from the top of the text's box.
+    /// Takes keyframes.
+    #[serde(default)]
+    pub y: Animated<f64>,
+}
+
 /// The object form of an outline.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -367,6 +389,63 @@ impl JsonSchema for Shadow {
         json_schema!({
             "title": "Shadow",
             "description": "A drop shadow: an object with x, y, blur and color, or the text-shadow shorthand \"<x> <y> [blur] [color]\" such as \"0 2px 8px #0008\".",
+            "anyOf": [
+                object,
+                { "type": "string" }
+            ]
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for TextFill {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct FillVisitor;
+
+        impl<'de> Visitor<'de> for FillVisitor {
+            type Value = TextFill;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str(
+                    "a fill: {\"gradient\", \"width\", \"height\", \"x\", \"y\"} or a gradient string",
+                )
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<TextFill, E> {
+                Ok(TextFill {
+                    gradient: v.to_owned(),
+                    width: None,
+                    height: None,
+                    x: Animated::Constant(0.0),
+                    y: Animated::Constant(0.0),
+                })
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<TextFill, A::Error> {
+                let f = TextFillFields::deserialize(de::value::MapAccessDeserializer::new(map))?;
+                Ok(TextFill {
+                    gradient: f.gradient,
+                    width: f.width,
+                    height: f.height,
+                    x: f.x,
+                    y: f.y,
+                })
+            }
+        }
+
+        deserializer.deserialize_any(FillVisitor)
+    }
+}
+
+impl JsonSchema for TextFill {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "TextFill".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let object = TextFillFields::json_schema(generator);
+        json_schema!({
+            "title": "TextFill",
+            "description": "A gradient that fills the glyphs: an object with gradient, width, height, x and y, or the gradient string alone, such as \"linear-gradient(90deg, #7A51CF, #C28072)\".",
             "anyOf": [
                 object,
                 { "type": "string" }
