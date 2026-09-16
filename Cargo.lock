@@ -637,6 +637,7 @@ dependencies = [
  "geneva-timeline",
  "image",
  "rayon",
+ "serde_json",
  "swash",
  "thiserror",
 ]

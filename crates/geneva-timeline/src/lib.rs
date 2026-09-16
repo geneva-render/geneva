@@ -21,13 +21,14 @@
 #![forbid(unsafe_code)]
 
 mod animated;
-mod animation;
+pub mod animation;
 pub mod captions;
 mod color;
 pub mod css;
 mod diagnostic;
 mod json_schema;
 mod length;
+pub mod motion;
 mod parse;
 mod ratio;
 mod resolve;

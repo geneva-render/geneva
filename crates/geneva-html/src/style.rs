@@ -178,6 +178,9 @@ pub struct Paint {
     pub shadow: Option<Shadow>,
     /// Multiplied into everything the box and its children draw.
     pub opacity: f64,
+    /// `filter: blur()`, in pixels of standard deviation, over everything
+    /// the box and its children draw. Zero is no blur.
+    pub blur: f64,
 }
 
 impl Default for Paint {
@@ -191,6 +194,7 @@ impl Default for Paint {
             radius: [0.0; 4],
             shadow: None,
             opacity: 1.0,
+            blur: 0.0,
         }
     }
 }
@@ -242,6 +246,65 @@ impl Default for Text {
     }
 }
 
+/// An element's `animation`, kept as written: the shorthand and any
+/// longhands set beside it. Nothing here plays it.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AnimationSpec {
+    /// The `animation` shorthand.
+    pub shorthand: Option<String>,
+    /// Longhands in cascade order, each `(property, value)`, such as
+    /// `("animation-delay", "0.2s, 0.4s")`. A shorthand written later
+    /// clears the ones before it, as in CSS.
+    pub longhands: Vec<(String, String)>,
+}
+
+/// What a frame changes on one element while an animation plays: the
+/// properties a keyframe can set, each `None` where the style stands.
+/// Applied to a copy of the computed styles before layout, so a box
+/// whose width is animated is laid out afresh at each frame.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Overrides {
+    /// `opacity`.
+    pub opacity: Option<f64>,
+    /// `filter: blur()`, in pixels.
+    pub blur: Option<f64>,
+    /// `color`.
+    pub color: Option<Color>,
+    /// `text-shadow`: `Some(None)` is `none`.
+    pub text_shadow: Option<Option<Shadow>>,
+    /// `letter-spacing`, in pixels.
+    pub letter_spacing: Option<f64>,
+    /// `width`.
+    pub width: Option<Extent>,
+    /// `height`.
+    pub height: Option<Extent>,
+    /// `max-width`.
+    pub max_width: Option<Extent>,
+    /// `min-width`.
+    pub min_width: Option<Extent>,
+    /// `background-position`.
+    pub background_position: Option<(Extent, Extent)>,
+}
+
+impl Overrides {
+    /// Whether anything here changes where boxes land, so layout has to
+    /// run again rather than only painting.
+    #[must_use]
+    pub fn moves_layout(&self) -> bool {
+        self.letter_spacing.is_some()
+            || self.width.is_some()
+            || self.height.is_some()
+            || self.max_width.is_some()
+            || self.min_width.is_some()
+    }
+
+    /// Whether nothing is set.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// Everything one element's style says.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Computed {
@@ -251,9 +314,10 @@ pub struct Computed {
     pub paint: Paint,
     /// Text, inherited by children.
     pub text: Text,
-    /// The `animation` shorthand, kept as written. Nothing here plays it;
-    /// the clip that draws the markup does.
-    pub animation: Option<String>,
+    /// The element's `animation`, kept as written. Nothing here plays
+    /// it; the clip that draws the markup does, or the renderer for an
+    /// element inside it.
+    pub animation: Option<AnimationSpec>,
     /// Whether `position` was written as `absolute` or `relative`. taffy
     /// has no `static`, so the style alone cannot say, and `z-index`
     /// applies only to a box that is positioned or a flex item.
@@ -428,6 +492,106 @@ pub fn cascade(doc: &Document, sheet: &Stylesheet) -> (Vec<Computed>, Vec<String
     (out, problems, used)
 }
 
+/// The styles with a frame's overrides applied. Text properties reach the
+/// element's descendants where they were inherited from it: a descendant
+/// that set its own keeps it, as it would under the cascade.
+#[must_use]
+pub fn overridden(
+    doc: &Document,
+    styles: &[Computed],
+    overrides: &std::collections::BTreeMap<crate::dom::NodeId, Overrides>,
+) -> Vec<Computed> {
+    let mut out = styles.to_vec();
+    for (id, o) in overrides {
+        let Some(before) = styles.get(*id).cloned() else {
+            continue;
+        };
+        let target = &mut out[*id];
+        if let Some(v) = o.opacity {
+            target.paint.opacity = v.clamp(0.0, 1.0);
+        }
+        if let Some(v) = o.blur {
+            target.paint.blur = v.max(0.0);
+        }
+        if let Some(v) = o.width {
+            target.layout.size.width = dimension_of(v);
+        }
+        if let Some(v) = o.height {
+            target.layout.size.height = dimension_of(v);
+        }
+        if let Some(v) = o.max_width {
+            target.layout.max_size.width = dimension_of(v);
+        }
+        if let Some(v) = o.min_width {
+            target.layout.min_size.width = dimension_of(v);
+        }
+        if let Some(v) = o.background_position {
+            target.paint.background_position = v;
+        }
+        text_override(&mut out[*id].text, &before.text, o);
+        // The element's own text style went to its descendants when the
+        // cascade ran; the same values are updated there.
+        let mut stack: Vec<crate::dom::NodeId> = doc.children(*id).to_vec();
+        while let Some(n) = stack.pop() {
+            text_override(&mut out[n].text, &before.text, o);
+            stack.extend(doc.children(n).iter().copied());
+        }
+    }
+    out
+}
+
+/// One node's text style under an override, changing only what still
+/// matches the animated element's own value, which is what it inherited.
+fn text_override(text: &mut Text, from: &Text, o: &Overrides) {
+    if let Some(c) = o.color {
+        if text.color == from.color {
+            text.color = c;
+        }
+    }
+    if let Some(sh) = o.text_shadow {
+        if text.shadow == from.shadow {
+            text.shadow = sh;
+        }
+    }
+    if let Some(v) = o.letter_spacing {
+        if text.letter_spacing == from.letter_spacing {
+            text.letter_spacing = v;
+        }
+    }
+    if let (Some(p), Some(fill)) = (o.background_position, text.fill.as_mut()) {
+        if from
+            .fill
+            .as_ref()
+            .is_some_and(|f| f.position == fill.position)
+        {
+            fill.position = p;
+        }
+    }
+}
+
+/// A taffy dimension as an [`Extent`], for a frame that has to start
+/// from the value the style already has. Anything taffy can say that
+/// CSS's `auto`, a length or a percentage cannot is read as `auto`.
+#[must_use]
+pub fn extent_of(d: Dimension) -> Extent {
+    let raw = d.into_raw();
+    if raw.tag() == taffy::CompactLength::LENGTH_TAG {
+        Extent::Px(f64::from(raw.value()))
+    } else if raw.tag() == taffy::CompactLength::PERCENT_TAG {
+        Extent::Percent(f64::from(raw.value()) * 100.0)
+    } else {
+        Extent::Auto
+    }
+}
+
+fn dimension_of(e: Extent) -> Dimension {
+    match e {
+        Extent::Auto => Dimension::auto(),
+        Extent::Px(v) => Dimension::length(v as f32),
+        Extent::Percent(p) => Dimension::percent((p / 100.0) as f32),
+    }
+}
+
 /// Applies one declaration. An unknown property is an error rather than
 /// something quietly ignored.
 #[allow(clippy::too_many_lines)]
@@ -559,7 +723,33 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
         "flex" => flex_shorthand(v, em, c)?,
         "order" => {} // Ordering is not implemented; the source order stands.
 
-        "animation" => c.animation = Some(v.to_owned()),
+        "animation" => {
+            c.animation = Some(AnimationSpec {
+                shorthand: Some(v.to_owned()),
+                longhands: Vec::new(),
+            });
+        }
+        "animation-name"
+        | "animation-duration"
+        | "animation-delay"
+        | "animation-timing-function"
+        | "animation-iteration-count"
+        | "animation-direction"
+        | "animation-fill-mode" => {
+            c.animation
+                .get_or_insert_with(AnimationSpec::default)
+                .longhands
+                .push((property.to_owned(), v.to_owned()));
+        }
+        "filter" => {
+            c.paint.blur = if l == "none" {
+                0.0
+            } else if let Some(arg) = function(l, v, "blur") {
+                pixels(arg, em)?.max(0.0)
+            } else {
+                return unsupported(property, v, "none or blur(<length>)");
+            };
+        }
         "background" | "background-color" => c.paint.background = Some(background(v)?),
         "background-size" => c.paint.background_size = background_size(v, em)?,
         "background-position" => c.paint.background_position = background_position(v, em)?,

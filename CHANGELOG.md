@@ -19,6 +19,20 @@ the format version it was written for.
   the radial size keywords and `url()` images are each named as
   undrawn (W450) rather than skipped; a radial is always sized to the
   farthest corner.
+- **Animations on elements inside markup.** An `animation` on an element
+  inside the outermost one is played by the renderer: the element is
+  composited as a group with the transform, opacity and `filter: blur()`
+  the animation gives it at each frame, several animations stack the way
+  a browser stacks them, `animation-fill-mode` and the other longhands
+  are read, and a keyframe can also set `color`, `text-shadow`,
+  `letter-spacing`, `width`, `height`, `max-width`, `min-width` and
+  `background-position`, the sizes laying the document out again at each
+  frame. Such an animation was W450 before. The outermost element's
+  animation is still the clip's, and a rule for it that sets anything
+  past transform and opacity is E442.
+- **`opacity` groups.** A box with an opacity below one is composited as
+  one picture, so its overlapping children no longer show through each
+  other. `filter: blur()` is drawn the same way.
 - **Gradient text fill.** A text source's `fill` draws its glyphs with a
   `linear-gradient()` or `radial-gradient()` in place of `color`, as the
   string alone or as `{ "gradient", "width", "height", "x", "y" }`. The

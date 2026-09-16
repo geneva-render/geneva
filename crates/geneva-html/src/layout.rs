@@ -57,10 +57,35 @@ pub struct Painted {
     pub border: [f32; 4],
     /// The clip an ancestor with `overflow: hidden` imposes, with its radii.
     pub clip: Option<(Rectangle, [f64; 4])>,
-    /// Opacity, with every ancestor's already multiplied in.
+    /// Opacity, with every ancestor's multiplied in up to the innermost
+    /// group, whose own opacity is applied when the group is composited.
     pub opacity: f32,
     /// The node this came from, for diagnostics.
     pub node: DomId,
+    /// The innermost group this box is painted inside, an index into
+    /// [`Laid::groups`], or `None` for the surface itself.
+    pub group: Option<usize>,
+}
+
+/// A subtree painted into a buffer of its own and then composited as one
+/// picture: an element with an `opacity` below one, a `filter`, or an
+/// `animation` the renderer plays. Its boxes are contiguous in paint
+/// order, since such an element is a stacking context.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Group {
+    /// The element.
+    pub node: DomId,
+    /// The group this one is inside, if any.
+    pub parent: Option<usize>,
+    /// The element's border box, which a transform turns about.
+    pub rect: Rectangle,
+    /// The element's own opacity, applied to the composited picture.
+    pub opacity: f32,
+    /// `filter: blur()` in pixels, applied to the composited picture.
+    pub blur: f64,
+    /// The clip an ancestor outside the group imposes, applied to the
+    /// composited picture rather than to the boxes inside.
+    pub clip: Option<(Rectangle, [f64; 4])>,
 }
 
 /// The laid-out document.
@@ -70,6 +95,8 @@ pub struct Laid {
     pub boxes: Vec<Painted>,
     /// The size the root settled on.
     pub size: (f32, f32),
+    /// The groups the boxes belong to, outer ones before inner.
+    pub groups: Vec<Group>,
 }
 
 /// What a taffy leaf stands for.
@@ -81,12 +108,15 @@ enum Leaf {
 
 /// Lays the document out. A dimension that is `None` is sized to the
 /// content, which is how a card fits itself to the text inside it.
+/// `played_by_clip` is the element whose animation the clip plays, so
+/// it does not open a group of its own for it.
 pub fn layout<M: Measure>(
     doc: &Document,
     styles: &[Computed],
     width: Option<f32>,
     height: Option<f32>,
     measure: &mut M,
+    played_by_clip: Option<DomId>,
 ) -> Result<Laid, String> {
     let mut tree: TaffyTree<Leaf> = TaffyTree::new();
     let mut map: Vec<Option<NodeId>> = vec![None; doc.nodes.len()];
@@ -161,22 +191,75 @@ pub fn layout<M: Measure>(
     .map_err(|e| format!("layout failed: {e}"))?;
 
     let mut boxes = Vec::new();
+    let mut groups = Vec::new();
     let size = tree.layout(root).map_err(|e| e.to_string())?.size;
-    paint_order(
+    let mut walk = Walk {
         doc,
         styles,
-        &tree,
-        &map,
-        doc.root,
-        (0.0, 0.0),
-        1.0,
-        None,
-        &mut boxes,
-    )?;
+        tree: &tree,
+        map: &map,
+        played_by_clip,
+        groups: &mut groups,
+    };
+    let root_group = walk.open_group(doc.root, (0.0, 0.0), None)?;
+    walk.paint_order(doc.root, (0.0, 0.0), 1.0, None, root_group, &mut boxes)?;
     Ok(Laid {
         boxes,
         size: (size.width, size.height),
+        groups,
     })
+}
+
+/// What the paint-order walk carries along.
+struct Walk<'a> {
+    doc: &'a Document,
+    styles: &'a [Computed],
+    tree: &'a TaffyTree<Leaf>,
+    map: &'a [Option<NodeId>],
+    played_by_clip: Option<DomId>,
+    groups: &'a mut Vec<Group>,
+}
+
+impl Walk<'_> {
+    /// Whether an element is composited as one picture.
+    fn is_group(&self, dom: DomId) -> bool {
+        let style = &self.styles[dom];
+        self.doc.nodes[dom].element().is_some()
+            && (style.paint.opacity < 1.0
+                || style.paint.blur > 0.0
+                || (style.animation.is_some() && self.played_by_clip != Some(dom)))
+    }
+
+    /// Records a group for an element that opens one, with its box.
+    fn open_group(
+        &mut self,
+        dom: DomId,
+        origin: (f32, f32),
+        parent: Option<usize>,
+    ) -> Result<Option<usize>, String> {
+        if !self.is_group(dom) {
+            return Ok(None);
+        }
+        let Some(id) = self.map[dom] else {
+            return Ok(None);
+        };
+        let l = self.tree.layout(id).map_err(|e| e.to_string())?;
+        let style = &self.styles[dom];
+        self.groups.push(Group {
+            node: dom,
+            parent,
+            rect: [
+                origin.0 + l.location.x,
+                origin.1 + l.location.y,
+                l.size.width,
+                l.size.height,
+            ],
+            opacity: style.paint.opacity as f32,
+            blur: style.paint.blur,
+            clip: None,
+        });
+        Ok(Some(self.groups.len() - 1))
+    }
 }
 
 /// Builds the taffy tree for one node and its children.
@@ -257,174 +340,180 @@ pub(crate) fn takes_z_index(doc: &Document, styles: &[Computed], dom: DomId) -> 
             .is_some_and(|p| styles[p].layout.display == Display::Flex)
 }
 
-/// Walks the tree in paint order, turning taffy's relative boxes into
-/// absolute ones.
-/// What one node contributes: its own box, where its children start, and
-/// the clip they inherit. Laying this out is separate from deciding the
-/// order the boxes are painted in.
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
-fn box_of(
-    doc: &Document,
-    styles: &[Computed],
-    tree: &TaffyTree<Leaf>,
-    map: &[Option<NodeId>],
-    dom: DomId,
-    origin: (f32, f32),
-    opacity: f32,
-    clip: Option<(Rectangle, [f64; 4])>,
-) -> Result<
-    Option<(
-        Option<Painted>,
-        (f32, f32),
-        f32,
-        Option<(Rectangle, [f64; 4])>,
-    )>,
-    String,
-> {
-    let Some(id) = map[dom] else {
-        return Ok(None);
-    };
-    let l = tree.layout(id).map_err(|e| e.to_string())?;
-    let x = origin.0 + l.location.x;
-    let y = origin.1 + l.location.y;
-    let style = &styles[dom];
-    let opacity = opacity * style.paint.opacity as f32;
-    let border = [l.border.top, l.border.right, l.border.bottom, l.border.left];
-    let rect: Rectangle = [x, y, l.size.width, l.size.height];
-    let content_rect: Rectangle = [
-        x + border[3] + l.padding.left,
-        y + border[0] + l.padding.top,
-        (l.size.width - border[1] - border[3] - l.padding.left - l.padding.right).max(0.0),
-        (l.size.height - border[0] - border[2] - l.padding.top - l.padding.bottom).max(0.0),
-    ];
+impl Walk<'_> {
+    /// What one node contributes: its own box, where its children start,
+    /// and the clip they inherit. Laying this out is separate from
+    /// deciding the order the boxes are painted in. A node that opens a
+    /// group has `group` set to it, and its own opacity is left for the
+    /// group's compositing rather than multiplied into its boxes.
+    #[allow(clippy::type_complexity)]
+    fn box_of(
+        &self,
+        dom: DomId,
+        origin: (f32, f32),
+        opacity: f32,
+        clip: Option<(Rectangle, [f64; 4])>,
+        group: Option<usize>,
+        opens_group: bool,
+    ) -> Result<
+        Option<(
+            Option<Painted>,
+            (f32, f32),
+            f32,
+            Option<(Rectangle, [f64; 4])>,
+        )>,
+        String,
+    > {
+        let doc = self.doc;
+        let Some(id) = self.map[dom] else {
+            return Ok(None);
+        };
+        let l = self.tree.layout(id).map_err(|e| e.to_string())?;
+        let x = origin.0 + l.location.x;
+        let y = origin.1 + l.location.y;
+        let style = &self.styles[dom];
+        let opacity = if opens_group {
+            opacity
+        } else {
+            opacity * style.paint.opacity as f32
+        };
+        let border = [l.border.top, l.border.right, l.border.bottom, l.border.left];
+        let rect: Rectangle = [x, y, l.size.width, l.size.height];
+        let content_rect: Rectangle = [
+            x + border[3] + l.padding.left,
+            y + border[0] + l.padding.top,
+            (l.size.width - border[1] - border[3] - l.padding.left - l.padding.right).max(0.0),
+            (l.size.height - border[0] - border[2] - l.padding.top - l.padding.bottom).max(0.0),
+        ];
 
-    let content = match &doc.nodes[dom].kind {
-        crate::dom::NodeKind::Text(text) => Content::Text {
-            text: collapse(text, style.text.pre),
-            style: style.text.clone(),
-        },
-        crate::dom::NodeKind::Element(el) if el.tag == "img" => Content::Image {
-            src: el.attrs.get("src").cloned().unwrap_or_default(),
-        },
-        crate::dom::NodeKind::Element(_) => Content::Empty,
-    };
+        let content = match &doc.nodes[dom].kind {
+            crate::dom::NodeKind::Text(text) => Content::Text {
+                text: collapse(text, style.text.pre),
+                style: style.text.clone(),
+            },
+            crate::dom::NodeKind::Element(el) if el.tag == "img" => Content::Image {
+                src: el.attrs.get("src").cloned().unwrap_or_default(),
+            },
+            crate::dom::NodeKind::Element(_) => Content::Empty,
+        };
 
-    // The root stands in for the page, so it draws only what someone
-    // asked it to draw with a `body` or `html` rule. Left alone it marks
-    // nothing, which is what keeps the painted area down to the content.
-    let root_draws = dom == doc.root
-        && (style.paint.background.is_some()
-            || style.paint.shadow.is_some()
-            || border.iter().any(|w| *w > 0.0));
-    let own = (dom != doc.root || root_draws).then(|| Painted {
-        rect,
-        content_rect,
-        content,
-        paint: style.paint.clone(),
-        border,
-        clip,
-        opacity,
-        node: dom,
-    });
-
-    let child_clip = if style.layout.overflow.x == Overflow::Visible
-        && style.layout.overflow.y == Overflow::Visible
-    {
-        clip
-    } else {
-        Some((rect, style.paint.radius))
-    };
-    Ok(Some((own, (x, y), opacity, child_clip)))
-}
-
-/// Paints a whole stacking context: the node's own box, then everything
-/// under it in the order CSS paints a context.
-#[allow(clippy::too_many_arguments)]
-fn paint_order(
-    doc: &Document,
-    styles: &[Computed],
-    tree: &TaffyTree<Leaf>,
-    map: &[Option<NodeId>],
-    dom: DomId,
-    origin: (f32, f32),
-    opacity: f32,
-    clip: Option<(Rectangle, [f64; 4])>,
-    out: &mut Vec<Painted>,
-) -> Result<(), String> {
-    let Some((own, at, opacity, child_clip)) =
-        box_of(doc, styles, tree, map, dom, origin, opacity, clip)?
-    else {
-        return Ok(());
-    };
-    let mut piles = Piles::default();
-    for (order, child) in doc.children(dom).iter().enumerate() {
-        sort_into(
-            doc, styles, tree, map, *child, at, opacity, child_clip, order, &mut piles,
-        )?;
-    }
-    piles.flatten(own, out);
-    Ok(())
-}
-
-/// Puts one node into the piles of the context it belongs to. A node with
-/// a z-index of its own opens a context and is painted whole, where its
-/// z-index puts it. A positioned node without one is also painted whole,
-/// so its children stay with it. Anything else joins the flow, and its
-/// children keep filling the same piles, which is how a z-index deeper in
-/// can still rise above an uncle.
-#[allow(clippy::too_many_arguments)]
-fn sort_into(
-    doc: &Document,
-    styles: &[Computed],
-    tree: &TaffyTree<Leaf>,
-    map: &[Option<NodeId>],
-    dom: DomId,
-    origin: (f32, f32),
-    opacity: f32,
-    clip: Option<(Rectangle, [f64; 4])>,
-    order: usize,
-    piles: &mut Piles,
-) -> Result<(), String> {
-    let z = styles[dom]
-        .z_index
-        .filter(|_| takes_z_index(doc, styles, dom));
-    if let Some(z) = z {
-        let mut boxes = Vec::new();
-        paint_order(
-            doc, styles, tree, map, dom, origin, opacity, clip, &mut boxes,
-        )?;
-        piles.contexts.push((z, order, boxes));
-        return Ok(());
-    }
-    if styles[dom].positioned {
-        let mut boxes = Vec::new();
-        paint_order(
-            doc, styles, tree, map, dom, origin, opacity, clip, &mut boxes,
-        )?;
-        piles.positioned.append(&mut boxes);
-        return Ok(());
-    }
-    let Some((own, at, opacity, child_clip)) =
-        box_of(doc, styles, tree, map, dom, origin, opacity, clip)?
-    else {
-        return Ok(());
-    };
-    piles.flow.extend(own);
-    for (i, child) in doc.children(dom).iter().enumerate() {
-        sort_into(
-            doc,
-            styles,
-            tree,
-            map,
-            *child,
-            at,
+        // The root stands in for the page, so it draws only what someone
+        // asked it to draw with a `body` or `html` rule. Left alone it marks
+        // nothing, which is what keeps the painted area down to the content.
+        let root_draws = dom == doc.root
+            && (style.paint.background.is_some()
+                || style.paint.shadow.is_some()
+                || border.iter().any(|w| *w > 0.0));
+        let own = (dom != doc.root || root_draws).then(|| Painted {
+            rect,
+            content_rect,
+            content,
+            paint: style.paint.clone(),
+            border,
+            clip,
             opacity,
-            child_clip,
-            order + i,
-            piles,
-        )?;
+            node: dom,
+            group,
+        });
+
+        let child_clip = if style.layout.overflow.x == Overflow::Visible
+            && style.layout.overflow.y == Overflow::Visible
+        {
+            clip
+        } else {
+            Some((rect, style.paint.radius))
+        };
+        Ok(Some((own, (x, y), opacity, child_clip)))
     }
-    Ok(())
+
+    /// Paints a whole stacking context: the node's own box, then
+    /// everything under it in the order CSS paints a context. `group` is
+    /// the group the node is painted inside; when the node opened it,
+    /// the group's own opacity and outside clip are kept for compositing.
+    fn paint_order(
+        &mut self,
+        dom: DomId,
+        origin: (f32, f32),
+        opacity: f32,
+        clip: Option<(Rectangle, [f64; 4])>,
+        group: Option<usize>,
+        out: &mut Vec<Painted>,
+    ) -> Result<(), String> {
+        let opens_group = group.is_some_and(|g| self.groups[g].node == dom);
+        let (opacity, clip) = if opens_group {
+            if let Some(g) = group {
+                self.groups[g].clip = clip;
+            }
+            (1.0, None)
+        } else {
+            (opacity, clip)
+        };
+        let Some((own, at, opacity, child_clip)) =
+            self.box_of(dom, origin, opacity, clip, group, opens_group)?
+        else {
+            return Ok(());
+        };
+        let mut piles = Piles::default();
+        for (order, child) in self.doc.children(dom).to_vec().iter().enumerate() {
+            self.sort_into(*child, at, opacity, child_clip, group, order, &mut piles)?;
+        }
+        piles.flatten(own, out);
+        Ok(())
+    }
+
+    /// Puts one node into the piles of the context it belongs to. A node
+    /// with a z-index of its own opens a context and is painted whole,
+    /// where its z-index puts it. A group is painted whole too, at
+    /// z-index zero, as an element with opacity or a filter is in CSS. A
+    /// positioned node without one is also painted whole, so its children
+    /// stay with it. Anything else joins the flow, and its children keep
+    /// filling the same piles, which is how a z-index deeper in can still
+    /// rise above an uncle.
+    #[allow(clippy::too_many_arguments)]
+    fn sort_into(
+        &mut self,
+        dom: DomId,
+        origin: (f32, f32),
+        opacity: f32,
+        clip: Option<(Rectangle, [f64; 4])>,
+        group: Option<usize>,
+        order: usize,
+        piles: &mut Piles,
+    ) -> Result<(), String> {
+        let z = self.styles[dom]
+            .z_index
+            .filter(|_| takes_z_index(self.doc, self.styles, dom));
+        let opened = self.open_group(dom, origin, group)?;
+        let inner = opened.or(group);
+        if let Some(z) = z {
+            let mut boxes = Vec::new();
+            self.paint_order(dom, origin, opacity, clip, inner, &mut boxes)?;
+            piles.contexts.push((z, order, boxes));
+            return Ok(());
+        }
+        if opened.is_some() {
+            let mut boxes = Vec::new();
+            self.paint_order(dom, origin, opacity, clip, inner, &mut boxes)?;
+            piles.contexts.push((0, order, boxes));
+            return Ok(());
+        }
+        if self.styles[dom].positioned {
+            let mut boxes = Vec::new();
+            self.paint_order(dom, origin, opacity, clip, inner, &mut boxes)?;
+            piles.positioned.append(&mut boxes);
+            return Ok(());
+        }
+        let Some((own, at, opacity, child_clip)) =
+            self.box_of(dom, origin, opacity, clip, group, false)?
+        else {
+            return Ok(());
+        };
+        piles.flow.extend(own);
+        for (i, child) in self.doc.children(dom).to_vec().iter().enumerate() {
+            self.sort_into(*child, at, opacity, child_clip, group, order + i, piles)?;
+        }
+        Ok(())
+    }
 }
 
 /// CSS whitespace collapsing, unless the element asked to keep it.
@@ -481,7 +570,7 @@ mod tests {
         let sheet = parse_stylesheet(&doc.style).unwrap();
         let (styles, problems, _) = crate::style::cascade(&doc, &sheet);
         assert!(problems.is_empty(), "{problems:?}");
-        let laid = layout(&doc, &styles, Some(w), Some(h), &mut Cells).unwrap();
+        let laid = layout(&doc, &styles, Some(w), Some(h), &mut Cells, None).unwrap();
         (doc, laid)
     }
 
@@ -719,15 +808,27 @@ mod tests {
     }
 
     #[test]
-    fn opacity_multiplies_down_the_tree() {
+    fn opacity_opens_a_group_rather_than_multiplying_down() {
         let (_, laid) = lay(
-            "<style>.a { opacity: 0.5 } .b { opacity: 0.5 }</style>\
-             <div class=a><div class=b></div></div>",
+            "<style>.a { opacity: 0.5 } .b { opacity: 0.5 } .c { animation: x 1s }</style>\
+             <div class=a><div class=b><div class=c></div></div><div class=d></div></div>",
             100.0,
             50.0,
         );
-        assert!((laid.boxes[0].opacity - 0.5).abs() < 1e-6);
-        assert!((laid.boxes[1].opacity - 0.25).abs() < 1e-6);
+        // Three groups: a, b inside a, c inside b. Each box carries its
+        // innermost group and an opacity of one; the groups carry theirs.
+        assert_eq!(laid.groups.len(), 3);
+        assert_eq!(laid.groups[0].parent, None);
+        assert_eq!(laid.groups[1].parent, Some(0));
+        assert_eq!(laid.groups[2].parent, Some(1));
+        assert!((laid.groups[0].opacity - 0.5).abs() < 1e-6);
+        assert!((laid.groups[2].opacity - 1.0).abs() < 1e-6);
+        for b in &laid.boxes {
+            assert!((b.opacity - 1.0).abs() < 1e-6, "{b:?}");
+        }
+        let groups: Vec<Option<usize>> = laid.boxes.iter().map(|b| b.group).collect();
+        // a's own box, then d in flow, then b (a context at z 0) with c.
+        assert_eq!(groups, vec![Some(0), Some(0), Some(1), Some(2)]);
     }
 
     #[test]

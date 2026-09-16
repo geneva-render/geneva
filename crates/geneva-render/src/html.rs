@@ -6,12 +6,13 @@
 //! not already do: a rounded rectangle is a signed distance field, and
 //! text goes through the same engine every other text source uses.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use geneva_color::{Color, LinearRgba};
 use geneva_html::layout::Rectangle;
 use geneva_html::style::{Extent, TextFill};
-use geneva_html::{Content, Laid, Measure, Painted, Prepared, Text};
+use geneva_html::{Content, Group, Laid, Measure, Painted, Prepared, Text};
+use geneva_timeline::motion::{NodeMotion, Transform};
 use geneva_timeline::schema::{Shadow, TextAlign, TextSource, TextStyle};
 use geneva_timeline::{Animated, FillTrack, ResolvedHtml, ResolvedText};
 
@@ -120,101 +121,503 @@ pub fn prepare(html: &ResolvedHtml) -> Result<Prepared, String> {
     geneva_html::prepare(&html.html, &html.css, &html.linked).map_err(|e| e.to_string())
 }
 
-/// Parses, lays out and paints an HTML source.
+/// Parses, lays out and paints an HTML source at `t` seconds into its
+/// clip. Nothing here depends on time unless an element inside carries
+/// an animation; then its style at `t` is laid over the document before
+/// layout, and the element is painted as a group and composited with the
+/// transform, opacity and blur the animation gives it.
 pub fn render(
     html: &ResolvedHtml,
     prepared: &Prepared,
     text: &mut TextEngine,
     images: &HashMap<String, Image>,
+    t: f64,
 ) -> Result<Image, String> {
     let mut context = Context {
         text,
         images,
         memo: HashMap::new(),
     };
-    let laid = prepared.layout(
+    let motions: HashMap<usize, &NodeMotion> = html.motion.iter().map(|m| (m.node, m)).collect();
+    let mut overrides = BTreeMap::new();
+    for m in &html.motion {
+        let Some(style) = prepared.styles.get(m.node) else {
+            continue;
+        };
+        let sampled = m.sample(t, style, (0.0, 0.0));
+        if !sampled.overrides.is_empty() {
+            overrides.insert(m.node, sampled.overrides);
+        }
+    }
+    let laid = prepared.layout_with(
         html.width.map(|w| w as f32),
         html.height.map(|h| h as f32),
         &mut context,
+        &overrides,
     )?;
-    Ok(paint(&laid, context.text, images))
+    // A transform is sampled against the box the element settled on,
+    // which a percentage in a translation is a share of.
+    let transforms: Vec<Option<Transform>> = laid
+        .groups
+        .iter()
+        .map(|g| {
+            let m = motions.get(&g.node)?;
+            let size = (f64::from(g.rect[2]), f64::from(g.rect[3]));
+            m.sample(t, &prepared.styles[g.node], size)
+                .transform
+                .filter(|tr| !tr.is_identity())
+        })
+        .collect();
+    Ok(paint(&laid, &transforms, context.text, images))
 }
 
-/// The union of everything the display list can touch, in the box's own
-/// pixels. A full-frame box whose markup draws one card in a corner is
-/// mostly empty; the compositor is told so rather than reading all of it.
-fn painted_bounds(laid: &Laid) -> Option<[f64; 4]> {
-    let mut b: Option<[f64; 4]> = None;
-    for painted in &laid.boxes {
-        if painted.opacity <= 0.0 {
+/// The rectangle one box can touch: its own, grown by what its shadows
+/// spill. Everything else a box draws is inside it.
+fn reach_of(painted: &Painted) -> Bounds {
+    let reach = |s: &geneva_html::style::Shadow| s.blur.abs() + s.x.abs().max(s.y.abs()) + 1.0;
+    let box_shadow = painted.paint.shadow.as_ref().map_or(0.0, reach);
+    let text_shadow = match &painted.content {
+        Content::Text { style, .. } => style.shadow.as_ref().map_or(0.0, reach),
+        _ => 0.0,
+    };
+    let grow = box_shadow.max(text_shadow);
+    [
+        f64::from(painted.rect[0]) - grow,
+        f64::from(painted.rect[1]) - grow,
+        f64::from(painted.rect[0] + painted.rect[2]) + grow,
+        f64::from(painted.rect[1] + painted.rect[3]) + grow,
+    ]
+}
+
+/// A rectangle as its left, top, right and bottom edges.
+type Bounds = [f64; 4];
+
+/// One rectangle per group, where a group has one.
+type GroupBounds = Vec<Option<Bounds>>;
+
+fn union(a: Option<Bounds>, r: Bounds) -> Bounds {
+    match a {
+        None => r,
+        Some(o) => [
+            o[0].min(r[0]),
+            o[1].min(r[1]),
+            o[2].max(r[2]),
+            o[3].max(r[3]),
+        ],
+    }
+}
+
+fn padded(r: Bounds, by: f64) -> Bounds {
+    [r[0] - by, r[1] - by, r[2] + by, r[3] + by]
+}
+
+/// A group's rectangle after its transform, about the centre of its box.
+fn transformed(r: Bounds, centre: (f64, f64), tr: &Transform) -> Bounds {
+    let mut out: Option<Bounds> = None;
+    for (x, y) in [(r[0], r[1]), (r[2], r[1]), (r[0], r[3]), (r[2], r[3])] {
+        let (px, py) = forward(tr, centre, (x, y));
+        out = Some(union(out, [px, py, px, py]));
+    }
+    out.unwrap_or(r)
+}
+
+/// Where a point of the group lands: scaled and turned about the centre,
+/// then moved. `rotate` is clockwise on a screen whose y grows down.
+fn forward(tr: &Transform, centre: (f64, f64), p: (f64, f64)) -> (f64, f64) {
+    let (dx, dy) = (
+        (p.0 - centre.0) * tr.scale[0],
+        (p.1 - centre.1) * tr.scale[1],
+    );
+    let (sin, cos) = tr.rotate.to_radians().sin_cos();
+    (
+        centre.0 + dx * cos - dy * sin + tr.translate[0],
+        centre.1 + dx * sin + dy * cos + tr.translate[1],
+    )
+}
+
+/// The point of the group that lands at `p`: [`forward`] undone.
+fn inverse(tr: &Transform, centre: (f64, f64), p: (f64, f64)) -> (f64, f64) {
+    let (dx, dy) = (
+        p.0 - centre.0 - tr.translate[0],
+        p.1 - centre.1 - tr.translate[1],
+    );
+    let (sin, cos) = tr.rotate.to_radians().sin_cos();
+    let (rx, ry) = (dx * cos + dy * sin, -dx * sin + dy * cos);
+    (centre.0 + rx / tr.scale[0], centre.1 + ry / tr.scale[1])
+}
+
+/// How much of the surface a group's own picture spans (`own`, in its
+/// own coordinates, taking in its children where they land) and where
+/// that picture lands once blurred and transformed (`placed`). Groups
+/// are listed parent before child, so a backward walk settles every
+/// child before its parent.
+fn group_bounds(laid: &Laid, transforms: &[Option<Transform>]) -> (GroupBounds, GroupBounds) {
+    let n = laid.groups.len();
+    let mut own: GroupBounds = vec![None; n];
+    let mut placed: GroupBounds = vec![None; n];
+    for b in &laid.boxes {
+        if b.opacity <= 0.0 {
             continue;
         }
-        // A shadow reaches outside its box, on the box itself or on its
-        // text. Everything else a box draws is inside it.
-        let reach = |s: &geneva_html::style::Shadow| s.blur.abs() + s.x.abs().max(s.y.abs()) + 1.0;
-        let box_shadow = painted.paint.shadow.as_ref().map_or(0.0, reach);
-        let text_shadow = match &painted.content {
-            Content::Text { style, .. } => style.shadow.as_ref().map_or(0.0, reach),
-            _ => 0.0,
-        };
-        let grow = box_shadow.max(text_shadow);
-        let r = [
-            f64::from(painted.rect[0]) - grow,
-            f64::from(painted.rect[1]) - grow,
-            f64::from(painted.rect[0] + painted.rect[2]) + grow,
-            f64::from(painted.rect[1] + painted.rect[3]) + grow,
-        ];
-        b = Some(match b {
-            None => r,
-            Some(o) => [
-                o[0].min(r[0]),
-                o[1].min(r[1]),
-                o[2].max(r[2]),
-                o[3].max(r[3]),
-            ],
-        });
+        if let Some(g) = b.group {
+            own[g] = Some(union(own[g], reach_of(b)));
+        }
     }
-    b
+    for g in (0..n).rev() {
+        let group = &laid.groups[g];
+        let Some(r) = own[g] else {
+            continue;
+        };
+        if group.opacity <= 0.0 {
+            continue;
+        }
+        let mut r = padded(r, group.blur * 3.0);
+        if let Some(tr) = &transforms[g] {
+            r = transformed(r, centre_of(group.rect), tr);
+        }
+        placed[g] = Some(r);
+        if let Some(p) = group.parent {
+            own[p] = Some(union(own[p], r));
+        }
+    }
+    (own, placed)
 }
 
-/// Paints the display list in order.
-fn paint(laid: &Laid, text: &mut TextEngine, images: &HashMap<String, Image>) -> Image {
+fn centre_of(rect: Rectangle) -> (f64, f64) {
+    (
+        f64::from(rect[0]) + f64::from(rect[2]) / 2.0,
+        f64::from(rect[1]) + f64::from(rect[3]) / 2.0,
+    )
+}
+
+/// A group's buffer while its boxes are painted. `origin` is where its
+/// top-left pixel sits on the surface.
+struct Layer {
+    group: usize,
+    image: Image,
+    origin: (i64, i64),
+}
+
+impl Layer {
+    /// A buffer covering `bounds`, or nothing for a group whose picture
+    /// would not show.
+    fn over(group: usize, bounds: Option<Bounds>, surface: (u32, u32)) -> Self {
+        let Some(b) = bounds else {
+            return Self {
+                group,
+                image: Image {
+                    width: 0,
+                    height: 0,
+                    pixels: Vec::new(),
+                    content: None,
+                },
+                origin: (0, 0),
+            };
+        };
+        // A group can reach past the surface and be moved back onto it,
+        // so its buffer is not clamped to the surface; it is bounded so a
+        // runaway scale cannot ask for the world.
+        let (w, h) = (f64::from(surface.0), f64::from(surface.1));
+        let x0 = b[0].floor().clamp(-w, 2.0 * w) as i64;
+        let y0 = b[1].floor().clamp(-h, 2.0 * h) as i64;
+        let x1 = b[2].ceil().clamp(-w, 2.0 * w) as i64;
+        let y1 = b[3].ceil().clamp(-h, 2.0 * h) as i64;
+        let width = (x1 - x0).max(0) as u32;
+        let height = (y1 - y0).max(0) as u32;
+        Self {
+            group,
+            image: Image {
+                width,
+                height,
+                pixels: vec![LinearRgba::TRANSPARENT; width as usize * height as usize],
+                content: None,
+            },
+            origin: (x0, y0),
+        }
+    }
+}
+
+/// The groups a box is inside, outermost first.
+fn chain_of(laid: &Laid, group: Option<usize>) -> Vec<usize> {
+    let mut chain = Vec::new();
+    let mut g = group;
+    while let Some(i) = g {
+        chain.push(i);
+        g = laid.groups[i].parent;
+    }
+    chain.reverse();
+    chain
+}
+
+/// A box moved so that a buffer's origin is at zero.
+fn shifted(b: &Painted, origin: (i64, i64)) -> Painted {
+    let (dx, dy) = (origin.0 as f32, origin.1 as f32);
+    let mut out = b.clone();
+    out.rect[0] -= dx;
+    out.rect[1] -= dy;
+    out.content_rect[0] -= dx;
+    out.content_rect[1] -= dy;
+    if let Some((rect, _)) = out.clip.as_mut() {
+        rect[0] -= dx;
+        rect[1] -= dy;
+    }
+    out
+}
+
+/// Paints the display list in order. Boxes on the surface are painted
+/// straight onto it; a group's boxes go into a buffer of its own, which
+/// is composited into whatever holds the group when its last box is
+/// done, under the group's opacity, blur, transform and outside clip.
+fn paint(
+    laid: &Laid,
+    transforms: &[Option<Transform>],
+    text: &mut TextEngine,
+    images: &HashMap<String, Image>,
+) -> Image {
     let width = laid.size.0.ceil().max(1.0) as u32;
     let height = laid.size.1.ceil().max(1.0) as u32;
-    let content = painted_bounds(laid).map(|[x0, y0, x1, y1]| {
+    let (own, placed) = group_bounds(laid, transforms);
+    // What the surface can be marked in: its own boxes and the top-level
+    // groups where they land. The compositor reads that rather than all
+    // of it.
+    let mut touched: Option<Bounds> = None;
+    for b in &laid.boxes {
+        if b.group.is_none() && b.opacity > 0.0 {
+            touched = Some(union(touched, reach_of(b)));
+        }
+    }
+    for (g, group) in laid.groups.iter().enumerate() {
+        if group.parent.is_none() {
+            if let Some(r) = placed[g] {
+                touched = Some(union(touched, r));
+            }
+        }
+    }
+    let content = touched.map(|[x0, y0, x1, y1]| {
         let x = x0.floor().clamp(0.0, f64::from(width)) as u32;
         let y = y0.floor().clamp(0.0, f64::from(height)) as u32;
         let right = x1.ceil().clamp(0.0, f64::from(width)) as u32;
         let bottom = y1.ceil().clamp(0.0, f64::from(height)) as u32;
         [x, y, right.saturating_sub(x), bottom.saturating_sub(y)]
     });
-    let mut image = Image {
+    let mut surface = Image {
         width,
         height,
         pixels: vec![LinearRgba::TRANSPARENT; width as usize * height as usize],
         content,
     };
+    let mut stack: Vec<Layer> = Vec::new();
+    // A group that would not show (no opacity, no size, nothing in it)
+    // is skipped whole, boxes and inner groups alike.
+    let mut skipping: Option<usize> = None;
     for b in &laid.boxes {
-        if b.opacity <= 0.0 {
+        let chain = chain_of(laid, b.group);
+        while let Some(top) = stack.last() {
+            if chain.contains(&top.group) {
+                break;
+            }
+            let layer = stack.pop().expect("checked above");
+            if skipping == Some(layer.group) {
+                skipping = None;
+                continue;
+            }
+            close(layer, laid, transforms, &placed, &mut stack, &mut surface);
+        }
+        for g in chain {
+            if stack.iter().any(|l| l.group == g) {
+                continue;
+            }
+            let group = &laid.groups[g];
+            let flat = transforms[g]
+                .as_ref()
+                .is_some_and(|tr| tr.scale[0] == 0.0 || tr.scale[1] == 0.0);
+            let hidden = skipping.is_some() || group.opacity <= 0.0 || flat || own[g].is_none();
+            if hidden {
+                skipping.get_or_insert(g);
+                stack.push(Layer::over(g, None, (width, height)));
+            } else {
+                let bounds = own[g].map(|r| padded(r, group.blur * 3.0));
+                stack.push(Layer::over(g, bounds, (width, height)));
+            }
+        }
+        if skipping.is_some() || b.opacity <= 0.0 {
             continue;
         }
-        paint_shadow(&mut image, b);
-        paint_box(&mut image, b);
-        match &b.content {
-            Content::Empty => {}
-            Content::Text { text: run, style } => paint_text(&mut image, b, run, style, text),
-            Content::Image { src } => {
-                if let Some(source) = images.get(src) {
-                    paint_image(&mut image, b, source);
-                }
+        match stack.last_mut() {
+            Some(layer) => {
+                let moved = shifted(b, layer.origin);
+                paint_one(&mut layer.image, &moved, text, images);
+            }
+            None => paint_one(&mut surface, b, text, images),
+        }
+    }
+    while let Some(layer) = stack.pop() {
+        if skipping == Some(layer.group) {
+            skipping = None;
+            continue;
+        }
+        close(layer, laid, transforms, &placed, &mut stack, &mut surface);
+    }
+    surface
+}
+
+/// Composites a finished group into the layer under it, or the surface.
+fn close(
+    layer: Layer,
+    laid: &Laid,
+    transforms: &[Option<Transform>],
+    placed: &[Option<Bounds>],
+    stack: &mut [Layer],
+    surface: &mut Image,
+) {
+    let group = &laid.groups[layer.group];
+    let tr = transforms[layer.group].as_ref();
+    let landing = placed[layer.group];
+    match stack.last_mut() {
+        Some(parent) => {
+            let origin = parent.origin;
+            composite(&mut parent.image, origin, layer, group, tr, landing);
+        }
+        None => composite(surface, (0, 0), layer, group, tr, landing),
+    }
+}
+
+/// One box onto a buffer.
+fn paint_one(
+    image: &mut Image,
+    b: &Painted,
+    text: &mut TextEngine,
+    images: &HashMap<String, Image>,
+) {
+    paint_shadow(image, b);
+    paint_box(image, b);
+    match &b.content {
+        Content::Empty => {}
+        Content::Text { text: run, style } => paint_text(image, b, run, style, text),
+        Content::Image { src } => {
+            if let Some(source) = images.get(src) {
+                paint_image(image, b, source);
             }
         }
     }
-    image
 }
 
-/// Signed distance to a rounded rectangle, negative inside. Radii go
-/// round from the top left corner, as CSS writes them.
+/// Lays a group's buffer into `dst`, whose top-left pixel sits at
+/// `dst_origin` on the surface, under the group's opacity, blur,
+/// transform and the clip an ancestor outside it imposes.
+fn composite(
+    dst: &mut Image,
+    dst_origin: (i64, i64),
+    mut layer: Layer,
+    group: &Group,
+    tr: Option<&Transform>,
+    landing: Option<Bounds>,
+) {
+    if layer.image.width == 0 || layer.image.height == 0 {
+        return;
+    }
+    if group.blur > 0.0 {
+        let (w, h) = (layer.image.width as usize, layer.image.height as usize);
+        crate::blur::blur_pixels(&mut layer.image.pixels, w, h, group.blur);
+    }
+    let opacity = group.opacity.clamp(0.0, 1.0);
+    let clip = |px: f64, py: f64| -> f32 {
+        group
+            .clip
+            .map_or(1.0, |(rect, radius)| coverage(px, py, rect, radius))
+    };
+    let src = &layer.image;
+    let (sw, sh) = (i64::from(src.width), i64::from(src.height));
+    let (dw, dh) = (i64::from(dst.width), i64::from(dst.height));
+    let Some(tr) = tr else {
+        // Straight on: pixel for pixel, offset by the two origins.
+        let (ox, oy) = (layer.origin.0 - dst_origin.0, layer.origin.1 - dst_origin.1);
+        for sy in 0..sh {
+            let dy = sy + oy;
+            if dy < 0 || dy >= dh {
+                continue;
+            }
+            for sx in 0..sw {
+                let dx = sx + ox;
+                if dx < 0 || dx >= dw {
+                    continue;
+                }
+                let texel = src.pixels[(sy * sw + sx) as usize];
+                if texel.a <= 0.0 {
+                    continue;
+                }
+                let (px, py) = (
+                    (dx + dst_origin.0) as f64 + 0.5,
+                    (dy + dst_origin.1) as f64 + 0.5,
+                );
+                over(dst, dx as usize, dy as usize, texel, opacity * clip(px, py));
+            }
+        }
+        return;
+    };
+    // Through the transform: each destination pixel inside where the
+    // group lands is mapped back into the buffer and sampled there. A
+    // group drawn smaller is sampled more than once per pixel, so its
+    // edges do not alias.
+    let Some(l) = landing else {
+        return;
+    };
+    let centre = centre_of(group.rect);
+    let x0 = (l[0].floor() as i64 - dst_origin.0).max(0);
+    let y0 = (l[1].floor() as i64 - dst_origin.1).max(0);
+    let x1 = (l[2].ceil() as i64 - dst_origin.0).min(dw);
+    let y1 = (l[3].ceil() as i64 - dst_origin.1).min(dh);
+    let taps = |scale: f64| ((1.0 / scale.abs().max(1e-3)).ceil() as usize).clamp(1, 4);
+    let (nx, ny) = (taps(tr.scale[0]), taps(tr.scale[1]));
+    let norm = 1.0 / (nx * ny) as f32;
+    for dy in y0..y1 {
+        for dx in x0..x1 {
+            let mut sum = LinearRgba::TRANSPARENT;
+            for j in 0..ny {
+                for i in 0..nx {
+                    let px = (dx + dst_origin.0) as f64 + (i as f64 + 0.5) / nx as f64;
+                    let py = (dy + dst_origin.1) as f64 + (j as f64 + 0.5) / ny as f64;
+                    let (lx, ly) = inverse(tr, centre, (px, py));
+                    let (u, v) = (lx - layer.origin.0 as f64, ly - layer.origin.1 as f64);
+                    if u < 0.0 || v < 0.0 || u >= sw as f64 || v >= sh as f64 {
+                        continue;
+                    }
+                    let s = src.sample(u, v);
+                    sum.r += s.r;
+                    sum.g += s.g;
+                    sum.b += s.b;
+                    sum.a += s.a;
+                }
+            }
+            if sum.a <= 0.0 {
+                continue;
+            }
+            let texel = sum.scaled(norm);
+            let (px, py) = (
+                (dx + dst_origin.0) as f64 + 0.5,
+                (dy + dst_origin.1) as f64 + 0.5,
+            );
+            over(dst, dx as usize, dy as usize, texel, opacity * clip(px, py));
+        }
+    }
+}
+
+/// A premultiplied pixel over another, at a coverage.
+fn over(dst: &mut Image, x: usize, y: usize, texel: LinearRgba, a: f32) {
+    if a <= 0.0 {
+        return;
+    }
+    let i = y * dst.width as usize + x;
+    let d = dst.pixels[i];
+    let inv = 1.0 - texel.a * a;
+    dst.pixels[i] = LinearRgba {
+        r: texel.r * a + d.r * inv,
+        g: texel.g * a + d.g * inv,
+        b: texel.b * a + d.b * inv,
+        a: texel.a * a + d.a * inv,
+    };
+}
+
 fn distance(px: f64, py: f64, rect: Rectangle, radius: [f64; 4]) -> f64 {
     let (w, h) = (f64::from(rect[2]), f64::from(rect[3]));
     if w <= 0.0 || h <= 0.0 {

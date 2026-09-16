@@ -14,17 +14,22 @@ use crate::Frame;
 /// Blurs `frame` in place with a Gaussian of standard deviation `sigma`
 /// pixels; a `sigma` of 0 or less leaves it as it is.
 pub fn gaussian_blur(frame: &mut Frame, sigma: f64) {
-    if sigma <= 0.0 || frame.width() == 0 || frame.height() == 0 {
+    let (w, h) = (frame.width() as usize, frame.height() as usize);
+    blur_pixels(frame.pixels_mut(), w, h, sigma);
+}
+
+/// The same blur over a bare row-major buffer of `w` by `h` pixels.
+pub(crate) fn blur_pixels(pixels: &mut [LinearRgba], w: usize, h: usize, sigma: f64) {
+    if sigma <= 0.0 || w == 0 || h == 0 || pixels.len() < w * h {
         return;
     }
-    let (w, h) = (frame.width() as usize, frame.height() as usize);
     let mut scratch = vec![LinearRgba::TRANSPARENT; w * h];
     for radius in box_radii(sigma) {
         if radius == 0 {
             continue;
         }
-        box_blur_rows(frame.pixels(), &mut scratch, w, radius);
-        box_blur_columns(&scratch, frame.pixels_mut(), w, h, radius);
+        box_blur_rows(pixels, &mut scratch, w, radius);
+        box_blur_columns(&scratch, pixels, w, h, radius);
     }
 }
 

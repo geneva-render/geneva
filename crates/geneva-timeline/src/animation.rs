@@ -8,9 +8,12 @@
 //! them into ordinary keyframe tracks, so everything downstream (the
 //! compositor, the copy planner, `--show-timeline`) is unchanged.
 
+use std::collections::BTreeMap;
 use std::fmt;
+use std::str::FromStr;
 
 use geneva_anim::{Easing, NamedEasing, Spring};
+use geneva_color::Color;
 
 /// Which way round each run of an animation plays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +40,36 @@ impl Direction {
     }
 }
 
+/// What an animation leaves on the element outside its runs:
+/// `animation-fill-mode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Fill {
+    /// Nothing: before the delay and after the last run the element is
+    /// as its style says.
+    #[default]
+    None,
+    /// The last run's final values stay after it ends.
+    Forwards,
+    /// The first run's initial values apply during the delay.
+    Backwards,
+    /// Both of the above.
+    Both,
+}
+
+impl Fill {
+    /// Whether the animation holds its end after the last run.
+    #[must_use]
+    pub fn forwards(self) -> bool {
+        matches!(self, Self::Forwards | Self::Both)
+    }
+
+    /// Whether the animation shows its start during the delay.
+    #[must_use]
+    pub fn backwards(self) -> bool {
+        matches!(self, Self::Backwards | Self::Both)
+    }
+}
+
 /// One entry of an `animation` list.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Animation {
@@ -52,6 +85,8 @@ pub struct Animation {
     pub iterations: f64,
     /// Which way round each run plays.
     pub direction: Direction,
+    /// What is left outside the runs.
+    pub fill: Fill,
 }
 
 /// A translation component: pixels, or a percentage of the clip's own
@@ -92,12 +127,64 @@ pub struct Values {
     pub rotate: Option<f64>,
     /// Opacity, which replaces the clip's own.
     pub opacity: Option<f64>,
+    /// `filter: blur()`, in pixels. The properties from here on are
+    /// played on an element inside markup, not on a clip.
+    pub blur: Option<f64>,
+    /// `color`.
+    pub color: Option<Color>,
+    /// `text-shadow`; `Some(None)` is `none`.
+    pub text_shadow: Option<Option<TextShadow>>,
+    /// `letter-spacing`, in pixels.
+    pub letter_spacing: Option<f64>,
+    /// `width`.
+    pub width: Option<Shift>,
+    /// `height`.
+    pub height: Option<Shift>,
+    /// `max-width`.
+    pub max_width: Option<Shift>,
+    /// `min-width`.
+    pub min_width: Option<Shift>,
+    /// `background-position`.
+    pub background_position: Option<[Shift; 2]>,
+}
+
+/// A `text-shadow` in a keyframe.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextShadow {
+    /// Horizontal offset in pixels.
+    pub x: f64,
+    /// Vertical offset in pixels.
+    pub y: f64,
+    /// Blur radius in pixels.
+    pub blur: f64,
+    /// Colour.
+    pub color: Color,
 }
 
 impl Values {
     /// Whether the block sets nothing at all.
     pub fn is_empty(self) -> bool {
         self == Self::default()
+    }
+
+    /// Whether it sets something a clip cannot play: anything past
+    /// transform and opacity belongs to an element inside markup.
+    pub fn beyond_a_clip(self) -> bool {
+        self.blur.is_some()
+            || self.color.is_some()
+            || self.text_shadow.is_some()
+            || self.moves_layout()
+            || self.background_position.is_some()
+    }
+
+    /// Whether it changes where boxes land, so the markup is laid out
+    /// again at each frame it plays.
+    pub fn moves_layout(self) -> bool {
+        self.letter_spacing.is_some()
+            || self.width.is_some()
+            || self.height.is_some()
+            || self.max_width.is_some()
+            || self.min_width.is_some()
     }
 }
 
@@ -306,6 +393,7 @@ fn parse_animation(entry: &str) -> Result<Animation, String> {
     let mut ease: Option<Easing> = None;
     let mut iterations: Option<f64> = None;
     let mut direction: Option<Direction> = None;
+    let mut fill: Option<Fill> = None;
 
     for token in tokens(entry) {
         if let Some(t) = time(token) {
@@ -333,12 +421,14 @@ fn parse_animation(entry: &str) -> Result<Animation, String> {
                 continue;
             }
             "normal" | "reverse" | "alternate" | "alternate-reverse" => {
-                direction = Some(match token {
-                    "reverse" => Direction::Reverse,
-                    "alternate" => Direction::Alternate,
-                    "alternate-reverse" => Direction::AlternateReverse,
-                    _ => Direction::Normal,
-                });
+                direction = Some(direction_of(token));
+                continue;
+            }
+            "none" | "forwards" | "backwards" | "both" => {
+                if fill.is_some() {
+                    return Err(format!("{entry:?} names two fill modes"));
+                }
+                fill = Some(fill_of(token));
                 continue;
             }
             _ => {}
@@ -370,7 +460,153 @@ fn parse_animation(entry: &str) -> Result<Animation, String> {
         easing: ease.unwrap_or_default(),
         iterations: iterations.unwrap_or(1.0),
         direction: direction.unwrap_or(Direction::Normal),
+        fill: fill.unwrap_or_default(),
     })
+}
+
+fn direction_of(token: &str) -> Direction {
+    match token {
+        "reverse" => Direction::Reverse,
+        "alternate" => Direction::Alternate,
+        "alternate-reverse" => Direction::AlternateReverse,
+        _ => Direction::Normal,
+    }
+}
+
+fn fill_of(token: &str) -> Fill {
+    match token {
+        "forwards" => Fill::Forwards,
+        "backwards" => Fill::Backwards,
+        "both" => Fill::Both,
+        _ => Fill::None,
+    }
+}
+
+/// The longhands an element may set beside the shorthand.
+const LONGHANDS: [&str; 7] = [
+    "animation-name",
+    "animation-duration",
+    "animation-delay",
+    "animation-timing-function",
+    "animation-iteration-count",
+    "animation-direction",
+    "animation-fill-mode",
+];
+
+/// Parses an element's `animation` with its longhands laid over it, as
+/// CSS does: each longhand is a comma-separated list applied entry by
+/// entry, repeating when it is shorter than the animation list. Without a
+/// shorthand, `animation-name` starts the list and `animation-duration`
+/// has to give each entry a length.
+///
+/// # Errors
+///
+/// Names the entry or longhand that does not parse.
+pub fn parse_animation_spec(
+    shorthand: Option<&str>,
+    longhands: &[(String, String)],
+) -> Result<Vec<Animation>, String> {
+    let mut list = match shorthand {
+        Some(s) => parse_animations(s)?,
+        None => Vec::new(),
+    };
+    // The last setting of each longhand is the one that counts.
+    let mut set: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (property, value) in longhands {
+        if !LONGHANDS.contains(&property.as_str()) {
+            return Err(format!("{property:?} is not an animation longhand"));
+        }
+        let parts: Vec<&str> = split_outside_parens(value, ',')
+            .into_iter()
+            .map(str::trim)
+            .collect();
+        if parts.iter().any(|p| p.is_empty()) {
+            return Err(format!("{property}: {value:?} has an empty entry"));
+        }
+        set.insert(property.as_str(), parts);
+    }
+    if let Some(names) = set.get("animation-name") {
+        if list.is_empty() {
+            list = names
+                .iter()
+                .map(|n| Animation {
+                    name: (*n).to_owned(),
+                    duration: 0.0,
+                    delay: 0.0,
+                    easing: Easing::default(),
+                    iterations: 1.0,
+                    direction: Direction::Normal,
+                    fill: Fill::None,
+                })
+                .collect();
+        } else {
+            for (i, a) in list.iter_mut().enumerate() {
+                names[i % names.len()].clone_into(&mut a.name);
+            }
+        }
+    }
+    if list.is_empty() && !set.is_empty() {
+        return Err(
+            "animation longhands are set with no animation to apply them to; add \
+`animation` or `animation-name`"
+                .to_owned(),
+        );
+    }
+    for (property, parts) in &set {
+        if *property == "animation-name" {
+            continue;
+        }
+        for (i, a) in list.iter_mut().enumerate() {
+            let token = parts[i % parts.len()];
+            let bad = || format!("{property}: {token:?} is not a value it takes");
+            match *property {
+                "animation-duration" => {
+                    let t = time(token).ok_or_else(bad)?;
+                    if t <= 0.0 {
+                        return Err(format!("{property}: {token:?} must be more than zero"));
+                    }
+                    a.duration = t;
+                }
+                "animation-delay" => a.delay = time(token).ok_or_else(bad)?,
+                "animation-timing-function" => a.easing = easing(token).ok_or_else(bad)??,
+                "animation-iteration-count" => {
+                    a.iterations = if token == "infinite" {
+                        f64::INFINITY
+                    } else {
+                        let n = token.parse::<f64>().map_err(|_| bad())?;
+                        if !n.is_finite() || n < 0.0 {
+                            return Err(bad());
+                        }
+                        n
+                    };
+                }
+                "animation-direction" => {
+                    if !matches!(
+                        token,
+                        "normal" | "reverse" | "alternate" | "alternate-reverse"
+                    ) {
+                        return Err(bad());
+                    }
+                    a.direction = direction_of(token);
+                }
+                _ => {
+                    if !matches!(token, "none" | "forwards" | "backwards" | "both") {
+                        return Err(bad());
+                    }
+                    a.fill = fill_of(token);
+                }
+            }
+        }
+    }
+    for a in &list {
+        if a.duration <= 0.0 {
+            return Err(format!(
+                "{:?} has no duration; set animation-duration or use the shorthand",
+                a.name
+            ));
+        }
+    }
+    Ok(list)
 }
 
 /// Parses a keyframe offset: `from`, `to` or a percentage.
@@ -414,15 +650,109 @@ pub fn parse_declarations(block: &str) -> Result<Values, String> {
             "scale" => v.scale = Some(mul(v.scale, scale_pair(value)?)),
             "rotate" => v.rotate = Some(v.rotate.unwrap_or(0.0) + angle(value)?),
             "opacity" => v.opacity = Some(number(value)?),
+            "filter" => {
+                v.blur = Some(if value == "none" {
+                    0.0
+                } else if let Some(args) = call(value, "blur") {
+                    match args.as_slice() {
+                        [px] => match pixels(px)? {
+                            Shift::Px(p) => p.max(0.0),
+                            Shift::Percent(_) => {
+                                return Err(format!("blur takes a length, not {px:?}"));
+                            }
+                        },
+                        _ => return Err(format!("{value:?}: blur takes one length")),
+                    }
+                } else {
+                    return Err(format!(
+                        "{value:?} is not a filter geneva animates; use none or blur(<length>)"
+                    ));
+                });
+            }
+            "color" => {
+                v.color =
+                    Some(Color::from_str(value).map_err(|_| format!("{value:?} is not a colour"))?);
+            }
+            "text-shadow" => v.text_shadow = Some(text_shadow(value)?),
+            "letter-spacing" => {
+                v.letter_spacing = Some(match pixels(value)? {
+                    Shift::Px(p) => p,
+                    Shift::Percent(_) => {
+                        return Err(format!("letter-spacing takes a length, not {value:?}"));
+                    }
+                });
+            }
+            "width" => v.width = Some(pixels(value)?),
+            "height" => v.height = Some(pixels(value)?),
+            "max-width" => v.max_width = Some(pixels(value)?),
+            "min-width" => v.min_width = Some(pixels(value)?),
+            "background-position" => v.background_position = Some(position_pair(value)?),
             _ => {
                 return Err(format!(
                     "{property:?} cannot be animated; a keyframe sets transform, translate, \
-scale, rotate or opacity"
+scale, rotate, opacity, filter, color, text-shadow, letter-spacing, width, height, \
+max-width, min-width or background-position"
                 ));
             }
         }
     }
     Ok(v)
+}
+
+/// `text-shadow` in a keyframe: `none`, or two or three lengths and a
+/// colour in any order.
+fn text_shadow(value: &str) -> Result<Option<TextShadow>, String> {
+    if value == "none" {
+        return Ok(None);
+    }
+    let mut lengths = Vec::new();
+    let mut color = None;
+    for token in tokens(value) {
+        if let Ok(Shift::Px(p)) = pixels(token) {
+            lengths.push(p);
+        } else if let Ok(c) = Color::from_str(token) {
+            color = Some(c);
+        } else {
+            return Err(format!(
+                "{value:?}: {token:?} is neither a length nor a colour"
+            ));
+        }
+    }
+    match lengths.as_slice() {
+        [x, y] | [x, y, _] => Ok(Some(TextShadow {
+            x: *x,
+            y: *y,
+            blur: lengths.get(2).copied().unwrap_or(0.0).max(0.0),
+            color: color.unwrap_or(Color {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.5,
+            }),
+        })),
+        _ => Err(format!(
+            "{value:?}: a text-shadow is \"<x> <y> [blur] [color]\" or none"
+        )),
+    }
+}
+
+/// `background-position` in a keyframe: one or two lengths, percentages
+/// or side keywords.
+fn position_pair(value: &str) -> Result<[Shift; 2], String> {
+    let one = |t: &str| match t {
+        "left" | "top" => Ok(Shift::Percent(0.0)),
+        "center" => Ok(Shift::Percent(50.0)),
+        "right" | "bottom" => Ok(Shift::Percent(100.0)),
+        _ => pixels(t),
+    };
+    let t = tokens(value);
+    match t.as_slice() {
+        [x] => Ok([one(x)?, Shift::Percent(50.0)]),
+        [x, y] => Ok([one(x)?, one(y)?]),
+        _ => Err(format!(
+            "invalid background-position {value:?}; write one or two values"
+        )),
+    }
 }
 
 /// Composes two translations. Two of a kind add; a pixel distance and a
@@ -642,7 +972,7 @@ mod tests {
     #[test]
     fn rejects_what_it_cannot_animate() {
         for bad in [
-            "color: red",
+            "margin: 1px",
             "transform: skew(10deg)",
             "opacity",
             "transform: translateX()",

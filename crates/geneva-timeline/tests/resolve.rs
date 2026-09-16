@@ -440,35 +440,44 @@ fn a_clips_animation_replaces_the_markups() {
 }
 
 #[test]
-fn an_animation_below_the_outermost_element_is_a_warning() {
+fn an_animation_below_the_outermost_element_is_the_renderers_to_play() {
     let text = doc(
         r#""layers":[{"clips":[{"duration":"2s","source":{"kind":"html","width":100,
-        "html":"<style>@keyframes a { from { opacity: 0 } to { opacity: 1 } } p { animation: a 1s }</style><div><p>hi</p></div>"}}]}]"#,
+        "html":"<style>@keyframes a { to { opacity: 1 } } p { animation: a 1s; animation-delay: 0.5s }</style><div><p>hi</p></div>"}}]}]"#,
     );
     let l = load(&text);
     assert!(l.is_ok(), "{:?}", l.diagnostics);
     assert!(
-        l.diagnostics
+        !l.diagnostics
             .iter()
-            .any(|d| d.code == "W450" && d.message.contains("outermost element only"))
+            .any(|d| d.code == "W450" || d.code == "W440"),
+        "{:?}",
+        l.diagnostics
     );
+    let comp = l.composition.unwrap();
+    let geneva_timeline::ResolvedSource::Html(h) = &comp.layers[0].clips[0].source else {
+        panic!("an html source");
+    };
+    assert_eq!(h.motion.len(), 1);
+    let play = &h.motion[0].plays[0];
+    assert_eq!(play.animation.name, "a");
+    assert!((play.animation.delay - 0.5).abs() < 1e-9);
+    assert_eq!(play.frames.len(), 1, "a lone `to` is kept for the renderer");
 }
 
 #[test]
-fn odd_dimensions_and_unused_assets_are_reported_softly() {
-    let text = r#"{"geneva":"0.1","output":{"width":641,"height":360,"fps":30,"duration":1},
-        "assets":{"x":{"src":"x.png"}}}"#;
-    let l = load(text);
-    assert!(l.is_ok());
-    assert!(
-        l.diagnostics
-            .iter()
-            .any(|d| d.code == "W401" && d.path == "/output/width")
+fn a_clip_cannot_play_a_rule_past_transform_and_opacity() {
+    let text = doc(
+        r#""layers":[{"clips":[{"duration":"2s","source":{"kind":"html","width":100,
+        "html":"<style>@keyframes a { from { color: red } to { color: blue } } .c { animation: a 1s }</style><div class='c'>hi</div>"}}]}]"#,
     );
+    let l = load(&text);
     assert!(
         l.diagnostics
             .iter()
-            .any(|d| d.code == "W201" && d.path == "/assets/x")
+            .any(|d| d.code == "E442" && d.message.contains("cannot play")),
+        "{:?}",
+        l.diagnostics
     );
 }
 

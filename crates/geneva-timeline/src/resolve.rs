@@ -12,10 +12,11 @@ use geneva_color::{Color, ColorTags, LinearRgba, ResolvedTags};
 use serde_json::json;
 
 use crate::animated::Animated;
-use crate::animation::{Animation, Shift, Values as AnimValues};
+use crate::animation::{Animation, Shift, Values as AnimValues, parse_animation_spec};
 use crate::color::ColorValue;
 use crate::diagnostic::{Diagnostic, Path};
 use crate::length::{Length, Point, Scale};
+use crate::motion::{NodeMotion, Play};
 use crate::ratio::Ratio;
 use crate::schema::{
     ACCEPTED_VERSIONS, Asset, AssetKind, AudioOutput, AudioTrack, BlendMode, BoxSize,
@@ -24,6 +25,7 @@ use crate::schema::{
     Transition, TransitionKind, VideoCodec, Word,
 };
 use crate::time::Time;
+use geneva_html::AnimationSpec;
 
 /// A fully resolved composition with exact times and sampleable tracks.
 #[derive(Debug, Clone)]
@@ -562,6 +564,10 @@ pub struct ResolvedHtml {
     pub width: Option<f64>,
     /// Box height in pixels, or `None` to fit the content.
     pub height: Option<f64>,
+    /// The animations on elements inside the outermost one, which the
+    /// renderer plays by compositing each such element as a group. The
+    /// outermost element's own animation is the clip's and is not here.
+    pub motion: Vec<NodeMotion>,
 }
 
 /// A subtitle track with its timing offset resolved.
@@ -708,7 +714,7 @@ struct Markup {
     /// `@keyframes` from the stylesheet, parsed.
     rules: BTreeMap<String, Vec<(f64, AnimValues)>>,
     /// The `animation` on the outermost element, as written.
-    animation: Option<String>,
+    animation: Option<AnimationSpec>,
     /// That element's box, which is what a percentage in its animation is
     /// a share of, the way CSS resolves one against the element and not
     /// against the page.
@@ -725,7 +731,7 @@ struct AnimationKnots {
 }
 
 impl AnimationKnots {
-    fn push(&mut self, time: f64, v: AnimValues, easing: Easing) {
+    fn push(&mut self, time: f64, v: &AnimValues, easing: Easing) {
         if let Some(value) = v.translate {
             // Percentages are resolved before this point, so whatever is
             // left is a distance in pixels.
@@ -846,7 +852,7 @@ fn expand(a: &Animation, steps: &[(f64, AnimValues)], length: f64, out: &mut Ani
             }
             mine.push(
                 a.delay + (f64::from(i) + progress) * a.duration,
-                *v,
+                v,
                 a.easing,
             );
         }
@@ -859,6 +865,44 @@ fn expand(a: &Animation, steps: &[(f64, AnimValues)], length: f64, out: &mut Ani
     out.scale.append(&mut mine.scale);
     out.rotate.append(&mut mine.rotate);
     out.opacity.append(&mut mine.opacity);
+}
+
+/// A rule as a clip plays it. A property set at one offset only has
+/// nothing to interpolate with, so it would hold a constant and drive
+/// nothing. Dropping it keeps a rule to what actually moves, which is
+/// what makes "to { transform: none }" mean "back to where you started"
+/// rather than "and reset the scale and rotation too". An element inside
+/// markup is played differently: there a lone `to` starts from the value
+/// under it.
+fn thinned(steps: &[(f64, AnimValues)]) -> Vec<(f64, AnimValues)> {
+    let mut steps = steps.to_vec();
+    let thin = |steps: &[(f64, AnimValues)], f: fn(&AnimValues) -> bool| {
+        steps.iter().filter(|(_, v)| f(v)).count() < 2
+    };
+    if thin(&steps, |v| v.translate.is_some()) {
+        for s in &mut steps {
+            s.1.translate = None;
+        }
+    }
+    if thin(&steps, |v| v.scale.is_some()) {
+        for s in &mut steps {
+            s.1.scale = None;
+        }
+    }
+    if thin(&steps, |v| v.rotate.is_some()) {
+        for s in &mut steps {
+            s.1.rotate = None;
+        }
+    }
+    if thin(&steps, |v| v.opacity.is_some()) {
+        for s in &mut steps {
+            s.1.opacity = None;
+        }
+    }
+    steps.retain(|(_, v)| {
+        v.translate.is_some() || v.scale.is_some() || v.rotate.is_some() || v.opacity.is_some()
+    });
+    steps
 }
 
 /// Deepest allowed nesting of compositions inside compositions.
@@ -2156,8 +2200,14 @@ transitions in over the same join"
                     .with_help("remove one of them so the file and the document agree"),
                 );
             }
-            let played = clip.animation.clone().or(markup.animation);
-            let (position, scale, rotation, opacity) = match played.as_deref() {
+            let played = match &clip.animation {
+                Some(a) => Some(AnimationSpec {
+                    shorthand: Some(a.clone()),
+                    longhands: Vec::new(),
+                }),
+                None => markup.animation,
+            };
+            let (position, scale, rotation, opacity) = match played.as_ref() {
                 None => (position, scale, rotation, opacity),
                 Some(spec) => {
                     let apath = if clip.animation.is_some() {
@@ -2986,7 +3036,8 @@ transitions in over the same join"
                     Ok(v) if v.is_empty() => self.diags.push(
                         Diagnostic::warning("W440", kpath, format!("{key} sets nothing"))
                             .with_help(
-                                "a keyframe sets transform, translate, scale, rotate or opacity",
+                                "a keyframe sets transform, opacity, filter, color, text-shadow, \
+letter-spacing, a size or background-position",
                             ),
                     ),
                     Ok(v) => steps.push((offset, v)),
@@ -2996,34 +3047,6 @@ transitions in over the same join"
                 }
             }
             steps.sort_by(|a, b| a.0.total_cmp(&b.0));
-            // A property set at one offset only has nothing to interpolate
-            // with, so it would hold a constant and drive nothing. Dropping
-            // it keeps a rule to what actually moves, which is what makes
-            // "to { transform: none }" mean "back to where you started"
-            // rather than "and reset the scale and rotation too".
-            let thin = |steps: &[(f64, AnimValues)], f: fn(&AnimValues) -> bool| {
-                steps.iter().filter(|(_, v)| f(&v.clone())).count() < 2
-            };
-            if thin(&steps, |v| v.translate.is_some()) {
-                for s in &mut steps {
-                    s.1.translate = None;
-                }
-            }
-            if thin(&steps, |v| v.scale.is_some()) {
-                for s in &mut steps {
-                    s.1.scale = None;
-                }
-            }
-            if thin(&steps, |v| v.rotate.is_some()) {
-                for s in &mut steps {
-                    s.1.rotate = None;
-                }
-            }
-            if thin(&steps, |v| v.opacity.is_some()) {
-                for s in &mut steps {
-                    s.1.opacity = None;
-                }
-            }
             steps.retain(|(_, v)| !v.is_empty());
             if steps.windows(2).any(|w| w[0].0 == w[1].0) {
                 self.diags.push(
@@ -3037,19 +3060,6 @@ transitions in over the same join"
                     ),
                 );
             }
-            if steps.len() < 2 {
-                self.diags.push(
-                    Diagnostic::warning(
-                        "W440",
-                        rpath.clone(),
-                        format!("nothing in {name:?} interpolates"),
-                    )
-                    .with_help(
-                        "a rule needs a property set at two offsets; one offset on its own \
-holds a value rather than moving it",
-                    ),
-                );
-            }
             steps
         }
     }
@@ -3057,17 +3067,20 @@ holds a value rather than moving it",
     /// Expands a clip's `animation` into keyframes in clip-local seconds.
     fn resolve_animation(
         &mut self,
-        spec: &str,
+        spec: &AnimationSpec,
         path: &Path,
         length: Ratio,
         extra: &BTreeMap<String, Vec<(f64, AnimValues)>>,
         clip_box: (Option<f64>, Option<f64>),
     ) -> AnimationKnots {
         let mut knots = AnimationKnots::default();
-        let animations = match crate::animation::parse_animations(spec) {
+        let animations = match parse_animation_spec(spec.shorthand.as_deref(), &spec.longhands) {
             Ok(a) => a,
             Err(e) => {
-                self.push(Diagnostic::error("E441", path.clone(), e).with_value(json!(spec)));
+                self.push(
+                    Diagnostic::error("E441", path.clone(), e)
+                        .with_value(json!(spec.shorthand.clone().unwrap_or_default())),
+                );
                 return knots;
             }
         };
@@ -3109,7 +3122,38 @@ holds a value rather than moving it",
                 );
                 continue;
             };
-            if steps.is_empty() {
+            if steps.iter().any(|(_, v)| v.beyond_a_clip()) {
+                self.push(
+                    Diagnostic::error(
+                        "E442",
+                        path.clone(),
+                        format!(
+                            "{:?} sets a property the clip cannot play: filter, color, \
+text-shadow, letter-spacing, a size or background-position",
+                            a.name
+                        ),
+                    )
+                    .with_value(json!(a.name))
+                    .with_help(
+                        "the clip moves the whole picture with transform and opacity; put such \
+an animation on an element inside the outermost one, which is played there",
+                    ),
+                );
+                continue;
+            }
+            let steps = thinned(steps);
+            if steps.len() < 2 {
+                self.push(
+                    Diagnostic::warning(
+                        "W440",
+                        path.clone(),
+                        format!("nothing in {:?} interpolates", a.name),
+                    )
+                    .with_help(
+                        "a rule a clip plays needs a property set at two offsets; one offset on \
+its own holds a value rather than moving it",
+                    ),
+                );
                 continue;
             }
             // A percentage in a translation is a share of the clip's own
@@ -3286,6 +3330,7 @@ be; write the distance in pixels, or give the source a size",
                                 linked: BTreeMap::new(),
                                 width: w,
                                 height: h,
+                                motion: Vec::new(),
                             }));
                         }
                     }
@@ -3311,6 +3356,7 @@ be; write the distance in pixels, or give the source a size",
         // Stylesheets the markup links to are read here, so a missing one
         // is an error before anything is drawn.
         let mut linked = BTreeMap::new();
+        let mut motion = Vec::new();
         if let Ok(hrefs) = geneva_html::stylesheet_links(&markup) {
             for href in hrefs {
                 let Some(path) = self.markup_path(&base, &href, spath, "stylesheet") else {
@@ -3401,6 +3447,55 @@ be; write the distance in pixels, or give the source a size",
                         );
                     }
                 }
+                // Animations on elements inside: each is the renderer's
+                // to play, composited as a group of its own.
+                for (node, spec) in p.inner_animations() {
+                    let el = p.doc.nodes[node].element();
+                    let where_ = el.map_or_else(String::new, |e| {
+                        e.id.as_deref().map_or_else(
+                            || format!("<{}>", e.tag),
+                            |i| format!("<{} id=\"{i}\">", e.tag),
+                        )
+                    });
+                    let animations =
+                        match parse_animation_spec(spec.shorthand.as_deref(), &spec.longhands) {
+                            Ok(a) => a,
+                            Err(e) => {
+                                self.push(
+                                    Diagnostic::error(
+                                        "E441",
+                                        spath.clone(),
+                                        format!("{where_}: {e}"),
+                                    )
+                                    .with_value(json!(spec.shorthand.clone().unwrap_or_default())),
+                                );
+                                continue;
+                            }
+                        };
+                    let mut plays = Vec::new();
+                    for a in animations {
+                        self.used_rules.insert(a.name.clone());
+                        let Some(steps) = self.rules.get(&a.name).or_else(|| rules.get(&a.name))
+                        else {
+                            self.push(
+                                Diagnostic::error(
+                                    "E440",
+                                    spath.clone(),
+                                    format!("{where_}: no keyframes named {:?}", a.name),
+                                )
+                                .with_value(json!(a.name)),
+                            );
+                            continue;
+                        };
+                        plays.push(Play {
+                            animation: a,
+                            frames: steps.clone(),
+                        });
+                    }
+                    if !plays.is_empty() {
+                        motion.push(NodeMotion { node, plays });
+                    }
+                }
                 self.from_markup = Some(Markup {
                     rules,
                     animation: p.animation,
@@ -3427,6 +3522,7 @@ be; write the distance in pixels, or give the source a size",
             linked,
             width: w,
             height: h,
+            motion,
         }))
     }
 

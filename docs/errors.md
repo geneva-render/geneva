@@ -88,10 +88,10 @@ result is not what was intended. Notes are informational.
 | E433 | An `outputs` value is out of range: a poster `at` outside the composition, a sprite `every` that is not positive, or `columns` of 0. |
 | E440 | A clip's `animation` names a rule that is not in the document's `keyframes`. |
 | E441 | An `animation` value is malformed: no rule name, no duration, a duration of zero, two timing functions, or three times. |
-| E442 | A `keyframes` rule is malformed: an offset that is not `from`, `to` or a percentage in 0% to 100%, two offsets at the same place, a property that cannot be animated, an unknown transform function, or a percentage distance on a clip whose box is not known until its file is opened. |
+| E442 | A `keyframes` rule is malformed: an offset that is not `from`, `to` or a percentage in 0% to 100%, two offsets at the same place, a property that cannot be animated, an unknown transform function, a percentage distance on a clip whose box is not known until its file is opened, or a property a clip cannot play (anything past `transform` and `opacity`) in a rule the clip is given rather than an element inside markup. |
 | E443 | A property is driven by the clip's own `keyframes` and by an animation at once. |
 | E444 | Two animations on one clip set the same property at the same time. |
-| W440 | An animation rule sets nothing at an offset, or has fewer than two offsets, so nothing interpolates. |
+| W440 | An animation rule sets nothing at an offset, or, for a rule a clip plays, has no property at two offsets, so nothing interpolates. An element inside markup plays a rule with a lone `to` from the value under it, so it is not warned about there. |
 | E450 | An `html` source has both `html` and `asset`, or neither. |
 | E451 | The markup or its styles did not parse. The message says what is wrong and the location points at it: a tag that closes the wrong element, an unclosed element, a selector or at-rule geneva does not support, a declaration block that is never closed. |
 | E452 | A file the markup points at, an `<img src>` or a stylesheet `<link href>`, is not there, or its path leaves the asset root (a leading `/`, a `..`, a drive letter or a URL). Paths inside markup are relative to the markup itself. |

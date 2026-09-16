@@ -30,9 +30,10 @@ pub struct CpuRenderer<A: AssetSource> {
     /// Rendered text images that do not change with time, by a hash of
     /// the clip and its text, so a caption is laid out once per clip.
     text_cache: HashMap<u64, Image>,
-    /// Markup boxes drawn earlier, by a hash of the clip; an HTML source
-    /// is the same picture at every time.
-    html_cache: HashMap<u64, Image>,
+    /// Markup prepared earlier, by a hash of the clip: the parsed
+    /// document and its pictures, and the drawn box when nothing in the
+    /// markup moves, which is then the same picture at every time.
+    html_cache: HashMap<u64, Scene>,
     /// Pixel buffers of nested compositions drawn earlier, used again for
     /// the next ones so that a frame-sized buffer is not allocated and
     /// faulted in on every frame.
@@ -44,6 +45,14 @@ pub struct CpuRenderer<A: AssetSource> {
 
 /// How many spare buffers are kept.
 const SPARE_BUFFERS: usize = 4;
+
+/// A markup source ready to draw.
+struct Scene {
+    prepared: geneva_html::Prepared,
+    images: HashMap<String, Image>,
+    /// The box as drawn, kept when no animation inside can change it.
+    still: Option<Image>,
+}
 
 impl<A: AssetSource> std::fmt::Debug for CpuRenderer<A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -204,8 +213,10 @@ impl<A: AssetSource> CpuRenderer<A> {
                 )?))
             }
             ResolvedSource::Html(html) => {
-                // Neither layout nor paint depends on time, so the box is
-                // drawn once per clip and reused for every frame.
+                // The markup is parsed and its pictures read once per
+                // clip. With nothing inside it moving, the box is drawn
+                // once too and reused for every frame; an animation on an
+                // element inside means a fresh drawing at each time.
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 clip.path.hash(&mut hasher);
                 let key = hasher.finish();
@@ -229,14 +240,44 @@ impl<A: AssetSource> CpuRenderer<A> {
                             images.insert(src, image.clone());
                         }
                     }
-                    let drawn = crate::html::render(html, &prepared, &mut self.text, &images)
-                        .map_err(|reason| RenderError::Asset {
-                            id: clip.path.clone(),
-                            reason,
-                        })?;
-                    self.html_cache.insert(key, drawn);
+                    self.html_cache.insert(
+                        key,
+                        Scene {
+                            prepared,
+                            images,
+                            still: None,
+                        },
+                    );
                 }
-                Paint::Image(Cow::Borrowed(&self.html_cache[&key]))
+                let scene = self.html_cache.get_mut(&key).expect("inserted above");
+                let failed = |reason| RenderError::Asset {
+                    id: clip.path.clone(),
+                    reason,
+                };
+                if html.motion.is_empty() {
+                    if scene.still.is_none() {
+                        let drawn = crate::html::render(
+                            html,
+                            &scene.prepared,
+                            &mut self.text,
+                            &scene.images,
+                            0.0,
+                        )
+                        .map_err(failed)?;
+                        scene.still = Some(drawn);
+                    }
+                    Paint::Image(Cow::Borrowed(scene.still.as_ref().expect("drawn above")))
+                } else {
+                    let drawn = crate::html::render(
+                        html,
+                        &scene.prepared,
+                        &mut self.text,
+                        &scene.images,
+                        local,
+                    )
+                    .map_err(failed)?;
+                    Paint::Image(Cow::Owned(drawn))
+                }
             }
             ResolvedSource::Text(text) => {
                 self.load_fonts(comp, text)?;

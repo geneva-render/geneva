@@ -630,8 +630,9 @@ author overrides freely: `h1`, `h2`, `h3`, `b`, `strong`, `i`, `em`,
 | Spacing | `margin`, `padding` and their per-side forms and one-to-four-value shorthands |
 | Flex | `flex-direction`, `flex-wrap`, `justify-content`, `align-items`, `align-self`, `align-content`, `gap`, `row-gap`, `column-gap`, `flex-grow`, `flex-shrink`, `flex-basis`, `flex` |
 | Border | `border`, `border-top`, `border-right`, `border-bottom`, `border-left`, `border-width`, `border-color`, `border-style` (`solid`, `none`), `border-radius` |
-| Paint | `background`, `background-color` (a colour or a gradient), `background-size`, `background-position`, `background-clip` (`text` or `border-box`, with or without `-webkit-`), `opacity`, `box-shadow` (one, not inset) |
+| Paint | `background`, `background-color` (a colour or a gradient), `background-size`, `background-position`, `background-clip` (`text` or `border-box`, with or without `-webkit-`), `opacity`, `filter` (`blur()` only), `box-shadow` (one, not inset) |
 | Text | `color`, `-webkit-text-fill-color` (read as `color`), `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space`, `text-shadow` (one, not a list) |
+| Motion | `animation` and its longhands `animation-name`, `-duration`, `-delay`, `-timing-function`, `-iteration-count`, `-direction`, `-fill-mode` |
 
 Lengths are `px`, `em`, `rem` and `%`; `em` is the element's own font
 size, settled before anything else uses it, and a percentage `font-size`
@@ -710,12 +711,32 @@ clip plays, so a file that moves in a browser moves here too:
 
 The clip's own `animation` replaces it, since only the document knows
 where the clip sits in time; when both are set, W451 says which one won.
+The clip plays `transform` and `opacity`; a rule it is given that sets
+anything else is E442, and it holds the animation's start and end
+outside its runs whatever `animation-fill-mode` says.
 
-An `animation` further in is W450, not motion. The markup is laid out and
-painted once and the clip moves that picture, which is what makes a box on
-screen for a minute cost one layout; a child moving on its own would mean
-a layout per frame. Put the motion on the outermost element, or split the
-parts that move into clips of their own.
+An `animation` on an element **inside** the outermost one is played
+there, the way a browser plays it. The element is composited as a group:
+its subtree is painted into a buffer of its own and laid onto the
+picture with the transform, opacity and blur the animation gives it at
+that moment. Several animations on one element stack in the order they
+are written, and a rule that sets only `to` starts from whatever the
+rules under it, or the style, leave the element at; `animation-delay`,
+`-duration`, `-iteration-count`, `-direction` and `-fill-mode` are read
+as longhands too, comma lists and all. A keyframe inside sets
+`transform`, `opacity`, `filter: blur()`, `color`, `text-shadow`,
+`letter-spacing`, `width`, `height`, `max-width`, `min-width` or
+`background-position`; anything else is E442. `color` and `text-shadow`
+reach the element's text and the descendants that inherited them.
+`steps()` and `linear()` timing functions are not read yet.
+
+A markup box whose elements do not move is laid out and painted once per
+clip and reused for every frame. One with an animation inside is painted
+at each frame, and laid out again at each frame when the animation sets
+`width`, `height`, `max-width`, `min-width` or `letter-spacing`, since
+those move the boxes around it. That is what a typing effect that grows
+a character's box costs; a card on screen for a minute with a fade
+inside it costs a paint per frame and one layout.
 
 ### What it does not do
 
@@ -726,9 +747,13 @@ parts that move into clips of their own.
 - **No inline layout.** An element's text is one paragraph, and a child
   element is a box of its own, so a `<span>` inside a sentence becomes a
   block rather than flowing with the words around it.
-- **`opacity` does not group.** It multiplies down the tree rather than
-  compositing the subtree off-screen first, so overlapping children of a
-  half-transparent box show through each other.
+- **`opacity` groups**, as in CSS: a box with an opacity below one is
+  painted into a buffer of its own with its children at their own
+  opacity, and the buffer is laid onto the picture at the box's, so
+  overlapping children do not show through each other. The same buffer
+  carries `filter: blur()`, which is the only filter drawn. A group is
+  painted whole where CSS puts a stacking context, so a child inside one
+  cannot rise above a box outside it with `z-index`.
 - There is no `float`, no grid, no transition and no media
   query. The clip's own `transform` and `animation` move the whole box.
 - **Nothing is fetched over the network.** A path is a file; a URL is
@@ -741,16 +766,17 @@ parts that move into clips of their own.
   its number puts it; negative numbers go under everything in flow. A box
   without one is painted in document order, and one deeper in can still
   rise above an uncle, since a plain box opens no stacking context of its
-  own. `opacity` does not open one either, per the note above. Setting it
-  where it does not apply is W454 rather than a quiet difference.
+  own. A group (opacity, filter or an animation) does open one. Setting
+  `z-index` where it does not apply is W454 rather than a quiet
+  difference.
 - `body` and `html` both select the box the markup is drawn into, which
   is the clip's own box. A `background` or `border` on it fills that box,
   and `padding` goes inside it, the way it does against a page. Left
   unstyled the box marks no pixels, so only the content counts towards
   what is composited.
 
-Layout and painting do not depend on time, so a markup box is drawn once
-per clip and reused for every frame it is on screen.
+Layout and painting depend on time only through an animation on an
+element inside the markup; see [Motion](#motion) for what each costs.
 
 ### Transitions
 

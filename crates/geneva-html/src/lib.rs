@@ -26,10 +26,10 @@ use std::fmt;
 
 pub use css::{CssError, KeyframesRule, Stylesheet};
 pub use dom::{Document, Element, HtmlError, Node, NodeId, NodeKind};
-pub use layout::{Content, Laid, Measure, Painted};
-pub use style::declared_box;
+pub use layout::{Content, Group, Laid, Measure, Painted};
 pub use style::{
-    Background, Computed, Direction, Extent, Paint, Shadow, Stop, Text, TextAlign, TextFill,
+    AnimationSpec, Background, Computed, Direction, Extent, Overrides, Paint, Shadow, Stop, Text,
+    TextAlign, TextFill, declared_box, extent_of, overridden,
 };
 
 /// Why a document did not parse, and where.
@@ -99,7 +99,9 @@ pub struct Prepared {
     /// The `animation` on the outermost element. Layout and paint do not
     /// play it; it is what the clip drawing this markup animates with, so
     /// a file that moves in a browser moves here too.
-    pub animation: Option<String>,
+    pub animation: Option<AnimationSpec>,
+    /// The element that carries that animation.
+    pub animated_node: Option<NodeId>,
     /// The style of the element that carries that animation, kept so that
     /// a percentage in it can resolve against that element's box rather
     /// than the surface's, which is what CSS does.
@@ -125,7 +127,51 @@ impl Prepared {
         height: Option<f32>,
         measure: &mut M,
     ) -> Result<Laid, String> {
-        layout::layout(&self.doc, &self.styles, width, height, measure)
+        layout::layout(
+            &self.doc,
+            &self.styles,
+            width,
+            height,
+            measure,
+            self.animated_node,
+        )
+    }
+
+    /// Lays the document out with a frame's overrides applied to the
+    /// styles first, which is how an element inside the markup is drawn
+    /// where its animation puts it at that moment.
+    pub fn layout_with<M: Measure>(
+        &self,
+        width: Option<f32>,
+        height: Option<f32>,
+        measure: &mut M,
+        overrides: &std::collections::BTreeMap<NodeId, Overrides>,
+    ) -> Result<Laid, String> {
+        if overrides.is_empty() {
+            return self.layout(width, height, measure);
+        }
+        let styles = style::overridden(&self.doc, &self.styles, overrides);
+        layout::layout(
+            &self.doc,
+            &styles,
+            width,
+            height,
+            measure,
+            self.animated_node,
+        )
+    }
+
+    /// Every element inside the outermost one that carries an
+    /// `animation`, with what it says. These are the renderer's to play.
+    #[must_use]
+    pub fn inner_animations(&self) -> Vec<(NodeId, &AnimationSpec)> {
+        self.styles
+            .iter()
+            .enumerate()
+            .filter(|(id, _)| self.doc.nodes[*id].element().is_some())
+            .filter(|(id, _)| self.animated_node != Some(*id))
+            .filter_map(|(id, c)| c.animation.as_ref().map(|a| (id, a)))
+            .collect()
     }
 }
 
@@ -184,7 +230,7 @@ pub fn prepare(
         // applied after it.
         sheet.keyframes.extend(more.keyframes);
     }
-    let (styles, mut problems, used) = style::cascade(&doc, &sheet);
+    let (styles, problems, used) = style::cascade(&doc, &sheet);
     // CSS honours z-index on a positioned box or a flex item and ignores
     // it everywhere else. Matching that keeps a card looking the same in
     // a browser, but forgetting `position` is the usual way to get z-index
@@ -227,8 +273,9 @@ nothing here; a browser ignores it too"
             ));
         }
     }
-    // Only the outermost element's animation is the clip's; anything
-    // deeper would have to move inside a picture that is drawn once.
+    // The outermost element's animation is the clip's to play; one on an
+    // element inside it is the renderer's, which composites that element
+    // as a group of its own.
     let outermost: Vec<NodeId> = doc
         .children(doc.root)
         .iter()
@@ -237,6 +284,7 @@ nothing here; a browser ignores it too"
         .collect();
     let mut animation = None;
     let mut animated = None;
+    let mut animated_node = None;
     for (id, computed) in styles.iter().enumerate() {
         let Some(spec) = &computed.animation else {
             continue;
@@ -244,12 +292,7 @@ nothing here; a browser ignores it too"
         if outermost.first() == Some(&id) {
             animation = Some(spec.clone());
             animated = Some(computed.clone());
-        } else if doc.nodes[id].element().is_some() {
-            let tag = doc.nodes[id].element().map_or("", |e| e.tag.as_str());
-            problems.push(format!(
-                "<{tag}>: an animation is played on the outermost element only, \
-because the markup is drawn once and the clip moves the picture"
-            ));
+            animated_node = Some(id);
         }
     }
     Ok(Prepared {
@@ -260,6 +303,7 @@ because the markup is drawn once and the clip moves the picture"
         inert,
         keyframes: sheet.keyframes,
         animation,
+        animated_node,
         animated,
     })
 }
@@ -279,7 +323,10 @@ mod tests {
     fn the_outermost_animation_is_hoisted_with_its_rules() {
         let p = prepare(CARD, "", &BTreeMap::new()).unwrap();
         assert!(p.problems.is_empty(), "{:?}", p.problems);
-        assert_eq!(p.animation.as_deref(), Some("slide-in 0.5s ease-out"));
+        assert_eq!(
+            p.animation.as_ref().and_then(|a| a.shorthand.as_deref()),
+            Some("slide-in 0.5s ease-out")
+        );
         assert_eq!(
             p.keyframes["slide-in"]["from"],
             "transform: translateX(-10px)"
@@ -345,20 +392,22 @@ mod tests {
     }
 
     #[test]
-    fn an_animation_further_in_is_named_rather_than_dropped() {
+    fn an_animation_further_in_is_the_renderers_to_play() {
         let p = prepare(
             "<style>@keyframes a { from { opacity: 0 } to { opacity: 1 } } \
-             p { animation: a 1s }</style><div><p>hi</p></div>",
+             p { animation: a 1s; animation-delay: 0.2s }</style><div><p>hi</p></div>",
             "",
             &BTreeMap::new(),
         )
         .unwrap();
         assert!(p.animation.is_none());
-        assert_eq!(p.problems.len(), 1);
-        assert!(
-            p.problems[0].contains("outermost element only"),
-            "{:?}",
-            p.problems
+        assert!(p.problems.is_empty(), "{:?}", p.problems);
+        let inner = p.inner_animations();
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0].1.shorthand.as_deref(), Some("a 1s"));
+        assert_eq!(
+            inner[0].1.longhands,
+            vec![("animation-delay".to_owned(), "0.2s".to_owned())]
         );
     }
 
@@ -420,7 +469,10 @@ mod tests {
             &BTreeMap::new(),
         )
         .unwrap();
-        assert_eq!(p.animation.as_deref(), Some("fade 1s"));
+        assert_eq!(
+            p.animation.as_ref().and_then(|a| a.shorthand.as_deref()),
+            Some("fade 1s")
+        );
         assert!(p.keyframes.contains_key("fade"));
     }
 }

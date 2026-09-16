@@ -235,3 +235,173 @@ fn a_background_clipped_to_text_fills_the_glyphs_and_not_the_box() {
     );
     assert_eq!(greens, 0, "the colour gives way to the fill");
 }
+
+/// A frame of a markup clip at `tenths` of a second, on a 200 by 100
+/// transparent output two seconds long.
+fn markup_at(html: &str, css: &str, tenths: i64) -> geneva_render::Frame {
+    let text = format!(
+        r#"{{"geneva":"0.3","output":{{"width":200,"height":100,"fps":30,"duration":"2s",
+        "background":"transparent"}},"layers":[{{"clips":[{{"source":{{"kind":"html","width":200,"height":100,
+        "html":{html},"css":{css}}},"duration":"2s",
+        "transform":{{"anchor":"top left","position":"0 0"}}}}]}}]}}"#,
+        html = serde_json::to_string(html).unwrap(),
+        css = serde_json::to_string(css).unwrap(),
+    );
+    let l = load(&text);
+    assert!(l.is_ok(), "{:?}", l.diagnostics);
+    let comp = l.composition.unwrap();
+    CpuRenderer::new(NoAssets)
+        .render_frame(&comp, Ratio::new(tenths, 10))
+        .unwrap()
+}
+
+#[test]
+fn a_half_transparent_box_is_composited_as_one_picture() {
+    // Two children of a box at half opacity overlap. Grouped, the
+    // overlap is the top child at half strength over nothing; multiplied
+    // down, the lower child would show through it.
+    let f = markup_at(
+        "<div class='p'><div class='a'></div><div class='b'></div></div>",
+        ".p { opacity: 0.5; position: relative; width: 200px; height: 100px } \
+         .a { position: absolute; left: 0; top: 0; width: 100px; height: 100px; background: #ff0000 } \
+         .b { position: absolute; left: 50px; top: 0; width: 100px; height: 100px; background: #0000ff }",
+        0,
+    );
+    let p = at(&f, 75, 50);
+    assert!(
+        near(p, 0.0, 0.0, 0.5, 0.5),
+        "blue at half, no red beneath: {p:?}"
+    );
+}
+
+#[test]
+fn an_animation_inside_the_markup_moves_its_element() {
+    let f = |tenths| {
+        markup_at(
+            "<div class='stage'><div class='dot'></div></div>",
+            "@keyframes go { to { transform: translateX(100px) } } \
+             .stage { position: relative; width: 200px; height: 100px } \
+             .dot { position: absolute; left: 0; top: 0; width: 50px; height: 100px; background: #00ff00; \
+                    animation: go 1s linear forwards }",
+            tenths,
+        )
+    };
+    assert!(
+        near(at(&f(0), 25, 50), 0.0, 1.0, 0.0, 1.0),
+        "at the start it is on the left"
+    );
+    assert!(
+        near(at(&f(5), 75, 50), 0.0, 1.0, 0.0, 1.0),
+        "halfway it has moved 50px"
+    );
+    assert!(near(at(&f(5), 25, 50), 0.0, 0.0, 0.0, 0.0));
+    assert!(
+        near(at(&f(15), 125, 50), 0.0, 1.0, 0.0, 1.0),
+        "and it holds at the end"
+    );
+}
+
+#[test]
+fn a_fade_in_with_a_delay_longhand_starts_from_the_style() {
+    let f = |tenths| {
+        markup_at(
+            "<div class='stage'><div class='box'></div></div>",
+            "@keyframes show { to { opacity: 1 } } \
+             .stage { position: relative; width: 200px; height: 100px } \
+             .box { position: absolute; inset: 0; background: #ff0000; opacity: 0; \
+                    animation: show 1s linear forwards; animation-delay: 0.5s }",
+            tenths,
+        )
+    };
+    assert!(
+        near(at(&f(2), 100, 50), 0.0, 0.0, 0.0, 0.0),
+        "nothing before the delay"
+    );
+    assert!(
+        near(at(&f(10), 100, 50), 0.5, 0.0, 0.0, 0.5),
+        "halfway up at one second"
+    );
+    assert!(
+        near(at(&f(19), 100, 50), 1.0, 0.0, 0.0, 1.0),
+        "held once done"
+    );
+}
+
+#[test]
+fn a_width_animation_lays_the_document_out_again() {
+    // A box growing from nothing pushes its sibling along, as it does
+    // in a browser: layout runs at each frame.
+    let f = |tenths| {
+        markup_at(
+            "<div class='row'><div class='a'></div><div class='b'></div></div>",
+            "@keyframes open { to { width: 100px } } \
+             .row { display: flex; width: 200px; height: 100px } \
+             .a { width: 0; height: 100px; background: #ff0000; animation: open 1s linear forwards } \
+             .b { width: 50px; height: 100px; background: #0000ff }",
+            tenths,
+        )
+    };
+    assert!(
+        near(at(&f(0), 25, 50), 0.0, 0.0, 1.0, 1.0),
+        "blue starts at the left edge"
+    );
+    assert!(
+        near(at(&f(5), 25, 50), 1.0, 0.0, 0.0, 1.0),
+        "red has grown to 50px"
+    );
+    assert!(
+        near(at(&f(5), 75, 50), 0.0, 0.0, 1.0, 1.0),
+        "and pushed blue along"
+    );
+}
+
+#[test]
+fn a_blur_filter_softens_the_group() {
+    let sharp = markup_at(
+        "<div class='stage'><div class='box'></div></div>",
+        ".stage { position: relative; width: 200px; height: 100px } \
+         .box { position: absolute; left: 50px; top: 25px; width: 100px; height: 50px; background: #ffffff }",
+        0,
+    );
+    let soft = markup_at(
+        "<div class='stage'><div class='box'></div></div>",
+        ".stage { position: relative; width: 200px; height: 100px } \
+         .box { position: absolute; left: 50px; top: 25px; width: 100px; height: 50px; background: #ffffff; filter: blur(6px) }",
+        0,
+    );
+    // Just outside the box: nothing sharp, something soft. Inside near
+    // the edge: full sharp, less soft.
+    assert!(at(&sharp, 45, 50).a < 0.01);
+    assert!(at(&soft, 45, 50).a > 0.05, "{:?}", at(&soft, 45, 50));
+    assert!(at(&sharp, 52, 50).a > 0.99);
+    assert!(at(&soft, 52, 50).a < 0.9, "{:?}", at(&soft, 52, 50));
+}
+
+#[test]
+fn a_colour_animation_reaches_the_text() {
+    let f = |tenths| {
+        markup_at(
+            "<div><p>HHHH</p></div>",
+            "@keyframes tint { from { color: #ff0000 } to { color: #0000ff } } \
+             p { margin: 0; font: 700 60px Liberation Sans; color: #ffffff; animation: tint 1s linear forwards }",
+            tenths,
+        )
+    };
+    let dominant = |frame: &geneva_render::Frame| {
+        let (mut r, mut b) = (0.0f32, 0.0f32);
+        for y in 0..100 {
+            for x in 0..200 {
+                let p = at(frame, x, y);
+                if p.a > 0.95 {
+                    r += p.r;
+                    b += p.b;
+                }
+            }
+        }
+        (r, b)
+    };
+    let (r0, b0) = dominant(&f(0));
+    let (r1, b1) = dominant(&f(10));
+    assert!(r0 > b0 * 10.0, "red at the start: {r0} {b0}");
+    assert!(b1 > r1 * 10.0, "blue at the end: {r1} {b1}");
+}
