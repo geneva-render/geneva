@@ -12,13 +12,17 @@ the format version it was written for.
 - **Gradients in markup.** `background` takes `linear-gradient()` and
   `radial-gradient()` as well as a colour: an angle or a `to` side or
   corner, stops with optional positions, and a circle or ellipse `at` a
-  position. Colours are mixed in linear light, the space the rest of
-  geneva composites in, so a ramp is lighter at its midpoint than the
-  same CSS in a browser and a ramp between saturated colours does not
-  pass through a muddy middle. `conic-gradient`, `repeating-` gradients,
+  position. `conic-gradient`, `repeating-` gradients,
   the radial size keywords and `url()` images are each named as
   undrawn (W450) rather than skipped; a radial is always sized to the
   farthest corner.
+- **Markup blends like a browser.** Inside an `html` source, gradients,
+  translucent boxes, shadows, blur and text edges are blended on
+  sRGB-encoded premultiplied values, as a browser blends them, and the
+  finished box is converted to linear light once for the compositor. A
+  30% teal over a dark ground is 83 on the green channel, as on a page,
+  where linear-light blending gave 139. Everything outside the box
+  (the clip's transform, opacity, blend mode, transitions) is unchanged.
 - **`steps()` and `linear()` timing functions.** Both are read where a
   timing function goes: in a CSS `animation`, and as `{ "steps": [n,
   "jump-end"] }` and `{ "linear": [[input, output], ...] }` on a

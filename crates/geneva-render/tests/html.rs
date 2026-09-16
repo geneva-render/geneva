@@ -124,29 +124,42 @@ fn a_linear_gradient_runs_the_way_its_angle_points() {
     let right = at(&f, 197, 50);
     assert!(left.r > 0.9 && left.b < 0.1, "{left:?}");
     assert!(right.b > 0.9 && right.r < 0.1, "{right:?}");
+    // A browser's midpoint is sRGB 0.5 on each end's channel, which is
+    // 0.214 once the box is in linear light.
     let middle = at(&f, 100, 50);
     assert!(
-        middle.r > 0.3 && middle.b > 0.3,
+        (middle.r - 0.214).abs() < 0.03 && (middle.b - 0.214).abs() < 0.03,
         "the middle mixes both ends: {middle:?}"
     );
 }
 
 #[test]
-fn a_gradient_interpolates_in_linear_light() {
+fn a_gradient_interpolates_as_a_browser_does() {
+    // Black to white: a browser's midpoint is sRGB 0.5, which is 0.214
+    // in the linear light the frame is delivered in.
     let f = frame(
         r#""layers":[{"clips":[{"source":{"kind":"html","width":200,"height":100,
-        "html":"<div class='g'></div>",
-        "css":".g { height: 100%; background: linear-gradient(to right, #000000, #ffffff) }"},
+        "html":"<div class='g'></div>","css":".g { width: 200px; height: 100px; background: linear-gradient(90deg, #000000, #ffffff) }"},
         "transform":{"anchor":"top left","position":"0 0"}}]}]"#,
     );
-    // Halfway along black to white is half the light, not half the sRGB
-    // number. A browser interpolates the encoded value and lands near
-    // 0.21 here; geneva composites in linear light throughout.
-    let middle = at(&f, 100, 50);
-    assert!(
-        (middle.r - 0.5).abs() < 0.03,
-        "expected about half the light, got {middle:?}"
+    let mid = at(&f, 100, 50);
+    assert!((mid.r - 0.214).abs() < 0.03, "{mid:?}");
+}
+
+#[test]
+fn a_translucent_box_blends_as_a_browser_does() {
+    // 30% teal over the dark ground: a browser gives 0.3 * 238 + 0.7 * 16
+    // = 83 on the green channel. Blended in linear light it would be
+    // 139.
+    let f = frame(
+        r#""layers":[{"clips":[{"source":{"kind":"html","width":200,"height":100,
+        "html":"<div class='ground'><div class='haze'></div></div>",
+        "css":".ground { position: relative; width: 200px; height: 100px; background: #07100C } .haze { position: absolute; inset: 0; background: rgba(0, 238, 225, 0.3) }"},
+        "transform":{"anchor":"top left","position":"0 0"}}]}]"#,
     );
+    let p = at(&f, 100, 50);
+    let g = geneva_color::Transfer::Srgb.from_linear(f64::from(p.g)) * 255.0;
+    assert!((g - 83.0).abs() < 2.0, "green {g}, pixel {p:?}");
 }
 
 #[test]

@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use geneva_color::{Color, LinearRgba};
+use geneva_color::{Color, LinearRgba, Transfer};
 use geneva_html::layout::Rectangle;
 use geneva_html::style::{Extent, TextFill};
 use geneva_html::{Content, Group, Laid, Measure, Painted, Prepared, Text};
@@ -17,7 +17,7 @@ use geneva_timeline::schema::{Shadow, TextAlign, TextSource, TextStyle};
 use geneva_timeline::{Animated, FillTrack, ResolvedHtml, ResolvedText};
 
 use crate::assets::Image;
-use crate::fill::Fill;
+use crate::fill::{Fill, encoded};
 use crate::text::TextEngine;
 
 /// The engine and the images an HTML box needs, gathered before layout so
@@ -168,7 +168,55 @@ pub fn render(
                 .filter(|tr| !tr.is_identity())
         })
         .collect();
-    Ok(paint(&laid, &transforms, context.text, images))
+    let mut surface = paint(&laid, &transforms, context.text, images);
+    to_linear(&mut surface);
+    Ok(surface)
+}
+
+/// A pixel of the painter's working space, which is a browser's: sRGB-
+/// encoded channels premultiplied by alpha. Everything inside a markup
+/// box (gradients, translucent boxes, shadows, blur, text) blends there,
+/// so a page looks as it does in a browser, and the finished box is
+/// turned into linear light once, for the compositor.
+fn encode_pixel(p: LinearRgba) -> LinearRgba {
+    if p.a <= 0.0 {
+        return LinearRgba::TRANSPARENT;
+    }
+    let enc = |v: f32| Transfer::Srgb.from_linear(f64::from(v / p.a)) as f32 * p.a;
+    LinearRgba {
+        r: enc(p.r),
+        g: enc(p.g),
+        b: enc(p.b),
+        a: p.a,
+    }
+}
+
+fn decode_pixel(p: LinearRgba) -> LinearRgba {
+    if p.a <= 0.0 {
+        return LinearRgba::TRANSPARENT;
+    }
+    let dec = |v: f32| Transfer::Srgb.to_linear(f64::from(v / p.a)) as f32 * p.a;
+    LinearRgba {
+        r: dec(p.r),
+        g: dec(p.g),
+        b: dec(p.b),
+        a: p.a,
+    }
+}
+
+/// A linear-light image as the painter works with it.
+pub(crate) fn to_encoded(mut image: Image) -> Image {
+    for p in &mut image.pixels {
+        *p = encode_pixel(*p);
+    }
+    image
+}
+
+/// The painter's image back in linear light.
+fn to_linear(image: &mut Image) {
+    for p in &mut image.pixels {
+        *p = decode_pixel(*p);
+    }
 }
 
 /// The rectangle one box can touch: its own, grown by what its shadows
@@ -812,7 +860,7 @@ fn paint_box(image: &mut Image, b: &Painted) {
         return;
     }
     let fill = background.map(|bg| {
-        Fill::new(
+        Fill::new_encoded(
             bg,
             tile(b.rect, b.paint.background_size, b.paint.background_position),
         )
@@ -841,7 +889,7 @@ fn paint_box(image: &mut Image, b: &Painted) {
                         image,
                         x,
                         y,
-                        colour.to_linear(),
+                        encoded(colour),
                         (outer - hole) * clip * b.opacity,
                     );
                 }
@@ -870,7 +918,7 @@ fn paint_shadow(image: &mut Image, b: &Painted) {
             for x in x0..x1 {
                 let (px, py) = (f64::from(x) + 0.5, f64::from(y) + 0.5);
                 let a = coverage(px, py, rect, b.paint.radius) * clip_coverage(b, px, py);
-                blend(image, x, y, shadow.color.to_linear(), a * b.opacity);
+                blend(image, x, y, encoded(shadow.color), a * b.opacity);
             }
         }
         return;
@@ -889,7 +937,7 @@ fn paint_shadow(image: &mut Image, b: &Painted) {
                     image,
                     x,
                     y,
-                    shadow.color.to_linear(),
+                    encoded(shadow.color),
                     a * clip_coverage(b, px, py) * b.opacity,
                 );
             }
@@ -924,7 +972,8 @@ fn paint_text(image: &mut Image, b: &Painted, run: &str, style: &Text, engine: &
         };
         source.fill = Some(fill_track(fill, b.content_rect, along));
     }
-    let drawn = engine.render(&source, 0.0);
+    // The engine draws in linear light; the page it lands on is not.
+    let drawn = to_encoded(engine.render(&source, 0.0));
     // The engine leaves room around the glyphs for a stroke and a
     // shadow. Layout did not count it, so painting takes it back off:
     // the glyphs land where they would have with no shadow, and the

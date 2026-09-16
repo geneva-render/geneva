@@ -673,11 +673,18 @@ that runs backwards is pulled up to the one before it so the ramp never
 reverses. A colour may carry two positions, which is a band of flat
 colour between them.
 
-Colours are mixed in linear light, which is the space the rest of geneva
-composites in. A browser mixes the encoded values instead, so a ramp from
-black to white is lighter here at its midpoint than the same CSS in a
-browser. Ramps between saturated colours do not pass through the muddy
-middle a browser gives them.
+Inside a markup box, colours blend the way a browser blends them: a
+gradient's stops, a translucent box over another, a shadow, a blur and
+the edges of text are worked out on sRGB-encoded values with alpha
+premultiplied, so a 30% teal over a dark ground comes out as it does on
+a page, and a ramp from black to white has a browser's midpoint. The
+finished box is converted to linear light once and composited onto the
+frame like every other clip, so the clip's own transform, opacity, blend
+mode and transitions stay in the linear light the rest of geneva works
+in (see [color.md](color.md)). One thing is still done in linear light:
+the glyphs of a text are drawn by the same engine as a `text` clip, so
+a gradient `fill` on text mixes its stops in linear light before the
+text joins the page.
 
 A background is drawn on a tile that repeats across the box, as in CSS:
 `background-size` is the tile, one or two of a length, a percentage or

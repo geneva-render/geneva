@@ -237,7 +237,7 @@ impl<A: AssetSource> CpuRenderer<A> {
                             format!("{}/{src}", html.base.trim_end_matches('/'))
                         };
                         if let Ok(image) = self.assets.image_at(&path) {
-                            images.insert(src, image.clone());
+                            images.insert(src, crate::html::to_encoded(image.clone()));
                         }
                     }
                     self.html_cache.insert(

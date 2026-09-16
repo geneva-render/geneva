@@ -2,8 +2,20 @@
 //! projection and a lookup rather than parsing geometry again. Boxes in
 //! markup and the glyphs of a text both draw through it.
 
-use geneva_color::LinearRgba;
+use geneva_color::{Color, LinearRgba};
 use geneva_html::style::{Background, Direction, Stop};
+
+/// A colour as a browser keeps it while painting: sRGB-encoded channels
+/// premultiplied by alpha. It is carried in a [`LinearRgba`] so the same
+/// blending code serves both spaces; nothing here reads it as light.
+pub(crate) fn encoded(c: Color) -> LinearRgba {
+    LinearRgba {
+        r: c.r * c.a,
+        g: c.g * c.a,
+        b: c.b * c.a,
+        a: c.a,
+    }
+}
 
 /// A colour or gradient laid over a tile that repeats across the plane,
 /// which is CSS's background: `background-size` is the tile and
@@ -31,11 +43,23 @@ enum Kind {
 }
 
 impl Fill {
-    /// A fill whose tile is `(x, y, width, height)`.
+    /// A fill whose tile is `(x, y, width, height)`, with its colours in
+    /// linear light.
     pub(crate) fn new(background: &Background, tile: (f64, f64, f64, f64)) -> Self {
+        Self::build(background, tile, false)
+    }
+
+    /// The same fill with its colours sRGB-encoded and premultiplied,
+    /// which is how a browser mixes a gradient's stops.
+    pub(crate) fn new_encoded(background: &Background, tile: (f64, f64, f64, f64)) -> Self {
+        Self::build(background, tile, true)
+    }
+
+    fn build(background: &Background, tile: (f64, f64, f64, f64), encode: bool) -> Self {
+        let colour = |c: Color| if encode { encoded(c) } else { c.to_linear() };
         let (x, y, w, h) = (tile.0, tile.1, tile.2.max(1.0), tile.3.max(1.0));
         let kind = match background {
-            Background::Color(c) => Kind::Flat(c.to_linear()),
+            Background::Color(c) => Kind::Flat(colour(*c)),
             Background::Linear { direction, stops } => {
                 let degrees = match *direction {
                     Direction::Angle(d) => d,
@@ -60,7 +84,7 @@ impl Fill {
                     origin: (x + w / 2.0, y + h / 2.0),
                     axis: (dx * length.max(1.0), dy * length.max(1.0)),
                     radial: false,
-                    stops: ramp(stops),
+                    stops: ramp(stops, &colour),
                 }
             }
             Background::Radial { circle, at, stops } => {
@@ -82,7 +106,7 @@ impl Fill {
                     origin: centre,
                     axis: (rx, ry),
                     radial: true,
-                    stops: ramp(stops),
+                    stops: ramp(stops, &colour),
                 }
             }
         };
@@ -119,11 +143,12 @@ impl Fill {
     }
 }
 
-/// Stops as (position, premultiplied linear colour).
-fn ramp(stops: &[Stop]) -> Vec<(f64, LinearRgba)> {
+/// Stops as (position, premultiplied colour), in whichever space
+/// `colour` gives.
+fn ramp(stops: &[Stop], colour: &impl Fn(Color) -> LinearRgba) -> Vec<(f64, LinearRgba)> {
     stops
         .iter()
-        .map(|s| (s.at.unwrap_or(0.0), s.color.to_linear()))
+        .map(|s| (s.at.unwrap_or(0.0), colour(s.color)))
         .collect()
 }
 

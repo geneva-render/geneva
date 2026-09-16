@@ -13,6 +13,11 @@ Blending encoded values (the common shortcut) makes semi-transparent edges
 and fades too dark; a 50% white over black is code 188 in linear light, not
 128.
 
+The one exception is inside a markup box: an `html` source blends the way a
+browser does, on sRGB-encoded values, and the finished box is converted to
+linear light once before it is composited like any other clip. See the
+gradients section of [timeline.md](timeline.md).
+
 ## Tags and inference
 
 Four tags describe a source: `primaries`, `transfer`, `matrix` and `range`.
