@@ -124,7 +124,7 @@ wrote dragon.mp4 (300 frames, 10s of video, 4.2s elapsed)
 The document controls when things appear. The HTML controls how they
 look. geneva handles the CSS layout itself, without a browser.
 Percentages are relative to the frame, so the layout scales with the
-output. 
+output.
 
 Because nothing is on screen for the first second or the last four, 135
 of the 300 frames are copied instead of re-encoded.
@@ -165,7 +165,6 @@ brew install x264                # macOS
 ## Commands
 
 ```sh
-
 geneva resize talk.mp4 -o talk-720.mp4 --height 720
 geneva trim talk.mp4 -o clip.mp4 --from 12s --exact     # frame-accurate, smart cut
 geneva concat part1.mp4 part2.mp4 -o all.mp4            # copied when the streams match
