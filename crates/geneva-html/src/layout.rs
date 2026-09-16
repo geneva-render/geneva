@@ -480,8 +480,9 @@ impl Walk<'_> {
 
     /// Puts one node into the piles of the context it belongs to. A node
     /// with a z-index of its own opens a context and is painted whole,
-    /// where its z-index puts it. A group is painted whole too, at
-    /// z-index zero, as an element with opacity or a filter is in CSS. A
+    /// where its z-index puts it. A group is painted whole too, in tree
+    /// order with the positioned boxes, which is where CSS paints an
+    /// element with opacity or a filter (its own z-index apart). A
     /// positioned node without one is also painted whole, so its children
     /// stay with it. Anything else joins the flow, and its children keep
     /// filling the same piles, which is how a z-index deeper in can still
@@ -508,13 +509,7 @@ impl Walk<'_> {
             piles.contexts.push((z, order, boxes));
             return Ok(());
         }
-        if opened.is_some() {
-            let mut boxes = Vec::new();
-            self.paint_order(dom, origin, opacity, clip, inner, &mut boxes)?;
-            piles.contexts.push((0, order, boxes));
-            return Ok(());
-        }
-        if self.styles[dom].positioned {
+        if opened.is_some() || self.styles[dom].positioned {
             let mut boxes = Vec::new();
             self.paint_order(dom, origin, opacity, clip, inner, &mut boxes)?;
             piles.positioned.append(&mut boxes);
@@ -846,6 +841,21 @@ mod tests {
         let groups: Vec<Option<usize>> = laid.boxes.iter().map(|b| b.group).collect();
         // a's own box, then d in flow, then b (a context at z 0) with c.
         assert_eq!(groups, vec![Some(0), Some(0), Some(1), Some(2)]);
+    }
+
+    #[test]
+    fn a_group_paints_in_tree_order_with_positioned_boxes() {
+        // The haze is a group (it has an animation); the vignette is a
+        // positioned box after it. CSS paints both in the same layer, in
+        // tree order, so the vignette lands on top of the haze.
+        let (_, laid) = lay(
+            "<style>.haze { position: absolute; animation: x 1s } .vignette { position: absolute }</style>\
+             <div><div class=haze></div><div class=vignette></div></div>",
+            100.0,
+            50.0,
+        );
+        let order: Vec<Option<usize>> = laid.boxes.iter().map(|b| b.group).collect();
+        assert_eq!(order, vec![None, Some(0), None]);
     }
 
     #[test]

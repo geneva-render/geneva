@@ -66,6 +66,18 @@ the format version it was written for.
   painting takes that padding back off, so adding a glow leaves the words
   where they were. It is clipped at the edge of the clip's own box.
 
+### Fixed
+
+- A `text-shadow` or `box-shadow` whose colour was written as `rgb()` or
+  `rgba()` was dropped as a shadow list (W450), since the commas inside
+  the colour were read as separators. Only a comma outside brackets
+  separates shadows now.
+- A box with `opacity`, a `filter` or an inner animation was painted
+  after every positioned box in its stacking context, so a translucent
+  haze under a positioned vignette came out on top of it. Such a box is
+  painted in tree order with the positioned boxes, where CSS puts it.
+
+
 ## 0.4.3 (2026-09-14)
 
 ### Added

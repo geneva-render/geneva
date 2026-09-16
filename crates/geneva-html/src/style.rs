@@ -1525,7 +1525,9 @@ fn shadow(value: &str, em: f64, property: &str) -> Result<Option<Shadow>, String
     if value.trim().eq_ignore_ascii_case("none") {
         return Ok(None);
     }
-    if value.contains(',') {
+    // A comma outside brackets separates shadows; inside, it is part
+    // of a colour such as rgba(0, 0, 0, 0.5).
+    if top_level_commas(value).len() > 1 {
         return Err(format!("only one {property} is drawn"));
     }
     if value.to_ascii_lowercase().contains("inset") {
@@ -1706,6 +1708,23 @@ mod tests {
         assert_eq!((shadow.x, shadow.y, shadow.blur), (2.0, 3.0, 9.0));
         assert_eq!(shadow.color.to_hex(), "#00eee1");
         assert!(styles[p].paint.shadow.is_none(), "the box keeps its own");
+    }
+
+    #[test]
+    fn a_shadow_keeps_a_colour_with_commas_in_it() {
+        let (doc, styles, problems) = styled(
+            "<style>p { text-shadow: 0 0 8px rgba(0, 238, 225, 0.5); \
+             box-shadow: 0 2px 4px rgb(0, 0, 0) }</style><p>hi</p>",
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let p = doc.children(doc.root)[0];
+        let glow = styles[p].text.shadow.expect("a text shadow");
+        assert_eq!(glow.blur, 8.0);
+        assert!((glow.color.a - 0.5).abs() < 0.01);
+        assert!(styles[p].paint.shadow.is_some());
+        let (_, _, problems) =
+            styled("<style>p { text-shadow: 0 0 1px red, 0 0 2px blue }</style><p>hi</p>");
+        assert_eq!(problems.len(), 1, "two shadows are still one too many");
     }
 
     #[test]
