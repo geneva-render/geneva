@@ -1,11 +1,8 @@
 <img src="docs/wordmark-any.png" alt="Geneva" width="240" height="77">
 
-geneva is a video editor for the command line, built as an alternative to
-`ffmpeg`. It is designed to work well with AI agents, too.
+geneva is a programmatic video editor, built as an alternative to the ffmpeg command line. It’s designed to work well with AI agents, too.
 
-Simple jobs take one line. More complex ones go in JSON, using the same
-engine. The JSON is just a file you can read, diff, validate and check
-into git.
+Simple jobs take one line. More complex ones go in as JSON + optional assets, so you can read, diff, validate and check into git.
 
 geneva validates the job before decoding anything, so bad options fail
 immediately instead of an hour into the render. It also reports what it
@@ -25,7 +22,7 @@ and video goes through libavformat and libavcodec.
 ## How it works
 
 Here is a name card and captions over ten seconds of space-station
-footage. The card is an HTML file. Open it in a browser and it looks and
+footage. The card is just an HTML file. Open it in a browser and it looks and
 moves the same:
 
 ```html
@@ -127,16 +124,7 @@ wrote dragon.mp4 (300 frames, 10s of video, 4.2s elapsed)
 The document controls when things appear. The HTML controls how they
 look. geneva handles the CSS layout itself, without a browser.
 Percentages are relative to the frame, so the layout scales with the
-output.
-
-Unsupported CSS produces a warning that names it. See
-[examples/README.md](examples/README.md#writing-a-card) for the supported
-subset.
-
-Captions are one clip in the document and one clip per cue on the
-timeline. The transcript carries the timing. See
-[examples/README.md](examples/README.md#captions) for the one-command
-version, SubRip and WebVTT input, and cue layout.
+output. 
 
 Because nothing is on screen for the first second or the last four, 135
 of the 300 frames are copied instead of re-encoded.
@@ -167,9 +155,9 @@ brew install x264                # macOS
 | | What it does | Where |
 | --- | --- | --- |
 | **Cut and join without re-encoding** | Copies the streams instead of decoding and encoding them again | [examples](examples/README.md#cuts-that-dont-re-encode) |
-| **Several outputs in one pass** | Renditions, a poster, a sprite sheet and speech audio from one read | [examples](examples/README.md#one-read-many-files) |
+| **Several outputs in one pass** | Multiple renditions, a poster, and speech audio from one read | [examples](examples/README.md#one-read-many-files) |
 | **Vertical video reframing** | Turns 16:9 into 9:16 over a blurred copy instead of cropping | [examples](examples/README.md#vertical-video) |
-| **Destination presets** | `--for tiktok`, `--for web`, `--for email` set size, codec, quality, keyframes and audio, and warn when limits are exceeded | [docs/cli.md](docs/cli.md#targets) |
+| **Destination presets** | `--for instagram`, `--for web`, `--for phone` set size, codec, quality, keyframes and audio, and warn when limits are exceeded | [docs/cli.md](docs/cli.md#targets) |
 | **Transitions** | Dissolve or dip through a colour at joins or clip boundaries, with picture and sound kept together | [docs/timeline.md](docs/timeline.md#transitions) |
 | **Colour** | Preserves BT.601/BT.709, reports guesses for untagged material, and tone-maps HDR with BT.2446 | [docs/color.md](docs/color.md) |
 | **Scripts and agents** | `--format json`, field-level diagnostics, deterministic output | [docs/agents.md](docs/agents.md) |
@@ -177,17 +165,17 @@ brew install x264                # macOS
 ## Commands
 
 ```sh
-geneva trim talk.mp4 -o intro.mp4 --to 30s              # copied, no re-encode
+
+geneva resize talk.mp4 -o talk-720.mp4 --height 720
 geneva trim talk.mp4 -o clip.mp4 --from 12s --exact     # frame-accurate, smart cut
 geneva concat part1.mp4 part2.mp4 -o all.mp4            # copied when the streams match
 geneva concat a.mp4 b.mp4 -o ab.mp4 --crossfade 0.5s    # dissolve, picture and sound
 geneva concat a.mp4 b.mp4 -o ab.mp4 --fade 0.6s         # dip through black
-geneva resize talk.mp4 -o talk-720.mp4 --height 720
+geneva overlay talk.mp4 logo.png -o branded.mp4 --at bottom-right --scale 0.5
 geneva convert talk.mp4 -o web.mp4 --for web            # copied if a browser can already play it
 geneva convert talk.mp4 -o talk.mov --codec prores --profile hq
 geneva convert talk.mp4 -o frames/%04d.png              # image sequence
-geneva overlay talk.mp4 logo.png -o branded.mp4 --at bottom-right --scale 0.5
-geneva audio talk.mp4 -o talk.wav --extract --speech    # 16 kHz mono, for whisper
+geneva audio talk.mp4 -o talk.wav --extract --speech    # 16 kHz mono, for whisper etc.
 geneva audio talk.mp4 -o scored.mp4 --mix music.mp3 --gain -12
 geneva subtitles talk.mp4 -o burned.mp4 --burn en.srt --fit
 geneva frame talk.mp4 -o thumb.jpg                      # first clear frame past the opening
