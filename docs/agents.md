@@ -219,8 +219,9 @@ A `color` on a crossfade is W304.
   `"00:00:01.5"`. A bare number is seconds.
 - **`deny_unknown_fields`.** A misspelled key is an error, not ignored, so
   typos surface at validation rather than as a silently wrong render.
-- **Long renders print progress on stderr** only in human mode; with
-  `--format json` stderr stays quiet apart from library messages.
+- **Progress goes to stderr in both modes**, one JSON object per line
+  under `--format json`, so stdout stays exactly one document. A run
+  that copies its streams renders no frames and prints none.
 - **Rotated clips come out upright.** Phones store portrait video as a
   landscape stream plus a rotation flag. `probe` reports the displayed
   size, the renderer turns frames upright, and a copy keeps the flag, so
