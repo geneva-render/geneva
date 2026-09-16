@@ -1,25 +1,54 @@
 # Geneva for programs and agents
 
-This page is for code, scripts and AI agents that drive `geneva`. It is
-short on purpose; the [command-line reference](cli.md) and the
-[timeline reference](timeline.md) have the details.
+For code, scripts and AI agents that drive `geneva`. This page is the
+calling contract and the handful of format details a generator gets
+wrong most often. Everything else is in the
+[command-line reference](cli.md), the
+[timeline reference](timeline.md) and [errors.md](errors.md).
+
+Contents: [the contract](#the-contract), [report shape](#report-shape),
+[a working loop](#a-working-loop), [starting from a verb](#starting-from-a-verb),
+[clip fields](#clip-fields), [motion](#motion),
+[transitions](#transitions), [markup](#markup), [captions](#captions),
+[outputs](#outputs), [shorthands](#shorthands),
+[things that trip programs up](#things-that-trip-programs-up).
 
 ## The contract
 
 - **One binary, no services.** `geneva` reads files, writes files and
   prints one report. It never needs a network.
-- **`--format json` everywhere.** Put it before the subcommand. Stdout is
-  then exactly one JSON document; stderr carries one progress object per
-  line (see [progress](cli.md#progress)), so a long render can be
-  followed without waiting for the report.
-- **Exit codes mean something.** 0 done, 1 timeline invalid, 2 usage
-  error, 3 render or encode failed.
+- **`--format json` everywhere.** Put it before the subcommand. Stdout
+  is then exactly one JSON document.
+- **Progress on stderr, in both modes.** Under `--format json` each
+  line is a complete object, so a long render can be followed without
+  waiting for the report. A run that copies its streams composites no
+  frames and prints none.
 - **Deterministic.** The same timeline, assets and version produce the
   same frames, so results can be cached by input hash.
 
+| Exit | Meaning |
+| --- | --- |
+| 0 | Done |
+| 1 | Timeline invalid |
+| 2 | Anything else: bad usage, a file that could not be read |
+| 3 | Render or encode failed |
+
+A progress line, at the first frame, about once a second, and at the
+last:
+
+```json
+{"event":"progress","frames":540,"total":1800,"seconds":8.0,"rate":67.5,
+ "time":18.0,"duration":60.0,"remaining":18.67}
+```
+
+`remaining` is the estimate in seconds at the rate so far, and `null`
+where there is nothing to estimate from: the last line, and the first
+half second, which measures startup as much as work.
+
 ## Report shape
 
-Every command that touches a timeline returns:
+Every command that touches a timeline returns `ok`, `diagnostics` and
+`summary`:
 
 ```json
 {
@@ -32,42 +61,47 @@ Every command that touches a timeline returns:
 }
 ```
 
-`render` and the verbs add `output`, `content_type`, `mode`, `frames`,
-`duration` and `seconds`. A render of a document with an `outputs` map,
-and `frame` on a video file, add `directory` and `outputs` instead of
-`output` and `mode`: one entry per file with `name`, `kind`, `path`,
-`bytes`, `content_type`, its own `mode`, and `width` and `height` for
-pictures and video (one tile, for a sprite sheet). Every file written
-is a row, the sprite map as `sprites-map`, so a program can hand the
-list to an uploader as it is; redirect the report to keep it as a
-manifest. The content types are the point: a `.vtt` or `.mp4` served as
-`application/octet-stream` breaks players, and the report names the
-right type for each file. `mode` is `"copy"` (source streams copied, no decoding),
-`"smart"` (packets copied where nothing changes, the frames around cuts
-and under overlays encoded into the same stream),
-`"direct"` (decoded frames handed straight to the encoder, scaled or
-repacked when needed) or `"render"`
-(frames composited by the renderer). `frame` adds `output`, `time`,
-`frame`, `width`, `height`. `probe` returns the media description directly.
+A diagnostic carries a stable `code`, a JSON pointer `path` into the
+document, and a `help` string when there is a concrete fix. Errors stop
+the run; warnings and notes do not.
 
-Diagnostics carry a stable `code` ([errors.md](errors.md)), a JSON
-pointer `path` into the document, and a `help` string when there is a
-concrete fix. Errors stop the run; warnings and notes do not.
+What each command adds to those three keys:
 
-While a render runs, each line on stderr is a complete JSON object
-`{"event":"progress","frames":…,"total":…,"seconds":…,"rate":…,"time":…,
-"duration":…,"remaining":…}`: the first frame, then about once a second,
-then the last. `remaining` is the estimate in seconds at the rate so far,
-`null` when there is nothing to estimate from (the last line, and the
-first half second, which measures the startup too). Read stderr line by
-line
-to drive a progress bar or a timeout; a run that copies its streams
-prints none, because it renders no frames.
+| Command | Adds |
+| --- | --- |
+| `validate` | nothing |
+| `render`, and the verbs | `output`, `content_type`, `mode`, `frames`, `duration`, `seconds` |
+| `render` on a document with `outputs` | `directory`, `outputs`, `frames`, `duration`, `seconds` |
+| `frame` on a timeline | `output`, `content_type`, `time`, `frame`, `width`, `height` |
+| `frame` on a media file | as for `outputs`, with one entry |
+| `subtitles --extract` | `output`, `content_type`, `cues` |
+| `probe` | the media description itself, not this envelope |
+
+`mode` says how the picture was made:
+
+| `mode` | What happened |
+| --- | --- |
+| `copy` | Source streams copied, nothing decoded |
+| `smart` | Packets copied where nothing changes, the frames around cuts and under overlays encoded into the same stream |
+| `direct` | Decoded frames handed straight to the encoder, scaled or repacked when needed |
+| `render` | Frames composited by the renderer |
+
+Each entry in `outputs` is one file written: `name`, `kind`, `path`,
+`bytes`, `mode`, `content_type`, and `width` and `height` for pictures
+and video, which for a sprite sheet are one tile. A sprite sheet's
+WebVTT map is its own row, of kind `sprites-map`. `width` and `height`
+are absent, not null, where they do not apply.
+
+The list is meant to go to an uploader as it stands, which is what
+`content_type` is for: a `.vtt` or `.mp4` served as
+`application/octet-stream` breaks players. Redirect the report to keep
+it as a manifest.
 
 ## A working loop
 
-1. **Write the timeline** as JSON. Start from `geneva schema` or from the
-   examples in `examples/`; every field has a description in the schema.
+1. **Write the timeline** as JSON. Start from `geneva schema` or from
+   the examples in `examples/`; every field has a description in the
+   schema.
 2. **Validate with probing** before rendering anything expensive:
 
    ```sh
@@ -90,143 +124,166 @@ prints none, because it renders no frames.
    Read `mode` and the N600 notes: a copy is instant but cuts land on
    keyframes; add `--exact` when the frame matters more than the time.
 
-## Verbs as a starting point
+## Starting from a verb
 
-The everyday verbs build timelines. `--show-timeline` prints the document
-instead of rendering, which is the fastest way to get a correct skeleton
-for a job and then edit it:
+The everyday verbs build timelines. `--show-timeline` prints the
+document instead of rendering, which is the fastest way to a correct
+skeleton to edit:
 
 ```sh
 geneva trim in.mp4 -o out.mp4 --from 10s --to 20s --show-timeline > job.json
 geneva render job.json --assets /path/printed/on/stderr -o out.mp4
 ```
 
-The asset root the printed document expects is written to stderr (it is
-the deepest directory containing every input).
+The asset root the printed document expects goes to stderr. It is the
+deepest directory containing every input. A printed timeline always
+uses the long form, never the shorthands below.
 
-Format 0.2 added four optional clip fields, all documented in
-[timeline.md](timeline.md): `crop` (a rectangle of the source that
-becomes the clip's box), `effects` (a list; `blur` with an animatable
-`radius`), `mask` (a rectangle or ellipse with `radius` and `feather`,
-or a luma image `asset`, in the box's own coordinates) and `speed` (a
-constant rate change; the clip lasts its range divided by it). The verbs
-expose the everyday cases as `--crop X,Y,WxH` (or `WxH` for the middle),
-`--speed FACTOR` and `--fill blur` (a blurred, scaled-up copy of the
-picture behind it on a canvas it does not cover). A clip using any of
-these is composited; the copy, smart-cut and direct paths do not apply
-to it, so the report's mode will be `render`.
+## Clip fields
 
-Version 0.3.0 kept the format at 0.2 and added optional encode fields:
-`encode.video.tune` (x264's names: `film`, `animation`, `grain`,
-`stillimage`, `fastdecode`, `zerolatency`), `encode.video.fixed_keyframes`
-(keyframes at `keyframe_interval` only; needs the interval, E422) and
-`encode.video.chunks` (`auto`, a number, or `1` to encode in one run).
-`output.color` may now be `pq` or `hlg` with BT.2020 on a ten-bit codec
-(`h265`, `av1`, `vp9`, `prores`; E420 otherwise); HDR sources are
-tone-mapped to SDR unless the output is HDR, and the verbs take
-`--keep-hdr`. Time zero of a file is its first video frame, so an audio
-track that starts later keeps its offset.
+| Field | Shape | Effect |
+| --- | --- | --- |
+| `crop` | a rectangle of the source | Becomes the clip's box, before `fit` |
+| `effects` | a list of `{ "kind": ... }` | `blur` with an animatable `radius` |
+| `mask` | a rectangle or ellipse with `radius` and `feather`, or a luma image `asset` | In the box's own coordinates |
+| `speed` | a number | Constant rate change; the clip lasts its range divided by it |
 
-Format 0.3 adds the optional top-level `outputs` map: the files one
-render writes from the composition, each `{ "kind": "video" | "poster" |
-"sprites" | "audio", ... }` with a size, a time (`at` for a poster),
-an interval and column count (sprites) or encode and audio settings of
-its own. `geneva render -o DIR` writes them all in one pass; that is
-the way to get a rendition, a thumbnail and a speech track from one
-read of the source. `frame` on a video file builds a one-entry
-document of this kind. `--for` on a verb copies a source that already
-fits the target instead of re-encoding it, and the note says which
-branch it took.
+Any of these makes the clip composited, so `mode` is `render`: the
+copy, smart-cut and direct paths do not apply to it. Fields in
+[timeline.md](timeline.md#crop). The verbs expose the everyday cases as
+`--crop X,Y,WxH` (or `WxH` for the middle), `--speed FACTOR` and
+`--fill blur`.
 
-Three parts of a document have a shorter spelling, all of them optional
-and all of them accepted alongside the long form, so a document can mix
-them freely:
+## Motion
+
+Keyframe tracks are one spelling. The other is CSS: a top-level
+`keyframes` map of `@keyframes` rules, played by a clip's `animation`
+with the CSS shorthand.
+
+```json
+"animation": "slide-in 0.5s ease-out, fade-out 0.3s 3.7s"
+```
+
+Both resolve to the same tracks, so neither is faster. Two things catch
+generators out: duration and delay need their units, and a rule's
+opacity replaces the clip's rather than combining, so the clip's value
+must be constant where a rule drives it (E443). Transforms do combine.
+Offsets, properties and `spring(170, 26)` are in
+[timeline.md](timeline.md#animation).
+
+## Transitions
+
+A clip's `transition` says how it arrives from the clip before it on
+the same layer. `transition_out` closes a layer the same way.
+
+```json
+"transition": { "kind": "crossfade", "duration": "0.5s", "ease": "ease-out" }
+```
+
+| `kind` | Picture | Sound |
+| --- | --- | --- |
+| `crossfade` | Both clips up at once, dissolving | Crosses at constant power |
+| `fade` | One clip at a time, dipping through `color` (black by default) | To silence and back |
+
+The pair overlaps by `duration` and a clip with no `start` is moved
+earlier to make room. On the first clip of a layer there is nothing to
+come from, so the transition opens the piece over its whole duration.
+E306 if the previous clip does not cover the overlap, E307 for a
+`transition_out` where another clip follows, W304 for a `color` on a
+crossfade. Details in [timeline.md](timeline.md#transitions).
+
+## Markup
+
+A clip can draw a box of markup: a source of kind `html`, with the
+markup inline in `html` or in an asset of kind `html`, plus optional
+`css`, a `width` (default: the frame) and a `height` (default: fits the
+content). It is a strict HTML parser with a CSS subset and block and
+flexbox layout, so a file that looks and moves right in a browser looks
+and moves right here.
+
+Pictures and stylesheets take paths relative to the markup, as on a
+page (`<img src="logo.png">`). A path that leaves the asset root, or a
+file that is not there, is E452 at validation.
+
+Nothing is dropped in silence, which is what makes a generated card
+debuggable:
+
+| Code | When |
+| --- | --- |
+| E451 | Markup or a selector it cannot parse |
+| W450 | A property it does not draw |
+| W452 | A rule whose selector matches no element |
+| W451 | Both the markup and the clip set an `animation` |
+| W454 | `z-index` where it does not apply |
+
+What it parses and draws is in [timeline.md](timeline.md#markup).
+
+## Captions
+
+A transcript is a source: `{ "kind": "captions", "asset": "words" }`
+reads a `.srt`, a `.vtt`, or the `.json` a speech recogniser writes,
+and becomes one clip per cue, so the frames between cues can still be
+copied.
+
+Word files go in as they came: whisper's `segments[].words[]`, a bare
+`{"words": [...]}`, or a bare list. `word` or `text` names the word and
+every other key is ignored. Word times are what let `style.highlight`
+pick out the word being said.
+
+An empty caption track is never drawn quietly. A file with no words in
+it, or with times in milliseconds, is E453; a `highlight` on a file
+that times whole cues rather than words is W453.
+
+`geneva subtitles --burn FILE [--highlight COLOR]` is the same thing
+without a document. Cue placement is in
+[timeline.md](timeline.md#sources).
+
+## Outputs
+
+The top-level `outputs` map is the files one render writes from the
+composition, each of kind `video`, `poster`, `sprites` or `audio`, with
+a size, a time, an interval, or encode and audio settings of its own.
+`geneva render timeline.json -o DIR` writes them all in one pass, which
+is how to get a rendition, a thumbnail and a speech track from one read
+of the source.
+
+Three encode fields are easy to miss: `encode.video.tune` takes x264's
+names, `encode.video.fixed_keyframes` needs `keyframe_interval` set
+(E422), and `output.color` may be `pq` or `hlg` only on a ten-bit codec
+(E420). HDR sources are tone-mapped to SDR unless the output is HDR.
+The rest is in [timeline.md](timeline.md#outputs).
+
+## Shorthands
+
+Three parts of a document have a shorter spelling. All are optional and
+accepted alongside the long form, so a document can mix them.
 
 - A point (`transform.position`, `transform.anchor`) as a pair or a
   string: `[30, 36]`, `"30 36"`, `"0% 50%"`, or the CSS keywords
   `"left"`, `"center"`, `"bottom right"`.
-- A keyframe as its fields in order: `[t, v]` or `[t, v, ease]`, so
+- A keyframe as its fields in order, `[t, v]` or `[t, v, ease]`, so
   `{ "keyframes": [ [0, 0], ["0.5s", 1, "ease-out"] ] }`.
-- A timed word as its fields in order: `["word", start, end]`, or
+- A timed word as its fields in order, `["word", start, end]`, or
   `["word", start]` where the next word's start ends it. The last word
   needs its own end (E102).
-
-A printed timeline (`--show-timeline`) always uses the long form.
-
-Motion has a second spelling too. A top-level `keyframes` map holds CSS
-`@keyframes` rules, an offset (`from`, `to`, `60%`) to a declaration block
-setting `transform`, `translate`, `scale`, `rotate` or `opacity`, and a
-clip's `animation` plays them with the CSS shorthand:
-`"slide-in 0.5s ease-out, fade-out 0.3s 3.7s"`. Duration and delay need
-their units; `infinite`, `alternate` and `spring(170, 26)` are
-understood. A rule's transform is laid over the clip's own (translations
-add to `transform.position`, scales multiply, rotations add) and its
-opacity replaces the clip's, so the clip's value must be constant where
-a rule drives it (E443). Everything resolves to the same keyframe
-tracks, so neither spelling is faster or slower than the other.
-
-A clip can also draw a box of markup: a source of kind `html` with the
-markup in `html` or in an asset of kind `html`, plus optional `css`, a
-`width` (default: the frame) and a `height` (default: fits the content).
-It is a strict HTML parser, a CSS subset with type, class and id
-selectors and the descendant and child combinators, and flexbox and block
-layout from taffy. Pictures and stylesheets take paths relative to the
-markup, as on a page (`<img src="logo.png">`, `<link rel="stylesheet"
-href="house.css">`); a path that leaves the asset root, or a file that
-is not there, is E452 at validation. There is no inline layout: an element's text is one
-paragraph and a child element is a box. Anything geneva cannot draw is
-named rather than ignored: E451 for markup or a selector it cannot parse,
-W450 for a property it does not draw. `@keyframes` in the markup are in
-scope for that clip, and an `animation` on its outermost element is what
-the clip plays unless the clip sets its own (W451 when both do), so a
-file that moves in a browser moves here. See
-[timeline.md](timeline.md#markup) for the property list.
-
-A transcript is a source too: `{ "kind": "captions", "asset": "words" }`
-reads a `.srt`, a `.vtt`, or the `.json` a speech recogniser writes, and
-becomes one clip per cue, so the frames between cues can still be copied.
-Word files go in as they came: whisper's `segments[].words[]`, a bare
-`{"words": [...]}` or a bare list; `word` or `text` for the word; every
-other key ignored. Their word times let `style.highlight` pick out the
-word being said. What geneva will not do is draw nothing quietly: a
-file with no words in it, or with times in milliseconds, is E453, and a
-`highlight` on a file that times whole cues is W453. `position`
-(`bottom`, `top`, `center`), `margin` and `safe` place the cues, and a
-WebVTT file's own placement is followed unless `follow_file` is false.
-`geneva subtitles --burn FILE [--highlight COLOR]` is the same thing
-without a document.
-
-A clip's `transition` says how it arrives from the clip before it on the
-same layer: `{"kind": "crossfade" | "fade", "duration": ..., "color": ...}`.
-A crossfade dissolves, with both clips up at once and the sound crossing
-at constant power. A fade dips through `color` (black by default), one
-clip at a time, the sound going to silence and back. The pair overlaps by
-`duration`, a clip with no `start` is moved earlier to make room, the
-previous clip must cover it (E306), and the first clip on a layer has
-nothing before it, in which case the transition opens the piece: over the
-whole duration, a fade comes up out of its colour and a crossfade up from
-whatever is behind. `transition_out` closes a layer the same way, and
-setting it where another clip follows is E307. `ease` shapes either ramp.
-A `color` on a crossfade is W304.
 
 ## Things that trip programs up
 
 - **Asset paths are relative to a root**, the timeline's directory by
-  default or `--assets DIR`. Absolute paths and `..` are rejected (E202).
-- **Sizes should be even** for the common codecs (W401 warns); the verbs
-  round for you, timelines do not.
-- **Times are strings** in JSON when they carry a unit: `"1.5s"`, `"45f"`,
-  `"00:00:01.5"`. A bare number is seconds.
-- **`deny_unknown_fields`.** A misspelled key is an error, not ignored, so
-  typos surface at validation rather than as a silently wrong render.
-- **Progress goes to stderr in both modes**, one JSON object per line
-  under `--format json`, so stdout stays exactly one document. A run
-  that copies its streams renders no frames and prints none.
+  default or `--assets DIR`. Absolute paths and `..` are rejected
+  (E202).
+- **Times are strings** in JSON when they carry a unit: `"1.5s"`,
+  `"45f"`, `"00:00:01.5"`. A bare number is seconds.
+- **`deny_unknown_fields`.** A misspelled key is an error, not ignored,
+  so typos surface at validation rather than as a silently wrong
+  render.
+- **Sizes should be even** for the common codecs (W401 warns). The
+  verbs round for you, timelines do not.
 - **Rotated clips come out upright.** Phones store portrait video as a
   landscape stream plus a rotation flag. `probe` reports the displayed
   size, the renderer turns frames upright, and a copy keeps the flag, so
   nothing needs to read it. Sizes in a timeline are displayed sizes.
-- **Containers reject codecs they cannot hold** with a plain error rather
-  than a broken file; the table in [cli.md](cli.md#containers-and-codecs)
-  says what goes where. Image sequences need a `%04d`-style pattern in the
-  output path.
+- **Containers reject codecs they cannot hold** with a plain error
+  rather than a broken file. The table in
+  [cli.md](cli.md#containers-and-codecs) says what goes where. Image
+  sequences need a `%04d`-style pattern in the output path.
