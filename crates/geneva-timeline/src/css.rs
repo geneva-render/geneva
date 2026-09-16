@@ -15,6 +15,7 @@ use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::de::{self, Deserializer, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
 
+use crate::animated::Animated;
 use crate::color::ColorValue;
 use crate::schema::{Shadow, Stroke, TextStyle};
 
@@ -92,11 +93,12 @@ pub fn parse_shadow(text: &str) -> Result<Shadow, String> {
             if blur < 0.0 {
                 return Err(format!("{text:?}: the blur {blur}px cannot be negative"));
             }
+            // The shorthand can only say one value, so it is a constant.
             Ok(Shadow {
-                color: shade,
-                x: *x,
-                y: *y,
-                blur,
+                color: shade.map(Animated::Constant),
+                x: Animated::Constant(*x),
+                y: Animated::Constant(*y),
+                blur: Animated::Constant(blur),
             })
         }
         _ => Err(format!(
@@ -301,18 +303,18 @@ pub fn expand_font(style: &mut TextStyle, line_height: &mut Option<f64>) -> Resu
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ShadowFields {
-    /// Shadow color. Defaults to 50% black.
+    /// Shadow color. Defaults to 50% black. Takes keyframes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<ColorValue>,
-    /// Horizontal offset in pixels.
+    pub color: Option<Animated<ColorValue>>,
+    /// Horizontal offset in pixels. Takes keyframes.
     #[serde(default)]
-    pub x: f64,
-    /// Vertical offset in pixels.
+    pub x: Animated<f64>,
+    /// Vertical offset in pixels. Takes keyframes.
     #[serde(default)]
-    pub y: f64,
-    /// Blur radius in pixels.
+    pub y: Animated<f64>,
+    /// Blur radius in pixels. Takes keyframes.
     #[serde(default)]
-    pub blur: f64,
+    pub blur: Animated<f64>,
 }
 
 /// The object form of an outline.
@@ -476,11 +478,13 @@ mod tests {
 
     #[test]
     fn shadows_parse_in_the_text_shadow_order() {
+        // The shorthand can only say one value, so every part is a constant.
+        let c = |a: &Animated<f64>| *a.constant().expect("a constant");
         let s = parse_shadow("0 2px 8px #0008").unwrap();
-        assert_eq!((s.x, s.y, s.blur), (0.0, 2.0, 8.0));
-        assert_eq!(s.color.unwrap().0.to_hex(), "#00000088");
+        assert_eq!((c(&s.x), c(&s.y), c(&s.blur)), (0.0, 2.0, 8.0));
+        assert_eq!(s.color.unwrap().constant().unwrap().0.to_hex(), "#00000088");
         let s = parse_shadow("rgba(0, 0, 0, 0.5) 1px 1px").unwrap();
-        assert_eq!((s.x, s.y, s.blur), (1.0, 1.0, 0.0));
+        assert_eq!((c(&s.x), c(&s.y), c(&s.blur)), (1.0, 1.0, 0.0));
         assert!(parse_shadow("2px").is_err());
         assert!(parse_shadow("0 0 -1px").is_err());
         assert!(parse_shadow("0 0 red blue").is_err());

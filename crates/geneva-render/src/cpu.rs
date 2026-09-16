@@ -240,8 +240,9 @@ impl<A: AssetSource> CpuRenderer<A> {
             }
             ResolvedSource::Text(text) => {
                 self.load_fonts(comp, text)?;
-                if text.words.is_empty() {
-                    // Static text: laid out once per clip.
+                if text.words.is_empty() && text.is_static() {
+                    // Static text: laid out once per clip. A colour or
+                    // shadow with keyframes is drawn fresh each frame.
                     let mut hasher = std::collections::hash_map::DefaultHasher::new();
                     clip.path.hash(&mut hasher);
                     text.text.hash(&mut hasher);

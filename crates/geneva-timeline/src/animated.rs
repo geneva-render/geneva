@@ -115,7 +115,32 @@ pub enum Animated<T> {
     Keyframes(Vec<KeyframeSpec<T>>),
 }
 
+impl<T: Default> Default for Animated<T> {
+    /// The type's own default, as a constant. Lets a field default to
+    /// zero or none and still accept keyframes.
+    fn default() -> Self {
+        Self::Constant(T::default())
+    }
+}
+
 impl<T> Animated<T> {
+    /// Applies `f` to every value the property takes, keeping the
+    /// keyframe times and easing.
+    pub fn map<U>(&self, f: impl Fn(&T) -> U) -> Animated<U> {
+        match self {
+            Self::Constant(v) => Animated::Constant(f(v)),
+            Self::Keyframes(k) => Animated::Keyframes(
+                k.iter()
+                    .map(|k| KeyframeSpec {
+                        t: k.t,
+                        v: f(&k.v),
+                        ease: k.ease,
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
     /// Returns the constant value, if any.
     pub fn constant(&self) -> Option<&T> {
         match self {

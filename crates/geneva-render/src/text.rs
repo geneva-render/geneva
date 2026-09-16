@@ -15,7 +15,7 @@ use cosmic_text::{
 };
 use geneva_color::{Color, LinearRgba};
 use geneva_timeline::ResolvedText;
-use geneva_timeline::schema::{TextAlign, TextSource, TextStyle};
+use geneva_timeline::schema::{TextAlign, TextStyle};
 use swash::scale::{Render, ScaleContext, Source, StrikeWith};
 use swash::zeno::{Format, Stroke, Style as ZenoStyle, Vector};
 
@@ -46,13 +46,11 @@ impl Default for TextEngine {
 /// alone would have gone subtracts this, and one that lays text out
 /// ignores it: neither a stroke nor a shadow changes where text sits.
 #[must_use]
-pub fn inset_for(spec: &TextSource) -> f64 {
-    let outline = spec.outline.as_ref().map_or(0.0, |o| o.width.max(0.0));
-    let (dx, dy, blur) = spec
-        .shadow
-        .as_ref()
-        .map_or((0.0, 0.0, 0.0), |s| (s.x, s.y, s.blur.max(0.0)));
-    outline + blur + dx.abs().max(dy.abs())
+pub fn inset_for(text: &ResolvedText) -> f64 {
+    let outline = text.spec.outline.as_ref().map_or(0.0, |o| o.width.max(0.0));
+    // The shadow's reach is its furthest over the whole clip, so a shadow
+    // that grows does not grow the image and move the glyphs with it.
+    outline + text.shadow.as_ref().map_or(0.0, |s| s.reach)
 }
 
 impl TextEngine {
@@ -92,15 +90,19 @@ impl TextEngine {
     /// whose size is the text's box (text bounds plus padding).
     pub fn render(&mut self, text: &ResolvedText, t: f64) -> Image {
         let spec = &text.spec;
-        let base = self.style(&spec.style, None);
+        let base_color = text.color.sample(t);
+        let base = self.style(&spec.style, None, base_color);
         let active_word = text
             .words
             .iter()
             .position(|(_, s, e)| s.to_f64() <= t && t < e.to_f64());
-        let highlight = spec
-            .highlight
-            .as_ref()
-            .map(|h| self.style(h, Some(&spec.style)));
+        let highlight = spec.highlight.as_ref().map(|h| {
+            let color = text
+                .highlight_color
+                .as_ref()
+                .map_or(base_color, |c| c.sample(t));
+            self.style(h, Some(&spec.style), color)
+        });
 
         let padding = spec.padding.unwrap_or(0.0).max(0.0) as f32;
         let line_height = spec.line_height.unwrap_or(DEFAULT_LINE_HEIGHT).max(0.1) as f32;
@@ -168,13 +170,21 @@ impl TextEngine {
             .outline
             .as_ref()
             .map_or(0.0, |o| o.width.max(0.0) as f32);
-        let shadow = spec.shadow.as_ref();
-        let (shadow_dx, shadow_dy, shadow_blur) = shadow.map_or((0.0, 0.0, 0.0), |s| {
-            (s.x as f32, s.y as f32, s.blur.max(0.0) as f32)
+        // The shadow at this moment. Its room in the image is the reach
+        // over the whole clip, not this moment's, so the glyphs stay put.
+        let shadow = text.shadow.as_ref().map(|s| {
+            (
+                s.x.sample(t) as f32,
+                s.y.sample(t) as f32,
+                s.blur.sample(t).max(0.0) as f32,
+                s.color.sample(t),
+            )
         });
+        let (shadow_dx, shadow_dy, shadow_blur) =
+            shadow.map_or((0.0, 0.0, 0.0), |(x, y, b, _)| (x, y, b));
         // Room for strokes and shadows around the text, worked out in one
         // place so a caller can subtract exactly what was added.
-        let extra = inset_for(spec) as f32;
+        let extra = inset_for(text) as f32;
         let inset = padding + extra;
         let text_w = (max_x - min_x).max(0.0);
         let width = (text_w + 2.0 * inset).ceil().max(1.0) as u32;
@@ -220,19 +230,7 @@ impl TextEngine {
             }
         }
 
-        if let Some(s) = shadow {
-            let color = s
-                .color
-                .map_or(
-                    Color {
-                        r: 0.0,
-                        g: 0.0,
-                        b: 0.0,
-                        a: 0.5,
-                    },
-                    |c| c.0,
-                )
-                .to_linear();
+        if let Some((_, _, _, color)) = shadow {
             let mut mask = Mask::new(width, height);
             for g in &placed {
                 if outline_w > 0.0 {
@@ -265,7 +263,8 @@ impl TextEngine {
     /// A font asset supplies its face's weight and style unless the style
     /// block sets them, so a bold font file renders bold without a separate
     /// `weight`.
-    fn style(&self, s: &TextStyle, parent: Option<&TextStyle>) -> Resolved {
+    /// `color` is sampled by the caller, since it can move over the clip.
+    fn style(&self, s: &TextStyle, parent: Option<&TextStyle>, color: LinearRgba) -> Resolved {
         let pick = |f: &dyn Fn(&TextStyle) -> Option<f64>| f(s).or_else(|| parent.and_then(f));
         let font = s
             .font
@@ -275,10 +274,6 @@ impl TextEngine {
         let family = font
             .clone()
             .map(|f| face.map_or(f, |face| face.family.clone()));
-        let color = s
-            .color
-            .or_else(|| parent.and_then(|p| p.color))
-            .map_or(Color::WHITE, |c| c.0);
         let weight = s
             .weight
             .or_else(|| parent.and_then(|p| p.weight))
@@ -295,7 +290,7 @@ impl TextEngine {
             weight,
             italic,
             letter_spacing: pick(&|s| s.letter_spacing).unwrap_or(0.0) as f32,
-            color: color.to_linear(),
+            color,
         }
     }
 

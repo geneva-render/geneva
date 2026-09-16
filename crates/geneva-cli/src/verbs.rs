@@ -1355,12 +1355,11 @@ fn measure_cue(
     spec: &TextSource,
     max_width: f64,
 ) -> (f64, f64) {
-    let resolved = geneva_timeline::ResolvedText {
-        text: spec.text.clone().unwrap_or_default(),
-        words: Vec::new(),
+    let resolved = geneva_timeline::ResolvedText::constant(
+        spec.text.clone().unwrap_or_default(),
+        spec.clone(),
         max_width,
-        spec: spec.clone(),
-    };
+    );
     let image = engine.render(&resolved, 0.0);
     (f64::from(image.width), f64::from(image.height))
 }
@@ -1372,9 +1371,9 @@ fn scale_style(spec: &mut TextSource, template: &TextSource, ratio: f64) {
         o.width = t.width * ratio;
     }
     if let (Some(sh), Some(t)) = (spec.shadow.as_mut(), template.shadow.as_ref()) {
-        sh.x = t.x * ratio;
-        sh.y = t.y * ratio;
-        sh.blur = t.blur * ratio;
+        sh.x = t.x.map(|v| v * ratio);
+        sh.y = t.y.map(|v| v * ratio);
+        sh.blur = t.blur.map(|v| v * ratio);
     }
 }
 

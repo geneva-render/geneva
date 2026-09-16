@@ -19,6 +19,14 @@ the format version it was written for.
   the radial size keywords and `url()` images are each named as
   undrawn (W450) rather than skipped; a radial is always sized to the
   farthest corner.
+- **Animatable text colour and shadow.** A `text` source's `color`,
+  and a `shadow`'s `color`, `x`, `y` and `blur`, take keyframes like any
+  other animatable value; the `text-shadow` shorthand stays a constant.
+  A highlight's colour animates independently or follows the base. The
+  rendered image is sized for the shadow's furthest reach over the clip
+  rather than its size at the frame, so a glow that swells does not move
+  the glyphs under it. A text whose style moves is drawn fresh each frame
+  instead of once per clip.
 - **`text-shadow` in markup.** One shadow, drawn behind the glyphs
   through the same path a text clip's `shadow` already used. It does not
   affect layout: the engine pads the image it renders to make room, and

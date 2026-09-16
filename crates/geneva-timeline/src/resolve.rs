@@ -358,6 +358,23 @@ pub struct ResolvedComposition {
     pub layers: Vec<ResolvedLayer>,
 }
 
+/// A shadow's animatable parts as tracks over clip-local time.
+#[derive(Debug, Clone)]
+pub struct ShadowTrack {
+    /// Premultiplied linear colour.
+    pub color: Track<LinearRgba>,
+    /// Horizontal offset in pixels.
+    pub x: Track<f64>,
+    /// Vertical offset in pixels.
+    pub y: Track<f64>,
+    /// Blur radius in pixels.
+    pub blur: Track<f64>,
+    /// The furthest the shadow reaches past the glyphs at any moment:
+    /// the largest blur plus the largest offset. The renderer sizes its
+    /// image by this, so the glyphs stay put while the shadow moves.
+    pub reach: f64,
+}
+
 /// Text content with defaults applied.
 #[derive(Debug, Clone)]
 pub struct ResolvedText {
@@ -369,7 +386,77 @@ pub struct ResolvedText {
     pub max_width: f64,
     /// The style block as written.
     pub spec: TextSource,
+    /// Fill colour over clip-local time.
+    pub color: Track<LinearRgba>,
+    /// The highlight's colour, when there is a highlight.
+    pub highlight_color: Option<Track<LinearRgba>>,
+    /// The shadow, when there is one.
+    pub shadow: Option<ShadowTrack>,
 }
+
+impl ResolvedText {
+    /// A text whose style is taken as written, for specs built in code
+    /// rather than read from a document. A keyframed value here is taken
+    /// at its first keyframe, since there is no resolver to check it.
+    #[must_use]
+    pub fn constant(text: String, spec: TextSource, max_width: f64) -> Self {
+        fn first<T: Clone>(a: &Animated<T>) -> T {
+            match a {
+                Animated::Constant(v) => v.clone(),
+                Animated::Keyframes(k) => k[0].v.clone(),
+            }
+        }
+        let color_of = |a: Option<&Animated<ColorValue>>, fallback: Color| {
+            Track::constant(a.map_or(fallback, |a| first(a).0).to_linear())
+        };
+        let color = color_of(spec.style.color.as_ref(), Color::WHITE);
+        let highlight_color = spec
+            .highlight
+            .as_ref()
+            .map(|h| color_of(h.color.as_ref().or(spec.style.color.as_ref()), Color::WHITE));
+        let shadow = spec.shadow.as_ref().map(|sh| {
+            let (x, y, blur) = (first(&sh.x), first(&sh.y), first(&sh.blur).max(0.0));
+            ShadowTrack {
+                color: color_of(sh.color.as_ref(), SHADOW_DEFAULT),
+                x: Track::constant(x),
+                y: Track::constant(y),
+                blur: Track::constant(blur),
+                reach: blur + x.abs().max(y.abs()),
+            }
+        });
+        Self {
+            text,
+            words: Vec::new(),
+            max_width,
+            spec,
+            color,
+            highlight_color,
+            shadow,
+        }
+    }
+
+    /// Whether nothing in the style changes over the clip, so one
+    /// rendering can stand for every frame.
+    #[must_use]
+    pub fn is_static(&self) -> bool {
+        self.color.is_constant()
+            && self.highlight_color.as_ref().is_none_or(Track::is_constant)
+            && self.shadow.as_ref().is_none_or(|s| {
+                s.color.is_constant()
+                    && s.x.is_constant()
+                    && s.y.is_constant()
+                    && s.blur.is_constant()
+            })
+    }
+}
+
+/// What a shadow is when it names no colour: half-transparent black.
+const SHADOW_DEFAULT: Color = Color {
+    r: 0.0,
+    g: 0.0,
+    b: 0.0,
+    a: 0.5,
+};
 
 /// Markup after parsing and styling. Layout and painting are left to the
 /// renderer, which is where text can be measured.
@@ -2679,11 +2766,45 @@ transitions in over the same join"
         let max_width = text.max_width.map_or(width, |m| {
             self.positive_length(m, &spath.key("max_width"), width, "max_width")
         });
+        let style_path = spath.key("style");
+        let color = self.track_color(
+            text.style.color.as_ref(),
+            &style_path.key("color"),
+            Color::WHITE,
+        );
+        let highlight_color = text.highlight.as_ref().map(|h| {
+            let a = h.color.as_ref().or(text.style.color.as_ref());
+            self.track_color(a, &spath.key("highlight").key("color"), Color::WHITE)
+        });
+        let shadow = text.shadow.as_ref().map(|sh| {
+            let p = spath.key("shadow");
+            let x = self.track_f64(Some(&sh.x), &p.key("x"), 0.0, Ratio::ZERO, None, "shadow x");
+            let y = self.track_f64(Some(&sh.y), &p.key("y"), 0.0, Ratio::ZERO, None, "shadow y");
+            let blur = self.track_f64(
+                Some(&sh.blur),
+                &p.key("blur"),
+                0.0,
+                Ratio::ZERO,
+                Some((0.0, 1.0e6)),
+                "shadow blur",
+            );
+            let peak = |a: &Animated<f64>| a.values().fold(0.0f64, |m, v| m.max(v.abs()));
+            ShadowTrack {
+                color: self.track_color(sh.color.as_ref(), &p.key("color"), SHADOW_DEFAULT),
+                x,
+                y,
+                blur,
+                reach: peak(&sh.blur) + peak(&sh.x).max(peak(&sh.y)),
+            }
+        });
         ResolvedText {
             text: content,
             words,
             max_width,
             spec: text.clone(),
+            color,
+            highlight_color,
+            shadow,
         }
     }
 

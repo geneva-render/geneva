@@ -975,18 +975,18 @@ pub struct Stroke {
 /// `"0 2px 8px #0008"` (see [`css`](crate::css)).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Shadow {
-    /// Shadow color. Defaults to 50% black.
+    /// Shadow color. Defaults to 50% black. Takes keyframes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<ColorValue>,
-    /// Horizontal offset in pixels.
+    pub color: Option<Animated<ColorValue>>,
+    /// Horizontal offset in pixels. Takes keyframes.
     #[serde(default)]
-    pub x: f64,
-    /// Vertical offset in pixels.
+    pub x: Animated<f64>,
+    /// Vertical offset in pixels. Takes keyframes.
     #[serde(default)]
-    pub y: f64,
-    /// Blur radius in pixels.
+    pub y: Animated<f64>,
+    /// Blur radius in pixels. Takes keyframes.
     #[serde(default)]
-    pub blur: f64,
+    pub blur: Animated<f64>,
 }
 
 /// A text source.
@@ -1247,9 +1247,9 @@ pub struct TextStyle {
     /// Italic.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub italic: Option<bool>,
-    /// Text color. Defaults to white.
+    /// Text color. Defaults to white. Takes keyframes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<ColorValue>,
+    pub color: Option<Animated<ColorValue>>,
     /// Extra spacing between letters in pixels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub letter_spacing: Option<f64>,

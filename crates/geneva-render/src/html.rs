@@ -13,7 +13,7 @@ use geneva_html::layout::Rectangle;
 use geneva_html::style::{Background, Direction, Stop};
 use geneva_html::{Content, Laid, Measure, Painted, Prepared, Text};
 use geneva_timeline::schema::{Shadow, TextAlign, TextSource, TextStyle};
-use geneva_timeline::{ResolvedHtml, ResolvedText};
+use geneva_timeline::{Animated, ResolvedHtml, ResolvedText};
 
 use crate::assets::Image;
 use crate::text::TextEngine;
@@ -31,11 +31,9 @@ struct Context<'a> {
 /// Turns an HTML text style into the text source the engine draws, so
 /// markup takes the same shaping, fallback and colour path as a text clip.
 fn as_text_source(text: &str, style: &Text, max_width: f64) -> ResolvedText {
-    ResolvedText {
-        text: text.to_owned(),
-        words: Vec::new(),
-        max_width,
-        spec: TextSource {
+    ResolvedText::constant(
+        text.to_owned(),
+        TextSource {
             text: Some(text.to_owned()),
             words: None,
             highlight: None,
@@ -44,7 +42,7 @@ fn as_text_source(text: &str, style: &Text, max_width: f64) -> ResolvedText {
                 size: Some(style.size),
                 weight: Some(style.weight),
                 italic: Some(style.italic),
-                color: Some(style.color.into()),
+                color: Some(Animated::Constant(style.color.into())),
                 letter_spacing: Some(style.letter_spacing),
             },
             max_width: None,
@@ -59,13 +57,14 @@ fn as_text_source(text: &str, style: &Text, max_width: f64) -> ResolvedText {
             radius: None,
             outline: None,
             shadow: style.shadow.map(|s| Shadow {
-                color: Some(s.color.into()),
-                x: s.x,
-                y: s.y,
-                blur: s.blur,
+                color: Some(Animated::Constant(s.color.into())),
+                x: Animated::Constant(s.x),
+                y: Animated::Constant(s.y),
+                blur: Animated::Constant(s.blur),
             }),
         },
-    }
+        max_width,
+    )
 }
 
 /// A key that distinguishes two runs with different styles.
@@ -552,7 +551,7 @@ fn paint_text(image: &mut Image, b: &Painted, run: &str, style: &Text, engine: &
     // shadow. Layout did not count it, so painting takes it back off:
     // the glyphs land where they would have with no shadow, and the
     // shadow spills outside the box the way it does on a page.
-    let inset = crate::text::inset_for(&source.spec);
+    let inset = crate::text::inset_for(&source);
     let slack = box_width - (f64::from(drawn.width) - 2.0 * inset);
     let dx = f64::from(b.content_rect[0]) - inset
         + match style.align {

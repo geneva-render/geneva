@@ -477,7 +477,7 @@ Every source has a `kind`.
 | `size` | no | `48` | Font size in pixels. |
 | `weight` | no | `400` | 100 to 900. |
 | `italic` | no | `false` | |
-| `color` | no | `white` | |
+| `color` | no | `white` | Animatable. |
 | `letter_spacing` | no | `0` | Pixels. |
 | `max_width` | no | output width | Wrap width. |
 | `align` | no | `center` | `left`, `center`, `right`. |
@@ -486,7 +486,7 @@ Every source has a `kind`.
 | `background` | no | none | Background box color. |
 | `radius` | no | `0` | Background box corner radius. |
 | `outline` | no | | `{ "color", "width" }`, or the shorthand `"2px black"` (width and color in either order). |
-| `shadow` | no | | `{ "color", "x", "y", "blur" }`, or the `text-shadow` shorthand `"0 2px 8px #0008"` (x, y, optional blur, optional color). |
+| `shadow` | no | | `{ "color", "x", "y", "blur" }`, or the `text-shadow` shorthand `"0 2px 8px #0008"` (x, y, optional blur, optional color). Each of the four is animatable in the object form; the shorthand is a constant. The image is sized for the shadow's furthest reach over the clip, so a shadow that grows or moves does not shift the text. |
 
 `captions`
 
