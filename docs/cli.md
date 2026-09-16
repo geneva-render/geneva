@@ -419,21 +419,3 @@ Video codecs and their sample layouts:
 Reading is wider than writing: sources may also be VP8, MPEG-2, MPEG-4
 part 2, DNxHD, raw video or GIF, with E-AC-3 audio, in MPEG-TS or AVI as
 well as the containers above.
-
-## Checking an installation
-
-`check.sh`, shipped in every release archive (and at `scripts/check.sh`
-in the repository), runs the everyday commands on one machine and prints a
-table with the time each step took, the size of its output, and the time
-ffmpeg takes for the same step when ffmpeg is installed:
-
-```sh
-sh check.sh                      # renders a 10-second test clip and works on it
-sh check.sh input.mp4            # works on your own file instead
-sh check.sh --quick              # skips the slower encodes (VP9, ProRes, DNxHR, PNG)
-sh check.sh --keep               # keeps the outputs and prints where they are
-sh check.sh --geneva target/release/geneva   # a specific binary
-```
-
-Every step's full output goes to `log.txt` in the working directory; when
-a step fails the log is kept and its path printed.
