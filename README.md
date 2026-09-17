@@ -129,15 +129,14 @@ output.
 Because nothing is on screen for the first second or the last four, 135
 of the 300 frames are copied instead of re-encoded.
 
-## An opening
+## Good transitions and nice sprites, via cli
 
-The same idea carries a title sequence. An LLM can write one in HTML and
-CSS ([opening.html](examples/opening.html): typed-on text, a gradient
-sweeping through it, a blur, a diagonal wipe), and geneva plays it over
-footage from one document ([opening.json](examples/opening.json)),
-with the wipe revealing the clip and a fade to black at the end.
+LLMs can be shown an example, and write custom good-looking intros and
+transitions as [HTML+CSS markup](examples/opening.html). geneva can
+render them natively over the footage using a simple
+[JSON file](examples/opening.json), in a single pass.
 
-<img src="docs/opening.gif" alt="A title sequence typing the word geneva, then two more lines, before a diagonal wipe reveals a street crossing that fades to black" width="640" height="360">
+<img src="docs/opening.webp" alt="A title sequence typing the word geneva, then two more lines, before a diagonal wipe reveals a street crossing that fades to black" width="640" height="360">
 
 ## Installing
 
