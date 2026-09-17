@@ -112,7 +112,7 @@ as-is. The JSON ties the footage, card and captions together:
 geneva render examples/lower-third.json -o dragon.mp4
 ```
 
-<img src="docs/demo.gif" alt="A name card sliding in at the top left over footage of a Dragon capsule at the space station, with captions below" width="640" height="360">
+<img src="docs/demo.webp" alt="A name card sliding in at the top left over footage of a Dragon capsule at the space station, with captions below" width="640" height="360">
 
 ```text
 note[N453]: 2 cues read from "words.json"

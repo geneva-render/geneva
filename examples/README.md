@@ -44,7 +44,7 @@ geneva subtitles examples/iss.mp4 --burn examples/words.json \
   -o captioned.mp4
 ```
 
-<img src="../docs/captions.gif" alt="Captions over the footage, each word picked out in yellow as it is said" width="640" height="360">
+<img src="../docs/captions.webp" alt="Captions over the footage, each word picked out in yellow as it is said" width="640" height="360">
 
 geneva groups the words into cues the way a caption editor would: at most
 two lines, about forty characters, nothing on screen for less than a beat.
