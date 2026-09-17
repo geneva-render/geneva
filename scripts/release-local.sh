@@ -19,6 +19,14 @@
 # Needs: docker (for the Linux targets), gh and a push remote (--publish),
 # and the build tools scripts/build-media-libs.sh lists (macOS target).
 #
+# Colima works in place of Docker Desktop, but not with its defaults: it
+# mounts the home directory read-only and gives the VM 2 CPUs and 2 GiB,
+# which is neither writable enough nor big enough to build ffmpeg and
+# link with thin LTO. Start it with
+#   colima start --cpu 6 --memory 12 --disk 80 \
+#     --vm-type=vz --vz-rosetta --mount-type=virtiofs --mount $HOME:w
+# and this checks the mount is writable before it builds anything.
+#
 # Tarballs are written to dist/. Everything else is built under
 # target/local-release/<target>, so the three builds do not share anything
 # and the checkout is left as it was.
@@ -106,6 +114,22 @@ mkdir -p "$dist"
 # shared; everything built is not, so each target keeps its own.
 shared_cargo=$root/target/local-release/cargo
 mkdir -p "$shared_cargo"
+
+# Colima, and some other runtimes, mount the host read-only unless asked
+# otherwise. The build would then fail somewhere deep inside configure,
+# so ask the question here where the answer can say what to do about it.
+if $needs_docker; then
+  say "checking the container can write to the build directory"
+  if ! docker run --rm -v "$shared_cargo:/probe" ubuntu:22.04 \
+      sh -c 'touch /probe/.probe && rm -f /probe/.probe' >/dev/null 2>&1; then
+    die "the container cannot write to $shared_cargo.
+    Colima mounts the home directory read-only unless told not to. Restart
+    it with the mount writable and room to build in:
+      colima stop
+      colima start --cpu 6 --memory 12 --disk 80 \\
+        --vm-type=vz --vz-rosetta --mount-type=virtiofs --mount \$HOME:w"
+  fi
+fi
 
 # --------------------------------------------------------------- package
 
