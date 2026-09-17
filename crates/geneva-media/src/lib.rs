@@ -42,8 +42,8 @@ pub use codecs::{
     container_accepts_audio, container_accepts_video, container_for, default_codecs,
     default_image_codec, hdr_metadata_of, output_tags_for, plan_smart_cut, plan_stream_copy,
     plan_stream_copy_explained, plane_format_for, probe, read_copied, read_copied_audio,
-    read_subtitles, set_decoder_threads_for_this_thread, stream_copy, subtitle_streams,
-    system_x264, system_x264_error,
+    read_subtitles, set_decoder_threads_for_this_thread, stream_copy, stream_copy_mixing_audio,
+    subtitle_streams, system_x264, system_x264_error,
 };
 pub use info::{AudioInfo, MediaInfo, SubtitleInfo, VideoInfo};
 #[cfg(feature = "media")]

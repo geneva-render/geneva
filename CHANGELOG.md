@@ -9,6 +9,16 @@ the format version it was written for.
 
 ### Added
 
+- **A copied picture with encoded sound.** An output whose mix is brought
+  to a loudness, cleaned or denoised no longer drags the picture through
+  the encoder with it. When nothing else asks for a re-encode, the video
+  packets are copied and the treated mix is encoded beside them, the two
+  written together so the file interleaves as a copy does. The report
+  calls it `copy-picture` and gives `frames: 0`. `--for podcast` reaches
+  it whenever the source's picture already fits the target: three minutes
+  of 1080p30 take 4 s instead of 80 s, and the video stream is byte for
+  byte the source's.
+
 - **Loudness.** `output.audio.loudness` brings the mix to an integrated
   loudness (`target_lufs`, measured as ITU-R BS.1770-4 and EBU R128
   measure it: K-weighted, gated, over the whole output) with one gain,
@@ -50,8 +60,10 @@ the format version it was written for.
   in a release build, and the feature adds 25 MB to the stripped binary
   (31.6 to 56.7 MB).
 - **`--for podcast`.** -16 LUFS and -1 dBTP, as Apple Podcasts asks
-  for, with hygiene on. A source is never copied as it is for this
-  target, since the hygiene is a change a copy cannot carry.
+  for, with hygiene on. Hygiene is a change no copied audio track can
+  carry, so the sound is always encoded for this target; the picture is
+  copied where it already fits, which is what makes it cheap on a long
+  recording.
 - **Audio in the golden harness.** A golden case can carry
   `expected/audio.wav`, compared on numbers rather than bytes: the
   largest sample difference, the level over the whole track and over

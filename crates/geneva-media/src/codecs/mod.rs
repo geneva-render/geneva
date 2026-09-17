@@ -21,7 +21,7 @@ use crate::MediaError;
 
 pub use copy::{
     CopyPlan, CopyRefusal, CopyReport, CopySegment, plan_stream_copy, plan_stream_copy_explained,
-    stream_copy,
+    stream_copy, stream_copy_mixing_audio,
 };
 pub use decode::{AudioReader, AudioStream, VideoReader, set_decoder_threads_for_this_thread};
 pub use direct::DirectSource;

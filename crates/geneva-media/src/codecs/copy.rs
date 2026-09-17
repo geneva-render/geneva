@@ -133,24 +133,10 @@ pub fn plan_stream_copy_explained(
         return Ok(Err(CopyRefusal(None)));
     }
     // A loudness target, hygiene or denoising change the sound, which
-    // only the mix can do; the picture goes with it, since there is no
-    // path yet that copies the video and re-encodes the audio alone.
-    if let Some(audio) = comp
-        .audio_output
-        .as_ref()
-        .filter(|a| a.loudness.is_some() || a.hygiene == Some(true) || a.denoise == Some(true))
-    {
-        let what = if audio.denoise == Some(true) {
-            "denoised"
-        } else if audio.hygiene == Some(true) {
-            "cleaned"
-        } else {
-            "brought to a loudness target"
-        };
-        return refuse(format!(
-            "the output's audio is {what}, which the mix does, so the streams are re-encoded"
-        ));
-    }
+    // only the mix can do. That says nothing about the picture: the plan
+    // still describes what can be copied, and a caller that treats the
+    // audio drops `audio` and encodes its own with
+    // `stream_copy_mixing_audio`.
     let Some(untouched) = untouched_video_clips(comp, root)? else {
         return Ok(Err(CopyRefusal(None)));
     };
@@ -831,6 +817,7 @@ pub fn stream_copy(
             &mut video_packets,
             &mut cues,
             lead_in_ok,
+            &mut |_, _| Ok(()),
         )?;
         report_segments = segs;
         duration = total;
@@ -853,6 +840,7 @@ pub fn stream_copy(
             &mut ignored,
             &mut cues,
             lead_in_ok,
+            &mut |_, _| Ok(()),
         )?;
         if out_video.is_none() {
             report_segments = segs;
@@ -868,8 +856,127 @@ pub fn stream_copy(
     })
 }
 
+/// Writes `output` with the planned video copied packet for packet and
+/// the audio encoded from `blocks`, which yield the treated mix in
+/// interleaved stereo at the settings' rate.
+///
+/// This is what an output whose sound is brought to a loudness, cleaned
+/// or denoised takes when its picture needs nothing: the treatment is a
+/// change no copied audio track can carry, but the picture is untouched
+/// either way, so only the sound is encoded. `plan.audio` is ignored.
+///
+/// The two tracks are written together, the audio caught up after each
+/// video packet, so the muxer interleaves them as it goes instead of
+/// holding a whole track in memory.
+pub fn stream_copy_mixing_audio(
+    plan: &CopyPlan,
+    output: &Path,
+    subtitles: &[SubtitleSettings],
+    fast_start: bool,
+    audio: &super::encode::AudioSettings,
+    blocks: &mut dyn FnMut(usize) -> Result<Option<Vec<f32>>, MediaError>,
+) -> Result<CopyReport, MediaError> {
+    init();
+    let container = super::encode::container_for(output, None);
+    let mut octx = match container.and_then(super::encode::muxer_name) {
+        Some(name) => {
+            ffmpeg_next::format::output_as(output, name).map_err(|e| open_error(output, e))?
+        }
+        None => ffmpeg_next::format::output(output).map_err(|e| open_error(output, e))?,
+    };
+    let first = plan.segments.first().ok_or_else(|| MediaError::Codec {
+        context: "stream copy".to_owned(),
+        reason: "no video to copy".to_owned(),
+    })?;
+    let out_video = {
+        let template =
+            ffmpeg_next::format::input(&first.path).map_err(|e| open_error(&first.path, e))?;
+        let video_in =
+            template
+                .streams()
+                .best(Type::Video)
+                .ok_or_else(|| MediaError::NoStream {
+                    path: first.path.clone(),
+                    kind: "video",
+                })?;
+        add_copied_stream(&mut octx, &video_in, output)?
+    };
+    let global_header = octx
+        .format()
+        .flags()
+        .contains(ffmpeg_next::format::Flags::GLOBAL_HEADER);
+    let mut encoder = super::encode::open_audio_track(&mut octx, output, audio, global_header)?;
+    let mut cues = SubtitleWriter::add_streams(&mut octx, container, subtitles, output)?;
+    super::encode::write_header(&mut octx, container, fast_start, output)?;
+    encoder.follow_muxer(&octx);
+
+    // A tenth of a second at a time: short enough that the audio stays
+    // beside the picture in the file, long enough not to be all overhead.
+    let block = (audio.sample_rate as usize / 10).max(1);
+    let mut drained = false;
+    let mut pump =
+        |octx: &mut ffmpeg_next::format::context::Output, upto: Ratio| -> Result<(), MediaError> {
+            while !drained && encoder.time() < upto {
+                match blocks(block)? {
+                    Some(chunk) => {
+                        for packet in encoder.push(&chunk)? {
+                            packet
+                                .write_interleaved(octx)
+                                .map_err(|e| super::codec_error("writing audio packet", e))?;
+                        }
+                    }
+                    None => drained = true,
+                }
+            }
+            Ok(())
+        };
+
+    let mut video_packets = 0u64;
+    let (report_segments, duration) = copy_track(
+        &mut octx,
+        &plan.segments,
+        Type::Video,
+        out_video,
+        &mut video_packets,
+        &mut cues,
+        matches!(container, Some(Container::Mp4 | Container::Mov)),
+        &mut pump,
+    )?;
+    // The mix can outlast the picture (a track that runs on under a
+    // still) and the last video packet leaves the encoder part-fed, so
+    // what is left is written after the copy rather than during it.
+    while !drained {
+        match blocks(block)? {
+            Some(chunk) => {
+                for packet in encoder.push(&chunk)? {
+                    packet
+                        .write_interleaved(&mut octx)
+                        .map_err(|e| super::codec_error("writing audio packet", e))?;
+                }
+            }
+            None => drained = true,
+        }
+    }
+    for packet in encoder.finish()? {
+        packet
+            .write_interleaved(&mut octx)
+            .map_err(|e| super::codec_error("writing audio packet", e))?;
+    }
+    cues.finish(&mut octx)?;
+    octx.write_trailer().map_err(|e| open_error(output, e))?;
+    Ok(CopyReport {
+        segments: report_segments,
+        duration,
+        video_packets,
+    })
+}
+
 /// Copies one kind of stream from a list of segments into output stream
 /// `out_idx`, returning the per-segment report and the total duration.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one demuxing loop with its output stream, its counters and its hook"
+)]
 fn copy_track(
     octx: &mut ffmpeg_next::format::context::Output,
     segments: &[CopySegment],
@@ -878,6 +985,10 @@ fn copy_track(
     packets: &mut u64,
     cues: &mut SubtitleWriter,
     lead_in_ok: bool,
+    reached: &mut dyn FnMut(
+        &mut ffmpeg_next::format::context::Output,
+        Ratio,
+    ) -> Result<(), MediaError>,
 ) -> Result<(Vec<SegmentReport>, Ratio), MediaError> {
     let mut report = Vec::new();
     let mut offset = Ratio::ZERO;
@@ -1028,6 +1139,9 @@ fn copy_track(
             if kind == Type::Video || !cues_follow_video {
                 cues.write_due(octx, shifted)?;
             }
+            // Another track that is written as this one advances, so the
+            // muxer interleaves the two instead of holding one whole.
+            reached(octx, shifted)?;
         }
         let seg_start = segment_start.unwrap_or(segment.from);
         let seg_end = segment

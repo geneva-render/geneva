@@ -1218,12 +1218,25 @@ fn kbps(bytes: u64, duration: Option<Ratio>) -> u64 {
     }
 }
 
+/// What of a source already meets a `--for` target.
+#[derive(Debug, Clone, Default)]
+pub struct TargetFit {
+    /// The picture needs nothing: H.264 4:2:0 SDR in an MP4 or MOV, no
+    /// larger than the target's ceiling, no faster than its frame rate
+    /// and no heavier than its bitrate cap for that size. The sound may
+    /// still need work, which is encoded beside the copied picture.
+    pub picture: bool,
+    /// The whole file does, its sound included, so it is copied as it
+    /// is. Carries what was checked, for the note.
+    pub whole: Option<String>,
+}
+
 /// Whether a source already meets a `--for` target, so that copying its
 /// streams gives what the target would encode: H.264 4:2:0 SDR in an
 /// MP4 or MOV with AAC or no audio, no larger than the target's
 /// ceiling, no faster than its frame rate, and no heavier than its
-/// bitrate cap for that size. Returns what was checked, for the note.
-pub fn fits_target(input: &Path, target: &crate::targets::Target) -> Result<Option<String>> {
+/// bitrate cap for that size.
+pub fn fits_target(input: &Path, target: &crate::targets::Target) -> Result<TargetFit> {
     let src = Input::probe(input)?;
     let bytes = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
     let ext = input
@@ -1242,16 +1255,21 @@ pub fn fits_target(input: &Path, target: &crate::targets::Target) -> Result<Opti
     let fps = src.fps.to_f64();
     let cap = crate::targets::cap_kbps(target, short, fps);
     let rate = kbps(bytes, src.duration);
-    let fits = matches!(ext.as_str(), "mp4" | "mov" | "m4v")
+    // The picture's own conditions. The bitrate is the whole file's,
+    // sound included, which can only make this stricter.
+    let picture = matches!(ext.as_str(), "mp4" | "mov" | "m4v")
         && h264
         && sdr
         && pixels
-        && audio_ok
         && fits_size
         && fps <= target.max_fps + 0.01
         && (rate == 0 || cap.is_none_or(|c| rate <= u64::from(c)));
-    if !fits {
-        return Ok(None);
+    let refuse = TargetFit {
+        picture,
+        whole: None,
+    };
+    if !picture || !audio_ok {
+        return Ok(refuse);
     }
     // A target with a loudness is met only by audio already at it: within
     // a loudness unit, its peaks under the ceiling. Anything else is
@@ -1261,32 +1279,35 @@ pub fn fits_target(input: &Path, target: &crate::targets::Target) -> Result<Opti
         match media::measure_audio(input)?.map(|r| (r.lufs, r.true_peak_dbtp)) {
             Some((Some(measured), peak)) => {
                 if (measured - lufs).abs() > 1.0 || peak > ceiling + 0.1 {
-                    return Ok(None);
+                    return Ok(refuse);
                 }
                 level = format!(" at {measured:.1} LUFS");
             }
             // Silence has no level to bring anywhere; a file that cannot
             // be measured is re-encoded so the mix can measure it.
             Some((None, _)) => {}
-            None => return Ok(None),
+            None => return Ok(refuse),
         }
         // Hygiene is a change a copy cannot carry.
         if target.hygiene {
-            return Ok(None);
+            return Ok(refuse);
         }
     }
-    Ok(Some(format!(
-        "{}×{} H.264{}{} at {} kb/s",
-        src.width,
-        src.height,
-        if src.audio_codec.is_some() {
-            " with AAC"
-        } else {
-            ""
-        },
-        level,
-        rate
-    )))
+    Ok(TargetFit {
+        picture,
+        whole: Some(format!(
+            "{}×{} H.264{}{} at {} kb/s",
+            src.width,
+            src.height,
+            if src.audio_codec.is_some() {
+                " with AAC"
+            } else {
+                ""
+            },
+            level,
+            rate
+        )),
+    })
 }
 
 /// A subtitle file to attach, with its language.

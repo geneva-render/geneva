@@ -110,6 +110,22 @@ calls this mode `direct`. Audio that is re-encoded keeps the source's
 sample rate and channel count when every input agrees (mono stays mono,
 44.1 kHz stays 44.1 kHz); otherwise it is written as 48 kHz stereo.
 
+### A copied picture with encoded sound
+
+Bringing a mix to a loudness, cleaning it or denoising it is a change no
+copied audio track can carry, but it says nothing about the picture. When
+nothing else asks for a re-encode, the video packets are copied and only
+the sound is mixed, treated and encoded beside them; the report calls
+this mode `copy-picture` and gives `frames: 0`, since no frame reaches an
+encoder. The two tracks are written together, so the file interleaves as
+a copy does.
+
+This is what `--for podcast` does on a recording that is already H.264 in
+an MP4 within the target's ceilings: the loudness and the hygiene are
+applied to the sound alone. On three minutes of 1080p30 here that is 4 s
+against 80 s for the same command re-encoding, and the video stream comes
+out byte for byte identical to the source's.
+
 ### Smart cut
 
 Between "copy everything, cuts move to keyframes" and "re-encode
@@ -168,7 +184,7 @@ otherwise. The printed timeline (`--show-timeline`) shows the choice.
 | Option | Effect |
 | --- | --- |
 | `--crf N`, `--preset NAME` | As for `render`. Setting either forces a re-encode. |
-| `--for TARGET` | Encode for a destination: a size ceiling (never upscaled), codec and level, quality, bitrate cap, keyframes, fast start and audio from one table; see [targets](#targets). A source used as it is that already fits the target (H.264 4:2:0 with AAC in MP4 or MOV, within the size, frame-rate and bitrate ceilings) is copied instead, and the note says so; `--crf`, `--quality`, `--budget` or `--exact` re-encode it regardless. |
+| `--for TARGET` | Encode for a destination: a size ceiling (never upscaled), codec and level, quality, bitrate cap, keyframes, fast start and audio from one table; see [targets](#targets). A source used as it is that already fits the target (H.264 4:2:0 with AAC in MP4 or MOV, within the size, frame-rate and bitrate ceilings) is copied instead, and the note says so. When only the sound falls short, as under `--for podcast`, the picture is still copied and the mix alone is encoded. `--crf`, `--quality`, `--budget` or `--exact` re-encode it regardless. |
 | `--quality best\|good\|eco` | Quality tier for `--for`; `good` by default. |
 | `--budget SIZE` | With `--for`: cap the bitrate so that the file fits `SIZE` (for example `25MB`), and warn when it still does not. |
 | `--codec h264\|h265\|vp9\|av1\|prores\|dnxhd\|png\|mjpeg` | Video codec. Defaults to the container's usual one. |

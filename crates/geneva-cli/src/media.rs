@@ -180,6 +180,12 @@ pub struct RenderOverrides {
     pub preset: Option<String>,
     pub no_audio: bool,
     pub exact: bool,
+    /// The picture already is what the output asks for, so the quality
+    /// settings in the document describe an encode that is not needed.
+    /// Set when a `--for` target had only the sound to change. Only the
+    /// copy paths read it, which a build without `media` does not have.
+    #[cfg_attr(not(feature = "media"), allow(dead_code))]
+    pub picture_as_is: bool,
 }
 
 /// What a render produced.
@@ -188,6 +194,9 @@ pub struct RenderOverrides {
 pub enum RenderMode {
     /// Source streams were copied without decoding.
     Copy,
+    /// The picture was copied without decoding and the sound was mixed,
+    /// treated and encoded beside it.
+    CopyPicture,
     /// Decoded frames went straight to the encoder without compositing.
     Direct,
     /// Source packets were copied where nothing changed and the frames
@@ -203,6 +212,7 @@ impl RenderMode {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Copy => "copy",
+            Self::CopyPicture => "copy-picture",
             Self::Direct => "direct",
             Self::Smart => "smart",
             Self::Render => "render",
@@ -792,63 +802,16 @@ mod imp {
                     let fast_start = o.encode.as_ref().and_then(|e| e.fast_start).unwrap_or(true);
                     // A copy, when the entry asks for nothing the source
                     // does not already have.
-                    let wants_encode = overrides.crf.is_some()
-                        || overrides.preset.is_some()
-                        || video.is_some_and(|v| {
-                            v.crf.is_some()
-                                || v.preset.is_some()
-                                || v.tune.is_some()
-                                || v.fixed_keyframes == Some(true)
-                        });
+                    let wants_encode = !overrides.picture_as_is
+                        && (overrides.crf.is_some()
+                            || overrides.preset.is_some()
+                            || video.is_some_and(|v| {
+                                v.crf.is_some()
+                                    || v.preset.is_some()
+                                    || v.tune.is_some()
+                                    || v.fixed_keyframes == Some(true)
+                            }));
                     let canvas_size = (o.width, o.height) == (comp.width, comp.height);
-                    if canvas_size
-                        && !wants_encode
-                        && !overrides.exact
-                        && !audio_treated(o.audio.as_ref())
-                    {
-                        let plan = geneva_media::plan_stream_copy_explained(
-                            comp,
-                            root,
-                            container,
-                            video.and_then(|v| v.codec),
-                        )
-                        .map_err(|e| err_at(&path, e))?;
-                        match plan {
-                            Ok(mut plan) => {
-                                if overrides.no_audio {
-                                    plan.audio.clear();
-                                }
-                                let report =
-                                    geneva_media::stream_copy(&plan, &path, &subtitles, fast_start)
-                                        .map_err(|e| err_at(&path, e))?;
-                                notes.push(format!("{}: {}", o.name, plan.reason));
-                                notes.extend(
-                                    report
-                                        .notes()
-                                        .into_iter()
-                                        .map(|n| format!("{}: {n}", o.name)),
-                                );
-                                stats.push(super::OutputStats {
-                                    name: o.name.clone(),
-                                    kind: "video",
-                                    bytes: std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
-                                    content_type: super::content_type_for(&path),
-                                    path,
-                                    mode: "copy",
-                                    width: Some(o.width),
-                                    height: Some(o.height),
-                                });
-                                continue;
-                            }
-                            Err(geneva_media::CopyRefusal(Some(reason))) => {
-                                notes.push(format!(
-                                    "{}: not copied without re-encoding: {reason}",
-                                    o.name
-                                ));
-                            }
-                            Err(_) => {}
-                        }
-                    }
                     let (default_video, default_audio) = geneva_media::default_codecs(container);
                     let audio_codec = audio.and_then(|a| a.codec).unwrap_or(default_audio);
                     let sample_rate = geneva_media::audio_sample_rate_for(
@@ -877,6 +840,84 @@ mod imp {
                             denoise: o.audio.as_ref().and_then(|a| a.denoise).unwrap_or(false),
                         })
                     };
+                    // A treated mix is a change no copied audio track can
+                    // carry, but it says nothing about the picture: the
+                    // copy still stands, with the sound encoded beside it.
+                    let mix_audio = audio_treated(o.audio.as_ref())
+                        .then(|| audio_settings.clone())
+                        .flatten();
+                    if canvas_size && !wants_encode && !overrides.exact {
+                        let plan = geneva_media::plan_stream_copy_explained(
+                            comp,
+                            root,
+                            container,
+                            video.and_then(|v| v.codec),
+                        )
+                        .map_err(|e| err_at(&path, e))?;
+                        match plan {
+                            Ok(mut plan) => {
+                                if overrides.no_audio {
+                                    plan.audio.clear();
+                                }
+                                let report = match &mix_audio {
+                                    Some(a) => {
+                                        let mut mixer =
+                                            geneva_media::mix::Mixer::for_output(comp, root, a);
+                                        let out = geneva_media::stream_copy_mixing_audio(
+                                            &plan,
+                                            &path,
+                                            &subtitles,
+                                            fast_start,
+                                            a,
+                                            &mut |frames| mixer.next_block(frames),
+                                        )
+                                        .map_err(|e| err_at(&path, e))?;
+                                        if let Some(r) = mixer.report() {
+                                            notes.extend(
+                                                treatment_notes(r)
+                                                    .into_iter()
+                                                    .map(|n| format!("{}: {n}", o.name)),
+                                            );
+                                        }
+                                        out
+                                    }
+                                    None => geneva_media::stream_copy(
+                                        &plan, &path, &subtitles, fast_start,
+                                    )
+                                    .map_err(|e| err_at(&path, e))?,
+                                };
+                                notes.push(format!("{}: {}", o.name, plan.reason));
+                                notes.extend(
+                                    report
+                                        .notes()
+                                        .into_iter()
+                                        .map(|n| format!("{}: {n}", o.name)),
+                                );
+                                stats.push(super::OutputStats {
+                                    name: o.name.clone(),
+                                    kind: "video",
+                                    bytes: std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+                                    content_type: super::content_type_for(&path),
+                                    path,
+                                    mode: if mix_audio.is_some() {
+                                        "copy-picture"
+                                    } else {
+                                        "copy"
+                                    },
+                                    width: Some(o.width),
+                                    height: Some(o.height),
+                                });
+                                continue;
+                            }
+                            Err(geneva_media::CopyRefusal(Some(reason))) => {
+                                notes.push(format!(
+                                    "{}: not copied without re-encoding: {reason}",
+                                    o.name
+                                ));
+                            }
+                            Err(_) => {}
+                        }
+                    }
                     let settings = EncodeSettings {
                         video: Some(VideoSettings {
                             width: o.width,
@@ -2068,14 +2109,15 @@ mod imp {
         // Copy source streams when nothing would change the picture, no
         // quality setting asks for a re-encode, and the caller did not ask
         // for exact cuts.
-        let wants_encode = overrides.crf.is_some()
-            || overrides.preset.is_some()
-            || video.is_some_and(|v| {
-                v.crf.is_some()
-                    || v.preset.is_some()
-                    || v.tune.is_some()
-                    || v.fixed_keyframes == Some(true)
-            });
+        let wants_encode = !overrides.picture_as_is
+            && (overrides.crf.is_some()
+                || overrides.preset.is_some()
+                || video.is_some_and(|v| {
+                    v.crf.is_some()
+                        || v.preset.is_some()
+                        || v.tune.is_some()
+                        || v.fixed_keyframes == Some(true)
+                }));
         let copyable = !overrides.exact && !wants_encode;
         // Why the streams were not copied although nothing in the
         // composition changes them: said in the notes of the render.
@@ -2097,19 +2139,48 @@ mod imp {
                 }
             };
             if let Some(plan) = plan {
-                let report = geneva_media::stream_copy(
-                    &plan,
-                    output,
-                    &settings.subtitles,
-                    settings.fast_start,
-                )
-                .map_err(media_err)?;
-                let mut notes = vec![plan.reason.clone()];
+                // A treated mix is encoded beside the copied picture;
+                // anything else copies both tracks as they are.
+                let mix_audio = settings
+                    .audio
+                    .clone()
+                    .filter(|_| audio_treated(comp.audio_output.as_ref()));
+                let mut notes = Vec::new();
+                let report = match &mix_audio {
+                    Some(a) => {
+                        let mut mixer = geneva_media::mix::Mixer::for_output(comp, root, a);
+                        let out = geneva_media::stream_copy_mixing_audio(
+                            &plan,
+                            output,
+                            &settings.subtitles,
+                            settings.fast_start,
+                            a,
+                            &mut |frames| mixer.next_block(frames),
+                        )
+                        .map_err(media_err)?;
+                        if let Some(r) = mixer.report() {
+                            notes.extend(treatment_notes(r));
+                        }
+                        out
+                    }
+                    None => geneva_media::stream_copy(
+                        &plan,
+                        output,
+                        &settings.subtitles,
+                        settings.fast_start,
+                    )
+                    .map_err(media_err)?,
+                };
+                notes.insert(0, plan.reason.clone());
                 notes.extend(report.notes());
                 return Ok(RenderStats {
                     frames: 0,
                     duration: report.duration,
-                    mode: RenderMode::Copy,
+                    mode: if mix_audio.is_some() {
+                        RenderMode::CopyPicture
+                    } else {
+                        RenderMode::Copy
+                    },
                     notes,
                     seconds: started.elapsed().as_secs_f64(),
                 });
@@ -2146,12 +2217,17 @@ mod imp {
         }
         // The clips' own audio goes with the video: copied as coded,
         // unless the output treats its audio, which only the mix does.
-        let copied_audio = match &smart {
-            Some(plan)
-                if settings.audio.is_some() && !audio_treated(comp.audio_output.as_ref()) =>
-            {
-                plan.audio.clone()
+        // Dropped from the plan as well as from the settings, so that
+        // the plan's own note does not claim a copy that did not happen.
+        let mut smart = smart;
+        if audio_treated(comp.audio_output.as_ref()) {
+            if let Some(plan) = smart.as_mut() {
+                plan.audio = None;
             }
+        }
+        let smart = smart;
+        let copied_audio = match &smart {
+            Some(plan) if settings.audio.is_some() => plan.audio.clone(),
             _ => None,
         };
         if let Some(copy) = &copied_audio {

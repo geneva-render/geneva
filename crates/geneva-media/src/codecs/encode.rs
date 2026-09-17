@@ -720,6 +720,72 @@ mod p010_tests {
 
 /// Opens the first video encoder candidate that accepts the settings and
 /// adds its stream to the output.
+/// Adds an audio stream to `octx` and opens its encoder. Shared by the
+/// encoding path and by a copy that mixes its own audio.
+pub(super) fn open_audio_track(
+    octx: &mut ffmpeg_next::format::context::Output,
+    path: &Path,
+    a: &AudioSettings,
+    global_header: bool,
+) -> Result<AudioEncoder, MediaError> {
+    let acodec = find_encoder(audio_encoder_names(a.codec))?;
+    let mut astream = octx.add_stream(acodec).map_err(|e| open_error(path, e))?;
+    let stream_index = astream.index();
+    let time_base = Rational::new(1, a.sample_rate as i32);
+    astream.set_time_base(time_base);
+    let mut actx = codec::context::Context::new_with_codec(acodec);
+    if global_header {
+        actx.set_flags(codec::Flags::GLOBAL_HEADER);
+    }
+    let mut aenc = actx
+        .encoder()
+        .audio()
+        .map_err(|e| codec_error("audio encoder setup", e))?;
+    let (format, bitrate_driven) = audio_sample_format(a.codec);
+    let layout = if a.channels == 1 {
+        ChannelLayout::MONO
+    } else {
+        ChannelLayout::STEREO
+    };
+    aenc.set_rate(a.sample_rate as i32);
+    aenc.set_format(format);
+    aenc.set_channel_layout(layout);
+    aenc.set_time_base(time_base);
+    if bitrate_driven {
+        aenc.set_bit_rate(a.bitrate_kbps as usize * 1000);
+    }
+    let encoder = aenc
+        .open()
+        .map_err(|e| codec_error("opening audio encoder", e))?;
+    let frame_size = match encoder.frame_size() {
+        0 => 1024,
+        n => n as usize,
+    };
+    octx.stream_mut(stream_index)
+        .expect("stream added")
+        .set_parameters(&encoder);
+    let resampler = resampling::Context::get(
+        Sample::F32(sample::Type::Packed),
+        ChannelLayout::STEREO,
+        a.sample_rate,
+        format,
+        layout,
+        a.sample_rate,
+    )
+    .map_err(|e| codec_error("audio sample format conversion", e))?;
+    Ok(AudioEncoder {
+        settings: a.clone(),
+        encoder,
+        stream_index,
+        time_base,
+        stream_time_base: time_base,
+        resampler,
+        frame_size,
+        pending: Vec::new(),
+        next_pts: 0,
+    })
+}
+
 fn open_video_track(
     octx: &mut ffmpeg_next::format::context::Output,
     path: &Path,
@@ -1056,6 +1122,15 @@ impl AudioEncoder {
         Ok(out)
     }
 
+    /// Takes the time base the muxer chose for the stream, which is
+    /// known only once the header is written.
+    pub(super) fn follow_muxer(&mut self, octx: &ffmpeg_next::format::context::Output) {
+        self.stream_time_base = octx
+            .stream(self.stream_index)
+            .expect("stream added")
+            .time_base();
+    }
+
     /// Time reached by the frames sent so far.
     pub fn time(&self) -> Ratio {
         Ratio::new(self.next_pts, i64::from(self.encoder.rate()).max(1))
@@ -1211,64 +1286,7 @@ impl Encoder {
         // Audio stream.
         let audio = match &settings.audio {
             None => None,
-            Some(a) => {
-                let acodec = find_encoder(audio_encoder_names(a.codec))?;
-                let mut astream = octx.add_stream(acodec).map_err(|e| open_error(path, e))?;
-                let stream_index = astream.index();
-                let time_base = Rational::new(1, a.sample_rate as i32);
-                astream.set_time_base(time_base);
-                let mut actx = codec::context::Context::new_with_codec(acodec);
-                if global_header {
-                    actx.set_flags(codec::Flags::GLOBAL_HEADER);
-                }
-                let mut aenc = actx
-                    .encoder()
-                    .audio()
-                    .map_err(|e| codec_error("audio encoder setup", e))?;
-                let (format, bitrate_driven) = audio_sample_format(a.codec);
-                let layout = if a.channels == 1 {
-                    ChannelLayout::MONO
-                } else {
-                    ChannelLayout::STEREO
-                };
-                aenc.set_rate(a.sample_rate as i32);
-                aenc.set_format(format);
-                aenc.set_channel_layout(layout);
-                aenc.set_time_base(time_base);
-                if bitrate_driven {
-                    aenc.set_bit_rate(a.bitrate_kbps as usize * 1000);
-                }
-                let encoder = aenc
-                    .open()
-                    .map_err(|e| codec_error("opening audio encoder", e))?;
-                let frame_size = match encoder.frame_size() {
-                    0 => 1024,
-                    n => n as usize,
-                };
-                octx.stream_mut(stream_index)
-                    .expect("stream added")
-                    .set_parameters(&encoder);
-                let resampler = resampling::Context::get(
-                    Sample::F32(sample::Type::Packed),
-                    ChannelLayout::STEREO,
-                    a.sample_rate,
-                    format,
-                    layout,
-                    a.sample_rate,
-                )
-                .map_err(|e| codec_error("audio sample format conversion", e))?;
-                Some(AudioEncoder {
-                    settings: a.clone(),
-                    encoder,
-                    stream_index,
-                    time_base,
-                    stream_time_base: time_base,
-                    resampler,
-                    frame_size,
-                    pending: Vec::new(),
-                    next_pts: 0,
-                })
-            }
+            Some(a) => Some(open_audio_track(&mut octx, path, a, global_header)?),
         };
 
         let subtitles =
@@ -1294,10 +1312,7 @@ impl Encoder {
         // The muxer may have chosen another time base for the stream.
         let mut audio = audio;
         if let Some(a) = audio.as_mut() {
-            a.stream_time_base = octx
-                .stream(a.stream_index)
-                .expect("stream added")
-                .time_base();
+            a.follow_muxer(&octx);
         }
         Ok(Self {
             path: path.to_owned(),

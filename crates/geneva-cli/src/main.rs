@@ -558,6 +558,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         &args.output,
                         !args.no_audio,
                         false,
+                        false,
                     )?;
                     size_limit = limit;
                     let text = serde_json::to_string_pretty(&tl)?;
@@ -570,6 +571,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 preset: args.preset.clone(),
                 no_audio: args.no_audio,
                 exact: args.exact,
+                picture_as_is: false,
             };
             render_to(
                 &loaded,
@@ -771,6 +773,7 @@ fn run_verb(
         output = timeline_dir(&output);
     }
     let output = output.as_path();
+    let mut picture_as_is = false;
     if encode.denoise {
         // Into the document, where a render reads it from; never part of
         // a target.
@@ -794,9 +797,14 @@ fn run_verb(
         // target would only force a re-encode to the same thing.
         let text = serde_json::to_string_pretty(&timeline)?;
         let first = load_text(&text, &compiled.root, true, false);
-        if let Some(note) = fits_target_as_is(&first, &compiled.root, name, encode, output)? {
+        let verdict = fits_target_as_is(&first, &compiled.root, name, encode, output)?;
+        if let Some(note) = verdict.as_is {
             extra.push(Diagnostic::note("N600", "", note));
         } else {
+            // A target that only wants the sound changed leaves the
+            // picture alone: the quality it writes is what to encode
+            // with, not a reason to encode.
+            picture_as_is = verdict.picture_as_is;
             let (notes, limit) = apply_target(
                 &mut timeline,
                 &first,
@@ -809,6 +817,7 @@ fn run_verb(
                 output,
                 !encode.no_audio,
                 encode.fill == Some(verbs::FillArg::Blur),
+                picture_as_is,
             )?;
             extra.extend(notes);
             size_limit = limit;
@@ -832,6 +841,7 @@ fn run_verb(
         preset: encode.preset.clone(),
         no_audio: encode.no_audio,
         exact: encode.exact,
+        picture_as_is,
     };
     render_to(
         &loaded,
@@ -850,6 +860,10 @@ type SizeLimit = Option<(String, u64)>;
 /// (a first resolution of the same document). Returns the target's
 /// diagnostics and the size limit to check the written file against.
 #[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::fn_params_excessive_bools,
+    reason = "each is a separate switch of the verb that asked for the target"
+)]
 fn apply_target(
     timeline: &mut geneva_timeline::Timeline,
     resolved: &Loaded,
@@ -862,6 +876,7 @@ fn apply_target(
     output: &Path,
     audio: bool,
     fill_blur: bool,
+    picture_as_is: bool,
 ) -> Result<(Vec<Diagnostic>, SizeLimit)> {
     let target = targets::find(name).ok_or_else(|| {
         anyhow::anyhow!(
@@ -895,6 +910,7 @@ fn apply_target(
         resize,
         extension,
         fill_blur,
+        picture_as_is,
     };
     let notes = targets::apply(timeline, &facts, &opts);
     let limit = match (budget, target.max_bytes) {
@@ -956,7 +972,14 @@ fn render_to(
             });
             if format == Format::Human {
                 report(&diagnostics, format, None)?;
-                if stats.mode == media::RenderMode::Copy {
+                if stats.mode == media::RenderMode::CopyPicture {
+                    println!(
+                        "wrote {} ({}s, picture copied without re-encoding, sound encoded, {:.1}s elapsed)",
+                        output.display(),
+                        stats.duration,
+                        stats.seconds
+                    );
+                } else if stats.mode == media::RenderMode::Copy {
                     println!(
                         "wrote {} ({}s, streams copied without re-encoding, {:.1}s elapsed)",
                         output.display(),
@@ -1047,6 +1070,9 @@ fn render_outputs_to(
                 for o in &outputs {
                     let how = match o.mode {
                         "copy" => ", streams copied without re-encoding".to_owned(),
+                        "copy-picture" => {
+                            ", picture copied without re-encoding, sound encoded".to_owned()
+                        }
                         "render" => String::new(),
                         other => format!(", {other}"),
                     };
@@ -1089,13 +1115,25 @@ fn render_outputs_to(
 /// source must fit the target's codec, size, rate and bitrate caps;
 /// any quality ask on the command line re-encodes regardless. Returns
 /// the note to report.
+/// What a `--for` target has to do to the sources it was given.
+#[derive(Default)]
+struct TargetVerdict {
+    /// Nothing: every source already fits, so the files are copied.
+    /// Carries the note that says so.
+    as_is: Option<String>,
+    /// Nothing to the picture, which is copied while the sound is
+    /// brought to the target's loudness or cleaned and encoded beside
+    /// it. False when the picture has to be re-encoded anyway.
+    picture_as_is: bool,
+}
+
 fn fits_target_as_is(
     first: &Loaded,
     root: &Path,
     target_name: &str,
     encode: &verbs::EncodeArgs,
     output: &Path,
-) -> Result<Option<String>> {
+) -> Result<TargetVerdict> {
     let asks_encode = encode.crf.is_some()
         || encode.preset.is_some()
         || encode.codec.is_some()
@@ -1109,20 +1147,26 @@ fn fits_target_as_is(
         || encode.denoise
         || encode.fill.is_some();
     if asks_encode {
-        return Ok(None);
+        return Ok(TargetVerdict::default());
     }
     let Some(target) = targets::find(target_name) else {
-        return Ok(None);
+        return Ok(TargetVerdict::default());
     };
     let Some(comp) = &first.composition else {
-        return Ok(None);
+        return Ok(TargetVerdict::default());
     };
     let Some(sources) = media::copy_sources(comp, root, output)? else {
-        return Ok(None);
+        return Ok(TargetVerdict::default());
     };
     let mut facts = Vec::new();
+    // The picture of every source has to need nothing, since one output
+    // carries one picture.
+    let mut picture_as_is = true;
+    let mut whole = true;
     for path in &sources {
-        match verbs::fits_target(path, target)? {
+        let fit = verbs::fits_target(path, target)?;
+        picture_as_is &= fit.picture;
+        match fit.whole {
             Some(f) => facts.push(format!(
                 "{} ({f})",
                 path.file_name().map_or_else(
@@ -1130,13 +1174,22 @@ fn fits_target_as_is(
                     |n| n.to_string_lossy().into_owned()
                 )
             )),
-            None => return Ok(None),
+            None => whole = false,
         }
     }
-    Ok(Some(format!(
-        "{} already fits {target_name}: copied, not re-encoded",
-        facts.join(", ")
-    )))
+    if !whole {
+        return Ok(TargetVerdict {
+            as_is: None,
+            picture_as_is,
+        });
+    }
+    Ok(TargetVerdict {
+        as_is: Some(format!(
+            "{} already fits {target_name}: copied, not re-encoded",
+            facts.join(", ")
+        )),
+        picture_as_is,
+    })
 }
 
 /// A picture size from a frame size and an optional width or height,

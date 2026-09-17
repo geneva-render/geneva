@@ -368,6 +368,11 @@ pub struct Options<'a> {
     /// Whether a picture that does not cover the canvas gets a blurred,
     /// scaled-up copy of itself behind it instead of bars.
     pub fill_blur: bool,
+    /// The source's picture already meets the target, so it is copied
+    /// and the quality settings are only a fallback. They are still
+    /// written, in case the copy is refused for another reason, but the
+    /// note does not claim them.
+    pub picture_as_is: bool,
 }
 
 fn even(v: f64) -> u32 {
@@ -484,29 +489,38 @@ pub fn apply(tl: &mut Timeline, facts: &Facts, opts: &Options<'_>) -> Vec<Diagno
     if short >= 2000 {
         crf = crf.saturating_sub(2);
     }
+    if opts.picture_as_is {
+        why.push("picture copied as it is, so nothing is encoded for it".to_owned());
+    }
     let crf = match opts.crf {
         Some(c) => {
-            why.push(format!("CRF {c} (yours)"));
+            if !opts.picture_as_is {
+                why.push(format!("CRF {c} (yours)"));
+            }
             c
         }
         None => {
-            why.push(format!("CRF {crf} ({})", ["best", "good", "eco"][tier]));
+            if !opts.picture_as_is {
+                why.push(format!("CRF {crf} ({})", ["best", "good", "eco"][tier]));
+            }
             crf
         }
     };
     let level = matches!(codec, VideoCodec::H264 | VideoCodec::H265)
         .then(|| h264_level(ow.max(oh), short, fps).to_owned());
-    match (&opts.codec, &level) {
-        (Some(c), Some(l)) => why.push(format!("{c:?} (yours) level {l}")),
-        (Some(c), None) => why.push(format!("{c:?} (yours)")),
-        (None, Some(l)) => why.push(format!("H.264 High level {l}")),
-        (None, None) => {}
+    if !opts.picture_as_is {
+        match (&opts.codec, &level) {
+            (Some(c), Some(l)) => why.push(format!("{c:?} (yours) level {l}")),
+            (Some(c), None) => why.push(format!("{c:?} (yours)")),
+            (None, Some(l)) => why.push(format!("H.264 High level {l}")),
+            (None, None) => {}
+        }
     }
 
     // Bitrate ceiling: the target's for this size, raised for high frame
     // rates, and lowered to fit a size budget when there is one.
     let mut cap = cap_kbps(t, short, fps);
-    if let Some(c) = cap {
+    if let (Some(c), false) = (cap, opts.picture_as_is) {
         why.push(format!("capped at {c} kb/s"));
     }
     let budget = match (opts.budget, t.max_bytes) {
@@ -551,7 +565,9 @@ pub fn apply(tl: &mut Timeline, facts: &Facts, opts: &Options<'_>) -> Vec<Diagno
         }
     }
 
-    why.push(format!("keyframes every {} s", t.keyframe_interval));
+    if !opts.picture_as_is {
+        why.push(format!("keyframes every {} s", t.keyframe_interval));
+    }
     why.push("fast start".to_owned());
     if facts.audio {
         why.push(format!("AAC {} kb/s 48 kHz stereo", t.audio_kbps));

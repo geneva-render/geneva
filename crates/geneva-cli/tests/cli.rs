@@ -1522,3 +1522,32 @@ fn denoise_is_refused_at_the_field_when_it_is_not_built_in() {
             .stderr(predicate::str::contains("/output/audio/denoise"));
     }
 }
+
+/// A target that only has the sound to change keeps the picture: the
+/// video packets are copied and the mix is encoded beside them, which
+/// is what `--for podcast` on a long recording depends on. No frame
+/// reaching an encoder is what makes it cheap.
+#[cfg(feature = "media")]
+#[test]
+fn a_podcast_target_copies_the_picture_and_encodes_only_the_sound() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("pod.mp4");
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/media/clip.mp4");
+    let result = geneva()
+        .args(["--format", "json", "convert"])
+        .arg(&source)
+        .arg("-o")
+        .arg(&out)
+        .args(["--for", "podcast"])
+        .assert()
+        .success();
+    let out_text = String::from_utf8_lossy(&result.get_output().stdout).into_owned();
+    assert!(
+        out_text.contains("\"mode\": \"copy-picture\""),
+        "the picture was not copied: {out_text}"
+    );
+    assert!(
+        out_text.contains("\"frames\": 0"),
+        "frames reached an encoder: {out_text}"
+    );
+}
