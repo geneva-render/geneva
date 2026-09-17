@@ -523,11 +523,14 @@ impl Mask {
     }
 
     /// Approximates a Gaussian blur with three box blurs.
+    /// Blurs by a CSS blur radius, which names a Gaussian of half that
+    /// standard deviation. Three box blurs of half-width `r` come to a
+    /// standard deviation of about `r + 0.5`, so `r` is set from that.
     fn blur(&mut self, radius: f32) {
-        if radius < 0.5 {
+        if radius < 1.0 {
             return;
         }
-        let r = (radius * 0.6).round().max(1.0) as usize;
+        let r = (radius / 2.0 - 0.5).round().max(1.0) as usize;
         for _ in 0..3 {
             self.box_blur(r);
         }

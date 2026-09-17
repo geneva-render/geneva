@@ -937,15 +937,22 @@ fn paint_one_shadow(image: &mut Image, b: &Painted, shadow: &geneva_html::style:
         }
         return;
     }
-    // A blurred shadow is the same shape with its distance field softened
-    // over the blur, which matches a Gaussian closely enough at these
-    // radii and costs one pass instead of three.
+    // A blurred shadow is the box convolved with a Gaussian whose
+    // standard deviation is half the blur, as CSS defines it. For an
+    // axis-aligned box that is exact as the product of one ramp per
+    // axis, each the difference of two error functions, so a bar
+    // thinner than its blur comes out as faint as it should rather than
+    // solid to its edge. Corners rounder than the blur do not show
+    // through it, so the radii are left out here.
     let sigma = shadow.blur / 2.0;
+    let k = 1.0 / (sigma * std::f64::consts::SQRT_2);
+    let ramp = |lo: f64, hi: f64, p: f64| 0.5 * (erf((p - lo) * k) - erf((p - hi) * k));
+    let (left, top) = (f64::from(rect[0]), f64::from(rect[1]));
+    let (right, bottom) = (left + f64::from(rect[2]), top + f64::from(rect[3]));
     for y in y0..y1 {
         for x in x0..x1 {
             let (px, py) = (f64::from(x) + 0.5, f64::from(y) + 0.5);
-            let d = distance(px, py, rect, b.paint.radius);
-            let a = (0.5 - d / (2.0 * sigma)).clamp(0.0, 1.0) as f32;
+            let a = (ramp(left, right, px) * ramp(top, bottom, py)).clamp(0.0, 1.0) as f32;
             if a > 0.0 {
                 blend(
                     image,
@@ -957,6 +964,18 @@ fn paint_one_shadow(image: &mut Image, b: &Painted, shadow: &geneva_html::style:
             }
         }
     }
+}
+
+/// The error function, to within 1.5e-7 (Abramowitz and Stegun 7.1.26).
+fn erf(x: f64) -> f64 {
+    let sign = if x < 0.0 { -1.0 } else { 1.0 };
+    let x = x.abs();
+    let t = 1.0 / (1.0 + 0.327_591_1 * x);
+    let poly = t
+        * (0.254_829_592
+            + t * (-0.284_496_736
+                + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
+    sign * (1.0 - poly * (-x * x).exp())
 }
 
 fn paint_text(image: &mut Image, b: &Painted, run: &str, style: &Text, engine: &mut TextEngine) {

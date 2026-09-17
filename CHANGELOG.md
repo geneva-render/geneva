@@ -78,6 +78,13 @@ the format version it was written for.
 
 ### Fixed
 
+- A blurred `box-shadow` was a distance-field ramp that stayed solid to
+  the box's edge, so a bar thinner than its blur glowed far harder than
+  in a browser. It is now the box convolved with the Gaussian CSS
+  defines (half the blur as standard deviation), exact for a box whose
+  corners are smaller than the blur. A blurred `text-shadow` was about
+  a fifth wider than CSS asks; its box passes are sized from the same
+  definition now.
 - A `text-shadow` or `box-shadow` whose colour was written as `rgb()` or
   `rgba()` was dropped as a shadow list (W450), since the commas inside
   the colour were read as separators. Only a comma outside brackets

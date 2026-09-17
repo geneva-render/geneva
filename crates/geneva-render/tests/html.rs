@@ -503,3 +503,21 @@ fn a_shadow_list_draws_every_shadow() {
         "both text shadows drawn ({red}, {blue})"
     );
 }
+
+#[test]
+fn a_blurred_shadow_of_a_thin_bar_is_faint() {
+    // A 4 px bar with a 20 px blur: the Gaussian spreads the bar's
+    // little mass, so even at its centre the shadow is well under full
+    // strength, and it has all but gone 20 px out.
+    let f = markup_at(
+        "<div class='stage'><div class='bar'></div></div>",
+        ".stage { position: relative; width: 200px; height: 100px } \
+         .bar { position: absolute; left: 98px; top: 10px; width: 4px; height: 80px; \
+                box-shadow: 0 0 20px #ffffff }",
+        0,
+    );
+    // Beside the bar, on its centre line.
+    let beside = at(&f, 103, 50).a;
+    assert!(beside > 0.05 && beside < 0.35, "{beside}");
+    assert!(at(&f, 125, 50).a < 0.02, "{}", at(&f, 125, 50).a);
+}
