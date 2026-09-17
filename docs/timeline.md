@@ -1,10 +1,10 @@
-# Timeline format 0.3
+# Timeline format 0.4
 
 A timeline is a JSON document that describes a video composition: the output
 frame, a table of assets, visual layers made of clips, and audio tracks.
 This page is the reference for humans and for programs that generate
 timelines. The machine-readable schema is in
-[`schema/geneva-timeline-0.3.schema.json`](../schema/geneva-timeline-0.3.schema.json)
+[`schema/geneva-timeline-0.4.schema.json`](../schema/geneva-timeline-0.4.schema.json)
 and is printed by `geneva schema`.
 
 Unknown fields are errors everywhere. That is deliberate: a misspelled
@@ -15,7 +15,7 @@ silently ignored.
 
 ```json
 {
-  "geneva": "0.3",
+  "geneva": "0.4",
   "output": { "width": 1280, "height": 720, "fps": 30, "duration": "3s" },
   "layers": [
     { "clips": [ { "source": { "kind": "solid", "color": "#1d2230" } } ] }
@@ -196,7 +196,7 @@ prints the document as it was written.
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `geneva` | yes | Format version, `"0.3"`. A `"0.1"` or `"0.2"` document is read as it is: 0.2 added optional clip fields (`crop`, `effects`, `mask`, `speed`), 0.3 adds the optional `outputs` map. |
+| `geneva` | yes | Format version, `"0.4"`. A `"0.1"`, `"0.2"` or `"0.3"` document is read as it is: 0.2 added optional clip fields (`crop`, `effects`, `mask`, `speed`), 0.3 added the optional `outputs` map, 0.4 adds the optional top-level `keyframes` map, the `captions` source kind and the `loudness`, `hygiene` and `denoise` fields on output audio. |
 | `output` | yes | Frame size, rate, duration, background, color, audio and encoding settings. |
 | `outputs` | no | Map of name to [output entry](#outputs): the files one render writes from the composition, when there is more than one. |
 | `assets` | no | Map of asset id to asset. |

@@ -1,5 +1,5 @@
 {
-  "geneva": "0.1",
+  "geneva": "0.4",
   "output": { "width": 640, "height": 360, "fps": 30, "duration": "3s", "background": "#101418" },
   "layers": [
     {

@@ -1,6 +1,6 @@
 //! The published JSON Schema must agree with the parser on the examples.
 
-use geneva_timeline::{json_schema, load};
+use geneva_timeline::{FORMAT_VERSION, json_schema, load};
 
 #[test]
 fn examples_validate_against_the_json_schema() {
@@ -34,7 +34,10 @@ fn schema_rejects_what_the_parser_rejects() {
 #[test]
 fn checked_in_schema_is_current() {
     let expected = serde_json::to_string_pretty(&json_schema()).unwrap() + "\n";
-    let path = "../../schema/geneva-timeline-0.3.schema.json";
+    // Named for the format version, so a format bump publishes a new
+    // file instead of rewriting the one an older release shipped.
+    let path = format!("../../schema/geneva-timeline-{FORMAT_VERSION}.schema.json");
+    let path = path.as_str();
     match std::fs::read_to_string(path) {
         Ok(actual) if actual == expected => {}
         _ => {

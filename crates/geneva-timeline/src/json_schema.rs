@@ -38,10 +38,13 @@ mod tests {
     #[test]
     fn schema_pins_the_version() {
         let s = json_schema();
-        assert_eq!(
-            s["properties"]["geneva"]["enum"],
-            json!(["0.1", "0.2", "0.3"])
-        );
+        // The enum is what the build actually reads, rather than a list
+        // written out again here that a format bump would have to keep
+        // in step by hand.
+        assert_eq!(s["properties"]["geneva"]["enum"], json!(ACCEPTED_VERSIONS));
+        // The version this build writes has to be one it reads, and the
+        // newest of them.
+        assert_eq!(ACCEPTED_VERSIONS.last(), Some(&FORMAT_VERSION));
         assert_eq!(
             s["$schema"],
             json!("https://json-schema.org/draft/2020-12/schema")
@@ -50,7 +53,7 @@ mod tests {
             s["$id"]
                 .as_str()
                 .unwrap()
-                .ends_with("geneva-timeline-0.3.schema.json")
+                .ends_with(&format!("geneva-timeline-{FORMAT_VERSION}.schema.json"))
         );
     }
 }

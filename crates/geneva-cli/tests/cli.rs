@@ -117,7 +117,10 @@ fn schema_prints_json_schema() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"$schema\""))
-        .stdout(predicate::str::contains("geneva-timeline-0.3"));
+        .stdout(predicate::str::contains(format!(
+            "geneva-timeline-{}",
+            geneva_timeline::FORMAT_VERSION
+        )));
 }
 
 #[test]

@@ -17,20 +17,23 @@ use crate::length::{Length, Point, Scale};
 use crate::time::{Fps, Time};
 
 /// The timeline format version this crate writes.
-pub const FORMAT_VERSION: &str = "0.3";
+pub const FORMAT_VERSION: &str = "0.4";
 
-/// The format versions this crate reads. A 0.2 document is a 0.1 document
-/// with more optional fields (crop, effects, mask, speed), so both are
-/// accepted as they are.
-pub const ACCEPTED_VERSIONS: &[&str] = &["0.1", "0.2", "0.3"];
+/// The format versions this crate reads. Each one is the one before it
+/// with more optional fields, so all of them are accepted as they are:
+/// 0.2 added crop, effects, mask and speed on a clip, 0.3 the outputs
+/// map, 0.4 the keyframes map, the captions source and loudness,
+/// hygiene and denoise on output audio.
+pub const ACCEPTED_VERSIONS: &[&str] = &["0.1", "0.2", "0.3", "0.4"];
 
 /// A complete composition: output settings, assets and layers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(title = "Geneva timeline")]
 pub struct Timeline {
-    /// Format version: "0.3", or "0.1" and "0.2" for a document written before
-    /// crop, effects, mask and speed existed (read as it is).
+    /// Format version: "0.4", or "0.1", "0.2" and "0.3" for a document
+    /// written before the fields each of those added existed. All of them
+    /// are read as they are.
     pub geneva: String,
     /// Frame size, rate, duration and encoding settings of the output.
     pub output: Output,

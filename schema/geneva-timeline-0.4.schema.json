@@ -4,11 +4,12 @@
   "properties": {
     "geneva": {
       "type": "string",
-      "description": "Format version: \"0.3\", or \"0.1\" and \"0.2\" for a document written before\ncrop, effects, mask and speed existed (read as it is).",
+      "description": "Format version: \"0.4\", or \"0.1\", \"0.2\" and \"0.3\" for a document\nwritten before the fields each of those added existed. All of them\nare read as they are.",
       "enum": [
         "0.1",
         "0.2",
-        "0.3"
+        "0.3",
+        "0.4"
       ]
     },
     "output": {
@@ -35,6 +36,16 @@
         "$ref": "#/$defs/CompositionDef"
       },
       "description": "Reusable sub-compositions, keyed by name. A clip shows one with a\nsource of kind \"composition\"."
+    },
+    "keyframes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      },
+      "description": "Named motion, spelled like CSS `@keyframes`: each rule maps an\noffset (\"from\", \"to\", \"60%\") to a declaration block\n(\"transform: translateX(-656px); opacity: 0\"). A clip plays one\nwith its `animation` field."
     },
     "layers": {
       "type": "array",
@@ -63,7 +74,7 @@
     "output"
   ],
   "title": "Geneva timeline",
-  "description": "Geneva timeline format 0.3: a declarative video composition.",
+  "description": "Geneva timeline format 0.4: a declarative video composition.",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
     "Output": {
@@ -349,9 +360,57 @@
           "minimum": 0,
           "maximum": 255,
           "description": "Channel count: 1 (mono) or 2 (stereo). Defaults to 2."
+        },
+        "loudness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Loudness"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A loudness to bring the mix to. Unset, the mix is written at\nwhatever level its sources add up to."
+        },
+        "hygiene": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Audio hygiene for speech: a high-pass at 80 Hz that takes rumble,\nhandling noise and DC offset, and notches on mains hum (50 or 60\nHz and its harmonics) where the mix has some. Fixed curves. On\nmusic the high-pass takes the bass under 80 Hz with it. Defaults\nto false."
+        },
+        "denoise": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Speech denoising with an embedded model (DeepFilterNet), before\nhygiene and loudness. Speech only: it damages music and\noverlapping speakers. Costs about as long as the audio takes to\nplay on one core. Defaults to false."
         }
       },
       "description": "Audio output format."
+    },
+    "Loudness": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "target_lufs": {
+          "type": "number",
+          "format": "double",
+          "description": "Integrated loudness to aim for, in LUFS: -40 to -5."
+        },
+        "true_peak_dbtp": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Ceiling for the true peak in dBTP, -20 to 0. Defaults to -1."
+        }
+      },
+      "required": [
+        "target_lufs"
+      ],
+      "description": "A loudness target for the mix, measured as ITU-R BS.1770-4 (EBU R128)\nmeasures it: K-weighted, gated, over the whole output. The mix is\nread once to measure it, then written with one gain, and a limiter\nholds the true peak under its ceiling. Platforms normalise to -14\nLUFS (YouTube, TikTok, Instagram) or ask for -16 (podcasts);\nbroadcast asks for -23 (EBU) or -24 (ATSC)."
     },
     "Encode": {
       "type": "object",
@@ -1020,6 +1079,16 @@
           "type": "string",
           "const": "subtitle",
           "description": "A subtitle file (SubRip `.srt` or WebVTT `.vtt`)."
+        },
+        {
+          "type": "string",
+          "const": "captions",
+          "description": "A caption file a clip draws: SubRip, WebVTT, or the JSON a\nspeech recogniser writes, one entry per word."
+        },
+        {
+          "type": "string",
+          "const": "html",
+          "description": "A markup file drawn by the HTML source."
         }
       ],
       "description": "The kind of content in an asset."
@@ -1141,7 +1210,18 @@
               "type": "null"
             }
           ],
-          "description": "A transition from the previous clip in the layer. The clip starts\nearly by the transition duration and blends over the previous one."
+          "description": "How the clip arrives. With a clip before it on the layer, this one\nstarts early by the transition duration and the pair blends. As the\nfirst clip on a layer it opens the piece: a \"fade\" comes up out of\nits color, a \"crossfade\" up from whatever is behind."
+        },
+        "transition_out": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Transition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the clip leaves, when nothing follows it on the layer. A \"fade\"\ngoes out to its color, a \"crossfade\" out to whatever is behind.\nWhere another clip follows, that clip's \"transition\" already covers\nthe join and setting this too is an E307."
         },
         "crop": {
           "anyOf": [
@@ -1164,6 +1244,13 @@
             }
           ],
           "description": "How the source is sized to the output frame before the transform.\nDefaults to \"contain\" for video and to \"none\" (natural size) for\neverything else."
+        },
+        "animation": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Motion from the document's `keyframes`, spelled like the CSS\n`animation` shorthand: a rule name with a duration, and optionally\na delay, a timing function, an iteration count and a direction\n(\"slide-in 0.5s ease-out\", \"pulse 2s infinite alternate\").\nSeveral are separated by commas. What a rule sets is applied on\ntop of `transform` and replaces `opacity`."
         },
         "transform": {
           "anyOf": [
@@ -1444,13 +1531,24 @@
             "color": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/Color"
+                  "$ref": "#/$defs/Animated_Color"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Text color. Defaults to white."
+              "description": "Text color. Defaults to white. Takes keyframes."
+            },
+            "fill": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TextFill"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A gradient that fills the glyphs in place of `color`: an object,\nor the gradient string alone."
             },
             "letter_spacing": {
               "type": [
@@ -1535,13 +1633,13 @@
             "shadow": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/Shadow"
+                  "$ref": "#/$defs/Shadows"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Drop shadow."
+              "description": "Drop shadows: one, or a list front to back."
             },
             "kind": {
               "type": "string",
@@ -1552,6 +1650,161 @@
           "required": [
             "kind"
           ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "html": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Markup written in the document."
+            },
+            "asset": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Id of an asset of kind \"html\", read as the markup."
+            },
+            "css": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "A stylesheet applied after any `<style>` in the markup."
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BoxSize"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Box width: a length, or \"auto\" to fit the content. Defaults to\nthe frame width, so markup is laid out on a surface the size of\nthe picture, the way a page is."
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BoxSize"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Box height: a length, or \"auto\" to fit the content, which is\nhow a card sizes itself to its text. Defaults to the frame\nheight."
+            },
+            "kind": {
+              "type": "string",
+              "const": "html"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "description": "A box of markup: HTML and CSS laid out with flexbox and drawn.\n\nThe markup comes from `html` or from an asset of kind \"html\", and\nthe styles from a `<style>` element inside it, from `css`, or\nboth. There is no inline layout: an element's text is one\nparagraph and a child element is a box of its own."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "asset": {
+              "type": "string",
+              "description": "Id of an asset of kind \"captions\"."
+            },
+            "position": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CaptionPosition"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Where cues sit. Defaults to the bottom."
+            },
+            "margin": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Length"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Distance from the edge. Defaults to the title-safe inset."
+            },
+            "safe": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double",
+              "description": "Title-safe inset as a percentage of each side; a cue outside\nit is a note. Defaults to 5; 0 turns the note off."
+            },
+            "follow_file": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Whether a WebVTT file's own placement wins over the fields\nabove. Defaults to true; set false to place every cue the\nsame way whatever the file says."
+            },
+            "max_lines": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0,
+              "description": "Most lines a cue shows at once. Defaults to 2."
+            },
+            "min_duration": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Shortest a cue may be, so that a word lasting a fifth of a\nsecond is still readable. Defaults to 1.2s."
+            },
+            "merge_gap": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A gap no longer than this between cues is closed rather than\nblinking the caption off and on. Defaults to 0.1s."
+            },
+            "style": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TextSource"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How the captions look: the same fields a text source takes,\nminus the ones that say what the text is."
+            },
+            "kind": {
+              "type": "string",
+              "const": "captions"
+            }
+          },
+          "required": [
+            "kind",
+            "asset"
+          ],
+          "description": "Captions from a file: SubRip, WebVTT, or the JSON a speech\nrecogniser writes.\n\nThe resolver turns the file into one clip per cue, so a caption\ntrack costs only the frames it is on, and takes its times from\nthe file rather than from `start` and `duration`. Where it sits\ncomes from `position` and `margin`, inside the title-safe area by\ndefault; a WebVTT cue that asks for somewhere else is obeyed\nunless the document overrides it."
         },
         {
           "type": "object",
@@ -1587,7 +1840,7 @@
             "keyframes": {
               "type": "array",
               "items": {
-                "$ref": "#/$defs/KeyframeSpec"
+                "$ref": "#/$defs/Keyframe_Color"
               },
               "minItems": 1
             }
@@ -1599,35 +1852,34 @@
         }
       ]
     },
-    "KeyframeSpec": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "t": {
-          "$ref": "#/$defs/Time",
-          "description": "Time of the keyframe, relative to the start of the clip."
-        },
-        "v": {
-          "$ref": "#/$defs/Color",
-          "description": "Value at that time."
-        },
-        "ease": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Easing"
+    "Keyframe_Color": {
+      "description": "One keyframe: {\"t\": .., \"v\": .., \"ease\": ..} or the same three in order as [t, v] or [t, v, ease].",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "$ref": "#/$defs/Time"
             },
-            {
-              "type": "null"
+            "v": {
+              "$ref": "#/$defs/Color"
+            },
+            "ease": {
+              "$ref": "#/$defs/Easing"
             }
+          },
+          "required": [
+            "t",
+            "v"
           ],
-          "description": "Easing applied between this keyframe and the next. Defaults to linear."
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3
         }
-      },
-      "required": [
-        "t",
-        "v"
-      ],
-      "description": "One keyframe as written in a timeline."
+      ]
     },
     "Easing": {
       "anyOf": [
@@ -1666,9 +1918,56 @@
             "spring"
           ],
           "description": "A damped spring, rescaled to settle at the end of the segment."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "steps": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                },
+                {
+                  "$ref": "#/$defs/StepPosition"
+                }
+              ],
+              "minItems": 2,
+              "maxItems": 2,
+              "description": "How many steps, and where the jumps fall."
+            }
+          },
+          "required": [
+            "steps"
+          ],
+          "description": "A staircase of equal steps, as CSS `steps(n, position)`."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "linear": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "description": "The points, at least two."
+            }
+          },
+          "required": [
+            "linear"
+          ],
+          "description": "Straight lines through points, as CSS `linear()`: each point is\n`[input, output]`, inputs from 0 to 1 in order."
         }
       ],
-      "description": "An easing curve applied to the segment that starts at a keyframe.\n\nIn JSON an easing is either a preset name (`\"ease-out\"`), an object with a\n`cubic-bezier` array, or an object with a `spring` block."
+      "description": "An easing curve applied to the segment that starts at a keyframe.\n\nIn JSON an easing is either a preset name (`\"ease-out\"`), an object with\na `cubic-bezier` array, a `spring` block, a `steps` pair or a `linear`\nlist of points."
     },
     "NamedEasing": {
       "oneOf": [
@@ -1730,6 +2029,31 @@
       },
       "description": "Parameters of a damped spring.\n\nThe spring is solved analytically and rescaled so that it settles exactly\nat the end of the keyframe segment; the parameters control the shape of\nthe motion (overshoot and bounce), not its duration."
     },
+    "StepPosition": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "jump-start",
+          "description": "The first jump is at the start, so the segment never shows its\nstarting value."
+        },
+        {
+          "type": "string",
+          "const": "jump-end",
+          "description": "The last jump is at the end, so the segment never shows its final\nvalue until then. CSS's default."
+        },
+        {
+          "type": "string",
+          "const": "jump-none",
+          "description": "Both ends are held: `n` steps make `n - 1` jumps."
+        },
+        {
+          "type": "string",
+          "const": "jump-both",
+          "description": "Neither end is held: `n` steps make `n + 1` jumps."
+        }
+      ],
+      "description": "Where a staircase jumps: the second argument of CSS `steps()`."
+    },
     "ShapeKind": {
       "oneOf": [
         {
@@ -1788,28 +2112,34 @@
       ]
     },
     "Word": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "text": {
-          "type": "string",
-          "description": "The word."
+      "title": "Word",
+      "description": "One timed word: {\"text\": .., \"start\": .., \"end\": ..} or the same three in order as [text, start] or [text, start, end]. Without an end, a word runs to the next word's start; the last word needs its own.",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "start": {
+              "$ref": "#/$defs/Time"
+            },
+            "end": {
+              "$ref": "#/$defs/Time"
+            }
+          },
+          "required": [
+            "text",
+            "start"
+          ],
+          "additionalProperties": false
         },
-        "start": {
-          "$ref": "#/$defs/Time",
-          "description": "When the word becomes current, relative to the clip start."
-        },
-        "end": {
-          "$ref": "#/$defs/Time",
-          "description": "When the word stops being current."
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3
         }
-      },
-      "required": [
-        "text",
-        "start",
-        "end"
-      ],
-      "description": "One timed word."
+      ]
     },
     "TextStyle": {
       "type": "object",
@@ -1850,13 +2180,24 @@
         "color": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Color"
+              "$ref": "#/$defs/Animated_Color"
             },
             {
               "type": "null"
             }
           ],
-          "description": "Text color. Defaults to white."
+          "description": "Text color. Defaults to white. Takes keyframes."
+        },
+        "fill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextFill"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A gradient that fills the glyphs in place of `color`: an object,\nor the gradient string alone."
         },
         "letter_spacing": {
           "type": [
@@ -1868,6 +2209,110 @@
         }
       },
       "description": "Font and color properties of text."
+    },
+    "TextFill": {
+      "title": "TextFill",
+      "description": "A gradient that fills the glyphs: an object with gradient, width, height, x and y, or the gradient string alone, such as \"linear-gradient(90deg, #7A51CF, #C28072)\".",
+      "anyOf": [
+        {
+          "description": "The object form of a text fill.",
+          "type": "object",
+          "properties": {
+            "gradient": {
+              "description": "The colour or gradient, in CSS.",
+              "type": "string"
+            },
+            "width": {
+              "description": "The tile's width in pixels. Defaults to the text's own width.",
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "height": {
+              "description": "The tile's height in pixels. Defaults to the text's own height.",
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "x": {
+              "description": "Where the tile starts, in pixels from the left of the text's box.\nTakes keyframes.",
+              "$ref": "#/$defs/Animated_double",
+              "default": 0.0
+            },
+            "y": {
+              "description": "Where the tile starts, in pixels from the top of the text's box.\nTakes keyframes.",
+              "$ref": "#/$defs/Animated_double",
+              "default": 0.0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "gradient"
+          ]
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "Animated_double": {
+      "description": "Either a constant value or {\"keyframes\": [...]} with values interpolated over time.",
+      "anyOf": [
+        {
+          "type": "number",
+          "format": "double"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "keyframes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Keyframe_double"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "keyframes"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Keyframe_double": {
+      "description": "One keyframe: {\"t\": .., \"v\": .., \"ease\": ..} or the same three in order as [t, v] or [t, v, ease].",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "$ref": "#/$defs/Time"
+            },
+            "v": {
+              "type": "number",
+              "format": "double"
+            },
+            "ease": {
+              "$ref": "#/$defs/Easing"
+            }
+          },
+          "required": [
+            "t",
+            "v"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3
+        }
+      ]
     },
     "TextAlign": {
       "oneOf": [
@@ -1889,6 +2334,22 @@
       ],
       "description": "Horizontal text alignment."
     },
+    "Shadows": {
+      "title": "Shadows",
+      "description": "One shadow, or a list of them front to back, each an object or a text-shadow string; a string may itself list several with commas.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Shadow"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Shadow"
+          },
+          "minItems": 1
+        }
+      ]
+    },
     "Shadow": {
       "title": "Shadow",
       "description": "A drop shadow: an object with x, y, blur and color, or the text-shadow shorthand \"<x> <y> [blur] [color]\" such as \"0 2px 8px #0008\".",
@@ -1898,10 +2359,10 @@
           "type": "object",
           "properties": {
             "color": {
-              "description": "Shadow color. Defaults to 50% black.",
+              "description": "Shadow color. Defaults to 50% black. Takes keyframes.",
               "anyOf": [
                 {
-                  "$ref": "#/$defs/Color"
+                  "$ref": "#/$defs/Animated_Color"
                 },
                 {
                   "type": "null"
@@ -1909,21 +2370,18 @@
               ]
             },
             "x": {
-              "description": "Horizontal offset in pixels.",
-              "type": "number",
-              "format": "double",
+              "description": "Horizontal offset in pixels. Takes keyframes.",
+              "$ref": "#/$defs/Animated_double",
               "default": 0.0
             },
             "y": {
-              "description": "Vertical offset in pixels.",
-              "type": "number",
-              "format": "double",
+              "description": "Vertical offset in pixels. Takes keyframes.",
+              "$ref": "#/$defs/Animated_double",
               "default": 0.0
             },
             "blur": {
-              "description": "Blur radius in pixels.",
-              "type": "number",
-              "format": "double",
+              "description": "Blur radius in pixels. Takes keyframes.",
+              "$ref": "#/$defs/Animated_double",
               "default": 0.0
             }
           },
@@ -1933,6 +2391,218 @@
           "type": "string"
         }
       ]
+    },
+    "BoxSize": {
+      "title": "BoxSize",
+      "description": "A box dimension: a length (a number of pixels, \"120px\", or a percentage of the frame), or \"auto\" to fit the content.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Length"
+        },
+        {
+          "const": "auto"
+        }
+      ]
+    },
+    "CaptionPosition": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "bottom",
+          "description": "Along the bottom, the usual place."
+        },
+        {
+          "type": "string",
+          "const": "top",
+          "description": "Along the top, for when the lower third is busy."
+        },
+        {
+          "type": "string",
+          "const": "center",
+          "description": "In the middle of the frame."
+        }
+      ],
+      "description": "Where captions sit in the frame."
+    },
+    "TextSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The text to show. Required unless \"words\" is given, in which case it\ndefaults to the words joined by spaces."
+        },
+        "words": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Word"
+          },
+          "description": "Timed words for caption-style highlighting. Times are relative to the\nclip start."
+        },
+        "highlight": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextStyle"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Style applied to the word whose time range contains the current\ntime."
+        },
+        "font": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Font: the id of an asset of kind \"font\", a family name available\non the system, or the CSS `font` shorthand (\"600 40px/1.2 Inter\"),\nwhose parts fill in size, weight, italic and line_height unless\nthose are set."
+        },
+        "size": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Font size in pixels. Defaults to 48."
+        },
+        "weight": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Weight from 100 to 900. Defaults to 400."
+        },
+        "italic": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Italic."
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_Color"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Text color. Defaults to white. Takes keyframes."
+        },
+        "fill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextFill"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A gradient that fills the glyphs in place of `color`: an object,\nor the gradient string alone."
+        },
+        "letter_spacing": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Extra spacing between letters in pixels."
+        },
+        "max_width": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Maximum line width before wrapping. Defaults to the output width."
+        },
+        "align": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextAlign"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Horizontal alignment within the box. Defaults to \"center\"."
+        },
+        "line_height": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Line height as a multiple of the font size. Defaults to 1.2."
+        },
+        "padding": {
+          "description": "Padding between the text and its background box, in pixels.",
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\s*-?\\d+(\\.\\d+)?\\s*(px)?\\s*$"
+            }
+          ]
+        },
+        "background": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Background box color. Defaults to none."
+        },
+        "radius": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Background box corner radius in pixels."
+        },
+        "outline": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Stroke"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Text outline."
+        },
+        "shadow": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Shadows"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Drop shadows: one, or a list front to back."
+        }
+      },
+      "description": "A text source."
     },
     "Transition": {
       "type": "object",
@@ -1944,7 +2614,29 @@
         },
         "duration": {
           "$ref": "#/$defs/Time",
-          "description": "How long the two clips overlap."
+          "description": "How long it lasts: the overlap between a pair of clips, or the\nramp at the head or tail of a layer."
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The color a \"fade\" passes through. Defaults to black. Ignored by\n\"crossfade\", which never shows a color of its own (W304)."
+        },
+        "ease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Easing"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Shape of the ramp. Defaults to linear; \"ease-in-out\" is the usual\nchoice for a slow dissolve."
         }
       },
       "required": [
@@ -1958,7 +2650,12 @@
         {
           "type": "string",
           "const": "crossfade",
-          "description": "Fade the incoming clip in over the outgoing one."
+          "description": "Fade the incoming clip in over the outgoing one. Both are visible\nat once, and the sound crosses at constant power."
+        },
+        {
+          "type": "string",
+          "const": "fade",
+          "description": "Dip through a color: the outgoing clip fades to it over the first\nhalf of the overlap, the incoming clip out of it over the second.\nOnly one is ever visible, and the sound goes to silence and back."
         }
       ],
       "description": "Transition types."
@@ -2102,7 +2799,7 @@
             "keyframes": {
               "type": "array",
               "items": {
-                "$ref": "#/$defs/KeyframeSpec2"
+                "$ref": "#/$defs/Keyframe_Point"
               },
               "minItems": 1
             }
@@ -2115,53 +2812,66 @@
       ]
     },
     "Point": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "x": {
-          "$ref": "#/$defs/Length",
-          "description": "Horizontal component; percentages refer to the output width."
-        },
-        "y": {
-          "$ref": "#/$defs/Length",
-          "description": "Vertical component; percentages refer to the output height."
-        }
-      },
-      "required": [
-        "x",
-        "y"
-      ],
-      "description": "A 2D point or size with independent units per axis."
-    },
-    "KeyframeSpec2": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "t": {
-          "$ref": "#/$defs/Time",
-          "description": "Time of the keyframe, relative to the start of the clip."
-        },
-        "v": {
-          "$ref": "#/$defs/Point",
-          "description": "Value at that time."
-        },
-        "ease": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Easing"
+      "title": "Point",
+      "description": "A 2D point: {\"x\": .., \"y\": ..}, a pair like [30, 36], or a string of one or two components (\"30 36\", \"0% 50%\", \"left\", \"bottom right\"). A component is a length or one of left, right, top, bottom, center.",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "x": {
+              "$ref": "#/$defs/Length"
             },
-            {
-              "type": "null"
+            "y": {
+              "$ref": "#/$defs/Length"
             }
+          },
+          "required": [
+            "x",
+            "y"
           ],
-          "description": "Easing applied between this keyframe and the next. Defaults to linear."
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Length"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        {
+          "type": "string"
         }
-      },
-      "required": [
-        "t",
-        "v"
-      ],
-      "description": "One keyframe as written in a timeline."
+      ]
+    },
+    "Keyframe_Point": {
+      "description": "One keyframe: {\"t\": .., \"v\": .., \"ease\": ..} or the same three in order as [t, v] or [t, v, ease].",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "$ref": "#/$defs/Time"
+            },
+            "v": {
+              "$ref": "#/$defs/Point"
+            },
+            "ease": {
+              "$ref": "#/$defs/Easing"
+            }
+          },
+          "required": [
+            "t",
+            "v"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3
+        }
+      ]
     },
     "Animated_Scale": {
       "description": "Either a constant value or {\"keyframes\": [...]} with values interpolated over time.",
@@ -2175,7 +2885,7 @@
             "keyframes": {
               "type": "array",
               "items": {
-                "$ref": "#/$defs/KeyframeSpec3"
+                "$ref": "#/$defs/Keyframe_Scale"
               },
               "minItems": 1
             }
@@ -2212,91 +2922,34 @@
         }
       ]
     },
-    "KeyframeSpec3": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "t": {
-          "$ref": "#/$defs/Time",
-          "description": "Time of the keyframe, relative to the start of the clip."
-        },
-        "v": {
-          "$ref": "#/$defs/Scale",
-          "description": "Value at that time."
-        },
-        "ease": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Easing"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Easing applied between this keyframe and the next. Defaults to linear."
-        }
-      },
-      "required": [
-        "t",
-        "v"
-      ],
-      "description": "One keyframe as written in a timeline."
-    },
-    "Animated_double": {
-      "description": "Either a constant value or {\"keyframes\": [...]} with values interpolated over time.",
+    "Keyframe_Scale": {
+      "description": "One keyframe: {\"t\": .., \"v\": .., \"ease\": ..} or the same three in order as [t, v] or [t, v, ease].",
       "anyOf": [
-        {
-          "type": "number",
-          "format": "double"
-        },
         {
           "type": "object",
           "properties": {
-            "keyframes": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/KeyframeSpec4"
-              },
-              "minItems": 1
+            "t": {
+              "$ref": "#/$defs/Time"
+            },
+            "v": {
+              "$ref": "#/$defs/Scale"
+            },
+            "ease": {
+              "$ref": "#/$defs/Easing"
             }
           },
           "required": [
-            "keyframes"
+            "t",
+            "v"
           ],
           "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3
         }
       ]
-    },
-    "KeyframeSpec4": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "t": {
-          "$ref": "#/$defs/Time",
-          "description": "Time of the keyframe, relative to the start of the clip."
-        },
-        "v": {
-          "type": "number",
-          "format": "double",
-          "description": "Value at that time."
-        },
-        "ease": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Easing"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Easing applied between this keyframe and the next. Defaults to linear."
-        }
-      },
-      "required": [
-        "t",
-        "v"
-      ],
-      "description": "One keyframe as written in a timeline."
     },
     "BlendMode": {
       "oneOf": [
@@ -2651,5 +3304,5 @@
       "description": "A subtitle track: one subtitle file written to the output as a text\nstream, for players to show or hide."
     }
   },
-  "$id": "https://geneva-render.github.io/schema/geneva-timeline-0.3.schema.json"
+  "$id": "https://geneva-render.github.io/schema/geneva-timeline-0.4.schema.json"
 }

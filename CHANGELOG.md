@@ -7,6 +7,11 @@ the format version it was written for.
 
 ## Unreleased
 
+Timeline format 0.4. Documents saying `"geneva": "0.1"`, `"0.2"` or
+`"0.3"` are read unchanged. 0.4 adds the optional top-level `keyframes`
+map, the `captions` source kind, and `loudness`, `hygiene` and `denoise`
+on output audio.
+
 ### Added
 
 - **Markup redrawn from kept pictures.** An element inside markup that
@@ -163,6 +168,13 @@ the format version it was written for.
   240 ms at its worst; layout is 1 ms of that, text shaping under 2 ms.
 
 ### Fixed
+
+- **The published schema no longer changes under a released version.**
+  The test that keeps `schema/` current wrote to a path with the format
+  version spelled into it, so every change to the format types rewrote
+  the file 0.4.0 had published as format 0.3 rather than publishing a
+  new one. It now takes the name from `FORMAT_VERSION`, and
+  `geneva-timeline-0.3.schema.json` is back to what 0.4.0 shipped.
 
 - A blurred `box-shadow` was a distance-field ramp that stayed solid to
   the box's edge, so a bar thinner than its blur glowed far harder than
