@@ -718,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "geneva-anim"
-version = "0.4.3"
+version = "0.5.0"
 dependencies = [
  "schemars",
  "serde",
@@ -727,11 +727,11 @@ dependencies = [
 
 [[package]]
 name = "geneva-audio"
-version = "0.4.3"
+version = "0.5.0"
 
 [[package]]
 name = "geneva-cli"
-version = "0.4.3"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -751,7 +751,7 @@ dependencies = [
 
 [[package]]
 name = "geneva-color"
-version = "0.4.3"
+version = "0.5.0"
 dependencies = [
  "geneva-anim",
  "schemars",
@@ -762,7 +762,7 @@ dependencies = [
 
 [[package]]
 name = "geneva-golden"
-version = "0.4.3"
+version = "0.5.0"
 dependencies = [
  "geneva-audio",
  "geneva-render",
@@ -775,7 +775,7 @@ dependencies = [
 
 [[package]]
 name = "geneva-html"
-version = "0.4.3"
+version = "0.5.0"
 dependencies = [
  "geneva-color",
  "taffy",
@@ -783,7 +783,7 @@ dependencies = [
 
 [[package]]
 name = "geneva-media"
-version = "0.4.3"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "deep_filter",
@@ -805,11 +805,11 @@ dependencies = [
 
 [[package]]
 name = "geneva-media-link"
-version = "0.4.3"
+version = "0.5.0"
 
 [[package]]
 name = "geneva-render"
-version = "0.4.3"
+version = "0.5.0"
 dependencies = [
  "cosmic-text",
  "geneva-color",
@@ -824,7 +824,7 @@ dependencies = [
 
 [[package]]
 name = "geneva-timeline"
-version = "0.4.3"
+version = "0.5.0"
 dependencies = [
  "geneva-anim",
  "geneva-color",

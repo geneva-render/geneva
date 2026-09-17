@@ -7,6 +7,8 @@ the format version it was written for.
 
 ## Unreleased
 
+## 0.5.0 (2026-09-17)
+
 Timeline format 0.4. Documents saying `"geneva": "0.1"`, `"0.2"` or
 `"0.3"` are read unchanged. 0.4 adds the optional top-level `keyframes`
 map, the `captions` source kind, and `loudness`, `hygiene` and `denoise`
