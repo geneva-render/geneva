@@ -15,10 +15,12 @@ timeline JSON ──parse──▶ Timeline ──resolve──▶ Composition �
 | --- | --- | --- |
 | `geneva-anim` | Easing curves and keyframe tracks. No I/O, no clocks. | serde |
 | `geneva-color` | Tags, inference, transfer functions, matrices, the `LinearRgba` working format and CSS color parsing. | geneva-anim |
-| `geneva-timeline` | The format: document types (also the JSON Schema source), exact `Ratio` time, parsing with path-precise errors, resolution into `Composition`, diagnostics. | geneva-anim, geneva-color |
-| `geneva-render` | The `Renderer` trait, `Frame`, asset loading, and `CpuRenderer`. | geneva-timeline, geneva-color |
-| `geneva-golden` | Perceptual comparison (per-channel epsilon, PSNR, SSIM), diff images, and the golden case runner. | geneva-render |
-| `geneva-media` | Probe, decode, encode and audio mixing over the bundled media libraries, behind the `media` feature; the only crate that knows about containers and codecs. | geneva-render, geneva-color |
+| `geneva-html` | A strict HTML and CSS subset: parsing, the cascade, block and flexbox layout over taffy, and a display list of boxes, text runs and images. Not a browser; it has no inline layout, float, grid, transition or media query. | geneva-color, taffy |
+| `geneva-timeline` | The format: document types (also the JSON Schema source), exact `Ratio` time, parsing with path-precise errors, resolution into `Composition`, diagnostics. Markup and CSS inside a document are checked here, so their errors carry a path like every other. | geneva-anim, geneva-color, geneva-html |
+| `geneva-render` | The `Renderer` trait, `Frame`, asset loading, `CpuRenderer`, the text engine and the markup painter. | geneva-timeline, geneva-color, geneva-html |
+| `geneva-golden` | Perceptual comparison (per-channel epsilon, PSNR, SSIM), diff images, and the golden case runner. | geneva-render, geneva-timeline |
+| `geneva-media-link` | The linker directives for the statically built media libraries, read from the prefix's pkg-config files. A build dependency of the two crates below, and nothing else. | none |
+| `geneva-media` | Probe, decode, encode and audio mixing over the bundled media libraries, behind the `media` feature; the only crate that knows about containers and codecs. | geneva-render, geneva-timeline, geneva-color, geneva-anim |
 | `geneva-cli` | The `geneva` binary. | everything above |
 
 Lower crates never depend on higher ones. `geneva-timeline` knows nothing
@@ -97,6 +99,19 @@ Text is laid out by `cosmic-text` (shaping, bidi, line breaking, fallback)
 and rasterized by `swash` into coverage masks. The engine composites the
 masks in linear light, draws the background box, outline and shadow, and
 hands the result to the same placement code as images.
+
+Markup (`source.kind: "html"`) is parsed and styled once per clip by
+`geneva-html`, then laid out and painted by the renderer into an image
+that the same placement code composites. Inside that image the painter
+blends on sRGB-encoded premultiplied values, as a browser does, and
+converts the finished box to linear light once. A box with nothing
+animated inside it is painted once per clip whatever its length. An
+element with an animation, a transform, opacity, a filter or a clip is
+painted as a group into its own buffer and composited with those
+applied; the buffer covers only what its parent can show, taken back
+through the transform and padded for the blur, and a group that lands
+off the frame is skipped. A group whose animation moves a size lays the
+box out again each frame.
 
 ## Stream copy
 
