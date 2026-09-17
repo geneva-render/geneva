@@ -179,7 +179,7 @@ otherwise. The printed timeline (`--show-timeline`) shows the choice.
 | `--keep-hdr` | Keep HDR sources HDR: the output takes their tags (PQ or HLG, BT.2020) and a ten-bit codec, `h265` unless `--codec` says otherwise (`h265` needs a hardware encoder; `av1` and `vp9` are software). Without it, HDR sources are tone-mapped to SDR. |
 | `--chunks N\|auto` | Encode the output in `N` stretches at once, on separate cores, joined afterwards; `auto` (the default) decides from the encoder and the machine, `1` turns it off. See `encode.video.chunks` in [timeline.md](timeline.md). |
 | `--no-audio` | Write no audio track. |
-| `--denoise` | Denoise the audio as speech with the embedded model, before hygiene and loudness; sets `output.audio.denoise` in the compiled timeline. Speech only: it damages music and overlapping speakers, and takes about as long as the audio plays on one core. Never part of a `--for` target. A binary built without the `denoise` feature refuses it with a message. |
+| `--denoise` | Denoise the audio as speech with the embedded model, before hygiene and loudness; sets `output.audio.denoise` in the compiled timeline. Speech only: it damages music and overlapping speakers. It runs on one core at about 20x the speed of the audio, 2.9 s a minute for 48 kHz stereo on a 2026 laptop. Never part of a `--for` target. A binary built without the `denoise` feature refuses the document with E424 before rendering anything. |
 | `--exact` | Cut on the exact frame; a [smart cut](#smart-cut) when the source allows. |
 | `--show-timeline` | Print the timeline the verb built instead of rendering it. Asset paths in it are relative to the directory printed on stderr. |
 

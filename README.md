@@ -168,6 +168,7 @@ brew install x264                # macOS
 | **Vertical video reframing** | Turns 16:9 into 9:16 over a blurred copy instead of cropping | [examples](examples/README.md#vertical-video) |
 | **Destination presets** | `--for instagram`, `--for web`, `--for phone` set size, codec, quality, keyframes, audio and, where the platform normalises it, loudness, and warn when limits are exceeded | [docs/cli.md](docs/cli.md#targets) |
 | **Transitions** | Dissolve or dip through a colour at joins or clip boundaries, with picture and sound kept together | [docs/timeline.md](docs/timeline.md#transitions) |
+| **Speech denoising** | `--denoise` runs the mix through DeepFilterNet before the loudness pass, about 20x faster than the audio plays. Speech only: it damages music and overlapping speakers. Not in the released binaries, which refuse it with E424; build it with `--features geneva-cli/denoise` | [docs/cli.md](docs/cli.md#everyday-verbs) |
 | **Colour** | Preserves BT.601/BT.709, reports guesses for untagged material, and tone-maps HDR with BT.2446 | [docs/color.md](docs/color.md) |
 | **Scripts and agents** | `--format json`, field-level diagnostics, deterministic output | [docs/agents.md](docs/agents.md) |
 

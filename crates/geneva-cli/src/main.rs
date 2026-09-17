@@ -1175,12 +1175,15 @@ fn load_timeline(args: &TimelineArgs, probe: bool, measure: bool) -> Result<Load
 /// Resolves timeline text whose asset paths are relative to `root`.
 /// `measure` also decodes the audio of every asset for its report.
 fn load_text(text: &str, root: &Path, probe: bool, measure: bool) -> Loaded {
-    if !probe {
-        return geneva_timeline::load(text);
-    }
-    let info = media::probe_assets(text, root, measure);
-    let mut loaded = geneva_timeline::load_with(text, &info);
-    loaded.diagnostics.extend(info.diagnostics());
+    let mut loaded = if probe {
+        let info = media::probe_assets(text, root, measure);
+        let mut loaded = geneva_timeline::load_with(text, &info);
+        loaded.diagnostics.extend(info.diagnostics());
+        loaded
+    } else {
+        geneva_timeline::load(text)
+    };
+    loaded.diagnostics.extend(unbuilt_features(&loaded));
     loaded.diagnostics.sort_by(|a, b| {
         b.severity
             .cmp(&a.severity)
@@ -1190,6 +1193,47 @@ fn load_text(text: &str, root: &Path, probe: bool, measure: bool) -> Loaded {
         loaded.composition = None;
     }
     loaded
+}
+
+/// Errors for what the document asks for and this binary was not built
+/// with, reported before anything is rendered rather than when the mix
+/// reaches the missing part.
+fn unbuilt_features(loaded: &Loaded) -> Vec<Diagnostic> {
+    #[cfg(feature = "denoise")]
+    {
+        let _ = loaded;
+        Vec::new()
+    }
+    #[cfg(not(feature = "denoise"))]
+    {
+        const MESSAGE: &str = "speech denoising is not built into this binary; build one with `--features geneva-cli/denoise`";
+        let Some(comp) = &loaded.composition else {
+            return Vec::new();
+        };
+        let asks = |a: Option<&geneva_timeline::schema::AudioOutput>| {
+            a.and_then(|a| a.denoise) == Some(true)
+        };
+        // A single-output document leaves `outputs` empty and carries
+        // its audio on the composition.
+        if comp.outputs.is_empty() {
+            return if asks(comp.audio_output.as_ref()) {
+                vec![Diagnostic::error("E424", "/output/audio/denoise", MESSAGE)]
+            } else {
+                Vec::new()
+            };
+        }
+        comp.outputs
+            .iter()
+            .filter(|o| asks(o.audio.as_ref()))
+            .map(|o| {
+                Diagnostic::error(
+                    "E424",
+                    format!("/outputs/{}/audio/denoise", o.name),
+                    MESSAGE,
+                )
+            })
+            .collect()
+    }
 }
 
 fn timeline_dir(path: &Path) -> PathBuf {

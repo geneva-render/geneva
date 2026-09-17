@@ -45,9 +45,10 @@ the format version it was written for.
   is kept, with the model's lag taken off so the sound stays where it
   was. Speech only: it damages music and overlapping speakers. It is
   in the `denoise` cargo feature and not in the default or the released
-  builds, which refuse it with a message; a minute of 48 kHz stereo
-  takes 2.9 s on one core in a release build, and the feature adds
-  25 MB to the stripped binary (31.6 to 56.7 MB).
+  builds, which refuse the document with E424 at `audio/denoise` before
+  rendering anything. A minute of 48 kHz stereo takes 2.9 s on one core
+  in a release build, and the feature adds 25 MB to the stripped binary
+  (31.6 to 56.7 MB).
 - **`--for podcast`.** -16 LUFS and -1 dBTP, as Apple Podcasts asks
   for, with hygiene on. A source is never copied as it is for this
   target, since the hygiene is a change a copy cannot carry.

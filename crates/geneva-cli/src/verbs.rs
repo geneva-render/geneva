@@ -163,7 +163,7 @@ pub struct EncodeArgs {
     pub no_audio: bool,
     /// Denoise the audio as speech with the embedded model (sets
     /// output.audio.denoise). Speech only: it damages music and
-    /// overlapping speakers, and takes about as long as the audio plays.
+    /// overlapping speakers. Runs at about 20x the speed of the audio.
     #[arg(long)]
     pub denoise: bool,
     /// Always decode and re-encode, for frame-accurate cuts.

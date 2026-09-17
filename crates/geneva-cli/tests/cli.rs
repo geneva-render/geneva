@@ -1496,3 +1496,29 @@ fn a_render_reports_progress_in_the_format_it_was_asked_for() {
         0
     );
 }
+
+/// A document asking for what this binary was not built with is refused
+/// at the field, before anything is rendered. With the feature on, the
+/// same document is accepted.
+#[test]
+fn denoise_is_refused_at_the_field_when_it_is_not_built_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("denoise.json");
+    std::fs::write(
+        &path,
+        r##"{"geneva":"0.3","output":{"width":320,"height":240,"fps":25,
+            "audio":{"denoise":true}},
+            "layers":[{"clips":[{"start":"0s","duration":"1s",
+            "source":{"kind":"solid","color":"#000000"}}]}]}"##,
+    )
+    .unwrap();
+    let assert = geneva().args(["validate"]).arg(&path).assert();
+    if cfg!(feature = "denoise") {
+        assert.success();
+    } else {
+        assert
+            .code(1)
+            .stderr(predicate::str::contains("E424"))
+            .stderr(predicate::str::contains("/output/audio/denoise"));
+    }
+}
