@@ -9,6 +9,14 @@ the format version it was written for.
 
 ### Added
 
+- **Markup redrawn from kept pictures.** An element inside markup that
+  only moves is painted once instead of once a frame. A group's boxes
+  are painted where they sit and its transform is applied when the
+  group is composited, so a drifting element paints the same pixels
+  every frame; those are now kept and the frame copies out the part it
+  needs. The opening example's markup goes from 205 ms a frame to
+  153 ms at 960x540, for about 98 MB more memory, and every frame is
+  byte for byte what it was.
 - **A copied picture with encoded sound.** An output whose mix is brought
   to a loudness, cleaned or denoised no longer drags the picture through
   the encoder with it. When nothing else asks for a re-encode, the video

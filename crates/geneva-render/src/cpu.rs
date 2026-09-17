@@ -52,6 +52,9 @@ struct Scene {
     images: HashMap<String, Image>,
     /// The box as drawn, kept when no animation inside can change it.
     still: Option<Image>,
+    /// Pictures of the groups inside that do not change from frame to
+    /// frame, which an animated source is redrawn from.
+    groups: crate::html::GroupCache,
 }
 
 impl<A: AssetSource> std::fmt::Debug for CpuRenderer<A> {
@@ -246,6 +249,7 @@ impl<A: AssetSource> CpuRenderer<A> {
                             prepared,
                             images,
                             still: None,
+                            groups: crate::html::GroupCache::default(),
                         },
                     );
                 }
@@ -262,8 +266,12 @@ impl<A: AssetSource> CpuRenderer<A> {
                             &mut self.text,
                             &scene.images,
                             0.0,
+                            &mut scene.groups,
                         )
                         .map_err(failed)?;
+                        // Drawn once and kept whole; the pictures of the
+                        // groups inside it are not needed again.
+                        scene.groups.clear();
                         scene.still = Some(drawn);
                     }
                     Paint::Image(Cow::Borrowed(scene.still.as_ref().expect("drawn above")))
@@ -274,6 +282,7 @@ impl<A: AssetSource> CpuRenderer<A> {
                         &mut self.text,
                         &scene.images,
                         local,
+                        &mut scene.groups,
                     )
                     .map_err(failed)?;
                     Paint::Image(Cow::Owned(drawn))

@@ -6,7 +6,7 @@
 //! not already do: a rounded rectangle is a signed distance field, and
 //! text goes through the same engine every other text source uses.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use geneva_color::{Color, LinearRgba, Transfer};
 use geneva_html::layout::Rectangle;
@@ -140,6 +140,7 @@ pub fn render(
     text: &mut TextEngine,
     images: &HashMap<String, Image>,
     t: f64,
+    cache: &mut GroupCache,
 ) -> Result<Image, String> {
     let mut context = Context {
         text,
@@ -176,7 +177,7 @@ pub fn render(
                 .filter(|tr| !tr.is_identity())
         })
         .collect();
-    let mut surface = paint(&laid, &transforms, context.text, images);
+    let mut surface = paint(&laid, &transforms, context.text, images, cache);
     to_linear(&mut surface);
     Ok(surface)
 }
@@ -334,10 +335,13 @@ fn group_bounds(
     laid: &Laid,
     transforms: &[Option<Transform>],
     surface: (f64, f64),
-) -> (GroupBounds, GroupBounds) {
+) -> (GroupBounds, GroupBounds, GroupBounds) {
     let n = laid.groups.len();
     let mut own: GroupBounds = vec![None; n];
     let mut placed: GroupBounds = vec![None; n];
+    // What each group covers before its parent's window cuts it down:
+    // the most a cached picture of it can usefully hold.
+    let mut natural: GroupBounds = vec![None; n];
     for b in &laid.boxes {
         if b.opacity <= 0.0 {
             continue;
@@ -386,9 +390,10 @@ fn group_bounds(
             Some(tr) => Some(padded(inverted(w, centre_of(group.rect), tr), reach)),
             None => Some(padded(w, reach)),
         });
+        natural[g] = Some(padded(r, reach));
         own[g] = visible.and_then(|v| intersect(padded(r, reach), v));
     }
-    (own, placed)
+    (own, placed, natural)
 }
 
 fn rect_bounds(rect: Rectangle) -> Bounds {
@@ -476,6 +481,212 @@ impl Layer {
     }
 }
 
+/// A group's picture, painted once and kept while nothing in it
+/// changes. `origin` is where its top-left pixel sits on the surface,
+/// as a [`Layer`]'s does.
+struct Cached {
+    /// The boxes that produced the picture. They are compared, not
+    /// hashed: equality is exact, costs nothing when the first field
+    /// differs, and there is no bit pattern of an `f32` to get right.
+    boxes: Vec<Painted>,
+    image: Image,
+    origin: (i64, i64),
+}
+
+impl Cached {
+    /// Whether the picture covers `want`, in surface pixels.
+    fn covers(&self, want: [i64; 4]) -> bool {
+        let (w, h) = (i64::from(self.image.width), i64::from(self.image.height));
+        want[0] >= self.origin.0
+            && want[1] >= self.origin.1
+            && want[2] <= self.origin.0 + w
+            && want[3] <= self.origin.1 + h
+    }
+
+    /// The part of the picture covering `want`, as a layer to composite.
+    fn window(&self, group: usize, want: [i64; 4]) -> Layer {
+        let width = (want[2] - want[0]).max(0) as u32;
+        let height = (want[3] - want[1]).max(0) as u32;
+        let mut pixels = Vec::with_capacity(width as usize * height as usize);
+        let stride = self.image.width as usize;
+        for y in 0..i64::from(height) {
+            let row = (want[1] + y - self.origin.1) as usize * stride;
+            let from = row + (want[0] - self.origin.0) as usize;
+            pixels.extend_from_slice(&self.image.pixels[from..from + width as usize]);
+        }
+        Layer {
+            group,
+            image: Image {
+                width,
+                height,
+                pixels,
+                content: None,
+            },
+            origin: (want[0], want[1]),
+        }
+    }
+}
+
+/// Pictures of groups that do not change from frame to frame, held
+/// between calls to [`render`] for one markup source.
+///
+/// A group's boxes are painted in the surface's coordinates and only
+/// then moved by its transform, so an element that drifts and scales
+/// paints the same pixels every frame; what changes is the window its
+/// parent can show, which slides and shrinks across them. The picture
+/// is therefore painted over the whole of what the group covers rather
+/// than over the window one frame needs, and each frame copies its
+/// window out. Painting the lot costs about three windows and then
+/// holds for the length of the animation, where a picture cut to one
+/// frame's window would be wrong by the next.
+#[derive(Default)]
+pub struct GroupCache {
+    entries: HashMap<usize, Cached>,
+    /// Misses in a row, per group, and past [`STRIKES`] the group is
+    /// not painted into the cache again.
+    give_up: HashMap<usize, u8>,
+    bytes: usize,
+}
+
+/// Pictures below this many pixels are not worth keeping: the copy out
+/// of the cache would cost about what painting them does.
+const MIN_PIXELS: i64 = 64 * 64;
+
+/// What one markup source may hold. Each thread rendering frames has a
+/// cache of its own, so this is what one costs.
+const BUDGET: usize = 96 << 20;
+
+/// How many times a group may be painted without its picture ever being
+/// used again before it is given up on. An element whose own boxes
+/// animate, a letter changing colour, never reuses one, and painting it
+/// a size larger than the frame needs is worse than not trying.
+const STRIKES: u8 = 3;
+
+impl GroupCache {
+    /// Forgets everything, freeing the pictures.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.give_up.clear();
+        self.bytes = 0;
+    }
+
+    fn insert(&mut self, group: usize, entry: Cached) {
+        if let Some(old) = self.entries.remove(&group) {
+            self.bytes -= old.image.pixels.len() * size_of::<LinearRgba>();
+        }
+        self.bytes += entry.image.pixels.len() * size_of::<LinearRgba>();
+        self.entries.insert(group, entry);
+    }
+}
+
+/// The integer buffer a group needs, as [`Layer::over`] would bound it.
+fn buffer_rect(bounds: Option<Bounds>, surface: (u32, u32)) -> Option<[i64; 4]> {
+    let b = bounds?;
+    let (w, h) = (f64::from(surface.0), f64::from(surface.1));
+    let r = [
+        b[0].floor().clamp(-w, 2.0 * w) as i64,
+        b[1].floor().clamp(-h, 2.0 * h) as i64,
+        b[2].ceil().clamp(-w, 2.0 * w) as i64,
+        b[3].ceil().clamp(-h, 2.0 * h) as i64,
+    ];
+    (r[2] > r[0] && r[3] > r[1]).then_some(r)
+}
+
+/// A group whose picture can be kept: one with no group inside it, so
+/// that its picture is its own boxes and nothing else. A group's own
+/// transform is applied when it is composited rather than when it is
+/// painted, so it does not stop its picture being kept, which is the
+/// point: a drifting element paints the same pixels every frame.
+///
+/// A group that holds other groups is not kept. Its picture is those
+/// groups composited into it, each with its own opacity, blur and
+/// transform, so reusing it would mean reusing theirs; and the boxes
+/// that would have to be compared for it are the whole subtree's.
+fn is_leaf(laid: &Laid, g: usize) -> bool {
+    !laid.groups.iter().any(|other| other.parent == Some(g))
+}
+
+/// Paints, or repaints, the groups whose pictures are worth keeping, and
+/// returns which ones the caller may take from the cache.
+fn fill_cache(
+    cache: &mut GroupCache,
+    laid: &Laid,
+    own: &[Option<Bounds>],
+    natural: &[Option<Bounds>],
+    surface: (u32, u32),
+    text: &mut TextEngine,
+    images: &HashMap<String, Image>,
+) -> HashSet<usize> {
+    let mut served = HashSet::new();
+    for g in 0..laid.groups.len() {
+        let Some(want) = buffer_rect(own[g], surface) else {
+            continue;
+        };
+        if (want[2] - want[0]) * (want[3] - want[1]) < MIN_PIXELS {
+            continue;
+        }
+        if !is_leaf(laid, g) {
+            continue;
+        }
+        let boxes: Vec<Painted> = laid
+            .boxes
+            .iter()
+            .filter(|b| b.group == Some(g) && b.opacity > 0.0)
+            .cloned()
+            .collect();
+        if boxes.is_empty() {
+            continue;
+        }
+        // Only the boxes are compared. A group's own opacity, blur and
+        // clips are read when its picture is composited rather than when
+        // it is painted, so they change nothing in the picture, and its
+        // transform is the whole point: the picture stays put and the
+        // transform moves it.
+        let fresh = cache
+            .entries
+            .get(&g)
+            .is_some_and(|c| c.covers(want) && c.boxes == boxes);
+        if !fresh {
+            let strikes = cache.give_up.entry(g).or_default();
+            if *strikes >= STRIKES {
+                continue;
+            }
+            *strikes += 1;
+            // The whole of what the group covers, not just the window
+            // this frame needs. The window slides and shrinks as the
+            // element drifts and scales, so one that fits the frame
+            // would be wrong by the next; painting the lot once costs
+            // about three of those and then never again.
+            let Some(region) = natural[g] else {
+                continue;
+            };
+            let mut layer = Layer::over(g, Some(region), surface);
+            let bytes = layer.image.pixels.len() * size_of::<LinearRgba>();
+            if cache.bytes + bytes > BUDGET {
+                continue;
+            }
+            for b in &boxes {
+                let moved = shifted(b, layer.origin);
+                paint_one(&mut layer.image, &moved, text, images);
+            }
+            let entry = Cached {
+                boxes,
+                image: layer.image,
+                origin: layer.origin,
+            };
+            // The clamp in `Layer::over` can cut a picture that reaches
+            // far past the surface down to less than the frame asks for.
+            if !entry.covers(want) {
+                continue;
+            }
+            cache.insert(g, entry);
+        }
+        cache.give_up.remove(&g);
+        served.insert(g);
+    }
+    served
+}
+
 /// The groups a box is inside, outermost first.
 fn chain_of(laid: &Laid, group: Option<usize>) -> Vec<usize> {
     let mut chain = Vec::new();
@@ -512,10 +723,12 @@ fn paint(
     transforms: &[Option<Transform>],
     text: &mut TextEngine,
     images: &HashMap<String, Image>,
+    cache: &mut GroupCache,
 ) -> Image {
     let width = laid.size.0.ceil().max(1.0) as u32;
     let height = laid.size.1.ceil().max(1.0) as u32;
-    let (own, placed) = group_bounds(laid, transforms, (f64::from(width), f64::from(height)));
+    let (own, placed, natural) =
+        group_bounds(laid, transforms, (f64::from(width), f64::from(height)));
     // What the surface can be marked in: its own boxes and the top-level
     // groups where they land. The compositor reads that rather than all
     // of it.
@@ -545,7 +758,11 @@ fn paint(
         pixels: vec![LinearRgba::TRANSPARENT; width as usize * height as usize],
         content,
     };
+    let served = fill_cache(cache, laid, &own, &natural, (width, height), text, images);
     let mut stack: Vec<Layer> = Vec::new();
+    // A group taken from the cache: its own boxes are already in the
+    // picture, so they are not painted again.
+    let mut serving: Option<usize> = None;
     // A group that would not show (no opacity, no size, nothing in it)
     // is skipped whole, boxes and inner groups alike.
     let mut skipping: Option<usize> = None;
@@ -559,6 +776,9 @@ fn paint(
             if skipping == Some(layer.group) {
                 skipping = None;
                 continue;
+            }
+            if serving == Some(layer.group) {
+                serving = None;
             }
             close(layer, laid, transforms, &placed, &mut stack, &mut surface);
         }
@@ -574,11 +794,21 @@ fn paint(
             if hidden {
                 skipping.get_or_insert(g);
                 stack.push(Layer::over(g, None, (width, height)));
-            } else {
-                stack.push(Layer::over(g, own[g], (width, height)));
+                continue;
+            }
+            let ready = (serving.is_none() && served.contains(&g))
+                .then(|| buffer_rect(own[g], (width, height)))
+                .flatten()
+                .and_then(|want| cache.entries.get(&g).map(|c| c.window(g, want)));
+            match ready {
+                Some(layer) => {
+                    serving = Some(g);
+                    stack.push(layer);
+                }
+                None => stack.push(Layer::over(g, own[g], (width, height))),
             }
         }
-        if skipping.is_some() || b.opacity <= 0.0 {
+        if skipping.is_some() || serving.is_some() || b.opacity <= 0.0 {
             continue;
         }
         match stack.last_mut() {
@@ -593,6 +823,9 @@ fn paint(
         if skipping == Some(layer.group) {
             skipping = None;
             continue;
+        }
+        if serving == Some(layer.group) {
+            serving = None;
         }
         close(layer, laid, transforms, &placed, &mut stack, &mut surface);
     }
