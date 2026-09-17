@@ -7,6 +7,8 @@ footage, so these run as they are.
 | --- | --- | --- |
 | `lower-third.json` | A name card written as HTML and CSS (`card.html`) sliding in on its own `@keyframes`, with captions from `words.json` under it. | `geneva render examples/lower-third.json -o dragon.mp4` |
 | `card.html` | The card alone. Open it in a browser; it looks and moves the same. | |
+| `opening.json` | A 13 s title sequence written in HTML (`opening.html`) over `shibuya.mp4`: typed-on text, a gradient sweep, blur, a diagonal wipe that reveals the footage, a fade to black. | `geneva render examples/opening.json -o opening.mp4` |
+| `opening.html` | The sequence alone: per-character animations, `background-clip: text`, `clip-path`, `steps()` and `linear()`. Opens in a browser at 960 by 540. | |
 | `words.json` | A whisper transcript, pasted in as it came out. | `geneva subtitles examples/iss.mp4 --burn examples/words.json --highlight "#ffd233" -o out.mp4` |
 | `captions.json` | The same transcript as a layer, plus a second layer from a SubRip file. | `geneva render examples/captions.json -o captioned.mp4` |
 | `social-reframe.json` | 16:9 fitted to 9:16 over a blurred copy of itself, captioned. | `geneva render examples/social-reframe.json -o reel.mp4` |
@@ -223,3 +225,11 @@ Space Station", from NASA's public library. NASA material is generally not
 subject to copyright. The excerpt was trimmed and re-encoded for size; the
 original is at
 <https://images.nasa.gov/details/Earth%20Views%20from%20the%20International%20Space%20Station>.
+
+`shibuya.mp4` is five seconds of "Shibuya Crossing, Tokyo, Japan
+(video)" by Basile Morin, from Wikimedia Commons, licensed CC BY-SA 4.0
+(<https://creativecommons.org/licenses/by-sa/4.0/>). The excerpt was
+trimmed, scaled to 960 by 540 and re-encoded without its sound; the
+original is at
+<https://commons.wikimedia.org/wiki/File:Shibuya_Crossing,_Tokyo,_Japan_(video).webm>.
+Share-alike applies to anything built on it.

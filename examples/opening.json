@@ -1,0 +1,21 @@
+{
+  "geneva": "0.3",
+  "output": { "width": 960, "height": 540, "fps": 30, "duration": "13s", "background": "black" },
+
+  "assets": {
+    "opening": { "kind": "html",  "src": "opening.html" },
+    "shibuya": { "kind": "video", "src": "shibuya.mp4" }
+  },
+
+  "layers": [
+    { "id": "footage", "clips": [ {
+        "source": { "kind": "video", "asset": "shibuya", "audio": false },
+        "fit": "cover",
+        "start": "8.4s", "duration": "4.6s",
+        "transition_out": { "kind": "fade", "duration": "0.8s", "color": "black" } } ] },
+
+    { "id": "opening", "clips": [ {
+        "source": { "kind": "html", "asset": "opening" },
+        "duration": "9.7s" } ] }
+  ]
+}
