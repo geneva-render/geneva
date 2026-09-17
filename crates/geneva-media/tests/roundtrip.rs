@@ -104,6 +104,7 @@ fn mono_output_is_written_as_mono() {
             bitrate_kbps: 96,
             sample_rate: 44100,
             channels: 1,
+            loudness: None,
         }),
     };
     let mut enc = Encoder::new(&out, settings).unwrap();
@@ -163,6 +164,7 @@ fn encoded_solid_color_survives_the_round_trip() {
             bitrate_kbps: 96,
             sample_rate: 48000,
             channels: 2,
+            loudness: None,
         }),
     };
     let mut enc = Encoder::new(&out, settings).unwrap();
@@ -364,6 +366,7 @@ fn audio_lands_at_its_timeline_position_in_the_output_file() {
             bitrate_kbps: 96,
             sample_rate: 48000,
             channels: 2,
+            loudness: None,
         }),
     };
     let mut enc = Encoder::new(&out, settings).unwrap();
@@ -676,6 +679,7 @@ fn audio_only_outputs_round_trip_through_wav() {
             bitrate_kbps: 0,
             sample_rate: 48000,
             channels: 2,
+            loudness: None,
         }),
     };
     let mut enc = Encoder::new(&out, settings).unwrap();
@@ -1014,6 +1018,7 @@ fn every_audio_codec_round_trips_a_tone() {
                 bitrate_kbps: 160,
                 sample_rate: 48000,
                 channels: 2,
+                loudness: None,
             }),
         };
         let mut enc = Encoder::new(&out, settings).unwrap();

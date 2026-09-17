@@ -1,0 +1,20 @@
+{
+  "geneva": "0.3",
+  "output": {
+    "width": 64,
+    "height": 36,
+    "fps": 25,
+    "duration": "2s",
+    "audio": {
+      "sample_rate": 16000,
+      "loudness": { "target_lufs": -16, "true_peak_dbtp": -1 }
+    }
+  },
+  "assets": {
+    "tone": { "src": "loudness-tone/tone.wav" }
+  },
+  "layers": [],
+  "audio": [
+    { "clips": [ { "asset": "tone", "duration": "2s" } ] }
+  ]
+}

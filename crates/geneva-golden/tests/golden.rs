@@ -30,6 +30,14 @@ fn golden_scenes_match_their_references() {
                         if f.passed { "ok" } else { "FAIL" }
                     );
                 }
+                if let Some(a) = &outcome.audio {
+                    eprintln!(
+                        "{} audio: {} ({})",
+                        outcome.name,
+                        if a.passed() { "ok" } else { "FAIL" },
+                        a.summary()
+                    );
+                }
                 if !outcome.passed() {
                     failed.push(outcome.name);
                 }

@@ -113,7 +113,7 @@ pub struct Output {
 }
 
 /// Audio output format.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AudioOutput {
     /// Sample rate in Hz. Defaults to 48000.
@@ -122,6 +122,26 @@ pub struct AudioOutput {
     /// Channel count: 1 (mono) or 2 (stereo). Defaults to 2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channels: Option<u8>,
+    /// A loudness to bring the mix to. Unset, the mix is written at
+    /// whatever level its sources add up to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loudness: Option<Loudness>,
+}
+
+/// A loudness target for the mix, measured as ITU-R BS.1770-4 (EBU R128)
+/// measures it: K-weighted, gated, over the whole output. The mix is
+/// read once to measure it, then written with one gain, and a limiter
+/// holds the true peak under its ceiling. Platforms normalise to -14
+/// LUFS (YouTube, TikTok, Instagram) or ask for -16 (podcasts);
+/// broadcast asks for -23 (EBU) or -24 (ATSC).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Loudness {
+    /// Integrated loudness to aim for, in LUFS: -40 to -5.
+    pub target_lufs: f64,
+    /// Ceiling for the true peak in dBTP, -20 to 0. Defaults to -1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub true_peak_dbtp: Option<f64>,
 }
 
 /// One file of a multi-output render, made from the composition.

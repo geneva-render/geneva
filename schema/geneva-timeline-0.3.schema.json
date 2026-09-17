@@ -359,9 +359,43 @@
           "minimum": 0,
           "maximum": 255,
           "description": "Channel count: 1 (mono) or 2 (stereo). Defaults to 2."
+        },
+        "loudness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Loudness"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A loudness to bring the mix to. Unset, the mix is written at\nwhatever level its sources add up to."
         }
       },
       "description": "Audio output format."
+    },
+    "Loudness": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "target_lufs": {
+          "type": "number",
+          "format": "double",
+          "description": "Integrated loudness to aim for, in LUFS: -40 to -5."
+        },
+        "true_peak_dbtp": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Ceiling for the true peak in dBTP, -20 to 0. Defaults to -1."
+        }
+      },
+      "required": [
+        "target_lufs"
+      ],
+      "description": "A loudness target for the mix, measured as ITU-R BS.1770-4 (EBU R128)\nmeasures it: K-weighted, gated, over the whole output. The mix is\nread once to measure it, then written with one gain, and a limiter\nholds the true peak under its ceiling. Platforms normalise to -14\nLUFS (YouTube, TikTok, Instagram) or ask for -16 (podcasts);\nbroadcast asks for -23 (EBU) or -24 (ATSC)."
     },
     "Encode": {
       "type": "object",

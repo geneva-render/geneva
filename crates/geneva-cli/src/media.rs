@@ -430,7 +430,9 @@ pub fn probe_assets(text: &str, root: &Path) -> ProbedAssets {
     out
 }
 
-pub use imp::{copy_sources, describe, probe, read_subtitles, render, render_outputs, renderer};
+pub use imp::{
+    copy_sources, describe, measure_audio, probe, read_subtitles, render, render_outputs, renderer,
+};
 
 #[cfg(feature = "media")]
 mod imp {
@@ -439,6 +441,7 @@ mod imp {
     use std::time::Instant;
 
     use anyhow::{Context, Result};
+    use geneva_media::mix::LoudnessReport;
     use geneva_media::{
         AudioSettings, EncodeSettings, Encoder, MediaAssets, MediaInfo, VideoSettings,
     };
@@ -631,6 +634,7 @@ mod imp {
                                 .and_then(|a| a.channels)
                                 .unwrap_or(2)
                                 .clamp(1, 2),
+                            loudness: o.audio.as_ref().and_then(|a| a.loudness.clone()),
                         }),
                         subtitles: Vec::new(),
                         fast_start: true,
@@ -734,6 +738,7 @@ mod imp {
                                 .and_then(|a| a.channels)
                                 .unwrap_or(2)
                                 .clamp(1, 2),
+                            loudness: o.audio.as_ref().and_then(|a| a.loudness.clone()),
                         })
                     };
                     let settings = EncodeSettings {
@@ -847,6 +852,7 @@ mod imp {
                 let encoder = sink.encoder.take().expect("encoder not yet started");
                 video_feeds.push(spawn_feed(
                     scope,
+                    &sink.name,
                     encoder,
                     sink.has_audio.then_some(48000),
                     comp,
@@ -858,6 +864,7 @@ mod imp {
                 let encoder = sink.encoder.take().expect("encoder not yet started");
                 audio_feeds.push(spawn_feed(
                     scope,
+                    &sink.name,
                     encoder,
                     Some(sink.sample_rate),
                     comp,
@@ -1039,11 +1046,17 @@ mod imp {
             for feed in video_feeds.into_iter().chain(audio_feeds) {
                 drop(feed.tx);
                 if let Some(a) = feed.audio {
-                    if let Err(e) = a.join().unwrap_or_else(|p| std::panic::resume_unwind(p)) {
-                        render_error.get_or_insert(RenderError::Asset {
-                            id: dir.display().to_string(),
-                            reason: e.to_string(),
-                        });
+                    match a.join().unwrap_or_else(|p| std::panic::resume_unwind(p)) {
+                        Err(e) => {
+                            render_error.get_or_insert(RenderError::Asset {
+                                id: dir.display().to_string(),
+                                reason: e.to_string(),
+                            });
+                        }
+                        Ok(Some(report)) => {
+                            notes.push(format!("{}: {}", feed.name, loudness_note(&report)));
+                        }
+                        Ok(None) => {}
                     }
                 }
                 match feed
@@ -1178,19 +1191,51 @@ mod imp {
         ))
     }
 
+    /// One line on what a loudness target measured and did.
+    fn loudness_note(r: &LoudnessReport) -> String {
+        let Some(measured) = r.measured_lufs else {
+            return format!(
+                "loudness: the mix is silent, so it was left as it is (target {} LUFS)",
+                r.target_lufs
+            );
+        };
+        let mut line = format!(
+            "loudness: measured {measured:.1} LUFS, {:+.1} dB to reach {} LUFS, true peak held under {} dBTP",
+            r.gain_db, r.target_lufs, r.ceiling_dbtp
+        );
+        if let Some(result) = r.result_lufs {
+            if (result - r.target_lufs).abs() > 0.3 {
+                use std::fmt::Write;
+                let _ = write!(
+                    line,
+                    "; written at {result:.1} LUFS, since the limiter took the peaks that carried the rest"
+                );
+            }
+        }
+        line
+    }
+
     /// Placeholder kept for the sink loop above.
     /// One encoder thread per file, fed through a channel; spare plane
     /// buffers come back to be filled again.
     struct Feed<'scope> {
+        /// The entry's name in `outputs`, for its notes.
+        name: String,
         tx: std::sync::mpsc::SyncSender<Msg>,
         spare_rx: std::sync::mpsc::Receiver<geneva_media::convert::Planes>,
         pool: geneva_media::convert::PlanePool,
         worker: std::thread::ScopedJoinHandle<'scope, Result<Encoder, geneva_media::MediaError>>,
-        audio: Option<std::thread::ScopedJoinHandle<'scope, Result<(), geneva_media::MediaError>>>,
+        audio: Option<
+            std::thread::ScopedJoinHandle<
+                'scope,
+                Result<Option<LoudnessReport>, geneva_media::MediaError>,
+            >,
+        >,
     }
 
     fn spawn_feed<'scope, 'env>(
         scope: &'scope std::thread::Scope<'scope, 'env>,
+        name: &str,
         mut encoder: Encoder,
         sample_rate: Option<u32>,
         comp: &'env Composition,
@@ -1215,21 +1260,25 @@ mod imp {
         let audio = audio_encoder.map(|mut enc| {
             let tx = tx.clone();
             let rate = sample_rate.expect("audio comes with a rate");
-            scope.spawn(move || -> Result<(), geneva_media::MediaError> {
-                let mut mixer = geneva_media::mix::Mixer::new(comp, root, rate);
-                while let Some(chunk) = mixer.next_block(rate as usize)? {
-                    let packets = enc.push(&chunk)?;
-                    if tx.send(Msg::Audio(packets, enc.time())).is_err() {
-                        return Ok(());
+            scope.spawn(
+                move || -> Result<Option<LoudnessReport>, geneva_media::MediaError> {
+                    let mut mixer =
+                        geneva_media::mix::Mixer::for_output(comp, root, enc.settings());
+                    while let Some(chunk) = mixer.next_block(rate as usize)? {
+                        let packets = enc.push(&chunk)?;
+                        if tx.send(Msg::Audio(packets, enc.time())).is_err() {
+                            return Ok(None);
+                        }
                     }
-                }
-                let time = enc.time();
-                let packets = enc.finish()?;
-                let _ = tx.send(Msg::Audio(packets, time));
-                Ok(())
-            })
+                    let time = enc.time();
+                    let packets = enc.finish()?;
+                    let _ = tx.send(Msg::Audio(packets, time));
+                    Ok(mixer.loudness_report().cloned())
+                },
+            )
         });
         Feed {
+            name: name.to_owned(),
             tx,
             spare_rx,
             pool: geneva_media::convert::PlanePool::default(),
@@ -1452,8 +1501,10 @@ mod imp {
                 }
                 Ok(encoder)
             });
-            let mut audio = audio_encoder
-                .map(|(enc, rate)| (enc, rate, geneva_media::mix::Mixer::new(comp, root, rate)));
+            let mut audio = audio_encoder.map(|(enc, rate)| {
+                let mixer = geneva_media::mix::Mixer::for_output(comp, root, enc.settings());
+                (enc, rate, mixer)
+            });
             let mut renderer =
                 CpuRenderer::new(MediaAssets::new(root).keep_hdr(comp.color.is_hdr()));
             let mut frame = geneva_render::Frame::new(0, 0, geneva_color::Color::BLACK);
@@ -1592,6 +1643,14 @@ mod imp {
 
     pub fn probe(path: &Path) -> Result<MediaInfo> {
         geneva_media::probe(path).with_context(|| format!("probing {}", path.display()))
+    }
+
+    /// The integrated loudness (`None` for silence) and true peak in dBTP
+    /// of a file's audio; `None` for a file without audio.
+    pub fn measure_audio(path: &Path) -> Result<Option<(Option<f64>, f64)>> {
+        let levels = geneva_media::measure_audio(path)
+            .with_context(|| format!("measuring the audio of {}", path.display()))?;
+        Ok(levels.map(|l| (l.lufs, l.true_peak_dbtp)))
     }
 
     pub fn renderer(root: std::path::PathBuf) -> CpuRenderer<MediaAssets> {
@@ -1752,6 +1811,7 @@ mod imp {
                 bitrate_kbps: audio.and_then(|a| a.bitrate_kbps).unwrap_or(160),
                 sample_rate,
                 channels,
+                loudness: comp.audio_output.as_ref().and_then(|a| a.loudness.clone()),
             })
         };
         let video_settings = if container.is_audio_only() {
@@ -2040,48 +2100,53 @@ mod imp {
             });
             let copy_worker = copied_audio.as_ref().map(|copy| {
                 let tx = tx.clone();
-                scope.spawn(move || -> Result<(), geneva_media::MediaError> {
-                    let mut grid = geneva_media::AudioGrid::default();
-                    for segment in &copy.segments {
-                        let mut batch = Vec::with_capacity(64);
-                        let mut stopped = false;
-                        geneva_media::read_copied_audio(segment, &mut grid, &mut |p| {
-                            batch.push(p);
-                            if batch.len() < 64 {
-                                return true;
+                scope.spawn(
+                    move || -> Result<Option<LoudnessReport>, geneva_media::MediaError> {
+                        let mut grid = geneva_media::AudioGrid::default();
+                        for segment in &copy.segments {
+                            let mut batch = Vec::with_capacity(64);
+                            let mut stopped = false;
+                            geneva_media::read_copied_audio(segment, &mut grid, &mut |p| {
+                                batch.push(p);
+                                if batch.len() < 64 {
+                                    return true;
+                                }
+                                stopped = tx
+                                    .send(Msg::CopiedAudio(std::mem::take(&mut batch)))
+                                    .is_err();
+                                !stopped
+                            })?;
+                            if stopped
+                                || (!batch.is_empty() && tx.send(Msg::CopiedAudio(batch)).is_err())
+                            {
+                                return Ok(None);
                             }
-                            stopped = tx
-                                .send(Msg::CopiedAudio(std::mem::take(&mut batch)))
-                                .is_err();
-                            !stopped
-                        })?;
-                        if stopped
-                            || (!batch.is_empty() && tx.send(Msg::CopiedAudio(batch)).is_err())
-                        {
-                            return Ok(());
                         }
-                    }
-                    Ok(())
-                })
+                        Ok(None)
+                    },
+                )
             });
             let audio_worker = audio_encoder.map(|mut enc| {
                 let tx = tx.clone();
-                scope.spawn(move || -> Result<(), geneva_media::MediaError> {
-                    // A second of audio per message keeps the video frames
-                    // flowing between them; the mix is made a second at a
-                    // time too, so a long timeline never holds it whole.
-                    let mut mixer = geneva_media::mix::Mixer::new(comp, root, sample_rate);
-                    while let Some(chunk) = mixer.next_block(sample_rate as usize)? {
-                        let packets = enc.push(&chunk)?;
-                        if tx.send(Msg::Audio(packets, enc.time())).is_err() {
-                            return Ok(());
+                scope.spawn(
+                    move || -> Result<Option<LoudnessReport>, geneva_media::MediaError> {
+                        // A second of audio per message keeps the video frames
+                        // flowing between them; the mix is made a second at a
+                        // time too, so a long timeline never holds it whole.
+                        let mut mixer =
+                            geneva_media::mix::Mixer::for_output(comp, root, enc.settings());
+                        while let Some(chunk) = mixer.next_block(sample_rate as usize)? {
+                            let packets = enc.push(&chunk)?;
+                            if tx.send(Msg::Audio(packets, enc.time())).is_err() {
+                                return Ok(None);
+                            }
                         }
-                    }
-                    let time = enc.time();
-                    let packets = enc.finish()?;
-                    let _ = tx.send(Msg::Audio(packets, time));
-                    Ok(())
-                })
+                        let time = enc.time();
+                        let packets = enc.finish()?;
+                        let _ = tx.send(Msg::Audio(packets, time));
+                        Ok(mixer.loudness_report().cloned())
+                    },
+                )
             });
             let mut frame = geneva_render::Frame::new(0, 0, geneva_color::Color::BLACK);
             // One output frame, by whichever path applies.
@@ -2198,8 +2263,10 @@ mod imp {
             return Err(e);
         }
         let encoder = joined.map_err(media_err)?;
-        if let Some(Err(e)) = audio_joined {
-            return Err(media_err(e));
+        match audio_joined {
+            Some(Err(e)) => return Err(media_err(e)),
+            Some(Ok(Some(report))) => notes.push(loudness_note(&report)),
+            _ => {}
         }
         progress.finish(total, total, comp.fps.to_f64());
         if base.is_some() && smart.is_none() {
@@ -2239,6 +2306,10 @@ mod imp {
     }
 
     pub fn probe(_: &Path) -> Result<geneva_media::MediaInfo> {
+        Err(unavailable())
+    }
+
+    pub fn measure_audio(_: &Path) -> Result<Option<(Option<f64>, f64)>> {
         Err(unavailable())
     }
 

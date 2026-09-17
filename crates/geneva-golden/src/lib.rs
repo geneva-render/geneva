@@ -9,8 +9,13 @@
 
 #![forbid(unsafe_code)]
 
+mod audio;
 mod compare;
 mod runner;
 
+pub use audio::{AudioComparison, AudioTolerance, Samples, compare_audio, from_wav, to_wav};
 pub use compare::{Comparison, Rgba8Image, Tolerance, compare, diff_image};
-pub use runner::{CaseOutcome, FrameOutcome, GoldenError, discover_cases, run_case};
+pub use runner::{
+    AudioOutcome, CaseOutcome, FrameOutcome, GoldenError, Mix, discover_cases, run_case,
+    run_case_with,
+};

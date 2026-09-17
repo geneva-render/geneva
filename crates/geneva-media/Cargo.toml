@@ -15,6 +15,7 @@ default = ["media"]
 media = ["dep:ffmpeg-next", "ffmpeg-next/static", "dep:libloading"]
 
 [dependencies]
+geneva-audio = { workspace = true }
 geneva-anim = { workspace = true }
 geneva-color = { workspace = true }
 geneva-render = { workspace = true }
@@ -29,6 +30,7 @@ libloading = { version = "0.8.9", optional = true }
 geneva-media-link = { workspace = true }
 
 [dev-dependencies]
+geneva-golden = { workspace = true }
 tempfile = "3.10"
 
 # This crate owns the FFI boundary and needs `unsafe` in one audited place

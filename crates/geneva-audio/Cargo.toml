@@ -1,0 +1,13 @@
+[package]
+name = "geneva-audio"
+description = "Loudness measurement, true peak and limiting for the Geneva engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

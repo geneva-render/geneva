@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/geneva-anim",
+    "crates/geneva-audio",
     "crates/geneva-color",
     "crates/geneva-timeline",
     "crates/geneva-html",
@@ -23,6 +24,7 @@ authors = ["Francesco Benetti <francesco@benetti.dev>"]
 
 [workspace.dependencies]
 geneva-anim = { path = "crates/geneva-anim", version = "0.4.3" }
+geneva-audio = { path = "crates/geneva-audio", version = "0.4.3" }
 geneva-color = { path = "crates/geneva-color", version = "0.4.3" }
 geneva-timeline = { path = "crates/geneva-timeline", version = "0.4.3" }
 geneva-html = { path = "crates/geneva-html", version = "0.4.3" }

@@ -119,6 +119,9 @@ pub struct AudioSettings {
     /// Channels written: 1 or 2. The samples pushed are always stereo;
     /// mono is their downmix.
     pub channels: u8,
+    /// A loudness target for the mix, met by the mixer before the
+    /// samples reach the encoder.
+    pub loudness: Option<geneva_timeline::schema::Loudness>,
 }
 
 /// Picks the container from settings or the file extension.
@@ -1001,6 +1004,7 @@ fn open_stitch_track(
 /// video is encoded; its packets go back through
 /// [`Encoder::write_audio_packets`].
 pub struct AudioEncoder {
+    settings: AudioSettings,
     encoder: codec::encoder::audio::Encoder,
     stream_index: usize,
     time_base: Rational,
@@ -1016,6 +1020,12 @@ pub struct AudioEncoder {
 }
 
 impl AudioEncoder {
+    /// The settings the track was opened with.
+    #[must_use]
+    pub fn settings(&self) -> &AudioSettings {
+        &self.settings
+    }
+
     /// Encodes interleaved stereo samples at the configured rate and
     /// returns the packets ready for the muxer. Samples that do not fill
     /// a whole encoder frame wait for the next call.
@@ -1244,6 +1254,7 @@ impl Encoder {
                 )
                 .map_err(|e| codec_error("audio sample format conversion", e))?;
                 Some(AudioEncoder {
+                    settings: a.clone(),
                     encoder,
                     stream_index,
                     time_base,

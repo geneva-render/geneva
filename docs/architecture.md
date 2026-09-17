@@ -14,13 +14,14 @@ timeline JSON ──parse──▶ Timeline ──resolve──▶ Composition �
 | Crate | Role | Depends on |
 | --- | --- | --- |
 | `geneva-anim` | Easing curves and keyframe tracks. No I/O, no clocks. | serde |
+| `geneva-audio` | The loudness meter of ITU-R BS.1770-4, true peak by oversampling, and a true-peak limiter, on interleaved `f32` frames. No I/O, no clocks. | none |
 | `geneva-color` | Tags, inference, transfer functions, matrices, the `LinearRgba` working format and CSS color parsing. | geneva-anim |
 | `geneva-html` | A strict HTML and CSS subset: parsing, the cascade, block and flexbox layout over taffy, and a display list of boxes, text runs and images. Not a browser; it has no inline layout, float, grid, transition or media query. | geneva-color, taffy |
 | `geneva-timeline` | The format: document types (also the JSON Schema source), exact `Ratio` time, parsing with path-precise errors, resolution into `Composition`, diagnostics. Markup and CSS inside a document are checked here, so their errors carry a path like every other. | geneva-anim, geneva-color, geneva-html |
 | `geneva-render` | The `Renderer` trait, `Frame`, asset loading, `CpuRenderer`, the text engine and the markup painter. | geneva-timeline, geneva-color, geneva-html |
-| `geneva-golden` | Perceptual comparison (per-channel epsilon, PSNR, SSIM), diff images, and the golden case runner. | geneva-render, geneva-timeline |
+| `geneva-golden` | Perceptual comparison (per-channel epsilon, PSNR, SSIM), diff images, audio comparison against a WAV reference on numbers rather than bytes, and the golden case runner. | geneva-render, geneva-timeline, geneva-audio |
 | `geneva-media-link` | The linker directives for the statically built media libraries, read from the prefix's pkg-config files. A build dependency of the two crates below, and nothing else. | none |
-| `geneva-media` | Probe, decode, encode and audio mixing over the bundled media libraries, behind the `media` feature; the only crate that knows about containers and codecs. | geneva-render, geneva-timeline, geneva-color, geneva-anim |
+| `geneva-media` | Probe, decode, encode and audio mixing over the bundled media libraries, behind the `media` feature; the only crate that knows about containers and codecs. The mixer brings a mix to a loudness target with the meter and limiter of `geneva-audio`. | geneva-render, geneva-timeline, geneva-color, geneva-anim, geneva-audio |
 | `geneva-cli` | The `geneva` binary. | everything above |
 
 Lower crates never depend on higher ones. `geneva-timeline` knows nothing

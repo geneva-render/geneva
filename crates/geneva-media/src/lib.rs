@@ -18,6 +18,8 @@ mod codecs;
 pub mod convert;
 mod info;
 #[cfg(feature = "media")]
+mod levels;
+#[cfg(feature = "media")]
 pub mod mix;
 pub mod subtitles;
 
@@ -40,6 +42,8 @@ pub use codecs::{
     system_x264, system_x264_error,
 };
 pub use info::{AudioInfo, MediaInfo, SubtitleInfo, VideoInfo};
+#[cfg(feature = "media")]
+pub use levels::{AudioLevels, measure_audio};
 
 /// Errors from reading or writing media.
 #[derive(Debug, Error)]

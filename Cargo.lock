@@ -557,6 +557,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "geneva-audio"
+version = "0.4.3"
+
+[[package]]
 name = "geneva-cli"
 version = "0.4.3"
 dependencies = [
@@ -590,6 +594,7 @@ dependencies = [
 name = "geneva-golden"
 version = "0.4.3"
 dependencies = [
+ "geneva-audio",
  "geneva-render",
  "geneva-timeline",
  "image",
@@ -612,7 +617,9 @@ version = "0.4.3"
 dependencies = [
  "ffmpeg-next",
  "geneva-anim",
+ "geneva-audio",
  "geneva-color",
+ "geneva-golden",
  "geneva-media-link",
  "geneva-render",
  "geneva-timeline",

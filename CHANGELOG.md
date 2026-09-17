@@ -9,6 +9,27 @@ the format version it was written for.
 
 ### Added
 
+- **Loudness.** `output.audio.loudness` brings the mix to an integrated
+  loudness (`target_lufs`, measured as ITU-R BS.1770-4 and EBU R128
+  measure it: K-weighted, gated, over the whole output) with one gain,
+  and a limiter holds the true peak under `true_peak_dbtp` (default
+  -1). The mix is read once to measure and once to write, so every
+  audio source is decoded twice. The render's notes say what was
+  measured and applied, and where the limiter took some of the gain
+  back, at what loudness the file was written. `--for youtube`,
+  `instagram` and `tiktok` set -14 LUFS and -1 dBTP, which those
+  platforms normalise to, and a source is copied as it is only when its
+  audio already measures within one loudness unit of that; `geneva
+  targets` shows the column. Out-of-range values are E423. The meter,
+  true peak and limiter are a crate of their own, `geneva-audio`, with
+  no dependencies.
+- **Audio in the golden harness.** A golden case can carry
+  `expected/audio.wav`, compared on numbers rather than bytes: the
+  largest sample difference, the level over the whole track and over
+  every 100 ms window, and the integrated loudness, each within a
+  stated tolerance, plus the loudness and true peak the case states.
+  Two cases cover a loudness target that is met exactly and one where
+  the limiter holds the peaks.
 - **Gradients in markup.** `background` takes `linear-gradient()` and
   `radial-gradient()` as well as a colour: an angle or a `to` side or
   corner, stops with optional positions, and a circle or ellipse `at` a

@@ -94,6 +94,7 @@ fn shared_audio(inputs: &[&Input]) -> Option<geneva_timeline::schema::AudioOutpu
     Some(geneva_timeline::schema::AudioOutput {
         sample_rate: Some(sample_rate),
         channels: Some(u8::try_from(channels.min(2)).expect("at most 2")),
+        loudness: None,
     })
 }
 
@@ -1085,6 +1086,7 @@ pub fn audio(input: &Path, op: &AudioOp, speech: bool, args: &EncodeArgs) -> Res
                 tl.output.audio = Some(geneva_timeline::schema::AudioOutput {
                     sample_rate: Some(16000),
                     channels: Some(1),
+                    loudness: None,
                 });
             }
         }
@@ -1239,19 +1241,39 @@ pub fn fits_target(input: &Path, target: &crate::targets::Target) -> Result<Opti
         && fits_size
         && fps <= target.max_fps + 0.01
         && (rate == 0 || cap.is_none_or(|c| rate <= u64::from(c)));
-    Ok(fits.then(|| {
-        format!(
-            "{}×{} H.264{} at {} kb/s",
-            src.width,
-            src.height,
-            if src.audio_codec.is_some() {
-                " with AAC"
-            } else {
-                ""
-            },
-            rate
-        )
-    }))
+    if !fits {
+        return Ok(None);
+    }
+    // A target with a loudness is met only by audio already at it: within
+    // a loudness unit, its peaks under the ceiling. Anything else is
+    // re-encoded so the mix can bring it there.
+    let mut level = String::new();
+    if let (Some((lufs, ceiling)), true) = (target.loudness, src.audio_codec.is_some()) {
+        match media::measure_audio(input)? {
+            Some((Some(measured), peak)) => {
+                if (measured - lufs).abs() > 1.0 || peak > ceiling + 0.1 {
+                    return Ok(None);
+                }
+                level = format!(" at {measured:.1} LUFS");
+            }
+            // Silence has no level to bring anywhere; a file that cannot
+            // be measured is re-encoded so the mix can measure it.
+            Some((None, _)) => {}
+            None => return Ok(None),
+        }
+    }
+    Ok(Some(format!(
+        "{}×{} H.264{}{} at {} kb/s",
+        src.width,
+        src.height,
+        if src.audio_codec.is_some() {
+            " with AAC"
+        } else {
+            ""
+        },
+        level,
+        rate
+    )))
 }
 
 /// A subtitle file to attach, with its language.

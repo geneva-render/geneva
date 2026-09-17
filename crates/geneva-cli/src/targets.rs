@@ -8,7 +8,8 @@
 //! play time from a ladder) is the hosted product's job, not this table's.
 
 use geneva_timeline::schema::{
-    AudioCodec, AudioEncode, Encode, Fit, Source, Timeline, VideoCodec, VideoEncode,
+    AudioCodec, AudioEncode, AudioOutput, Encode, Fit, Loudness, Source, Timeline, VideoCodec,
+    VideoEncode,
 };
 use geneva_timeline::{Diagnostic, Fps, Ratio};
 
@@ -47,6 +48,9 @@ pub struct Target {
     pub keyframe_interval: f64,
     /// AAC bitrate in kb/s.
     pub audio_kbps: u32,
+    /// The loudness the destination normalises to or asks for, as
+    /// (LUFS, true-peak ceiling in dBTP); none where it publishes none.
+    pub loudness: Option<(f64, f64)>,
     /// The platform's duration limit, warned about, never enforced.
     pub max_seconds: Option<f64>,
     /// The platform's size limit, which also caps the bitrate.
@@ -88,6 +92,7 @@ pub const TARGETS: &[Target] = &[
         caps: WEB_CAPS,
         keyframe_interval: 2.0,
         audio_kbps: 128,
+        loudness: None,
         max_seconds: None,
         max_bytes: None,
         checked: "device class: 1080p covers current phones fullscreen at 3x pixel density",
@@ -103,6 +108,7 @@ pub const TARGETS: &[Target] = &[
         caps: WEB_CAPS,
         keyframe_interval: 2.0,
         audio_kbps: 160,
+        loudness: None,
         max_seconds: None,
         max_bytes: None,
         checked: "device class",
@@ -118,6 +124,7 @@ pub const TARGETS: &[Target] = &[
         caps: WEB_CAPS,
         keyframe_interval: 2.0,
         audio_kbps: 160,
+        loudness: None,
         max_seconds: None,
         max_bytes: None,
         checked: "device class",
@@ -133,6 +140,7 @@ pub const TARGETS: &[Target] = &[
         caps: WEB_CAPS,
         keyframe_interval: 2.0,
         audio_kbps: 192,
+        loudness: None,
         max_seconds: None,
         max_bytes: None,
         checked: "device class",
@@ -148,6 +156,7 @@ pub const TARGETS: &[Target] = &[
         caps: WEB_CAPS,
         keyframe_interval: 2.0,
         audio_kbps: 128,
+        loudness: None,
         max_seconds: None,
         max_bytes: None,
         checked: "device class",
@@ -163,9 +172,10 @@ pub const TARGETS: &[Target] = &[
         caps: YOUTUBE_CAPS,
         keyframe_interval: 0.5,
         audio_kbps: 384,
+        loudness: Some((-14.0, -1.0)),
         max_seconds: Some(43_200.0),
         max_bytes: Some(256_000_000_000),
-        checked: "2026-09, support.google.com/youtube/answer/1722171",
+        checked: "2026-09, support.google.com/youtube/answer/1722171; loudness: YouTube normalises playback to -14 LUFS",
     },
     Target {
         name: "instagram",
@@ -178,9 +188,10 @@ pub const TARGETS: &[Target] = &[
         caps: WEB_CAPS,
         keyframe_interval: 2.0,
         audio_kbps: 128,
+        loudness: Some((-14.0, -1.0)),
         max_seconds: Some(900.0),
         max_bytes: Some(4_000_000_000),
-        checked: "2026-09, facebook.com/business/ads-guide/update/video/instagram-reels",
+        checked: "2026-09, facebook.com/business/ads-guide/update/video/instagram-reels; loudness: not published, -14 LUFS is what uploads are measured to be normalised to",
     },
     Target {
         name: "tiktok",
@@ -193,9 +204,10 @@ pub const TARGETS: &[Target] = &[
         caps: WEB_CAPS,
         keyframe_interval: 2.0,
         audio_kbps: 128,
+        loudness: Some((-14.0, -1.0)),
         max_seconds: Some(600.0),
         max_bytes: Some(500_000_000),
-        checked: "2026-09, ads.tiktok.com/help/article/video-ads-specifications",
+        checked: "2026-09, ads.tiktok.com/help/article/video-ads-specifications; loudness: not published, -14 LUFS is what uploads are measured to be normalised to",
     },
     Target {
         name: "x",
@@ -208,6 +220,7 @@ pub const TARGETS: &[Target] = &[
         caps: WEB_CAPS,
         keyframe_interval: 2.0,
         audio_kbps: 128,
+        loudness: None,
         max_seconds: Some(140.0),
         max_bytes: Some(512_000_000),
         checked: "not re-checked (help.x.com refuses automated reads); as published: 2:20, 512 MB, 1920x1200",
@@ -223,6 +236,7 @@ pub const TARGETS: &[Target] = &[
         caps: WEB_CAPS,
         keyframe_interval: 2.0,
         audio_kbps: 128,
+        loudness: None,
         max_seconds: Some(600.0),
         max_bytes: Some(5_000_000_000),
         checked: "not re-checked (help pages not reachable); as published: 10 min, 5 GB, 4096x2304",
@@ -238,6 +252,7 @@ pub const TARGETS: &[Target] = &[
         caps: &[(360, 800), (480, 1500), (720, 2500)],
         keyframe_interval: 2.0,
         audio_kbps: 96,
+        loudness: None,
         max_seconds: None,
         max_bytes: Some(25_000_000),
         checked: "geneva's own budget: 25 MB, the common attachment limit",
@@ -509,6 +524,9 @@ pub fn apply(tl: &mut Timeline, facts: &Facts, opts: &Options<'_>) -> Vec<Diagno
     why.push("fast start".to_owned());
     if facts.audio {
         why.push(format!("AAC {} kb/s 48 kHz stereo", t.audio_kbps));
+        if let Some((lufs, peak)) = t.loudness {
+            why.push(format!("loudness {lufs} LUFS, true peak under {peak} dBTP"));
+        }
     }
 
     // Into the encode block, explicit.
@@ -546,6 +564,17 @@ pub fn apply(tl: &mut Timeline, facts: &Facts, opts: &Options<'_>) -> Vec<Diagno
         });
         audio.codec = Some(AudioCodec::Aac);
         audio.bitrate_kbps = Some(t.audio_kbps);
+        if let Some((lufs, peak)) = t.loudness {
+            let out = tl.output.audio.get_or_insert(AudioOutput {
+                sample_rate: None,
+                channels: None,
+                loudness: None,
+            });
+            out.loudness = Some(Loudness {
+                target_lufs: lufs,
+                true_peak_dbtp: Some(peak),
+            });
+        }
     }
 
     diagnostics.push(Diagnostic::note(
@@ -627,6 +656,7 @@ pub fn table() -> Vec<serde_json::Value> {
                 "bitrate_caps_kbps": t.caps.iter().map(|(l, k)| serde_json::json!({ "lines": l, "kbps": k })).collect::<Vec<_>>(),
                 "keyframe_interval": t.keyframe_interval,
                 "audio_kbps": t.audio_kbps,
+                "loudness": t.loudness.map(|(lufs, peak)| serde_json::json!({ "target_lufs": lufs, "true_peak_dbtp": peak })),
                 "max_seconds": t.max_seconds,
                 "max_bytes": t.max_bytes,
                 "checked": t.checked,
@@ -637,7 +667,7 @@ pub fn table() -> Vec<serde_json::Value> {
 
 /// The table as text.
 pub fn print_table() {
-    println!("target     ceiling     crf b/g/e   audio    limits     about");
+    println!("target     ceiling     crf b/g/e   audio    loudness   limits     about");
     for t in TARGETS {
         let mut limits = Vec::new();
         if let Some(s) = t.max_seconds {
@@ -647,11 +677,13 @@ pub fn print_table() {
             limits.push(human_size(b));
         }
         println!(
-            "{:<10} {:<11} {:<11} {:<8} {:<10} {}",
+            "{:<10} {:<11} {:<11} {:<8} {:<10} {:<10} {}",
             t.name,
             format!("{}x{}", t.max_width, t.max_height),
             format!("{}/{}/{}", t.crf[0], t.crf[1], t.crf[2]),
             format!("{} kb/s", t.audio_kbps),
+            t.loudness
+                .map_or("-".to_owned(), |(lufs, _)| format!("{lufs} LUFS")),
             if limits.is_empty() {
                 "-".to_owned()
             } else {

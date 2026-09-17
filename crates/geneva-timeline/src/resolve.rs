@@ -20,9 +20,9 @@ use crate::motion::{NodeMotion, Play};
 use crate::ratio::Ratio;
 use crate::schema::{
     ACCEPTED_VERSIONS, Asset, AssetKind, AudioOutput, AudioTrack, BlendMode, BoxSize,
-    CaptionPosition, Clip, CompositionDef, Crop, Effect, Encode, FORMAT_VERSION, Fit, Layer, Mask,
-    OutputKind, ShapeKind, Source, TextAlign, TextFill, TextSource, TextStyle, Timeline, Transform,
-    Transition, TransitionKind, VideoCodec, Word,
+    CaptionPosition, Clip, CompositionDef, Crop, Effect, Encode, FORMAT_VERSION, Fit, Layer,
+    Loudness, Mask, OutputKind, ShapeKind, Source, TextAlign, TextFill, TextSource, TextStyle,
+    Timeline, Transform, Transition, TransitionKind, VideoCodec, Word,
 };
 use crate::time::Time;
 use geneva_html::AnimationSpec;
@@ -1171,6 +1171,9 @@ impl Resolver<'_> {
                 );
             }
         }
+        if let Some(loudness) = out.audio.as_ref().and_then(|a| a.loudness.as_ref()) {
+            self.check_loudness(loudness, &out_path.key("audio").key("loudness"));
+        }
         if let Some(video) = out.encode.as_ref().and_then(|e| e.video.as_ref()) {
             let vpath = out_path.key("encode").key("video");
             if video
@@ -1506,6 +1509,9 @@ impl Resolver<'_> {
                 }
                 _ => None,
             };
+            if let Some(loudness) = spec.audio.as_ref().and_then(|a| a.loudness.as_ref()) {
+                self.check_loudness(loudness, &path.key("audio").key("loudness"));
+            }
             resolved.push(ResolvedOutput {
                 name: name.clone(),
                 kind,
@@ -3714,6 +3720,38 @@ or a URL; pass --assets to choose the root",
                 }
                 let first = out[0].value.clone();
                 Track::new(out).unwrap_or_else(|| Track::constant(first))
+            }
+        }
+    }
+
+    /// A loudness target within what a meter can mean: a target between
+    /// -40 and -5 LUFS, a true-peak ceiling between -20 and 0 dBTP.
+    fn check_loudness(&mut self, loudness: &Loudness, path: &Path) {
+        let target = loudness.target_lufs;
+        if !target.is_finite() || !(-40.0..=-5.0).contains(&target) {
+            self.push(
+                Diagnostic::error(
+                    "E423",
+                    path.key("target_lufs"),
+                    format!("{target} is outside the -40 to -5 LUFS a target can be"),
+                )
+                .with_value(json!(target))
+                .with_help(
+                    "platforms normalise to -14 or ask for -16; broadcast asks for -23 or -24",
+                ),
+            );
+        }
+        if let Some(peak) = loudness.true_peak_dbtp {
+            if !peak.is_finite() || !(-20.0..=0.0).contains(&peak) {
+                self.push(
+                    Diagnostic::error(
+                        "E423",
+                        path.key("true_peak_dbtp"),
+                        format!("{peak} is outside the -20 to 0 dBTP a ceiling can be"),
+                    )
+                    .with_value(json!(peak))
+                    .with_help("-1 is what platforms ask for; -2 leaves room for a lossy encoder"),
+                );
             }
         }
     }

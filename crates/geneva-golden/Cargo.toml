@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+geneva-audio = { workspace = true }
 geneva-render = { workspace = true }
 geneva-timeline = { workspace = true }
 image = { workspace = true }

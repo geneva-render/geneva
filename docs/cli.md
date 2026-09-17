@@ -323,19 +323,19 @@ timeline can say the same without the flag. What a particular viewer
 gets, a rendition chosen at play time from a ladder, is not a file's
 property and stays with the hosted product.
 
-| Target | Ceiling | About |
-| --- | --- | --- |
-| `phone` | 1920×1080 | Playback on a phone, fullscreen (covers current screens at 3× pixel density). |
-| `tablet` | 2560×1600 | Playback on a tablet. |
-| `desktop` | 2560×1440 | Playback on a laptop or desktop screen. |
-| `tv` | 3840×2160 | Playback on a television. |
-| `web` | 1920×1080 | A page or player on the open web. |
-| `youtube` | 3840×2160 | Upload to YouTube: high quality, keyframes every half second, AAC 384 kb/s, as its upload guide asks. |
-| `instagram` | 1440×2560, 9:16 | Instagram Reels. |
-| `tiktok` | 1080×1920, 9:16 | TikTok. |
-| `x` | 1920×1200 | A post on X: 2:20 and 512 MB limits. |
-| `linkedin` | 4096×2304 | A native LinkedIn post: 10 minutes and 5 GB limits. |
-| `email` | 1280×720 | An attachment: a 25 MB budget. |
+| Target | Ceiling | Loudness | About |
+| --- | --- | --- | --- |
+| `phone` | 1920×1080 | | Playback on a phone, fullscreen (covers current screens at 3× pixel density). |
+| `tablet` | 2560×1600 | | Playback on a tablet. |
+| `desktop` | 2560×1440 | | Playback on a laptop or desktop screen. |
+| `tv` | 3840×2160 | | Playback on a television. |
+| `web` | 1920×1080 | | A page or player on the open web. |
+| `youtube` | 3840×2160 | -14 LUFS | Upload to YouTube: high quality, keyframes every half second, AAC 384 kb/s, as its upload guide asks; the loudness it normalises playback to. |
+| `instagram` | 1440×2560, 9:16 | -14 LUFS | Instagram Reels. The loudness is not published; -14 is what uploads are measured to be normalised to. |
+| `tiktok` | 1080×1920, 9:16 | -14 LUFS | TikTok. As for Instagram. |
+| `x` | 1920×1200 | | A post on X: 2:20 and 512 MB limits. |
+| `linkedin` | 4096×2304 | | A native LinkedIn post: 10 minutes and 5 GB limits. |
+| `email` | 1280×720 | | An attachment: a 25 MB budget. |
 
 The rules, in order:
 
@@ -369,6 +369,13 @@ The rules, in order:
    video longer than the platform allows (`W411`), a file still larger
    than the limit after encoding (`W412`), an output that is not an MP4
    (`W413`), a budget too small for the length (`W414`).
+8. Where the destination normalises loudness, the mix is brought to its
+   level first (`output.audio.loudness`, see [timeline.md](timeline.md#output)):
+   -14 LUFS with true peaks under -1 dBTP, so the platform has nothing
+   to correct. A source used as it is counts as fitting only when its
+   audio already measures within one loudness unit of that with its
+   peaks under the ceiling; otherwise it is re-encoded. The targets
+   without a number leave the level alone.
 
 The report carries one note (`N410`) with every choice and its reason:
 
@@ -376,6 +383,13 @@ The report carries one note (`N410`) with every choice and its reason:
 note[N410]: target phone: 3840×2160 scaled to 1920×1080 (ceiling 1920×1080);
   CRF 23 (good); H.264 High level 4.0; capped at 10000 kb/s;
   keyframes every 2 s; fast start; AAC 128 kb/s 48 kHz stereo
+```
+
+A loudness target adds what the mix measured and what was done to it
+to the render's notes:
+
+```
+note[N600]: loudness: measured -23.4 LUFS, +9.4 dB to reach -14 LUFS, true peak held under -1 dBTP
 ```
 
 ```sh

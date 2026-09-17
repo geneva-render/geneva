@@ -8,11 +8,12 @@
 use std::path::Path;
 
 use geneva_anim::Track;
-use geneva_timeline::schema::TransitionKind;
+use geneva_audio::{Limiter, Meter};
+use geneva_timeline::schema::{Loudness, TransitionKind};
 use geneva_timeline::{Composition, Ratio, ResolvedLayer, ResolvedSource};
 
 use crate::MediaError;
-use crate::codecs::{AudioReader, AudioStream};
+use crate::codecs::{AudioReader, AudioSettings, AudioStream};
 
 /// Gain is sampled once per block of this many frames.
 const GAIN_BLOCK: usize = 64;
@@ -35,6 +36,7 @@ enum FadeShape {
 }
 
 /// One thing to mix.
+#[derive(Debug, Clone)]
 struct Voice {
     src: String,
     in_: Ratio,
@@ -198,6 +200,67 @@ struct Live {
     opened: bool,
 }
 
+impl Live {
+    /// A voice placed on the output's frame grid, its file not yet open.
+    fn fresh(voice: Voice, rate: u32, total_frames: usize) -> Self {
+        let frame_at = |t: Ratio| (t.to_f64() * f64::from(rate)).round().max(0.0) as usize;
+        let first = frame_at(voice.start);
+        let last = (first + frame_at(voice.end - voice.start)).min(total_frames);
+        Self {
+            voice,
+            first,
+            last,
+            stream: None,
+            silent: false,
+            opened: false,
+        }
+    }
+}
+
+/// What a loudness target did to the mix.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoudnessReport {
+    /// The target, in LUFS.
+    pub target_lufs: f64,
+    /// The true-peak ceiling, in dBTP.
+    pub ceiling_dbtp: f64,
+    /// The mix as its sources add up, or `None` for silence (nothing
+    /// above the meter's absolute gate), which is left as it is.
+    pub measured_lufs: Option<f64>,
+    /// The gain applied, in dB, before the limiter.
+    pub gain_db: f64,
+    /// The mix as written, known once the last block is out. The
+    /// limiter can leave it a little under the target on peaky material.
+    pub result_lufs: Option<f64>,
+}
+
+/// The loudness pass over the mix: measured first, then gained and
+/// limited block by block.
+struct Levelling {
+    spec: Loudness,
+    /// Channels the encoder writes; a mono output is measured as the
+    /// downmix the encoder makes.
+    channels: usize,
+    meter: Meter,
+    limiter: Option<Limiter>,
+    pending: Vec<f32>,
+    exhausted: bool,
+    report: Option<LoudnessReport>,
+}
+
+/// Feeds a stereo block to a meter as the output carries it.
+fn meter_push(meter: &mut Meter, block: &[f32], channels: usize) {
+    if channels == 1 {
+        let mono: Vec<f32> = block
+            .chunks_exact(2)
+            .map(|lr| (lr[0] + lr[1]) * 0.5)
+            .collect();
+        meter.push(&mono);
+    } else {
+        meter.push(block);
+    }
+}
+
 /// Mixes a composition block by block, so that only a block of the output
 /// is ever held: every voice is read forward as the blocks advance. The
 /// mix is a pure function of the composition and the files, like the
@@ -208,6 +271,10 @@ pub struct Mixer {
     total_frames: usize,
     position: usize,
     voices: Vec<Live>,
+    /// The voices as placed, kept only for a loudness target's first
+    /// pass over the mix.
+    template: Vec<Voice>,
+    levelling: Option<Levelling>,
 }
 
 impl Mixer {
@@ -215,22 +282,10 @@ impl Mixer {
     /// voices come up.
     pub fn new(comp: &Composition, root: &Path, rate: u32) -> Self {
         let total_frames = (comp.duration.to_f64() * f64::from(rate)).round() as usize;
-        let frame_at = |t: Ratio| (t.to_f64() * f64::from(rate)).round().max(0.0) as usize;
         let voices = voices(comp)
             .into_iter()
             .filter(|v| v.end > v.start)
-            .map(|voice| {
-                let first = frame_at(voice.start);
-                let last = (first + frame_at(voice.end - voice.start)).min(total_frames);
-                Live {
-                    voice,
-                    first,
-                    last,
-                    stream: None,
-                    silent: false,
-                    opened: false,
-                }
-            })
+            .map(|voice| Live::fresh(voice, rate, total_frames))
             .collect();
         Self {
             root: root.to_path_buf(),
@@ -238,7 +293,84 @@ impl Mixer {
             total_frames,
             position: 0,
             voices,
+            template: Vec::new(),
+            levelling: None,
         }
+    }
+
+    /// The mix for an output as its audio settings describe it: at its
+    /// rate, and brought to its loudness target when it has one. A
+    /// target reads the whole mix once to measure it before the first
+    /// block goes out, which decodes every audio source twice.
+    pub fn for_output(comp: &Composition, root: &Path, audio: &AudioSettings) -> Self {
+        let mut mixer = Self::new(comp, root, audio.sample_rate);
+        if let Some(spec) = &audio.loudness {
+            let channels = usize::from(audio.channels.clamp(1, 2));
+            mixer.template = mixer.voices.iter().map(|l| l.voice.clone()).collect();
+            mixer.levelling = Some(Levelling {
+                spec: spec.clone(),
+                channels,
+                meter: Meter::new(audio.sample_rate, channels),
+                limiter: None,
+                pending: Vec::new(),
+                exhausted: false,
+                report: None,
+            });
+        }
+        mixer
+    }
+
+    /// What the loudness target measured and did; `None` without one,
+    /// or before the first block. `result_lufs` is filled in after the
+    /// last.
+    #[must_use]
+    pub fn loudness_report(&self) -> Option<&LoudnessReport> {
+        self.levelling.as_ref().and_then(|l| l.report.as_ref())
+    }
+
+    /// The same mix from the start, without the loudness pass.
+    fn raw_copy(&self) -> Self {
+        Self {
+            root: self.root.clone(),
+            rate: self.rate,
+            total_frames: self.total_frames,
+            position: 0,
+            voices: self
+                .template
+                .iter()
+                .cloned()
+                .map(|voice| Live::fresh(voice, self.rate, self.total_frames))
+                .collect(),
+            template: Vec::new(),
+            levelling: None,
+        }
+    }
+
+    /// The first pass: the whole mix through a meter, and from it the
+    /// gain and the limiter the second pass applies.
+    fn measure(&mut self) -> Result<(), MediaError> {
+        let mut raw = self.raw_copy();
+        let rate = self.rate;
+        let Some(levelling) = self.levelling.as_mut() else {
+            return Ok(());
+        };
+        let mut meter = Meter::new(rate, levelling.channels);
+        while let Some(block) = raw.raw_block(rate as usize)? {
+            meter_push(&mut meter, &block, levelling.channels);
+        }
+        let measured = meter.integrated();
+        let target = levelling.spec.target_lufs;
+        let ceiling = levelling.spec.true_peak_dbtp.unwrap_or(-1.0);
+        let gain_db = measured.map_or(0.0, |m| target - m);
+        levelling.limiter = Some(Limiter::new(rate, 2, gain_db, ceiling));
+        levelling.report = Some(LoudnessReport {
+            target_lufs: target,
+            ceiling_dbtp: ceiling,
+            measured_lufs: measured,
+            gain_db,
+            result_lufs: None,
+        });
+        Ok(())
     }
 
     /// Frames in the whole mix: `round(duration × rate)`.
@@ -247,9 +379,62 @@ impl Mixer {
     }
 
     /// The next block of at most `frames` frames, or `None` after the
-    /// last one. Samples are summed without limiting; the encoder clamps
-    /// to full scale.
+    /// last one. Without a loudness target, samples are summed without
+    /// limiting and the encoder clamps to full scale; with one, they are
+    /// gained to the target and the limiter holds the true peak under
+    /// its ceiling. The blocks are the same whatever size they are asked
+    /// for in.
     pub fn next_block(&mut self, frames: usize) -> Result<Option<Vec<f32>>, MediaError> {
+        if self.levelling.is_none() {
+            return self.raw_block(frames);
+        }
+        if self.levelling.as_ref().is_some_and(|l| l.limiter.is_none()) {
+            self.measure()?;
+        }
+        let wanted = frames * 2;
+        loop {
+            let (enough, exhausted) = self
+                .levelling
+                .as_ref()
+                .map_or((true, true), |l| (l.pending.len() >= wanted, l.exhausted));
+            if enough || exhausted {
+                break;
+            }
+            let raw = self.raw_block(frames)?;
+            let Some(levelling) = self.levelling.as_mut() else {
+                break;
+            };
+            let Some(limiter) = levelling.limiter.as_mut() else {
+                break;
+            };
+            let out = match raw {
+                Some(block) => limiter.push(&block),
+                None => {
+                    levelling.exhausted = true;
+                    limiter.finish()
+                }
+            };
+            meter_push(&mut levelling.meter, &out, levelling.channels);
+            levelling.pending.extend(out);
+            if levelling.exhausted {
+                let result = levelling.meter.integrated();
+                if let Some(report) = levelling.report.as_mut() {
+                    report.result_lufs = result;
+                }
+            }
+        }
+        let Some(levelling) = self.levelling.as_mut() else {
+            return Ok(None);
+        };
+        if levelling.pending.is_empty() {
+            return Ok(None);
+        }
+        let n = wanted.min(levelling.pending.len());
+        Ok(Some(levelling.pending.drain(..n).collect()))
+    }
+
+    /// The next block of the plain mix.
+    fn raw_block(&mut self, frames: usize) -> Result<Option<Vec<f32>>, MediaError> {
         if self.position >= self.total_frames || frames == 0 {
             return Ok(None);
         }
