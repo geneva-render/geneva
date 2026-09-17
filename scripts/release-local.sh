@@ -105,6 +105,29 @@ for t in $targets; do
   if [ "$t" = "$MACOS" ]; then
     [ "$(uname -s)" = Darwin ] || die "$MACOS can only be built on macOS"
     [ "$(uname -m)" = arm64 ] || die "$MACOS needs an Apple Silicon Mac"
+    # The Linux targets bring their own toolchain in the container. This
+    # one builds on the host, so the host needs the lot. Report all of
+    # what is missing at once rather than one per run.
+    missing=
+    for tool in cargo cmake meson ninja nasm pkg-config; do
+      command -v "$tool" >/dev/null || missing="$missing $tool"
+    done
+    if [ -n "$missing" ]; then
+      # cargo comes from rustup, the rest from brew, so the advice
+      # splits in two. Built by hand rather than by filtering a pipe,
+      # which exits non-zero when it filters everything out.
+      brewable=
+      wants_rust=false
+      for tool in $missing; do
+        if [ "$tool" = cargo ]; then wants_rust=true; else brewable="$brewable $tool"; fi
+      done
+      note=
+      $wants_rust && note="
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+      [ -n "$brewable" ] && note="$note
+      brew install$brewable"
+      die "$MACOS needs these and they are not installed:$missing$note"
+    fi
   fi
 done
 

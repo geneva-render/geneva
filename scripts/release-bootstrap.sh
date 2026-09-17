@@ -63,6 +63,12 @@ esac
 
 command -v git >/dev/null || die "git is not installed (xcode-select --install)"
 command -v gh >/dev/null || die "gh is not installed (brew install gh)"
+# Everything else is checked by release-local.sh, which knows which
+# targets need what. cargo is checked here because --bump refreshes
+# Cargo.lock before that runs.
+[ -z "$bump" ] || command -v cargo >/dev/null || die "cargo is not installed, and --bump refreshes Cargo.lock.
+    Install the Rust toolchain:
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
 
 # ----------------------------------------------------------- the account
 
@@ -156,6 +162,18 @@ if [ -n "$bump" ]; then
 
   say "bumping $version to $bump and moving the changelog"
 
+  # Cargo.toml and CHANGELOG.md are edited before anything is committed,
+  # so put them back if this does not get as far as the commit. Leaving
+  # them half-written makes the next run refuse over a dirty tree.
+  bump_committed=false
+  bump_rollback() {
+    $bump_committed && return 0
+    bump_committed=true
+    git checkout -- Cargo.toml Cargo.lock CHANGELOG.md 2>/dev/null || true
+    echo "    put Cargo.toml, Cargo.lock and CHANGELOG.md back" >&2
+  }
+  trap bump_rollback EXIT
+
   # The version is written ten times: once under [workspace.package] and
   # once in each path dependency on a crate in this workspace. All of
   # them move together, and nothing else is touched.
@@ -181,6 +199,7 @@ if [ -n "$bump" ]; then
 
   git add Cargo.toml Cargo.lock CHANGELOG.md
   git commit -q -m "Release $bump"
+  bump_committed=true
   git push -q origin main
   echo "    committed and pushed as $(git rev-parse --short HEAD)"
   tag=v$bump
