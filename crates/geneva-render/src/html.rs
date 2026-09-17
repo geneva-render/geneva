@@ -203,7 +203,7 @@ fn decode_pixel(p: LinearRgba) -> LinearRgba {
     if p.a <= 0.0 {
         return LinearRgba::TRANSPARENT;
     }
-    let dec = |v: f32| Transfer::Srgb.to_linear(f64::from(v / p.a)) as f32 * p.a;
+    let dec = |v: f32| srgb_to_linear(v / p.a) * p.a;
     LinearRgba {
         r: dec(p.r),
         g: dec(p.g),
@@ -218,6 +218,26 @@ pub(crate) fn to_encoded(mut image: Image) -> Image {
         *p = encode_pixel(*p);
     }
     image
+}
+
+/// The sRGB curve on `[0, 1]` read off a table, for the whole surface
+/// once a frame. Linear between entries this close, the table is within
+/// 1e-7 of the curve; a value outside the range takes the curve itself.
+fn srgb_to_linear(v: f32) -> f32 {
+    const STEPS: usize = 4096;
+    static TABLE: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
+    if !(0.0..=1.0).contains(&v) {
+        return Transfer::Srgb.to_linear(f64::from(v)) as f32;
+    }
+    let table = TABLE.get_or_init(|| {
+        (0..=STEPS)
+            .map(|i| Transfer::Srgb.to_linear(i as f64 / STEPS as f64) as f32)
+            .collect()
+    });
+    let at = v * STEPS as f32;
+    let i = (at as usize).min(STEPS - 1);
+    let f = at - i as f32;
+    table[i] + (table[i + 1] - table[i]) * f
 }
 
 /// The painter's image back in linear light.
@@ -303,12 +323,18 @@ fn inverse(tr: &Transform, centre: (f64, f64), p: (f64, f64)) -> (f64, f64) {
     (centre.0 + rx / tr.scale[0], centre.1 + ry / tr.scale[1])
 }
 
-/// How much of the surface a group's own picture spans (`own`, in its
-/// own coordinates, taking in its children where they land) and where
-/// that picture lands once blurred and transformed (`placed`). Groups
-/// are listed parent before child, so a backward walk settles every
-/// child before its parent.
-fn group_bounds(laid: &Laid, transforms: &[Option<Transform>]) -> (GroupBounds, GroupBounds) {
+/// The buffer each group needs (`own`, in its own coordinates: what its
+/// boxes and children reach, padded for its blur, and no more than can
+/// show through its parent's buffer and its transform) and where its
+/// picture lands once blurred and transformed (`placed`). Groups are
+/// listed parent before child, so a backward walk settles every child's
+/// reach before its parent's, and a forward walk then cuts each buffer
+/// down to the part its parent can show.
+fn group_bounds(
+    laid: &Laid,
+    transforms: &[Option<Transform>],
+    surface: (f64, f64),
+) -> (GroupBounds, GroupBounds) {
     let n = laid.groups.len();
     let mut own: GroupBounds = vec![None; n];
     let mut placed: GroupBounds = vec![None; n];
@@ -337,7 +363,63 @@ fn group_bounds(laid: &Laid, transforms: &[Option<Transform>]) -> (GroupBounds, 
             own[p] = Some(union(own[p], r));
         }
     }
+    // What a group paints outside the window its parent shows is never
+    // seen, so its buffer stops there: the window (the surface, or the
+    // parent's buffer, cut to the group's clip) taken back through the
+    // transform, and padded for the blur, which reads that far outside
+    // the pixels it lands on.
+    for g in 0..n {
+        let group = &laid.groups[g];
+        let Some(r) = own[g] else {
+            continue;
+        };
+        let mut window = match group.parent {
+            None => Some([0.0, 0.0, surface.0, surface.1]),
+            Some(p) => own[p],
+        };
+        if let (Some(w), Some((clip, _))) = (window, group.clip) {
+            window = intersect(w, rect_bounds(clip));
+        }
+        let reach = group.blur * 3.0;
+        let visible = window.and_then(|w| match &transforms[g] {
+            Some(tr) if tr.scale[0] == 0.0 || tr.scale[1] == 0.0 => None,
+            Some(tr) => Some(padded(inverted(w, centre_of(group.rect), tr), reach)),
+            None => Some(padded(w, reach)),
+        });
+        own[g] = visible.and_then(|v| intersect(padded(r, reach), v));
+    }
     (own, placed)
+}
+
+fn rect_bounds(rect: Rectangle) -> Bounds {
+    [
+        f64::from(rect[0]),
+        f64::from(rect[1]),
+        f64::from(rect[0] + rect[2]),
+        f64::from(rect[1] + rect[3]),
+    ]
+}
+
+/// The overlap of two rectangles, or nothing where they do not meet.
+fn intersect(a: Bounds, b: Bounds) -> Option<Bounds> {
+    let r = [
+        a[0].max(b[0]),
+        a[1].max(b[1]),
+        a[2].min(b[2]),
+        a[3].min(b[3]),
+    ];
+    (r[2] > r[0] && r[3] > r[1]).then_some(r)
+}
+
+/// The rectangle of the group that lands on `r`: [`transformed`] undone,
+/// as a bounding box.
+fn inverted(r: Bounds, centre: (f64, f64), tr: &Transform) -> Bounds {
+    let mut out: Option<Bounds> = None;
+    for (x, y) in [(r[0], r[1]), (r[2], r[1]), (r[0], r[3]), (r[2], r[3])] {
+        let (px, py) = inverse(tr, centre, (x, y));
+        out = Some(union(out, [px, py, px, py]));
+    }
+    out.unwrap_or(r)
 }
 
 fn centre_of(rect: Rectangle) -> (f64, f64) {
@@ -433,7 +515,7 @@ fn paint(
 ) -> Image {
     let width = laid.size.0.ceil().max(1.0) as u32;
     let height = laid.size.1.ceil().max(1.0) as u32;
-    let (own, placed) = group_bounds(laid, transforms);
+    let (own, placed) = group_bounds(laid, transforms, (f64::from(width), f64::from(height)));
     // What the surface can be marked in: its own boxes and the top-level
     // groups where they land. The compositor reads that rather than all
     // of it.
@@ -493,8 +575,7 @@ fn paint(
                 skipping.get_or_insert(g);
                 stack.push(Layer::over(g, None, (width, height)));
             } else {
-                let bounds = own[g].map(|r| padded(r, group.blur * 3.0));
-                stack.push(Layer::over(g, bounds, (width, height)));
+                stack.push(Layer::over(g, own[g], (width, height)));
             }
         }
         if skipping.is_some() || b.opacity <= 0.0 {
@@ -629,6 +710,16 @@ fn composite(
     let y0 = (l[1].floor() as i64 - dst_origin.1).max(0);
     let x1 = (l[2].ceil() as i64 - dst_origin.0).min(dw);
     let y1 = (l[3].ceil() as i64 - dst_origin.1).min(dh);
+    // `inverse` with its trigonometry done once for the whole group.
+    let (sin, cos) = tr.rotate.to_radians().sin_cos();
+    let back = |px: f64, py: f64| -> (f64, f64) {
+        let (dx, dy) = (
+            px - centre.0 - tr.translate[0],
+            py - centre.1 - tr.translate[1],
+        );
+        let (rx, ry) = (dx * cos + dy * sin, -dx * sin + dy * cos);
+        (centre.0 + rx / tr.scale[0], centre.1 + ry / tr.scale[1])
+    };
     let taps = |scale: f64| ((1.0 / scale.abs().max(1e-3)).ceil() as usize).clamp(1, 4);
     let (nx, ny) = (taps(tr.scale[0]), taps(tr.scale[1]));
     let norm = 1.0 / (nx * ny) as f32;
@@ -639,7 +730,7 @@ fn composite(
                 for i in 0..nx {
                     let px = (dx + dst_origin.0) as f64 + (i as f64 + 0.5) / nx as f64;
                     let py = (dy + dst_origin.1) as f64 + (j as f64 + 0.5) / ny as f64;
-                    let (lx, ly) = inverse(tr, centre, (px, py));
+                    let (lx, ly) = back(px, py);
                     let (u, v) = (lx - layer.origin.0 as f64, ly - layer.origin.1 as f64);
                     if u < 0.0 || v < 0.0 || u >= sw as f64 || v >= sh as f64 {
                         continue;
@@ -887,11 +978,14 @@ fn paint_box(image: &mut Image, b: &Painted) {
             if clip <= 0.0 {
                 continue;
             }
-            let hole = coverage(px, py, inner_rect, inner_radius);
             if let Some(fill) = &fill {
                 blend(image, x, y, fill.at(px, py), outer * clip * b.opacity);
             }
-            if has_border && outer > hole {
+            if !has_border {
+                continue;
+            }
+            let hole = coverage(px, py, inner_rect, inner_radius);
+            if outer > hole {
                 let colour = b.paint.border_color[side(b, px, py)];
                 if colour.a > 0.0 {
                     blend(

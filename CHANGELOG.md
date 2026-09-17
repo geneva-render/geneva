@@ -76,6 +76,22 @@ the format version it was written for.
   painting takes that padding back off, so adding a glow leaves the words
   where they were. It is clipped at the edge of the clip's own box.
 
+### Changed
+
+- **Markup renders faster.** A group inside an `html` source (an element
+  with an animation, a transform, opacity, a filter or a clip) was painted
+  whole into its own buffer, however far it reached outside the frame,
+  and then resampled whole. It is now painted and resampled only where
+  its parent can show it, taken back through its transform and padded
+  for its blur, and the buffer of a group that lands off the frame is
+  skipped. A box with no border no longer tests its inner edge per
+  pixel, a gradient no longer takes a modulo per pixel inside its own
+  tile, and the finished box's conversion to linear light reads a table.
+  The pixels are the same to within one level in 255. The README's
+  opening (960x540, four full-frame radial gradients drifting under the
+  text) went from 526 ms to 194 ms a frame on one core, from 744 ms to
+  240 ms at its worst; layout is 1 ms of that, text shaping under 2 ms.
+
 ### Fixed
 
 - A blurred `box-shadow` was a distance-field ramp that stayed solid to

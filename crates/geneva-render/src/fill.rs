@@ -128,8 +128,8 @@ impl Fill {
                 stops,
             } => {
                 let (x, y, w, h) = self.tile;
-                let px = x + (px - x).rem_euclid(w);
-                let py = y + (py - y).rem_euclid(h);
+                let px = wrap(px, x, w);
+                let py = wrap(py, y, h);
                 let (ox, oy) = *origin;
                 let t = if *radial {
                     ((px - ox) / axis.0).hypot((py - oy) / axis.1)
@@ -140,6 +140,17 @@ impl Fill {
                 sample(stops, t.clamp(0.0, 1.0))
             }
         }
+    }
+}
+
+/// `v` brought into the tile that starts at `start` and is `size` long.
+/// Inside it already, which is nearly every pixel of a box painted with
+/// its own tile, there is nothing to do; the modulo is for the rest.
+fn wrap(v: f64, start: f64, size: f64) -> f64 {
+    if v >= start && v < start + size {
+        v
+    } else {
+        start + (v - start).rem_euclid(size)
     }
 }
 
