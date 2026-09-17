@@ -4,6 +4,9 @@
 #
 # Usage: scripts/build-media-libs.sh [prefix]
 #   prefix defaults to target/media-libs (absolute path is printed at the end)
+#   MEDIA_SRC is where sources are unpacked and built, target/media-src by
+#   default. Give a build for another architecture its own, since the
+#   sources are built in place.
 #
 # Needs: a C/C++ compiler, make, cmake, meson, ninja, nasm, pkg-config, curl,
 # git. On Debian/Ubuntu: build-essential cmake meson ninja-build nasm
@@ -26,7 +29,9 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 prefix_arg=${1:-$root/target/media-libs}
 mkdir -p "$prefix_arg"
 prefix=$(cd "$prefix_arg" && pwd)
-src=$root/target/media-src
+# Sources are unpacked and built in place, so a build for another
+# architecture needs its own scratch: MEDIA_SRC keeps them apart.
+src=${MEDIA_SRC:-$root/target/media-src}
 jobs=${JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}
 mkdir -p "$prefix" "$src" "$prefix/share/licenses"
 export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
