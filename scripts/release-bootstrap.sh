@@ -107,7 +107,13 @@ if [ -d "$dir/.git" ]; then
     *) die "$dir is a checkout of '$origin', not $REPO" ;;
   esac
   say "updating $dir"
-  [ -z "$(git -C "$dir" status --porcelain)" ] || die "$dir has uncommitted changes"
+  dirty=$(git -C "$dir" status --porcelain)
+  if [ -n "$dirty" ]; then
+    die "$dir has uncommitted changes:
+$(echo "$dirty" | sed 's/^/      /')
+    Keep them, or throw them away and run this again:
+      git -C $dir reset --hard"
+  fi
   git -C "$dir" fetch -q origin main
   git -C "$dir" checkout -q main
   git -C "$dir" reset -q --hard origin/main
