@@ -438,8 +438,8 @@ pub struct ResolvedText {
     /// The highlight's gradient. A highlight keeps the base fill unless
     /// it sets a `color` or a `fill` of its own.
     pub highlight_fill: Option<FillTrack>,
-    /// The shadow, when there is one.
-    pub shadow: Option<ShadowTrack>,
+    /// The shadows, front to back as listed; empty for none.
+    pub shadow: Vec<ShadowTrack>,
 }
 
 impl ResolvedText {
@@ -462,15 +462,20 @@ impl ResolvedText {
             .highlight
             .as_ref()
             .map(|h| color_of(h.color.as_ref().or(spec.style.color.as_ref()), Color::WHITE));
-        let shadow = spec.shadow.as_ref().map(|sh| {
-            let (x, y, blur) = (first(&sh.x), first(&sh.y), first(&sh.blur).max(0.0));
-            ShadowTrack {
-                color: color_of(sh.color.as_ref(), SHADOW_DEFAULT),
-                x: Track::constant(x),
-                y: Track::constant(y),
-                blur: Track::constant(blur),
-                reach: blur + x.abs().max(y.abs()),
-            }
+        let shadow = spec.shadow.as_ref().map_or_else(Vec::new, |list| {
+            list.0
+                .iter()
+                .map(|sh| {
+                    let (x, y, blur) = (first(&sh.x), first(&sh.y), first(&sh.blur).max(0.0));
+                    ShadowTrack {
+                        color: color_of(sh.color.as_ref(), SHADOW_DEFAULT),
+                        x: Track::constant(x),
+                        y: Track::constant(y),
+                        blur: Track::constant(blur),
+                        reach: blur + x.abs().max(y.abs()),
+                    }
+                })
+                .collect()
         });
         // A gradient that does not parse is dropped here; the resolver
         // is where it is named.
@@ -515,7 +520,7 @@ impl ResolvedText {
                 .highlight_fill
                 .as_ref()
                 .is_none_or(FillTrack::is_constant)
-            && self.shadow.as_ref().is_none_or(|s| {
+            && self.shadow.iter().all(|s| {
                 s.color.is_constant()
                     && s.x.is_constant()
                     && s.y.is_constant()
@@ -2926,27 +2931,38 @@ transitions in over the same join"
             };
             self.resolve_fill(f, &p)
         });
-        let shadow = text.shadow.as_ref().map(|sh| {
-            let p = spath.key("shadow");
-            let x = self.track_f64(Some(&sh.x), &p.key("x"), 0.0, Ratio::ZERO, None, "shadow x");
-            let y = self.track_f64(Some(&sh.y), &p.key("y"), 0.0, Ratio::ZERO, None, "shadow y");
-            let blur = self.track_f64(
-                Some(&sh.blur),
-                &p.key("blur"),
-                0.0,
-                Ratio::ZERO,
-                Some((0.0, 1.0e6)),
-                "shadow blur",
-            );
-            let peak = |a: &Animated<f64>| a.values().fold(0.0f64, |m, v| m.max(v.abs()));
-            ShadowTrack {
-                color: self.track_color(sh.color.as_ref(), &p.key("color"), SHADOW_DEFAULT),
-                x,
-                y,
-                blur,
-                reach: peak(&sh.blur) + peak(&sh.x).max(peak(&sh.y)),
+        let mut shadow = Vec::new();
+        if let Some(list) = &text.shadow {
+            for (i, sh) in list.0.iter().enumerate() {
+                // One shadow was written as an object at "shadow"; a list
+                // puts each at its index.
+                let p = if list.0.len() == 1 {
+                    spath.key("shadow")
+                } else {
+                    spath.key("shadow").index(i)
+                };
+                let x =
+                    self.track_f64(Some(&sh.x), &p.key("x"), 0.0, Ratio::ZERO, None, "shadow x");
+                let y =
+                    self.track_f64(Some(&sh.y), &p.key("y"), 0.0, Ratio::ZERO, None, "shadow y");
+                let blur = self.track_f64(
+                    Some(&sh.blur),
+                    &p.key("blur"),
+                    0.0,
+                    Ratio::ZERO,
+                    Some((0.0, 1.0e6)),
+                    "shadow blur",
+                );
+                let peak = |a: &Animated<f64>| a.values().fold(0.0f64, |m, v| m.max(v.abs()));
+                shadow.push(ShadowTrack {
+                    color: self.track_color(sh.color.as_ref(), &p.key("color"), SHADOW_DEFAULT),
+                    x,
+                    y,
+                    blur,
+                    reach: peak(&sh.blur) + peak(&sh.x).max(peak(&sh.y)),
+                });
             }
-        });
+        }
         ResolvedText {
             text: content,
             words,

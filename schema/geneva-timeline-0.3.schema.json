@@ -1584,13 +1584,13 @@
             "shadow": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/Shadow"
+                  "$ref": "#/$defs/Shadows"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Drop shadow."
+              "description": "Drop shadows: one, or a list front to back."
             },
             "kind": {
               "type": "string",
@@ -2285,6 +2285,22 @@
       ],
       "description": "Horizontal text alignment."
     },
+    "Shadows": {
+      "title": "Shadows",
+      "description": "One shadow, or a list of them front to back, each an object or a text-shadow string; a string may itself list several with commas.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Shadow"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Shadow"
+          },
+          "minItems": 1
+        }
+      ]
+    },
     "Shadow": {
       "title": "Shadow",
       "description": "A drop shadow: an object with x, y, blur and color, or the text-shadow shorthand \"<x> <y> [blur] [color]\" such as \"0 2px 8px #0008\".",
@@ -2528,13 +2544,13 @@
         "shadow": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Shadow"
+              "$ref": "#/$defs/Shadows"
             },
             {
               "type": "null"
             }
           ],
-          "description": "Drop shadow."
+          "description": "Drop shadows: one, or a list front to back."
         }
       },
       "description": "A text source."

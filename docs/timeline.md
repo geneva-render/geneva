@@ -492,7 +492,7 @@ Every source has a `kind`.
 | `background` | no | none | Background box color. |
 | `radius` | no | `0` | Background box corner radius. |
 | `outline` | no | | `{ "color", "width" }`, or the shorthand `"2px black"` (width and color in either order). |
-| `shadow` | no | | `{ "color", "x", "y", "blur" }`, or the `text-shadow` shorthand `"0 2px 8px #0008"` (x, y, optional blur, optional color). Each of the four is animatable in the object form; the shorthand is a constant. The image is sized for the shadow's furthest reach over the clip, so a shadow that grows or moves does not shift the text. |
+| `shadow` | no | | `{ "color", "x", "y", "blur" }`, the `text-shadow` shorthand `"0 2px 8px #0008"` (x, y, optional blur, optional color), or a list of either, front to back as CSS lists them; a string may list several with commas. Each of the four is animatable in the object form; the shorthand is a constant. The image is sized for the furthest reach of any shadow over the clip, so a shadow that grows or moves does not shift the text. |
 
 `captions`
 
@@ -532,7 +532,7 @@ the values that map one to one:
 
 | CSS | Timeline field | Example |
 | --- | --- | --- |
-| `text-shadow` | `shadow` | `"0 2px 8px #0008"` |
+| `text-shadow` | `shadow` | `"0 2px 8px #0008"`, `"0 0 4px #fff8, 0 0 12px #0ff8"` |
 | `outline` (`-webkit-text-stroke`) | `outline` | `"2px black"` |
 | `font` | `font` | `"italic 600 40px/1.2 Inter"` |
 | `padding` | `padding` | `"8px"` (one value) |
@@ -635,8 +635,8 @@ author overrides freely: `h1`, `h2`, `h3`, `b`, `strong`, `i`, `em`,
 | Spacing | `margin`, `padding` and their per-side forms and one-to-four-value shorthands |
 | Flex | `flex-direction`, `flex-wrap`, `justify-content`, `align-items`, `align-self`, `align-content`, `gap`, `row-gap`, `column-gap`, `flex-grow`, `flex-shrink`, `flex-basis`, `flex` |
 | Border | `border`, `border-top`, `border-right`, `border-bottom`, `border-left`, `border-width`, `border-color`, `border-style` (`solid`, `none`), `border-radius` |
-| Paint | `background`, `background-color` (a colour or a gradient), `background-size`, `background-position`, `background-clip` (`text` or `border-box`, with or without `-webkit-`), `opacity`, `filter` (`blur()` only), `clip-path` (`polygon()` only, or `none`), `box-shadow` (one, not inset) |
-| Text | `color`, `-webkit-text-fill-color` (read as `color`), `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space`, `text-shadow` (one, not a list) |
+| Paint | `background`, `background-color` (a colour or a gradient), `background-size`, `background-position`, `background-clip` (`text` or `border-box`, with or without `-webkit-`), `opacity`, `filter` (`blur()` only), `clip-path` (`polygon()` only, or `none`), `box-shadow` (a list; `inset` is not drawn) |
+| Text | `color`, `-webkit-text-fill-color` (read as `color`), `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space`, `text-shadow` (a list) |
 | Motion | `animation` and its longhands `animation-name`, `-duration`, `-delay`, `-timing-function`, `-iteration-count`, `-direction`, `-fill-mode` |
 
 Lengths are `px`, `em`, `rem` and `%`; `em` is the element's own font
@@ -755,8 +755,8 @@ inside it costs a paint per frame and one layout.
 
 ### What it does not do
 
-- **A `text-shadow` does not move the text.** It is drawn behind the
-  glyphs and spills outside the box, as on a page, but layout is done as
+- **A `text-shadow` does not move the text.** Each shadow in the list is drawn behind the
+  glyphs, the first on top, and spills outside the box, as on a page, but layout is done as
   though it were not there. It is clipped at the edge of the clip's own
   box, so a glow on text at the very edge of a card is cut off.
 - **No inline layout.** An element's text is one paragraph, and a child

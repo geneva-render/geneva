@@ -174,8 +174,8 @@ pub struct Paint {
     pub border_color: [Color; 4],
     /// Corner radii in pixels: top-left, top-right, bottom-right, bottom-left.
     pub radius: [f64; 4],
-    /// A single box shadow.
-    pub shadow: Option<Shadow>,
+    /// Box shadows, front to back as CSS lists them; `inset` is not read.
+    pub shadow: Vec<Shadow>,
     /// Multiplied into everything the box and its children draw.
     pub opacity: f64,
     /// `filter: blur()`, in pixels of standard deviation, over everything
@@ -196,7 +196,7 @@ impl Default for Paint {
             clip_text: false,
             border_color: [Color::from_rgba8(0, 0, 0, 0); 4],
             radius: [0.0; 4],
-            shadow: None,
+            shadow: Vec::new(),
             opacity: 1.0,
             blur: 0.0,
             clip_path: None,
@@ -225,8 +225,8 @@ pub struct Text {
     pub align: TextAlign,
     /// Whether runs of whitespace and newlines are kept.
     pub pre: bool,
-    /// A shadow drawn behind the glyphs.
-    pub shadow: Option<Shadow>,
+    /// Shadows drawn behind the glyphs, front to back as CSS lists them.
+    pub shadow: Vec<Shadow>,
     /// A background clipped to the glyphs, from an ancestor's
     /// `background-clip: text`. It stands in for `color` while it is set.
     /// Boxed so a style with no fill stays small.
@@ -245,7 +245,7 @@ impl Default for Text {
             letter_spacing: 0.0,
             align: TextAlign::Left,
             pre: false,
-            shadow: None,
+            shadow: Vec::new(),
             fill: None,
         }
     }
@@ -275,8 +275,8 @@ pub struct Overrides {
     pub blur: Option<f64>,
     /// `color`.
     pub color: Option<Color>,
-    /// `text-shadow`: `Some(None)` is `none`.
-    pub text_shadow: Option<Option<Shadow>>,
+    /// `text-shadow`: the list, empty for `none`.
+    pub text_shadow: Option<Vec<Shadow>>,
     /// `letter-spacing`, in pixels.
     pub letter_spacing: Option<f64>,
     /// `width`.
@@ -558,9 +558,9 @@ fn text_override(text: &mut Text, from: &Text, o: &Overrides) {
             text.color = c;
         }
     }
-    if let Some(sh) = o.text_shadow {
+    if let Some(sh) = &o.text_shadow {
         if text.shadow == from.shadow {
-            text.shadow = sh;
+            text.shadow.clone_from(sh);
         }
     }
     if let Some(v) = o.letter_spacing {
@@ -1175,8 +1175,8 @@ fn font_shorthand(value: &str, em: f64, c: &mut Computed) -> Result<(), String> 
     Ok(())
 }
 
-/// `box-shadow: 0 2px 8px #0008`. `inset` and multiple shadows are not
-/// drawn.
+/// `box-shadow: 0 2px 8px #0008, 0 0 2em #fff8`: a list, front to back.
+/// `inset` is not drawn.
 /// A background: one colour, or a gradient.
 ///
 /// # Errors
@@ -1521,38 +1521,39 @@ fn stops(parts: &[&str]) -> Result<Vec<Stop>, String> {
     Ok(out)
 }
 
-fn shadow(value: &str, em: f64, property: &str) -> Result<Option<Shadow>, String> {
+fn shadow(value: &str, em: f64, property: &str) -> Result<Vec<Shadow>, String> {
     if value.trim().eq_ignore_ascii_case("none") {
-        return Ok(None);
-    }
-    // A comma outside brackets separates shadows; inside, it is part
-    // of a colour such as rgba(0, 0, 0, 0.5).
-    if top_level_commas(value).len() > 1 {
-        return Err(format!("only one {property} is drawn"));
+        return Ok(Vec::new());
     }
     if value.to_ascii_lowercase().contains("inset") {
         return Err(format!("an inset {property} is not drawn"));
     }
-    let p = parts(value);
-    let mut lengths = Vec::new();
-    let mut fill = Color::from_rgba8(0, 0, 0, 128);
-    for token in p {
-        match pixels(token, em) {
-            Ok(v) if lengths.len() < 3 => lengths.push(v),
-            _ => fill = color(token)?,
-        }
-    }
-    if lengths.len() < 2 {
-        return Err(format!(
-            "{value:?} needs an x and y offset, and optionally a blur radius"
-        ));
-    }
-    Ok(Some(Shadow {
-        x: lengths[0],
-        y: lengths[1],
-        blur: lengths.get(2).copied().unwrap_or(0.0),
-        color: fill,
-    }))
+    // A comma outside brackets separates shadows; inside, it is part
+    // of a colour such as rgba(0, 0, 0, 0.5).
+    top_level_commas(value)
+        .iter()
+        .map(|one| {
+            let mut lengths = Vec::new();
+            let mut fill = Color::from_rgba8(0, 0, 0, 128);
+            for token in parts(one) {
+                match pixels(token, em) {
+                    Ok(v) if lengths.len() < 3 => lengths.push(v),
+                    _ => fill = color(token)?,
+                }
+            }
+            if lengths.len() < 2 {
+                return Err(format!(
+                    "{one:?} needs an x and y offset, and optionally a blur radius"
+                ));
+            }
+            Ok(Shadow {
+                x: lengths[0],
+                y: lengths[1],
+                blur: lengths.get(2).copied().unwrap_or(0.0),
+                color: fill,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1661,7 +1662,7 @@ mod tests {
         assert_eq!(s.text.size, 32.0);
         assert!((s.text.line_height - 1.25).abs() < 1e-9);
         assert_eq!(s.text.family.as_deref(), Some("Liberation Sans"));
-        let sh = s.paint.shadow.unwrap();
+        let sh = s.paint.shadow[0];
         assert_eq!((sh.x, sh.y, sh.blur), (0.0, 2.0, 8.0));
     }
 
@@ -1704,10 +1705,10 @@ mod tests {
             styled("<style>p { text-shadow: 2px 3px 9px #00EEE1 }</style><p>hi</p>");
         assert!(problems.is_empty(), "{problems:?}");
         let p = doc.children(doc.root)[0];
-        let shadow = styles[p].text.shadow.expect("a text shadow");
+        let shadow = styles[p].text.shadow[0];
         assert_eq!((shadow.x, shadow.y, shadow.blur), (2.0, 3.0, 9.0));
         assert_eq!(shadow.color.to_hex(), "#00eee1");
-        assert!(styles[p].paint.shadow.is_none(), "the box keeps its own");
+        assert!(styles[p].paint.shadow.is_empty(), "the box keeps its own");
     }
 
     #[test]
@@ -1718,13 +1719,28 @@ mod tests {
         );
         assert!(problems.is_empty(), "{problems:?}");
         let p = doc.children(doc.root)[0];
-        let glow = styles[p].text.shadow.expect("a text shadow");
+        let glow = styles[p].text.shadow[0];
         assert_eq!(glow.blur, 8.0);
         assert!((glow.color.a - 0.5).abs() < 0.01);
-        assert!(styles[p].paint.shadow.is_some());
-        let (_, _, problems) =
-            styled("<style>p { text-shadow: 0 0 1px red, 0 0 2px blue }</style><p>hi</p>");
-        assert_eq!(problems.len(), 1, "two shadows are still one too many");
+        assert_eq!(styles[p].paint.shadow.len(), 1);
+    }
+
+    #[test]
+    fn a_shadow_list_is_read_in_order() {
+        let (doc, styles, problems) = styled(
+            "<style>p { text-shadow: 0 0 1px red, 0 0 2px rgba(0, 0, 255, 0.5); \
+             box-shadow: 0 1px 2px #000, inset 0 0 1px #fff }</style><p>hi</p>",
+        );
+        let p = doc.children(doc.root)[0];
+        assert_eq!(styles[p].text.shadow.len(), 2);
+        assert_eq!(styles[p].text.shadow[0].blur, 1.0);
+        assert_eq!(styles[p].text.shadow[1].blur, 2.0);
+        assert_eq!(
+            problems.len(),
+            1,
+            "the inset box-shadow is named: {problems:?}"
+        );
+        assert!(styles[p].paint.shadow.is_empty());
     }
 
     #[test]

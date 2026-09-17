@@ -1370,10 +1370,12 @@ fn scale_style(spec: &mut TextSource, template: &TextSource, ratio: f64) {
     if let (Some(o), Some(t)) = (spec.outline.as_mut(), template.outline.as_ref()) {
         o.width = t.width * ratio;
     }
-    if let (Some(sh), Some(t)) = (spec.shadow.as_mut(), template.shadow.as_ref()) {
-        sh.x = t.x.map(|v| v * ratio);
-        sh.y = t.y.map(|v| v * ratio);
-        sh.blur = t.blur.map(|v| v * ratio);
+    if let (Some(list), Some(t)) = (spec.shadow.as_mut(), template.shadow.as_ref()) {
+        for (sh, t) in list.0.iter_mut().zip(&t.0) {
+            sh.x = t.x.map(|v| v * ratio);
+            sh.y = t.y.map(|v| v * ratio);
+            sh.blur = t.blur.map(|v| v * ratio);
+        }
     }
     if let (Some(f), Some(t)) = (spec.style.fill.as_mut(), template.style.fill.as_ref()) {
         f.width = t.width.map(|v| v * ratio);

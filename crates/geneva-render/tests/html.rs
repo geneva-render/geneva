@@ -462,3 +462,44 @@ fn an_animated_clip_path_rolls_the_box_away() {
     assert!(at(&f(5), 100, 75).a < 0.01, "and the bottom half has gone");
     assert!(at(&f(15), 100, 5).a < 0.01, "nothing left at the end");
 }
+
+#[test]
+fn a_shadow_list_draws_every_shadow() {
+    // A red shadow to the left and a blue one to the right of a box, and
+    // the same two on text: both colours land where they are sent.
+    let f = markup_at(
+        "<div class='stage'><div class='box'></div><p>H</p></div>",
+        ".stage { position: relative; width: 200px; height: 100px } \
+         .box { position: absolute; left: 30px; top: 10px; width: 40px; height: 30px; background: #ffffff; \
+                box-shadow: -20px 0 0 #ff0000, 20px 0 0 #0000ff } \
+         p { position: absolute; left: 110px; top: 40px; margin: 0; font: 700 40px Liberation Sans; color: #ffffff; \
+             text-shadow: -20px 0 0 #ff0000, 20px 0 0 #0000ff }",
+        0,
+    );
+    assert!(
+        near(at(&f, 15, 25), 1.0, 0.0, 0.0, 1.0),
+        "red box shadow: {:?}",
+        at(&f, 15, 25)
+    );
+    assert!(
+        near(at(&f, 85, 25), 0.0, 0.0, 1.0, 1.0),
+        "blue box shadow: {:?}",
+        at(&f, 85, 25)
+    );
+    let (mut red, mut blue) = (0, 0);
+    for y in 40..100 {
+        for x in 100..200 {
+            let p = at(&f, x, y);
+            if p.a > 0.9 && p.r > 0.8 && p.b < 0.2 {
+                red += 1;
+            }
+            if p.a > 0.9 && p.b > 0.8 && p.r < 0.2 {
+                blue += 1;
+            }
+        }
+    }
+    assert!(
+        red > 50 && blue > 50,
+        "both text shadows drawn ({red}, {blue})"
+    );
+}

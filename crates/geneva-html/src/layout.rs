@@ -419,7 +419,7 @@ impl Walk<'_> {
         // nothing, which is what keeps the painted area down to the content.
         let root_draws = dom == doc.root
             && (style.paint.background.is_some()
-                || style.paint.shadow.is_some()
+                || !style.paint.shadow.is_empty()
                 || border.iter().any(|w| *w > 0.0));
         let own = (dom != doc.root || root_draws).then(|| Painted {
             rect,

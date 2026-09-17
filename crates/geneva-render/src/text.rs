@@ -49,9 +49,9 @@ impl Default for TextEngine {
 #[must_use]
 pub fn inset_for(text: &ResolvedText) -> f64 {
     let outline = text.spec.outline.as_ref().map_or(0.0, |o| o.width.max(0.0));
-    // The shadow's reach is its furthest over the whole clip, so a shadow
+    // A shadow's reach is its furthest over the whole clip, so a shadow
     // that grows does not grow the image and move the glyphs with it.
-    outline + text.shadow.as_ref().map_or(0.0, |s| s.reach)
+    outline + text.shadow.iter().fold(0.0f64, |m, s| m.max(s.reach))
 }
 
 impl TextEngine {
@@ -171,18 +171,20 @@ impl TextEngine {
             .outline
             .as_ref()
             .map_or(0.0, |o| o.width.max(0.0) as f32);
-        // The shadow at this moment. Its room in the image is the reach
+        // The shadows at this moment. Their room in the image is the reach
         // over the whole clip, not this moment's, so the glyphs stay put.
-        let shadow = text.shadow.as_ref().map(|s| {
-            (
-                s.x.sample(t) as f32,
-                s.y.sample(t) as f32,
-                s.blur.sample(t).max(0.0) as f32,
-                s.color.sample(t),
-            )
-        });
-        let (shadow_dx, shadow_dy, shadow_blur) =
-            shadow.map_or((0.0, 0.0, 0.0), |(x, y, b, _)| (x, y, b));
+        let shadows: Vec<(f32, f32, f32, LinearRgba)> = text
+            .shadow
+            .iter()
+            .map(|s| {
+                (
+                    s.x.sample(t) as f32,
+                    s.y.sample(t) as f32,
+                    s.blur.sample(t).max(0.0) as f32,
+                    s.color.sample(t),
+                )
+            })
+            .collect();
         // Room for strokes and shadows around the text, worked out in one
         // place so a caller can subtract exactly what was added.
         let extra = inset_for(text) as f32;
@@ -264,16 +266,17 @@ impl TextEngine {
             }
         }
 
-        if let Some((_, _, _, color)) = shadow {
+        // CSS lists shadows front to back, so the last is laid down first.
+        for (dx, dy, blur, color) in shadows.iter().rev() {
             let mut mask = Mask::new(width, height);
             for g in &placed {
                 if outline_w > 0.0 {
-                    self.stroke_into(&mut mask, g, outline_w, shadow_dx, shadow_dy);
+                    self.stroke_into(&mut mask, g, outline_w, *dx, *dy);
                 }
-                self.fill_mask_into(&mut mask, g, shadow_dx, shadow_dy);
+                self.fill_mask_into(&mut mask, g, *dx, *dy);
             }
-            mask.blur(shadow_blur);
-            mask.composite(&mut image, color);
+            mask.blur(*blur);
+            mask.composite(&mut image, *color);
         }
         if outline_w > 0.0 {
             let color = spec

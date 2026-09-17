@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::animated::Animated;
 use crate::color::ColorValue;
-use crate::schema::{Shadow, Stroke, TextFill, TextStyle};
+use crate::schema::{Shadow, Shadows, Stroke, TextFill, TextStyle};
 
 /// Splits on whitespace, keeping parenthesized groups such as
 /// `rgba(0, 0, 0, 0.5)` and quoted names together.
@@ -67,6 +67,26 @@ fn pixels(token: &str) -> Option<f64> {
 
 fn color(token: &str) -> Option<ColorValue> {
     Color::from_str(token).ok().map(ColorValue)
+}
+
+/// `"0 2px 8px #0008, 0 0 1em #fff8"`: shadows separated by commas
+/// outside brackets, front to back, each as [`parse_shadow`] reads it.
+pub fn parse_shadows(text: &str) -> Result<Shadows, String> {
+    let mut out = Vec::new();
+    let (mut depth, mut start) = (0usize, 0usize);
+    for (i, c) in text.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                out.push(parse_shadow(&text[start..i])?);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(parse_shadow(&text[start..])?);
+    Ok(Shadows(out))
 }
 
 /// `"0 2px 8px #0008"`: horizontal and vertical offsets, an optional blur,
@@ -379,6 +399,70 @@ impl<'de> Deserialize<'de> for Shadow {
     }
 }
 
+impl Serialize for Shadows {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // One shadow prints as it was written, an object; a list as one.
+        match self.0.as_slice() {
+            [one] => one.serialize(serializer),
+            many => many.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Shadows {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ShadowsVisitor;
+
+        impl<'de> Visitor<'de> for ShadowsVisitor {
+            type Value = Shadows;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a shadow, a text-shadow string, or a list of either")
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Shadows, E> {
+                parse_shadows(v).map_err(E::custom)
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Shadows, A::Error> {
+                Shadow::deserialize(de::value::MapAccessDeserializer::new(map))
+                    .map(|s| Shadows(vec![s]))
+            }
+
+            fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Shadows, A::Error> {
+                let mut out = Vec::new();
+                while let Some(s) = seq.next_element::<Shadow>()? {
+                    out.push(s);
+                }
+                if out.is_empty() {
+                    return Err(de::Error::custom("a shadow list needs at least one shadow"));
+                }
+                Ok(Shadows(out))
+            }
+        }
+
+        deserializer.deserialize_any(ShadowsVisitor)
+    }
+}
+
+impl JsonSchema for Shadows {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Shadows".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let one = generator.subschema_for::<Shadow>();
+        json_schema!({
+            "title": "Shadows",
+            "description": "One shadow, or a list of them front to back, each an object or a text-shadow string; a string may itself list several with commas.",
+            "anyOf": [
+                one,
+                { "type": "array", "items": one, "minItems": 1 }
+            ]
+        })
+    }
+}
+
 impl JsonSchema for Shadow {
     fn schema_name() -> std::borrow::Cow<'static, str> {
         "Shadow".into()
@@ -567,6 +651,9 @@ mod tests {
         assert!(parse_shadow("2px").is_err());
         assert!(parse_shadow("0 0 -1px").is_err());
         assert!(parse_shadow("0 0 red blue").is_err());
+        let list = parse_shadows("0 0 1px red, 0 0 2px rgba(0, 0, 255, 0.5)").unwrap();
+        assert_eq!(list.0.len(), 2);
+        assert_eq!(c(&list.0[1].blur), 2.0);
     }
 
     #[test]

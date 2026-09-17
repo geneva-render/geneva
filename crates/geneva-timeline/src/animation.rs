@@ -132,8 +132,8 @@ pub struct Values {
     pub blur: Option<f64>,
     /// `color`.
     pub color: Option<Color>,
-    /// `text-shadow`; `Some(None)` is `none`.
-    pub text_shadow: Option<Option<TextShadow>>,
+    /// `text-shadow`: the list front to back, empty for `none`.
+    pub text_shadow: Option<Vec<TextShadow>>,
     /// `letter-spacing`, in pixels.
     pub letter_spacing: Option<f64>,
     /// `width`.
@@ -819,12 +819,19 @@ max-width, min-width, background-position or clip-path"
     Ok(v)
 }
 
-/// `text-shadow` in a keyframe: `none`, or two or three lengths and a
-/// colour in any order.
-fn text_shadow(value: &str) -> Result<Option<TextShadow>, String> {
+/// `text-shadow` in a keyframe: `none`, or a list of shadows, each two or
+/// three lengths and a colour in any order.
+fn text_shadow(value: &str) -> Result<Vec<TextShadow>, String> {
     if value == "none" {
-        return Ok(None);
+        return Ok(Vec::new());
     }
+    split_outside_parens(value, ',')
+        .into_iter()
+        .map(|one| one_text_shadow(one.trim()))
+        .collect()
+}
+
+fn one_text_shadow(value: &str) -> Result<TextShadow, String> {
     let mut lengths = Vec::new();
     let mut color = None;
     for token in tokens(value) {
@@ -839,7 +846,7 @@ fn text_shadow(value: &str) -> Result<Option<TextShadow>, String> {
         }
     }
     match lengths.as_slice() {
-        [x, y] | [x, y, _] => Ok(Some(TextShadow {
+        [x, y] | [x, y, _] => Ok(TextShadow {
             x: *x,
             y: *y,
             blur: lengths.get(2).copied().unwrap_or(0.0).max(0.0),
@@ -849,9 +856,9 @@ fn text_shadow(value: &str) -> Result<Option<TextShadow>, String> {
                 b: 0.0,
                 a: 0.5,
             }),
-        })),
+        }),
         _ => Err(format!(
-            "{value:?}: a text-shadow is \"<x> <y> [blur] [color]\" or none"
+            "{value:?}: a text-shadow is \"<x> <y> [blur] [color]\", a list of them, or none"
         )),
     }
 }
@@ -1152,6 +1159,22 @@ mod tests {
         );
         assert!(parse_animations("go 1s steps(0)").is_err());
         assert!(parse_animations("go 1s linear(1)").is_err());
+    }
+
+    #[test]
+    fn a_text_shadow_list_is_a_keyframe_value() {
+        let v = parse_declarations(
+            "text-shadow: 0 0 4px rgba(239, 251, 238, 0.7), 0 0 12px rgba(0, 238, 225, 0.5)",
+        )
+        .unwrap();
+        let list = v.text_shadow.expect("shadows");
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[1].blur, 12.0);
+        assert_eq!(
+            parse_declarations("text-shadow: none").unwrap().text_shadow,
+            Some(Vec::new())
+        );
+        assert!(parse_declarations("text-shadow: 1px").is_err());
     }
 
     #[test]

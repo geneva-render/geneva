@@ -971,6 +971,11 @@ pub struct Stroke {
     pub width: f64,
 }
 
+/// One or more drop shadows, front to back as CSS lists them: a
+/// [`Shadow`], or an array of them (see [`css`](crate::css)).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Shadows(pub Vec<Shadow>);
+
 /// A drop shadow: an object, or the `text-shadow` shorthand
 /// `"0 2px 8px #0008"` (see [`css`](crate::css)).
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1058,9 +1063,9 @@ pub struct TextSource {
     /// Text outline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outline: Option<Stroke>,
-    /// Drop shadow.
+    /// Drop shadows: one, or a list front to back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shadow: Option<Shadow>,
+    pub shadow: Option<Shadows>,
 }
 
 /// A box dimension: a length, or `"auto"` to fit what is inside it.

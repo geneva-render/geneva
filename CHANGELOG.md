@@ -16,6 +16,12 @@ the format version it was written for.
   the radial size keywords and `url()` images are each named as
   undrawn (W450) rather than skipped; a radial is always sized to the
   farthest corner.
+- **Shadow lists.** `text-shadow` and `box-shadow` in markup, a text
+  source's `shadow`, and `text-shadow` in a keyframe all take several
+  shadows, front to back as CSS lists them; the first is drawn on top.
+  A keyframe from one shadow to two pads the shorter list with a
+  transparent shadow of no size, as CSS does, so the newcomer fades in.
+  `inset` box shadows are still not drawn.
 - **Markup blends like a browser.** Inside an `html` source, gradients,
   translucent boxes, shadows, blur and text edges are blended on
   sRGB-encoded premultiplied values, as a browser blends them, and the

@@ -13,7 +13,7 @@ use geneva_html::layout::Rectangle;
 use geneva_html::style::{Extent, TextFill};
 use geneva_html::{Content, Group, Laid, Measure, Painted, Prepared, Text};
 use geneva_timeline::motion::{NodeMotion, Transform};
-use geneva_timeline::schema::{Shadow, TextAlign, TextSource, TextStyle};
+use geneva_timeline::schema::{Shadow, Shadows, TextAlign, TextSource, TextStyle};
 use geneva_timeline::{Animated, FillTrack, ResolvedHtml, ResolvedText};
 
 use crate::assets::Image;
@@ -59,11 +59,19 @@ fn as_text_source(text: &str, style: &Text, max_width: f64) -> ResolvedText {
             background: None,
             radius: None,
             outline: None,
-            shadow: style.shadow.map(|s| Shadow {
-                color: Some(Animated::Constant(s.color.into())),
-                x: Animated::Constant(s.x),
-                y: Animated::Constant(s.y),
-                blur: Animated::Constant(s.blur),
+            shadow: (!style.shadow.is_empty()).then(|| {
+                Shadows(
+                    style
+                        .shadow
+                        .iter()
+                        .map(|s| Shadow {
+                            color: Some(Animated::Constant(s.color.into())),
+                            x: Animated::Constant(s.x),
+                            y: Animated::Constant(s.y),
+                            blur: Animated::Constant(s.blur),
+                        })
+                        .collect(),
+                )
             }),
         },
         max_width,
@@ -100,7 +108,7 @@ impl Measure for Context<'_> {
         // move the text it is drawn behind. CSS lays text out as though
         // the shadow were not there, and so does this.
         let mut plain = style.clone();
-        plain.shadow = None;
+        plain.shadow.clear();
         let source = as_text_source(text, &plain, f64::from(limit));
         let image = self.text.render(&source, 0.0);
         let size = (image.width as f32, image.height as f32);
@@ -223,9 +231,10 @@ fn to_linear(image: &mut Image) {
 /// spill. Everything else a box draws is inside it.
 fn reach_of(painted: &Painted) -> Bounds {
     let reach = |s: &geneva_html::style::Shadow| s.blur.abs() + s.x.abs().max(s.y.abs()) + 1.0;
-    let box_shadow = painted.paint.shadow.as_ref().map_or(0.0, reach);
+    let furthest = |list: &[geneva_html::style::Shadow]| list.iter().map(reach).fold(0.0, f64::max);
+    let box_shadow = furthest(&painted.paint.shadow);
     let text_shadow = match &painted.content {
-        Content::Text { style, .. } => style.shadow.as_ref().map_or(0.0, reach),
+        Content::Text { style, .. } => furthest(&style.shadow),
         _ => 0.0,
     };
     let grow = box_shadow.max(text_shadow);
@@ -898,10 +907,15 @@ fn paint_box(image: &mut Image, b: &Painted) {
     }
 }
 
+/// The box's shadows, the last in the list laid down first, as CSS
+/// paints them.
 fn paint_shadow(image: &mut Image, b: &Painted) {
-    let Some(shadow) = b.paint.shadow else {
-        return;
-    };
+    for shadow in b.paint.shadow.iter().rev() {
+        paint_one_shadow(image, b, shadow);
+    }
+}
+
+fn paint_one_shadow(image: &mut Image, b: &Painted, shadow: &geneva_html::style::Shadow) {
     if shadow.color.a <= 0.0 {
         return;
     }

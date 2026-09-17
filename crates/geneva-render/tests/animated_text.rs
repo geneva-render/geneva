@@ -153,3 +153,23 @@ fn a_fill_that_does_not_parse_is_named() {
         .expect("an E103");
     assert!(d.path.ends_with("/fill/gradient"), "{}", d.path);
 }
+
+#[test]
+fn a_text_source_takes_a_list_of_shadows() {
+    let clip = r##""source":{"kind":"text","text":"H","font":"700 40px Liberation Sans","color":"#ffffff",
+        "shadow":[{"color":"#ff0000","x":-30},"30px 0 #0000ff"]},"duration":"2s""##;
+    let f = frame_at(clip, 5);
+    let (mut red, mut blue) = (0, 0);
+    for y in 0..120 {
+        for x in 0..240 {
+            let p = f.get(x, y);
+            if p.a > 0.9 && p.r > 0.8 && p.b < 0.2 {
+                red += 1;
+            }
+            if p.a > 0.9 && p.b > 0.8 && p.r < 0.2 {
+                blue += 1;
+            }
+        }
+    }
+    assert!(red > 50 && blue > 50, "both shadows drawn ({red}, {blue})");
+}

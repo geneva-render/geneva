@@ -125,9 +125,13 @@ impl NodeMotion {
             text_shadow: stacked(
                 plays,
                 t,
-                base.text.shadow,
-                |v| v.text_shadow.map(|s| s.map(shadow_of)),
-                shadow_lerp,
+                base.text.shadow.clone(),
+                |v| {
+                    v.text_shadow
+                        .as_ref()
+                        .map(|list| list.iter().copied().map(shadow_of).collect())
+                },
+                shadows_lerp,
             ),
             letter_spacing: stacked(
                 plays,
@@ -306,18 +310,28 @@ fn shadow_of(s: TextShadow) -> Shadow {
     }
 }
 
-/// Two shadows mix part by part; a shadow and `none` cannot, so the
-/// change is a step, as CSS makes it.
-fn shadow_lerp(a: Option<Shadow>, b: Option<Shadow>, u: f64) -> Option<Shadow> {
-    match (a, b) {
-        (Some(a), Some(b)) => Some(Shadow {
+/// Two shadow lists mix shadow by shadow. The shorter list is padded
+/// with shadows of no offset, no blur and a transparent colour, as CSS
+/// pads it, so a glow that appears mid-rule fades in rather than pops.
+fn shadows_lerp(mut a: Vec<Shadow>, mut b: Vec<Shadow>, u: f64) -> Vec<Shadow> {
+    let none = Shadow {
+        x: 0.0,
+        y: 0.0,
+        blur: 0.0,
+        color: Color::TRANSPARENT,
+    };
+    let n = a.len().max(b.len());
+    a.resize(n, none);
+    b.resize(n, none);
+    a.into_iter()
+        .zip(b)
+        .map(|(a, b)| Shadow {
             x: lerp(a.x, b.x, u),
             y: lerp(a.y, b.y, u),
             blur: lerp(a.blur, b.blur, u).max(0.0),
             color: color_lerp(a.color, b.color, u),
-        }),
-        _ => step(a, b, u),
-    }
+        })
+        .collect()
 }
 
 /// Lengths of one kind mix; a length and a percentage, or either and
@@ -466,6 +480,41 @@ mod tests {
         assert!((t.scale[0] - 0.75).abs() < 1e-9);
         assert_eq!(t.translate, [0.0, 0.0]);
         assert_eq!(t.rotate, 0.0);
+    }
+
+    #[test]
+    fn a_shadow_that_joins_the_list_fades_in() {
+        // From one shadow to two: the second is padded from a transparent
+        // shadow of no size, so halfway it is half its final alpha and
+        // half its blur.
+        let one = |blur: f64, a: f32| TextShadow {
+            x: 0.0,
+            y: 0.0,
+            blur,
+            color: Color {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a,
+            },
+        };
+        let from = Values {
+            text_shadow: Some(vec![one(4.0, 1.0)]),
+            ..Values::default()
+        };
+        let to = Values {
+            text_shadow: Some(vec![one(4.0, 1.0), one(12.0, 0.5)]),
+            ..Values::default()
+        };
+        let m = NodeMotion {
+            node: 0,
+            plays: vec![play(0.0, 1.0, Fill::Both, vec![(0.0, from), (1.0, to)])],
+        };
+        let s = m.sample(0.5, &Computed::default(), (1.0, 1.0));
+        let list = s.overrides.text_shadow.expect("shadows");
+        assert_eq!(list.len(), 2);
+        assert!((list[1].blur - 6.0).abs() < 1e-9);
+        assert!((list[1].color.a - 0.25).abs() < 1e-6, "{:?}", list[1].color);
     }
 
     #[test]
