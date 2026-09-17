@@ -95,6 +95,8 @@ fn shared_audio(inputs: &[&Input]) -> Option<geneva_timeline::schema::AudioOutpu
         sample_rate: Some(sample_rate),
         channels: Some(u8::try_from(channels.min(2)).expect("at most 2")),
         loudness: None,
+        hygiene: None,
+        denoise: None,
     })
 }
 
@@ -159,6 +161,11 @@ pub struct EncodeArgs {
     /// Write no audio track.
     #[arg(long)]
     pub no_audio: bool,
+    /// Denoise the audio as speech with the embedded model (sets
+    /// output.audio.denoise). Speech only: it damages music and
+    /// overlapping speakers, and takes about as long as the audio plays.
+    #[arg(long)]
+    pub denoise: bool,
     /// Always decode and re-encode, for frame-accurate cuts.
     #[arg(long)]
     pub exact: bool,
@@ -1087,6 +1094,8 @@ pub fn audio(input: &Path, op: &AudioOp, speech: bool, args: &EncodeArgs) -> Res
                     sample_rate: Some(16000),
                     channels: Some(1),
                     loudness: None,
+                    hygiene: None,
+                    denoise: None,
                 });
             }
         }
@@ -1249,7 +1258,7 @@ pub fn fits_target(input: &Path, target: &crate::targets::Target) -> Result<Opti
     // re-encoded so the mix can bring it there.
     let mut level = String::new();
     if let (Some((lufs, ceiling)), true) = (target.loudness, src.audio_codec.is_some()) {
-        match media::measure_audio(input)? {
+        match media::measure_audio(input)?.map(|r| (r.lufs, r.true_peak_dbtp)) {
             Some((Some(measured), peak)) => {
                 if (measured - lufs).abs() > 1.0 || peak > ceiling + 0.1 {
                     return Ok(None);
@@ -1260,6 +1269,10 @@ pub fn fits_target(input: &Path, target: &crate::targets::Target) -> Result<Opti
             // be measured is re-encoded so the mix can measure it.
             Some((None, _)) => {}
             None => return Ok(None),
+        }
+        // Hygiene is a change a copy cannot carry.
+        if target.hygiene {
+            return Ok(None);
         }
     }
     Ok(Some(format!(

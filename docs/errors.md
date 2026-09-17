@@ -70,6 +70,13 @@ result is not what was intended. Notes are informational.
 | W304 | A transition has a `color` but its kind never shows one. Only `fade` dips through a color. |
 | W304 | An audio clip's fades add up to more than its length. |
 | W305 | `out` is past the end of the file; the clip ends where the file ends. |
+| N310 | (note, `validate --probe`) What an asset's audio measures: integrated loudness, true peak, noise floor and how far under the signal it sits, rate and channels; and, where the document sets `output.audio.loudness`, how far from the target it is. Measuring decodes the track once. |
+| W311 | (`validate --probe`) An asset's audio is clipped: runs of three or more samples at full scale. The message counts them and gives the longest and the first; a loudness target does not undo the distortion. |
+| W312 | (`validate --probe`) An asset's audio carries a DC offset over 1% of full scale. `output.audio.hygiene` takes it out. |
+| W313 | (`validate --probe`) An asset's audio hums at 50 or 60 Hz; the message gives the level and how many harmonics show. `output.audio.hygiene` notches it. |
+| W314 | (`validate --probe`) An asset's audio is silent: nothing above -60 dBTP. |
+| N315 | (note, `validate --probe`) An asset's audio is two channels of one signal, which reads 3 dB louder than the same recording in one channel. |
+| W316 | (`validate --probe`) An asset's audio could not be decoded for measuring; the rest of the probe stands. |
 
 ## Values (E400–E499)
 

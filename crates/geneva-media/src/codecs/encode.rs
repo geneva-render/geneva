@@ -122,6 +122,10 @@ pub struct AudioSettings {
     /// A loudness target for the mix, met by the mixer before the
     /// samples reach the encoder.
     pub loudness: Option<geneva_timeline::schema::Loudness>,
+    /// The rumble high-pass and hum notches, applied by the mixer.
+    pub hygiene: bool,
+    /// The speech denoiser, applied by the mixer first of all.
+    pub denoise: bool,
 }
 
 /// Picks the container from settings or the file extension.

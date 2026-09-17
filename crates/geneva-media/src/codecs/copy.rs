@@ -132,6 +132,25 @@ pub fn plan_stream_copy_explained(
     if comp.audio.len() > 1 {
         return Ok(Err(CopyRefusal(None)));
     }
+    // A loudness target, hygiene or denoising change the sound, which
+    // only the mix can do; the picture goes with it, since there is no
+    // path yet that copies the video and re-encodes the audio alone.
+    if let Some(audio) = comp
+        .audio_output
+        .as_ref()
+        .filter(|a| a.loudness.is_some() || a.hygiene == Some(true) || a.denoise == Some(true))
+    {
+        let what = if audio.denoise == Some(true) {
+            "denoised"
+        } else if audio.hygiene == Some(true) {
+            "cleaned"
+        } else {
+            "brought to a loudness target"
+        };
+        return refuse(format!(
+            "the output's audio is {what}, which the mix does, so the streams are re-encoded"
+        ));
+    }
     let Some(untouched) = untouched_video_clips(comp, root)? else {
         return Ok(Err(CopyRefusal(None)));
     };

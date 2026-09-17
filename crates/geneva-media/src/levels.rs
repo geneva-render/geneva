@@ -1,28 +1,23 @@
-//! What a file's audio measures: its integrated loudness and true peak,
-//! as the file is, so a `--for` target can tell whether a copy would
-//! already be at the level it asks for.
+//! What a file's audio measures, as the file is, for a report before a
+//! render and for a `--for` target to tell whether a copy would already
+//! be at the level it asks for.
 
 use std::path::Path;
 
-use geneva_audio::{Meter, TruePeak, to_db};
+use geneva_audio::{Analysis, Report};
 use geneva_timeline::Ratio;
 
 use crate::MediaError;
 use crate::codecs::{AudioReader, probe};
 
-/// The levels of a file's audio.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct AudioLevels {
-    /// Integrated loudness in LUFS, or `None` for silence.
-    pub lufs: Option<f64>,
-    /// True peak in dBTP.
-    pub true_peak_dbtp: f64,
-}
-
 /// Measures the audio of `path` at its own rate and channel count (a
 /// mono file as mono, anything wider as the stereo it is decoded to).
 /// `None` for a file without audio.
-pub fn measure_audio(path: &Path) -> Result<Option<AudioLevels>, MediaError> {
+///
+/// The decoder hands a mono file out as a stereo pair 3 dB down, the
+/// constant-power upmix, so the measurement takes that back: what is
+/// reported is the file as a player or a platform would measure it.
+pub fn measure_audio(path: &Path) -> Result<Option<Report>, MediaError> {
     let info = probe(path)?;
     let Some(audio) = info.audio else {
         return Ok(None);
@@ -33,9 +28,7 @@ pub fn measure_audio(path: &Path) -> Result<Option<AudioLevels>, MediaError> {
     let rate = audio.sample_rate.max(1000);
     let channels = usize::from(audio.channels.clamp(1, 2));
     let mut stream = AudioReader::open(path)?.into_stream(Ratio::ZERO, rate)?;
-    let mut meter = Meter::new(rate, channels);
-    let mut peak = TruePeak::new(rate, channels);
-    let mut highest = 0f32;
+    let mut analysis = Analysis::new(rate, channels);
     let mut left = (duration.to_f64() * f64::from(rate)).round().max(0.0) as usize;
     while left > 0 {
         let block = stream.read(left.min(rate as usize))?;
@@ -46,21 +39,12 @@ pub fn measure_audio(path: &Path) -> Result<Option<AudioLevels>, MediaError> {
         if channels == 1 {
             let mono: Vec<f32> = block
                 .chunks_exact(2)
-                .map(|lr| (lr[0] + lr[1]) * 0.5)
+                .map(|lr| (lr[0] + lr[1]) * std::f32::consts::FRAC_1_SQRT_2)
                 .collect();
-            meter.push(&mono);
-            for s in &mono {
-                highest = highest.max(peak.push(&[*s]));
-            }
+            analysis.push(&mono);
         } else {
-            meter.push(&block);
-            for frame in block.chunks_exact(2) {
-                highest = highest.max(peak.push(frame));
-            }
+            analysis.push(&block);
         }
     }
-    Ok(Some(AudioLevels {
-        lufs: meter.integrated(),
-        true_peak_dbtp: to_db(f64::from(highest)),
-    }))
+    Ok(Some(analysis.report()))
 }

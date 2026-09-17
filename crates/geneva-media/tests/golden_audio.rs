@@ -23,6 +23,8 @@ fn mix(comp: &Composition, root: &Path) -> Result<Samples, String> {
         sample_rate: rate,
         channels,
         loudness: audio.and_then(|a| a.loudness.clone()),
+        hygiene: audio.and_then(|a| a.hygiene).unwrap_or(false),
+        denoise: audio.and_then(|a| a.denoise).unwrap_or(false),
     };
     let mut mixer = Mixer::for_output(comp, root, &settings);
     let mut data = Vec::new();
@@ -33,8 +35,8 @@ fn mix(comp: &Composition, root: &Path) -> Result<Samples, String> {
             data.extend(block);
         }
     }
-    if let Some(report) = mixer.loudness_report() {
-        eprintln!("loudness: {report:?}");
+    if let Some(report) = mixer.report() {
+        eprintln!("treatment: {report:?}");
     }
     Ok(Samples {
         rate,

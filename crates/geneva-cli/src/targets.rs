@@ -51,6 +51,9 @@ pub struct Target {
     /// The loudness the destination normalises to or asks for, as
     /// (LUFS, true-peak ceiling in dBTP); none where it publishes none.
     pub loudness: Option<(f64, f64)>,
+    /// Whether the audio is speech that gets the rumble high-pass and
+    /// hum notches on the way.
+    pub hygiene: bool,
     /// The platform's duration limit, warned about, never enforced.
     pub max_seconds: Option<f64>,
     /// The platform's size limit, which also caps the bitrate.
@@ -93,6 +96,7 @@ pub const TARGETS: &[Target] = &[
         keyframe_interval: 2.0,
         audio_kbps: 128,
         loudness: None,
+        hygiene: false,
         max_seconds: None,
         max_bytes: None,
         checked: "device class: 1080p covers current phones fullscreen at 3x pixel density",
@@ -109,6 +113,7 @@ pub const TARGETS: &[Target] = &[
         keyframe_interval: 2.0,
         audio_kbps: 160,
         loudness: None,
+        hygiene: false,
         max_seconds: None,
         max_bytes: None,
         checked: "device class",
@@ -125,6 +130,7 @@ pub const TARGETS: &[Target] = &[
         keyframe_interval: 2.0,
         audio_kbps: 160,
         loudness: None,
+        hygiene: false,
         max_seconds: None,
         max_bytes: None,
         checked: "device class",
@@ -141,6 +147,7 @@ pub const TARGETS: &[Target] = &[
         keyframe_interval: 2.0,
         audio_kbps: 192,
         loudness: None,
+        hygiene: false,
         max_seconds: None,
         max_bytes: None,
         checked: "device class",
@@ -157,6 +164,7 @@ pub const TARGETS: &[Target] = &[
         keyframe_interval: 2.0,
         audio_kbps: 128,
         loudness: None,
+        hygiene: false,
         max_seconds: None,
         max_bytes: None,
         checked: "device class",
@@ -173,6 +181,7 @@ pub const TARGETS: &[Target] = &[
         keyframe_interval: 0.5,
         audio_kbps: 384,
         loudness: Some((-14.0, -1.0)),
+        hygiene: false,
         max_seconds: Some(43_200.0),
         max_bytes: Some(256_000_000_000),
         checked: "2026-09, support.google.com/youtube/answer/1722171; loudness: YouTube normalises playback to -14 LUFS",
@@ -189,6 +198,7 @@ pub const TARGETS: &[Target] = &[
         keyframe_interval: 2.0,
         audio_kbps: 128,
         loudness: Some((-14.0, -1.0)),
+        hygiene: false,
         max_seconds: Some(900.0),
         max_bytes: Some(4_000_000_000),
         checked: "2026-09, facebook.com/business/ads-guide/update/video/instagram-reels; loudness: not published, -14 LUFS is what uploads are measured to be normalised to",
@@ -205,6 +215,7 @@ pub const TARGETS: &[Target] = &[
         keyframe_interval: 2.0,
         audio_kbps: 128,
         loudness: Some((-14.0, -1.0)),
+        hygiene: false,
         max_seconds: Some(600.0),
         max_bytes: Some(500_000_000),
         checked: "2026-09, ads.tiktok.com/help/article/video-ads-specifications; loudness: not published, -14 LUFS is what uploads are measured to be normalised to",
@@ -221,6 +232,7 @@ pub const TARGETS: &[Target] = &[
         keyframe_interval: 2.0,
         audio_kbps: 128,
         loudness: None,
+        hygiene: false,
         max_seconds: Some(140.0),
         max_bytes: Some(512_000_000),
         checked: "not re-checked (help.x.com refuses automated reads); as published: 2:20, 512 MB, 1920x1200",
@@ -237,9 +249,27 @@ pub const TARGETS: &[Target] = &[
         keyframe_interval: 2.0,
         audio_kbps: 128,
         loudness: None,
+        hygiene: false,
         max_seconds: Some(600.0),
         max_bytes: Some(5_000_000_000),
         checked: "not re-checked (help pages not reachable); as published: 10 min, 5 GB, 4096x2304",
+    },
+    Target {
+        name: "podcast",
+        about: "speech for a podcast feed, or a video of one",
+        max_width: 1920,
+        max_height: 1080,
+        portrait: false,
+        max_fps: 60.0,
+        crf: [20, 23, 26],
+        caps: WEB_CAPS,
+        keyframe_interval: 2.0,
+        audio_kbps: 128,
+        loudness: Some((-16.0, -1.0)),
+        hygiene: true,
+        max_seconds: None,
+        max_bytes: None,
+        checked: "2026-09, podcasters.apple.com/support/893-audio-requirements: -16 LUFS, -1 dBTP; Spotify normalises to -14 and accepts -16",
     },
     Target {
         name: "email",
@@ -253,6 +283,7 @@ pub const TARGETS: &[Target] = &[
         keyframe_interval: 2.0,
         audio_kbps: 96,
         loudness: None,
+        hygiene: false,
         max_seconds: None,
         max_bytes: Some(25_000_000),
         checked: "geneva's own budget: 25 MB, the common attachment limit",
@@ -527,6 +558,9 @@ pub fn apply(tl: &mut Timeline, facts: &Facts, opts: &Options<'_>) -> Vec<Diagno
         if let Some((lufs, peak)) = t.loudness {
             why.push(format!("loudness {lufs} LUFS, true peak under {peak} dBTP"));
         }
+        if t.hygiene {
+            why.push("hygiene (high-pass at 80 Hz, hum notched where found)".to_owned());
+        }
     }
 
     // Into the encode block, explicit.
@@ -564,16 +598,23 @@ pub fn apply(tl: &mut Timeline, facts: &Facts, opts: &Options<'_>) -> Vec<Diagno
         });
         audio.codec = Some(AudioCodec::Aac);
         audio.bitrate_kbps = Some(t.audio_kbps);
-        if let Some((lufs, peak)) = t.loudness {
+        if t.loudness.is_some() || t.hygiene {
             let out = tl.output.audio.get_or_insert(AudioOutput {
                 sample_rate: None,
                 channels: None,
                 loudness: None,
+                hygiene: None,
+                denoise: None,
             });
-            out.loudness = Some(Loudness {
-                target_lufs: lufs,
-                true_peak_dbtp: Some(peak),
-            });
+            if let Some((lufs, peak)) = t.loudness {
+                out.loudness = Some(Loudness {
+                    target_lufs: lufs,
+                    true_peak_dbtp: Some(peak),
+                });
+            }
+            if t.hygiene {
+                out.hygiene = Some(true);
+            }
         }
     }
 
@@ -657,6 +698,7 @@ pub fn table() -> Vec<serde_json::Value> {
                 "keyframe_interval": t.keyframe_interval,
                 "audio_kbps": t.audio_kbps,
                 "loudness": t.loudness.map(|(lufs, peak)| serde_json::json!({ "target_lufs": lufs, "true_peak_dbtp": peak })),
+                "hygiene": t.hygiene,
                 "max_seconds": t.max_seconds,
                 "max_bytes": t.max_bytes,
                 "checked": t.checked,

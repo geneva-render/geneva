@@ -179,6 +179,7 @@ otherwise. The printed timeline (`--show-timeline`) shows the choice.
 | `--keep-hdr` | Keep HDR sources HDR: the output takes their tags (PQ or HLG, BT.2020) and a ten-bit codec, `h265` unless `--codec` says otherwise (`h265` needs a hardware encoder; `av1` and `vp9` are software). Without it, HDR sources are tone-mapped to SDR. |
 | `--chunks N\|auto` | Encode the output in `N` stretches at once, on separate cores, joined afterwards; `auto` (the default) decides from the encoder and the machine, `1` turns it off. See `encode.video.chunks` in [timeline.md](timeline.md). |
 | `--no-audio` | Write no audio track. |
+| `--denoise` | Denoise the audio as speech with the embedded model, before hygiene and loudness; sets `output.audio.denoise` in the compiled timeline. Speech only: it damages music and overlapping speakers, and takes about as long as the audio plays on one core. Never part of a `--for` target. A binary built without the `denoise` feature refuses it with a message. |
 | `--exact` | Cut on the exact frame; a [smart cut](#smart-cut) when the source allows. |
 | `--show-timeline` | Print the timeline the verb built instead of rendering it. Asset paths in it are relative to the directory printed on stderr. |
 
@@ -333,6 +334,7 @@ property and stays with the hosted product.
 | `youtube` | 3840×2160 | -14 LUFS | Upload to YouTube: high quality, keyframes every half second, AAC 384 kb/s, as its upload guide asks; the loudness it normalises playback to. |
 | `instagram` | 1440×2560, 9:16 | -14 LUFS | Instagram Reels. The loudness is not published; -14 is what uploads are measured to be normalised to. |
 | `tiktok` | 1080×1920, 9:16 | -14 LUFS | TikTok. As for Instagram. |
+| `podcast` | 1920×1080 | -16 LUFS | Speech for a podcast feed, or a video of one: Apple Podcasts asks for -16 LUFS and -1 dBTP; Spotify normalises to -14 and accepts -16. The only target that also turns on `output.audio.hygiene`. |
 | `x` | 1920×1200 | | A post on X: 2:20 and 512 MB limits. |
 | `linkedin` | 4096×2304 | | A native LinkedIn post: 10 minutes and 5 GB limits. |
 | `email` | 1280×720 | | An attachment: a 25 MB budget. |
@@ -372,10 +374,13 @@ The rules, in order:
 8. Where the destination normalises loudness, the mix is brought to its
    level first (`output.audio.loudness`, see [timeline.md](timeline.md#output)):
    -14 LUFS with true peaks under -1 dBTP, so the platform has nothing
-   to correct. A source used as it is counts as fitting only when its
-   audio already measures within one loudness unit of that with its
-   peaks under the ceiling; otherwise it is re-encoded. The targets
-   without a number leave the level alone.
+   to correct; `podcast` asks for -16 and also turns on
+   `output.audio.hygiene`, the high-pass and hum notches for speech. A
+   source used as it is counts as fitting only when its audio already
+   measures within one loudness unit of that with its peaks under the
+   ceiling, and never for `podcast`, whose hygiene a copy cannot
+   carry; otherwise it is re-encoded. The targets without a number
+   leave the level alone. `--denoise` is never part of a target.
 
 The report carries one note (`N410`) with every choice and its reason:
 
@@ -385,12 +390,18 @@ note[N410]: target phone: 3840×2160 scaled to 1920×1080 (ceiling 1920×1080);
   keyframes every 2 s; fast start; AAC 128 kb/s 48 kHz stereo
 ```
 
-A loudness target adds what the mix measured and what was done to it
-to the render's notes:
+A loudness target, hygiene or denoising add what the mix measured and
+what was done to it to the render's notes:
 
 ```
+note[N600]: hygiene: high-pass at 80 Hz; mains hum at 60 Hz (-40 dBFS) notched with 2 harmonics
 note[N600]: loudness: measured -23.4 LUFS, +9.4 dB to reach -14 LUFS, true peak held under -1 dBTP
 ```
+
+`validate --probe` measures each asset's audio before anything is
+rendered and reports it (N310), with a warning for clipping (W311), a
+DC offset (W312), mains hum (W313) and silence (W314); see
+[errors.md](errors.md).
 
 ```sh
 geneva convert master.mov -o phone.mp4 --for phone

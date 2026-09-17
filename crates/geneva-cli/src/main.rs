@@ -437,7 +437,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Validate(args) => {
-            let loaded = load_timeline(&args.timeline, args.probe)?;
+            let loaded = load_timeline(&args.timeline, args.probe, args.probe)?;
             report(&loaded.diagnostics, cli.format, None)?;
             Ok(if loaded.is_ok() {
                 ExitCode::SUCCESS
@@ -478,7 +478,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 timeline: args.input.clone(),
                 assets: args.assets.clone(),
             };
-            let loaded = load_timeline(&timeline, true)?;
+            let loaded = load_timeline(&timeline, true, false)?;
             let Some(comp) = &loaded.composition else {
                 report(&loaded.diagnostics, cli.format, None)?;
                 return Ok(ExitCode::from(EXIT_INVALID));
@@ -541,7 +541,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
         }
         Command::Render(args) => {
-            let mut loaded = load_timeline(&args.timeline, true)?;
+            let mut loaded = load_timeline(&args.timeline, true, false)?;
             let mut size_limit = None;
             if let Some(name) = &args.for_ {
                 let text = std::fs::read_to_string(&args.timeline.timeline)?;
@@ -561,7 +561,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     )?;
                     size_limit = limit;
                     let text = serde_json::to_string_pretty(&tl)?;
-                    loaded = load_text(&text, &args.timeline.root(), true);
+                    loaded = load_text(&text, &args.timeline.root(), true, false);
                     loaded.diagnostics.extend(extra);
                 }
             }
@@ -771,6 +771,21 @@ fn run_verb(
         output = timeline_dir(&output);
     }
     let output = output.as_path();
+    if encode.denoise {
+        // Into the document, where a render reads it from; never part of
+        // a target.
+        let audio = timeline
+            .output
+            .audio
+            .get_or_insert(geneva_timeline::schema::AudioOutput {
+                sample_rate: None,
+                channels: None,
+                loudness: None,
+                hygiene: None,
+                denoise: None,
+            });
+        audio.denoise = Some(true);
+    }
     if let Some(name) = &encode.for_ {
         // A first resolution gives the facts the target needs (the size
         // and length the verb arrived at); the target then rewrites the
@@ -778,7 +793,7 @@ fn run_verb(
         // already fits the target, used as it is, is copied instead: the
         // target would only force a re-encode to the same thing.
         let text = serde_json::to_string_pretty(&timeline)?;
-        let first = load_text(&text, &compiled.root, true);
+        let first = load_text(&text, &compiled.root, true, false);
         if let Some(note) = fits_target_as_is(&first, &compiled.root, name, encode, output)? {
             extra.push(Diagnostic::note("N600", "", note));
         } else {
@@ -810,7 +825,7 @@ fn run_verb(
         }
         return Ok(ExitCode::SUCCESS);
     }
-    let mut loaded = load_text(&text, &compiled.root, true);
+    let mut loaded = load_text(&text, &compiled.root, true, false);
     loaded.diagnostics.extend(extra);
     let overrides = media::RenderOverrides {
         crf: encode.crf,
@@ -1091,6 +1106,7 @@ fn fits_target_as_is(
         || encode.budget.is_some()
         || encode.exact
         || encode.keep_hdr
+        || encode.denoise
         || encode.fill.is_some();
     if asks_encode {
         return Ok(None);
@@ -1150,18 +1166,19 @@ fn render_diagnostic(err: &RenderError) -> Diagnostic {
 
 /// Reads and resolves a timeline file, probing media assets for their
 /// lengths when `probe` is set and media support is available.
-fn load_timeline(args: &TimelineArgs, probe: bool) -> Result<Loaded> {
+fn load_timeline(args: &TimelineArgs, probe: bool, measure: bool) -> Result<Loaded> {
     let text = std::fs::read_to_string(&args.timeline)
         .with_context(|| format!("reading {}", args.timeline.display()))?;
-    Ok(load_text(&text, &args.root(), probe))
+    Ok(load_text(&text, &args.root(), probe, measure))
 }
 
 /// Resolves timeline text whose asset paths are relative to `root`.
-fn load_text(text: &str, root: &Path, probe: bool) -> Loaded {
+/// `measure` also decodes the audio of every asset for its report.
+fn load_text(text: &str, root: &Path, probe: bool, measure: bool) -> Loaded {
     if !probe {
         return geneva_timeline::load(text);
     }
-    let info = media::probe_assets(text, root);
+    let info = media::probe_assets(text, root, measure);
     let mut loaded = geneva_timeline::load_with(text, &info);
     loaded.diagnostics.extend(info.diagnostics());
     loaded.diagnostics.sort_by(|a, b| {

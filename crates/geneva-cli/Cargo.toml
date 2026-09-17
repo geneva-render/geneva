@@ -16,10 +16,14 @@ default = ["media"]
 # Media probing, video decoding and rendering to files, with the media
 # libraries built by scripts/build-media-libs.sh linked statically.
 media = ["geneva-media/media"]
+# Speech denoising with the DeepFilterNet model embedded in the binary,
+# under --denoise and output.audio.denoise.
+denoise = ["media", "geneva-media/denoise"]
 
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
+geneva-audio = { workspace = true }
 geneva-color = { workspace = true }
 geneva-media = { workspace = true }
 geneva-render = { workspace = true }

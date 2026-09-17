@@ -23,6 +23,34 @@ the format version it was written for.
   targets` shows the column. Out-of-range values are E423. The meter,
   true peak and limiter are a crate of their own, `geneva-audio`, with
   no dependencies.
+- **Audio hygiene.** `output.audio.hygiene` runs a second-order
+  high-pass at 80 Hz (rumble, handling noise, DC offset) and, where the
+  mix hums at 50 or 60 Hz, notches 2 Hz wide on the fundamental and the
+  harmonics that show. Hum is found by arithmetic (one Goertzel probe
+  per candidate against its neighbours, no transform), the mix is read
+  once to look for it, and the render's note says what was found. Fixed
+  curves, meant for speech: on music the high-pass takes the bass.
+- **Audio diagnostics.** `validate --probe` measures each asset's audio
+  and reports it (N310: integrated loudness, true peak, noise floor,
+  distance from the document's loudness target), and warns about
+  clipping (W311), a DC offset (W312), mains hum (W313) and silence
+  (W314); a stereo file carrying one signal twice is noted (N315). A
+  mono file is measured as a player measures it, not as the decoder's
+  3 dB-down upmix. `render` does not measure, since it reports what it
+  applies.
+- **Speech denoising, behind a build feature.** `output.audio.denoise`
+  and `--denoise` on the verbs run the mix through DeepFilterNet
+  (v0.5.6, MIT or Apache-2.0, the model embedded) before hygiene and
+  loudness, at 48 kHz as a mid and a side channel so the stereo image
+  is kept, with the model's lag taken off so the sound stays where it
+  was. Speech only: it damages music and overlapping speakers. It is
+  in the `denoise` cargo feature and not in the default or the released
+  builds, which refuse it with a message; a minute of 48 kHz stereo
+  takes 2.9 s on one core in a release build, and the feature adds
+  25 MB to the stripped binary (31.6 to 56.7 MB).
+- **`--for podcast`.** -16 LUFS and -1 dBTP, as Apple Podcasts asks
+  for, with hygiene on. A source is never copied as it is for this
+  target, since the hygiene is a change a copy cannot carry.
 - **Audio in the golden harness.** A golden case can carry
   `expected/audio.wav`, compared on numbers rather than bytes: the
   largest sample difference, the level over the whole track and over

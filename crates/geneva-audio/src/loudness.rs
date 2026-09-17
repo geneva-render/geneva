@@ -2,34 +2,7 @@
 //! 400 ms blocks every 100 ms, an absolute gate at -70 LUFS and a
 //! relative gate 10 LU under the mean of what passed it.
 
-/// One second-order section in direct form I.
-#[derive(Debug, Clone, Copy)]
-struct Biquad {
-    b: [f64; 3],
-    a: [f64; 3],
-    x: [f64; 2],
-    y: [f64; 2],
-}
-
-impl Biquad {
-    fn new(b: [f64; 3], a: [f64; 3]) -> Self {
-        Self {
-            b,
-            a,
-            x: [0.0; 2],
-            y: [0.0; 2],
-        }
-    }
-
-    fn run(&mut self, x: f64) -> f64 {
-        let y = self.b[0] * x + self.b[1] * self.x[0] + self.b[2] * self.x[1]
-            - self.a[1] * self.y[0]
-            - self.a[2] * self.y[1];
-        self.x = [x, self.x[0]];
-        self.y = [y, self.y[0]];
-        y
-    }
-}
+use crate::biquad::Biquad;
 
 /// The two stages of the K-weighting filter at `rate`: the high shelf
 /// that stands in for the head, then the high-pass. BS.1770 tabulates

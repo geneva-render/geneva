@@ -1,6 +1,7 @@
 //! Audio measurement and gain: the loudness meter of ITU-R BS.1770-4,
-//! true peak by oversampling, and a limiter that holds a true-peak
-//! ceiling. Pure arithmetic on interleaved `f32` frames, no I/O and no
+//! true peak by oversampling, a limiter that holds a true-peak ceiling,
+//! a rumble high-pass with hum notches, and the analysis a report is
+//! made from. Pure arithmetic on interleaved `f32` frames, no I/O and no
 //! clocks, so the same samples in give the same samples out on every
 //! machine, block boundaries included.
 //!
@@ -9,10 +10,15 @@
 
 #![forbid(unsafe_code)]
 
+mod analysis;
+mod biquad;
+mod hygiene;
 mod limiter;
 mod loudness;
 mod peak;
 
+pub use analysis::{Analysis, Report};
+pub use hygiene::{HIGH_PASS_HZ, Hum, HumDetector, Hygiene, NOTCH_BANDWIDTH_HZ};
 pub use limiter::Limiter;
 pub use loudness::{Meter, integrated};
 pub use peak::{TruePeak, true_peak};

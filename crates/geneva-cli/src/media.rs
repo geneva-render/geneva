@@ -352,7 +352,10 @@ impl AssetInfo for ProbedAssets {
 }
 
 /// Opens every video and audio asset declared in `text` under `root`.
-pub fn probe_assets(text: &str, root: &Path) -> ProbedAssets {
+/// `measure` decodes every audio track to report what it measures
+/// (N310 and the warnings around it), which `validate --probe` asks for
+/// and a render does not, since the render reports what it applies.
+pub fn probe_assets(text: &str, root: &Path, measure: bool) -> ProbedAssets {
     let mut out = ProbedAssets {
         root: root.to_path_buf(),
         ..ProbedAssets::default()
@@ -415,6 +418,22 @@ pub fn probe_assets(text: &str, root: &Path) -> ProbedAssets {
                 if let Some(d) = duration {
                     out.durations.insert(id.clone(), d);
                 }
+                if measure && info.audio.is_some() {
+                    match imp::measure_audio(&path) {
+                        Ok(Some(report)) => {
+                            audio_diagnostics(id, &report, &timeline.output, &mut out.problems);
+                        }
+                        Ok(None) => {}
+                        Err(e) => out.problems.push(
+                            Diagnostic::warning(
+                                "W316",
+                                format!("/assets/{id}/src"),
+                                format!("the audio of {id:?} could not be measured: {e}"),
+                            )
+                            .with_value(asset.src.clone()),
+                        ),
+                    }
+                }
             }
             Err(e) => out.problems.push(
                 Diagnostic::error(
@@ -430,6 +449,115 @@ pub fn probe_assets(text: &str, root: &Path) -> ProbedAssets {
     out
 }
 
+/// What a track measures, as a note, with a warning for each thing a
+/// render cannot put right or that the document has not asked to.
+fn audio_diagnostics(
+    id: &str,
+    r: &geneva_audio::Report,
+    output: &geneva_timeline::schema::Output,
+    out: &mut Vec<Diagnostic>,
+) {
+    use std::fmt::Write as _;
+    let path = format!("/assets/{id}/src");
+    let audio = output.audio.as_ref();
+    let hygiene = audio.and_then(|a| a.hygiene).unwrap_or(false);
+    if r.silent {
+        out.push(Diagnostic::warning(
+            "W314",
+            path.clone(),
+            format!("the audio of {id:?} is silent: nothing above -60 dBTP"),
+        ));
+        return;
+    }
+    let mut line = format!(
+        "audio of {id:?}: {} integrated, true peak {:.1} dBTP",
+        r.lufs
+            .map_or("no loudness".to_owned(), |l| format!("{l:.1} LUFS")),
+        r.true_peak_dbtp
+    );
+    if let (Some(floor), Some(snr)) = (r.noise_floor_dbfs, r.snr_db) {
+        let _ = write!(
+            line,
+            ", noise floor {floor:.0} dBFS ({snr:.0} dB under the signal)"
+        );
+    }
+    let _ = write!(
+        line,
+        ", {} Hz {}",
+        r.rate,
+        if r.channels == 1 { "mono" } else { "stereo" }
+    );
+    if let (Some(measured), Some(target)) = (r.lufs, audio.and_then(|a| a.loudness.as_ref())) {
+        let diff = target.target_lufs - measured;
+        let _ = write!(
+            line,
+            "; {:.1} LU {} the {} LUFS target, which the render applies",
+            diff.abs(),
+            if diff >= 0.0 { "under" } else { "over" },
+            target.target_lufs
+        );
+    }
+    out.push(Diagnostic::note("N310", path.clone(), line));
+    if r.clipped_runs > 0 {
+        out.push(
+            Diagnostic::warning(
+                "W311",
+                path.clone(),
+                format!(
+                    "the audio of {id:?} is clipped: {} run{} of samples at full scale, the longest {} samples, the first at {:.2} s",
+                    r.clipped_runs,
+                    if r.clipped_runs == 1 { "" } else { "s" },
+                    r.longest_clip,
+                    r.first_clip_secs.unwrap_or(0.0)
+                ),
+            )
+            .with_help("the recording is distorted where it clips; a loudness target does not undo that"),
+        );
+    }
+    if r.dc_offset > 0.01 {
+        let d = Diagnostic::warning(
+            "W312",
+            path.clone(),
+            format!(
+                "the audio of {id:?} carries a DC offset of {:.1}% of full scale",
+                r.dc_offset * 100.0
+            ),
+        );
+        out.push(if hygiene {
+            d.with_help("output.audio.hygiene is on and takes it out")
+        } else {
+            d.with_help("set output.audio.hygiene to take it out")
+        });
+    }
+    if let Some(hum) = &r.hum {
+        let d = Diagnostic::warning(
+            "W313",
+            path.clone(),
+            format!(
+                "the audio of {id:?} hums at {} Hz ({:.0} dBFS) with {} harmonic{}",
+                hum.base_hz,
+                hum.level_dbfs,
+                hum.harmonics.len() - 1,
+                if hum.harmonics.len() == 2 { "" } else { "s" }
+            ),
+        );
+        out.push(if hygiene {
+            d.with_help("output.audio.hygiene is on and notches it")
+        } else {
+            d.with_help("set output.audio.hygiene to notch it")
+        });
+    }
+    if r.dual_mono {
+        out.push(Diagnostic::note(
+            "N315",
+            path,
+            format!(
+                "the audio of {id:?} is two channels of one signal; it reads 3 dB louder than the same recording in one channel"
+            ),
+        ));
+    }
+}
+
 pub use imp::{
     copy_sources, describe, measure_audio, probe, read_subtitles, render, render_outputs, renderer,
 };
@@ -441,7 +569,7 @@ mod imp {
     use std::time::Instant;
 
     use anyhow::{Context, Result};
-    use geneva_media::mix::LoudnessReport;
+    use geneva_media::mix::TreatmentReport;
     use geneva_media::{
         AudioSettings, EncodeSettings, Encoder, MediaAssets, MediaInfo, VideoSettings,
     };
@@ -635,6 +763,8 @@ mod imp {
                                 .unwrap_or(2)
                                 .clamp(1, 2),
                             loudness: o.audio.as_ref().and_then(|a| a.loudness.clone()),
+                            hygiene: o.audio.as_ref().and_then(|a| a.hygiene).unwrap_or(false),
+                            denoise: o.audio.as_ref().and_then(|a| a.denoise).unwrap_or(false),
                         }),
                         subtitles: Vec::new(),
                         fast_start: true,
@@ -671,7 +801,11 @@ mod imp {
                                 || v.fixed_keyframes == Some(true)
                         });
                     let canvas_size = (o.width, o.height) == (comp.width, comp.height);
-                    if canvas_size && !wants_encode && !overrides.exact {
+                    if canvas_size
+                        && !wants_encode
+                        && !overrides.exact
+                        && !audio_treated(o.audio.as_ref())
+                    {
                         let plan = geneva_media::plan_stream_copy_explained(
                             comp,
                             root,
@@ -739,6 +873,8 @@ mod imp {
                                 .unwrap_or(2)
                                 .clamp(1, 2),
                             loudness: o.audio.as_ref().and_then(|a| a.loudness.clone()),
+                            hygiene: o.audio.as_ref().and_then(|a| a.hygiene).unwrap_or(false),
+                            denoise: o.audio.as_ref().and_then(|a| a.denoise).unwrap_or(false),
                         })
                     };
                     let settings = EncodeSettings {
@@ -1054,7 +1190,9 @@ mod imp {
                             });
                         }
                         Ok(Some(report)) => {
-                            notes.push(format!("{}: {}", feed.name, loudness_note(&report)));
+                            for note in treatment_notes(&report) {
+                                notes.push(format!("{}: {note}", feed.name));
+                            }
                         }
                         Ok(None) => {}
                     }
@@ -1191,28 +1329,59 @@ mod imp {
         ))
     }
 
-    /// One line on what a loudness target measured and did.
-    fn loudness_note(r: &LoudnessReport) -> String {
-        let Some(measured) = r.measured_lufs else {
-            return format!(
-                "loudness: the mix is silent, so it was left as it is (target {} LUFS)",
-                r.target_lufs
-            );
-        };
-        let mut line = format!(
-            "loudness: measured {measured:.1} LUFS, {:+.1} dB to reach {} LUFS, true peak held under {} dBTP",
-            r.gain_db, r.target_lufs, r.ceiling_dbtp
-        );
-        if let Some(result) = r.result_lufs {
-            if (result - r.target_lufs).abs() > 0.3 {
-                use std::fmt::Write;
-                let _ = write!(
-                    line,
-                    "; written at {result:.1} LUFS, since the limiter took the peaks that carried the rest"
-                );
-            }
+    /// Whether an output's audio is brought to a loudness, cleaned or
+    /// denoised, which only the mix can do, so no copy of it will do.
+    fn audio_treated(audio: Option<&geneva_timeline::schema::AudioOutput>) -> bool {
+        audio.is_some_and(|a| {
+            a.loudness.is_some() || a.hygiene == Some(true) || a.denoise == Some(true)
+        })
+    }
+
+    /// What the treatment of the mix measured and did, a line each.
+    fn treatment_notes(r: &TreatmentReport) -> Vec<String> {
+        let mut notes = Vec::new();
+        if r.denoised {
+            notes.push("denoise: the mix went through the speech model at 48 kHz".to_owned());
         }
-        line
+        if r.high_pass {
+            let hum = match &r.hum {
+                Some(hum) => format!(
+                    "; mains hum at {} Hz ({:.0} dBFS) notched with {} harmonic{}",
+                    hum.base_hz,
+                    hum.level_dbfs,
+                    hum.harmonics.len() - 1,
+                    if hum.harmonics.len() == 2 { "" } else { "s" }
+                ),
+                None => "; no mains hum found".to_owned(),
+            };
+            notes.push(format!(
+                "hygiene: high-pass at {} Hz{hum}",
+                geneva_audio::HIGH_PASS_HZ
+            ));
+        }
+        if let Some(l) = &r.loudness {
+            let Some(measured) = l.measured_lufs else {
+                notes.push(format!(
+                    "loudness: the mix is silent, so it was left as it is (target {} LUFS)",
+                    l.target_lufs
+                ));
+                return notes;
+            };
+            let mut line = format!(
+                "loudness: measured {measured:.1} LUFS, {:+.1} dB to reach {} LUFS, true peak held under {} dBTP",
+                l.gain_db, l.target_lufs, l.ceiling_dbtp
+            );
+            if let Some(result) = l.result_lufs {
+                if (result - l.target_lufs).abs() > 0.3 {
+                    let _ = write!(
+                        line,
+                        "; written at {result:.1} LUFS, since the limiter took the peaks that carried the rest"
+                    );
+                }
+            }
+            notes.push(line);
+        }
+        notes
     }
 
     /// Placeholder kept for the sink loop above.
@@ -1228,7 +1397,7 @@ mod imp {
         audio: Option<
             std::thread::ScopedJoinHandle<
                 'scope,
-                Result<Option<LoudnessReport>, geneva_media::MediaError>,
+                Result<Option<TreatmentReport>, geneva_media::MediaError>,
             >,
         >,
     }
@@ -1261,7 +1430,7 @@ mod imp {
             let tx = tx.clone();
             let rate = sample_rate.expect("audio comes with a rate");
             scope.spawn(
-                move || -> Result<Option<LoudnessReport>, geneva_media::MediaError> {
+                move || -> Result<Option<TreatmentReport>, geneva_media::MediaError> {
                     let mut mixer =
                         geneva_media::mix::Mixer::for_output(comp, root, enc.settings());
                     while let Some(chunk) = mixer.next_block(rate as usize)? {
@@ -1273,7 +1442,7 @@ mod imp {
                     let time = enc.time();
                     let packets = enc.finish()?;
                     let _ = tx.send(Msg::Audio(packets, time));
-                    Ok(mixer.loudness_report().cloned())
+                    Ok(mixer.report().cloned())
                 },
             )
         });
@@ -1645,12 +1814,10 @@ mod imp {
         geneva_media::probe(path).with_context(|| format!("probing {}", path.display()))
     }
 
-    /// The integrated loudness (`None` for silence) and true peak in dBTP
-    /// of a file's audio; `None` for a file without audio.
-    pub fn measure_audio(path: &Path) -> Result<Option<(Option<f64>, f64)>> {
-        let levels = geneva_media::measure_audio(path)
-            .with_context(|| format!("measuring the audio of {}", path.display()))?;
-        Ok(levels.map(|l| (l.lufs, l.true_peak_dbtp)))
+    /// What a file's audio measures; `None` for a file without audio.
+    pub fn measure_audio(path: &Path) -> Result<Option<geneva_audio::Report>> {
+        geneva_media::measure_audio(path)
+            .with_context(|| format!("measuring the audio of {}", path.display()))
     }
 
     pub fn renderer(root: std::path::PathBuf) -> CpuRenderer<MediaAssets> {
@@ -1812,6 +1979,16 @@ mod imp {
                 sample_rate,
                 channels,
                 loudness: comp.audio_output.as_ref().and_then(|a| a.loudness.clone()),
+                hygiene: comp
+                    .audio_output
+                    .as_ref()
+                    .and_then(|a| a.hygiene)
+                    .unwrap_or(false),
+                denoise: comp
+                    .audio_output
+                    .as_ref()
+                    .and_then(|a| a.denoise)
+                    .unwrap_or(false),
             })
         };
         let video_settings = if container.is_audio_only() {
@@ -1967,9 +2144,14 @@ mod imp {
                 crf: STITCH_CRF,
             });
         }
-        // The clips' own audio goes with the video: copied as coded.
+        // The clips' own audio goes with the video: copied as coded,
+        // unless the output treats its audio, which only the mix does.
         let copied_audio = match &smart {
-            Some(plan) if settings.audio.is_some() => plan.audio.clone(),
+            Some(plan)
+                if settings.audio.is_some() && !audio_treated(comp.audio_output.as_ref()) =>
+            {
+                plan.audio.clone()
+            }
             _ => None,
         };
         if let Some(copy) = &copied_audio {
@@ -2101,7 +2283,7 @@ mod imp {
             let copy_worker = copied_audio.as_ref().map(|copy| {
                 let tx = tx.clone();
                 scope.spawn(
-                    move || -> Result<Option<LoudnessReport>, geneva_media::MediaError> {
+                    move || -> Result<Option<TreatmentReport>, geneva_media::MediaError> {
                         let mut grid = geneva_media::AudioGrid::default();
                         for segment in &copy.segments {
                             let mut batch = Vec::with_capacity(64);
@@ -2129,7 +2311,7 @@ mod imp {
             let audio_worker = audio_encoder.map(|mut enc| {
                 let tx = tx.clone();
                 scope.spawn(
-                    move || -> Result<Option<LoudnessReport>, geneva_media::MediaError> {
+                    move || -> Result<Option<TreatmentReport>, geneva_media::MediaError> {
                         // A second of audio per message keeps the video frames
                         // flowing between them; the mix is made a second at a
                         // time too, so a long timeline never holds it whole.
@@ -2144,7 +2326,7 @@ mod imp {
                         let time = enc.time();
                         let packets = enc.finish()?;
                         let _ = tx.send(Msg::Audio(packets, time));
-                        Ok(mixer.loudness_report().cloned())
+                        Ok(mixer.report().cloned())
                     },
                 )
             });
@@ -2265,7 +2447,7 @@ mod imp {
         let encoder = joined.map_err(media_err)?;
         match audio_joined {
             Some(Err(e)) => return Err(media_err(e)),
-            Some(Ok(Some(report))) => notes.push(loudness_note(&report)),
+            Some(Ok(Some(report))) => notes.extend(treatment_notes(&report)),
             _ => {}
         }
         progress.finish(total, total, comp.fps.to_f64());
@@ -2309,7 +2491,7 @@ mod imp {
         Err(unavailable())
     }
 
-    pub fn measure_audio(_: &Path) -> Result<Option<(Option<f64>, f64)>> {
+    pub fn measure_audio(_: &Path) -> Result<Option<geneva_audio::Report>> {
         Err(unavailable())
     }
 

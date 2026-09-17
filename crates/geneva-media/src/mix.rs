@@ -8,12 +8,13 @@
 use std::path::Path;
 
 use geneva_anim::Track;
-use geneva_audio::{Limiter, Meter};
+use geneva_audio::{Hum, HumDetector, Hygiene, Limiter, Meter};
 use geneva_timeline::schema::{Loudness, TransitionKind};
 use geneva_timeline::{Composition, Ratio, ResolvedLayer, ResolvedSource};
 
 use crate::MediaError;
 use crate::codecs::{AudioReader, AudioSettings, AudioStream};
+use crate::spool::Spool;
 
 /// Gain is sampled once per block of this many frames.
 const GAIN_BLOCK: usize = 64;
@@ -224,8 +225,9 @@ pub struct LoudnessReport {
     pub target_lufs: f64,
     /// The true-peak ceiling, in dBTP.
     pub ceiling_dbtp: f64,
-    /// The mix as its sources add up, or `None` for silence (nothing
-    /// above the meter's absolute gate), which is left as it is.
+    /// The mix as its sources add up (after hygiene and denoising, where
+    /// they are on), or `None` for silence (nothing above the meter's
+    /// absolute gate), which is left as it is.
     pub measured_lufs: Option<f64>,
     /// The gain applied, in dB, before the limiter.
     pub gain_db: f64,
@@ -234,18 +236,63 @@ pub struct LoudnessReport {
     pub result_lufs: Option<f64>,
 }
 
-/// The loudness pass over the mix: measured first, then gained and
-/// limited block by block.
-struct Levelling {
-    spec: Loudness,
+/// What the treatment of the mix measured and did.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TreatmentReport {
+    /// The loudness target, where there was one.
+    pub loudness: Option<LoudnessReport>,
+    /// Whether the rumble high-pass ran.
+    pub high_pass: bool,
+    /// The hum found and notched, where hygiene was on and there was
+    /// any.
+    pub hum: Option<Hum>,
+    /// Whether the speech denoiser ran.
+    pub denoised: bool,
+}
+
+/// The treatment of the mix: measured in one or two passes over it,
+/// then applied block by block on the way out.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "two switches from the document and two states of the passes"
+)]
+struct Treatment {
+    loudness: Option<Loudness>,
+    hygiene: bool,
+    denoise: bool,
     /// Channels the encoder writes; a mono output is measured as the
     /// downmix the encoder makes.
     channels: usize,
-    meter: Meter,
+    prepared: bool,
+    filters: Option<Hygiene>,
     limiter: Option<Limiter>,
+    meter: Meter,
     pending: Vec<f32>,
     exhausted: bool,
-    report: Option<LoudnessReport>,
+    report: TreatmentReport,
+    /// The denoised mix from the first pass, read back instead of
+    /// being made again.
+    spool: Option<Spool>,
+    /// Frames taken from the spool so far.
+    spooled: usize,
+}
+
+/// A plain mixer over `template`, for a pass that runs while the
+/// treatment itself is borrowed.
+fn self_raw_copy(root: &Path, rate: u32, total_frames: usize, template: &[Voice]) -> Mixer {
+    Mixer {
+        root: root.to_path_buf(),
+        rate,
+        total_frames,
+        position: 0,
+        voices: template
+            .iter()
+            .cloned()
+            .map(|voice| Live::fresh(voice, rate, total_frames))
+            .collect(),
+        template: Vec::new(),
+        treatment: None,
+    }
 }
 
 /// Feeds a stereo block to a meter as the output carries it.
@@ -271,10 +318,10 @@ pub struct Mixer {
     total_frames: usize,
     position: usize,
     voices: Vec<Live>,
-    /// The voices as placed, kept only for a loudness target's first
-    /// pass over the mix.
+    /// The voices as placed, kept only for a treatment's passes over
+    /// the mix.
     template: Vec<Voice>,
-    levelling: Option<Levelling>,
+    treatment: Option<Treatment>,
 }
 
 impl Mixer {
@@ -294,41 +341,63 @@ impl Mixer {
             position: 0,
             voices,
             template: Vec::new(),
-            levelling: None,
+            treatment: None,
         }
     }
 
     /// The mix for an output as its audio settings describe it: at its
-    /// rate, and brought to its loudness target when it has one. A
-    /// target reads the whole mix once to measure it before the first
-    /// block goes out, which decodes every audio source twice.
+    /// rate, denoised, cleaned and brought to its loudness target where
+    /// they ask for that. A treatment reads the whole mix once to
+    /// measure it before the first block goes out (twice when hum is
+    /// found under a loudness target), which decodes every audio
+    /// source again each time.
     pub fn for_output(comp: &Composition, root: &Path, audio: &AudioSettings) -> Self {
         let mut mixer = Self::new(comp, root, audio.sample_rate);
-        if let Some(spec) = &audio.loudness {
+        if audio.loudness.is_some() || audio.hygiene || audio.denoise {
             let channels = usize::from(audio.channels.clamp(1, 2));
             mixer.template = mixer.voices.iter().map(|l| l.voice.clone()).collect();
-            mixer.levelling = Some(Levelling {
-                spec: spec.clone(),
+            mixer.treatment = Some(Treatment {
+                loudness: audio.loudness.clone(),
+                hygiene: audio.hygiene,
+                denoise: audio.denoise,
                 channels,
-                meter: Meter::new(audio.sample_rate, channels),
+                prepared: false,
+                filters: None,
                 limiter: None,
+                meter: Meter::new(audio.sample_rate, channels),
                 pending: Vec::new(),
                 exhausted: false,
-                report: None,
+                report: TreatmentReport {
+                    loudness: None,
+                    high_pass: audio.hygiene,
+                    hum: None,
+                    denoised: audio.denoise,
+                },
+                spool: None,
+                spooled: 0,
             });
         }
         mixer
     }
 
-    /// What the loudness target measured and did; `None` without one,
-    /// or before the first block. `result_lufs` is filled in after the
-    /// last.
+    /// Frames in the whole mix: `round(duration x rate)`.
     #[must_use]
-    pub fn loudness_report(&self) -> Option<&LoudnessReport> {
-        self.levelling.as_ref().and_then(|l| l.report.as_ref())
+    pub fn total_frames(&self) -> usize {
+        self.total_frames
     }
 
-    /// The same mix from the start, without the loudness pass.
+    /// What the treatment measured and did; `None` without one, or
+    /// before the first block. The loudness result is filled in after
+    /// the last.
+    #[must_use]
+    pub fn report(&self) -> Option<&TreatmentReport> {
+        self.treatment
+            .as_ref()
+            .filter(|t| t.prepared)
+            .map(|t| &t.report)
+    }
+
+    /// The same mix from the start, without the treatment.
     fn raw_copy(&self) -> Self {
         Self {
             root: self.root.clone(),
@@ -342,95 +411,194 @@ impl Mixer {
                 .map(|voice| Live::fresh(voice, self.rate, self.total_frames))
                 .collect(),
             template: Vec::new(),
-            levelling: None,
+            treatment: None,
         }
     }
 
-    /// The first pass: the whole mix through a meter, and from it the
-    /// gain and the limiter the second pass applies.
-    fn measure(&mut self) -> Result<(), MediaError> {
-        let mut raw = self.raw_copy();
+    /// The measuring passes: the mix, denoised where asked, through the
+    /// hum detector, the high-pass and the meter; then, when hum was
+    /// found under a loudness target, the notched mix through the meter
+    /// again, since the notches take level with them. From those, the
+    /// filters, the gain and the limiter the writing pass applies. A
+    /// denoised mix is spooled to a temporary file on the first pass,
+    /// since the model is the expensive part, and read back after.
+    fn prepare(&mut self) -> Result<(), MediaError> {
         let rate = self.rate;
-        let Some(levelling) = self.levelling.as_mut() else {
+        let mut raw = self.raw_copy();
+        let Some(t) = self.treatment.as_mut() else {
             return Ok(());
         };
-        let mut meter = Meter::new(rate, levelling.channels);
-        while let Some(block) = raw.raw_block(rate as usize)? {
-            meter_push(&mut meter, &block, levelling.channels);
+        #[cfg(not(feature = "denoise"))]
+        if t.denoise {
+            return Err(MediaError::Codec {
+                context: "audio".to_owned(),
+                reason: "denoising is not built into this binary".to_owned(),
+            });
         }
-        let measured = meter.integrated();
-        let target = levelling.spec.target_lufs;
-        let ceiling = levelling.spec.true_peak_dbtp.unwrap_or(-1.0);
-        let gain_db = measured.map_or(0.0, |m| target - m);
-        levelling.limiter = Some(Limiter::new(rate, 2, gain_db, ceiling));
-        levelling.report = Some(LoudnessReport {
-            target_lufs: target,
-            ceiling_dbtp: ceiling,
-            measured_lufs: measured,
-            gain_db,
-            result_lufs: None,
-        });
+        #[cfg(feature = "denoise")]
+        let mut denoiser = if t.denoise {
+            t.spool = Some(Spool::new()?);
+            Some(crate::denoise::Denoiser::new(rate)?)
+        } else {
+            None
+        };
+        let mut high_pass = t.hygiene.then(|| Hygiene::new(rate, 2, None));
+        let mut detector = t.hygiene.then(|| HumDetector::new(rate, 2));
+        let mut meter = t.loudness.as_ref().map(|_| Meter::new(rate, t.channels));
+        let channels = t.channels;
+        let mut feed =
+            |block: &mut Vec<f32>, spool: &mut Option<Spool>| -> Result<(), MediaError> {
+                if let Some(s) = spool.as_mut() {
+                    s.write(block)?;
+                }
+                // Hum is looked for before the high-pass, which would take
+                // 9 dB off a 60 Hz fundamental first.
+                if let Some(d) = detector.as_mut() {
+                    d.push(block);
+                }
+                if let Some(hp) = high_pass.as_mut() {
+                    hp.process(block);
+                }
+                if let Some(m) = meter.as_mut() {
+                    meter_push(m, block, channels);
+                }
+                Ok(())
+            };
+        while let Some(mut block) = raw.raw_block(rate as usize)? {
+            #[cfg(feature = "denoise")]
+            if let Some(d) = denoiser.as_mut() {
+                block = d.push(&block)?;
+            }
+            feed(&mut block, &mut t.spool)?;
+        }
+        #[cfg(feature = "denoise")]
+        if let Some(d) = denoiser.as_mut() {
+            let mut tail = d.finish()?;
+            feed(&mut tail, &mut t.spool)?;
+        }
+        let hum = detector.and_then(|d| d.hum());
+        if hum.is_some() && meter.is_some() {
+            let mut raw = self_raw_copy(&self.root, rate, self.total_frames, &self.template);
+            if let Some(s) = t.spool.as_mut() {
+                s.rewind()?;
+            }
+            let mut chain = Hygiene::new(rate, 2, hum.as_ref());
+            let mut again = Meter::new(rate, t.channels);
+            loop {
+                let block = match t.spool.as_mut() {
+                    Some(s) => s.read(rate as usize)?,
+                    None => raw.raw_block(rate as usize)?.unwrap_or_default(),
+                };
+                if block.is_empty() {
+                    break;
+                }
+                let mut block = block;
+                chain.process(&mut block);
+                meter_push(&mut again, &block, t.channels);
+            }
+            meter = Some(again);
+        }
+        if let Some(s) = t.spool.as_mut() {
+            s.rewind()?;
+        }
+        t.filters = t.hygiene.then(|| Hygiene::new(rate, 2, hum.as_ref()));
+        if let (Some(spec), Some(meter)) = (&t.loudness, meter) {
+            let measured = meter.integrated();
+            let ceiling = spec.true_peak_dbtp.unwrap_or(-1.0);
+            let gain_db = measured.map_or(0.0, |m| spec.target_lufs - m);
+            t.limiter = Some(Limiter::new(rate, 2, gain_db, ceiling));
+            t.report.loudness = Some(LoudnessReport {
+                target_lufs: spec.target_lufs,
+                ceiling_dbtp: ceiling,
+                measured_lufs: measured,
+                gain_db,
+                result_lufs: None,
+            });
+        }
+        t.report.hum = hum;
+        t.prepared = true;
         Ok(())
     }
 
-    /// Frames in the whole mix: `round(duration × rate)`.
-    pub fn total_frames(&self) -> usize {
-        self.total_frames
-    }
-
     /// The next block of at most `frames` frames, or `None` after the
-    /// last one. Without a loudness target, samples are summed without
+    /// last one. Without a treatment, samples are summed without
     /// limiting and the encoder clamps to full scale; with one, they are
-    /// gained to the target and the limiter holds the true peak under
-    /// its ceiling. The blocks are the same whatever size they are asked
-    /// for in.
+    /// filtered, gained to the target and the limiter holds the true
+    /// peak under its ceiling. The blocks are the same whatever size
+    /// they are asked for in.
     pub fn next_block(&mut self, frames: usize) -> Result<Option<Vec<f32>>, MediaError> {
-        if self.levelling.is_none() {
+        if self.treatment.is_none() {
             return self.raw_block(frames);
         }
-        if self.levelling.as_ref().is_some_and(|l| l.limiter.is_none()) {
-            self.measure()?;
+        if self.treatment.as_ref().is_some_and(|t| !t.prepared) {
+            self.prepare()?;
         }
         let wanted = frames * 2;
         loop {
             let (enough, exhausted) = self
-                .levelling
+                .treatment
                 .as_ref()
-                .map_or((true, true), |l| (l.pending.len() >= wanted, l.exhausted));
+                .map_or((true, true), |t| (t.pending.len() >= wanted, t.exhausted));
             if enough || exhausted {
                 break;
             }
-            let raw = self.raw_block(frames)?;
-            let Some(levelling) = self.levelling.as_mut() else {
+            let total = self.total_frames;
+            let mut spool = self.treatment.as_mut().and_then(|t| t.spool.take());
+            let spooled = self.treatment.as_ref().map_or(0, |t| t.spooled);
+            let raw = match spool.as_mut() {
+                // Exactly the mix's length, whatever rounding the model's
+                // rate change left the spool with.
+                Some(s) => {
+                    let need = total.saturating_sub(spooled).min(frames);
+                    if need == 0 {
+                        None
+                    } else {
+                        let mut v = s.read(need)?;
+                        v.resize(need * 2, 0.0);
+                        Some(v)
+                    }
+                }
+                None => self.raw_block(frames)?,
+            };
+            let Some(t) = self.treatment.as_mut() else {
                 break;
             };
-            let Some(limiter) = levelling.limiter.as_mut() else {
-                break;
-            };
+            t.spool = spool;
+            if let Some(block) = &raw {
+                t.spooled += block.len() / 2;
+            }
             let out = match raw {
-                Some(block) => limiter.push(&block),
+                Some(mut block) => {
+                    if let Some(f) = t.filters.as_mut() {
+                        f.process(&mut block);
+                    }
+                    match t.limiter.as_mut() {
+                        Some(l) => l.push(&block),
+                        None => block,
+                    }
+                }
                 None => {
-                    levelling.exhausted = true;
-                    limiter.finish()
+                    t.exhausted = true;
+                    t.limiter.as_mut().map_or_else(Vec::new, Limiter::finish)
                 }
             };
-            meter_push(&mut levelling.meter, &out, levelling.channels);
-            levelling.pending.extend(out);
-            if levelling.exhausted {
-                let result = levelling.meter.integrated();
-                if let Some(report) = levelling.report.as_mut() {
+            meter_push(&mut t.meter, &out, t.channels);
+            t.pending.extend(out);
+            if t.exhausted {
+                let result = t.meter.integrated();
+                if let Some(report) = t.report.loudness.as_mut() {
                     report.result_lufs = result;
                 }
             }
         }
-        let Some(levelling) = self.levelling.as_mut() else {
+        let Some(t) = self.treatment.as_mut() else {
             return Ok(None);
         };
-        if levelling.pending.is_empty() {
+        if t.pending.is_empty() {
             return Ok(None);
         }
-        let n = wanted.min(levelling.pending.len());
-        Ok(Some(levelling.pending.drain(..n).collect()))
+        let n = wanted.min(t.pending.len());
+        Ok(Some(t.pending.drain(..n).collect()))
     }
 
     /// The next block of the plain mix.

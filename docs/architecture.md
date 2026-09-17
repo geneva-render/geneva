@@ -14,7 +14,7 @@ timeline JSON ──parse──▶ Timeline ──resolve──▶ Composition �
 | Crate | Role | Depends on |
 | --- | --- | --- |
 | `geneva-anim` | Easing curves and keyframe tracks. No I/O, no clocks. | serde |
-| `geneva-audio` | The loudness meter of ITU-R BS.1770-4, true peak by oversampling, and a true-peak limiter, on interleaved `f32` frames. No I/O, no clocks. | none |
+| `geneva-audio` | The loudness meter of ITU-R BS.1770-4, true peak by oversampling, a true-peak limiter, the rumble high-pass with hum detection and notches, and the analysis behind `validate --probe`, on interleaved `f32` frames. No I/O, no clocks. | none |
 | `geneva-color` | Tags, inference, transfer functions, matrices, the `LinearRgba` working format and CSS color parsing. | geneva-anim |
 | `geneva-html` | A strict HTML and CSS subset: parsing, the cascade, block and flexbox layout over taffy, and a display list of boxes, text runs and images. Not a browser; it has no inline layout, float, grid, transition or media query. | geneva-color, taffy |
 | `geneva-timeline` | The format: document types (also the JSON Schema source), exact `Ratio` time, parsing with path-precise errors, resolution into `Composition`, diagnostics. Markup and CSS inside a document are checked here, so their errors carry a path like every other. | geneva-anim, geneva-color, geneva-html |
@@ -285,7 +285,14 @@ format. Encoding goes the other way: linear to the output transfer, to
 Y'CbCr, 2×2 chroma averaging, 8-bit 4:2:0, then the encoder. Color tags
 travel with the stream in both directions. Audio is decoded and resampled
 to stereo `f32` at the output rate, shaped by gain tracks and fades, and
-summed.
+summed. An output that asks for it is then treated on the way out: the
+speech denoiser first (the `denoise` cargo feature, which links the
+DeepFilterNet runtime from its git repository at a released tag and
+embeds its model; off unless built in), then the hygiene high-pass and
+notches, then the gain to a loudness target and the true-peak limiter.
+Anything measured first is measured on a pass over the mix before the
+blocks go out, and a denoised mix is spooled to a temporary file between
+the passes so the model runs once.
 
 ## Golden tests
 

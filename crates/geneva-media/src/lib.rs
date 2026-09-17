@@ -16,11 +16,15 @@ pub mod chunks;
 #[cfg(feature = "media")]
 mod codecs;
 pub mod convert;
+#[cfg(feature = "denoise")]
+pub mod denoise;
 mod info;
 #[cfg(feature = "media")]
 mod levels;
 #[cfg(feature = "media")]
 pub mod mix;
+#[cfg(feature = "media")]
+mod spool;
 pub mod subtitles;
 
 use std::path::PathBuf;
@@ -43,7 +47,7 @@ pub use codecs::{
 };
 pub use info::{AudioInfo, MediaInfo, SubtitleInfo, VideoInfo};
 #[cfg(feature = "media")]
-pub use levels::{AudioLevels, measure_audio};
+pub use levels::measure_audio;
 
 /// Errors from reading or writing media.
 #[derive(Debug, Error)]

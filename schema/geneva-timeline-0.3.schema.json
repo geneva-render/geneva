@@ -370,6 +370,20 @@
             }
           ],
           "description": "A loudness to bring the mix to. Unset, the mix is written at\nwhatever level its sources add up to."
+        },
+        "hygiene": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Audio hygiene for speech: a high-pass at 80 Hz that takes rumble,\nhandling noise and DC offset, and notches on mains hum (50 or 60\nHz and its harmonics) where the mix has some. Fixed curves. On\nmusic the high-pass takes the bass under 80 Hz with it. Defaults\nto false."
+        },
+        "denoise": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Speech denoising with an embedded model (DeepFilterNet), before\nhygiene and loudness. Speech only: it damages music and\noverlapping speakers. Costs about as long as the audio takes to\nplay on one core. Defaults to false."
         }
       },
       "description": "Audio output format."

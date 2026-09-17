@@ -7,6 +7,8 @@ mod encode;
 mod ffi;
 mod h264;
 mod probe;
+#[cfg(feature = "denoise")]
+mod resample;
 mod scale;
 mod smartcut;
 mod subtitle_streams;
@@ -32,6 +34,8 @@ pub use ffi::HdrMetadata;
 /// An encoded packet on its way to the muxer.
 pub use ffmpeg_next::Packet;
 pub use probe::{hdr_metadata_of, probe};
+#[cfg(feature = "denoise")]
+pub use resample::Resampler;
 pub use scale::PlaneScaler;
 pub use smartcut::{
     AudioCopy, AudioGrid, AudioSegment, CopiedPacket, Segment, SmartPlan, SourceStream,

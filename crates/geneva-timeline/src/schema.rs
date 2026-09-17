@@ -126,6 +126,19 @@ pub struct AudioOutput {
     /// whatever level its sources add up to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loudness: Option<Loudness>,
+    /// Audio hygiene for speech: a high-pass at 80 Hz that takes rumble,
+    /// handling noise and DC offset, and notches on mains hum (50 or 60
+    /// Hz and its harmonics) where the mix has some. Fixed curves. On
+    /// music the high-pass takes the bass under 80 Hz with it. Defaults
+    /// to false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hygiene: Option<bool>,
+    /// Speech denoising with an embedded model (DeepFilterNet), before
+    /// hygiene and loudness. Speech only: it damages music and
+    /// overlapping speakers. Costs about as long as the audio takes to
+    /// play on one core. Defaults to false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub denoise: Option<bool>,
 }
 
 /// A loudness target for the mix, measured as ITU-R BS.1770-4 (EBU R128)
