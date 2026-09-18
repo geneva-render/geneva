@@ -84,12 +84,12 @@ fn what_is_not_drawn_yet_is_refused_by_name() {
     };
     let loaded = load(
         r##"{"geneva":"0.4","output":{"width":16,"height":16,"fps":30,"duration":"1s"},
-        "layers":[{"clips":[{"source":{"kind":"solid","color":"#fff"},"blend":"multiply"}]}]}"##,
+        "layers":[{"clips":[{"source":{"kind":"solid","color":"#fff"},"effects":[{"kind":"blur","radius":4}]}]}]}"##,
     );
     let comp = loaded.composition.expect("a valid scene");
     let mut renderer = GpuRenderer::new(gpu, NoAssets);
     match renderer.render_frame(&comp, Ratio::ZERO) {
-        Err(RenderError::Unsupported { what, .. }) => assert_eq!(what, "the multiply blend mode"),
+        Err(RenderError::Unsupported { what, .. }) => assert_eq!(what, "the blur effect"),
         other => panic!("expected the unsupported error, got {other:?}"),
     }
 }

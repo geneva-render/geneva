@@ -93,7 +93,7 @@ mode). A sprite sheet's `.vtt` map is its own row (`kind`
 | `--crf N` | Constant-quality level, overriding the timeline. Lower is better; 18 to 30 is the useful range for H.264 and H.265. |
 | `--preset NAME` | Encoder speed preset, `ultrafast` to `veryslow`. |
 | `--no-audio` | Write no audio track. |
-| `--renderer auto\|cpu\|gpu` | Which renderer composites the frames. `auto` takes the GPU where the machine has one the renderer can draw with and the CPU otherwise; `gpu` takes whatever device opens, a software one included, and falls back to the CPU with a note when none does. The GPU renderer draws solids, shapes and still images so far and the render loop does not use it yet, so every choice composites on the CPU for now; `gpu` probes the device and reports what it found. |
+| `--renderer auto\|cpu\|gpu` | Which renderer composites the frames. `auto` takes the GPU where the machine has one the renderer can draw with and the CPU otherwise; `gpu` takes whatever device opens, a software one included, and falls back to the CPU with a note when none does. The GPU renderer draws everything but blur, text, markup and video so far, and the render loop does not use it yet, so every choice composites on the CPU for now; `gpu` probes the device and reports what it found. |
 | `--exact` | Cut on the exact frame instead of moving cuts to keyframes; see [smart cut](#smart-cut). |
 | `--for TARGET`, `--quality`, `--budget` | Encode for a destination; see [targets](#targets). On `render` the timeline's size is kept; only the encode block is set. |
 | `--fill bars\|blur` | What surrounds a picture that does not cover its frame (a landscape video on a portrait canvas): the background color, or a blurred, scaled-up copy of the picture behind it. Verbs only. |

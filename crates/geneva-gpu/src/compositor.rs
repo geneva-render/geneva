@@ -1,19 +1,30 @@
-//! Drawing a frame: the pipelines, the per-clip uniforms, the image
-//! textures, the target and its readback.
+//! Drawing a frame: the pipelines, the per-clip uniforms, the textures
+//! (image assets, luma masks, nested compositions, the backdrop copy a
+//! separable blend reads), the target and its readback.
 //!
 //! What draws here is what `composite.wgsl` transcribes from the CPU
-//! renderer: solids, shapes and still images, placed through the same
-//! [`Placement`] the reference uses, at the clip's opacity, blended
-//! normally or additively. Everything else in the imaging model (masks,
-//! the separable blend modes, transitions, nested compositions, blur,
-//! text, markup and video) is refused with [`RenderError::Unsupported`]
-//! until its step of the plan.
+//! renderer: solids, shapes, still images and nested compositions,
+//! placed through the same [`Placement`] the reference uses, through
+//! shape and luma masks, at the clip's opacity with its transitions,
+//! blended by any of the format's modes, with a fade's veil over the
+//! result. Blur, text, markup and video are refused with
+//! [`RenderError::Unsupported`] until their step of the plan.
+//!
+//! A frame is a list of passes, nested compositions first: each renders
+//! its layers into a texture (a pooled one for a nested composition, the
+//! frame's own for the top), and a nested composition's texture is then
+//! drawn into its parent like an image. Normal and add blending are
+//! fixed-function; a separable mode ends the pass, copies the target to
+//! a backdrop texture, and draws with a pipeline that replaces the pixel
+//! with what the shader composites from the copy.
 
 use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
 use geneva_color::{Color, LinearRgba};
-use geneva_render::{AssetSource, Frame, Image, Placement, RenderError, crop_window};
+use geneva_render::{
+    AssetSource, Frame, Image, Placement, RenderError, crop_window, fade_veil, transition_gain,
+};
 use geneva_timeline::schema::{BlendMode, ShapeKind};
 use geneva_timeline::{Composition, Ratio, ResolvedClip, ResolvedLayer, ResolvedSource};
 use half::f16;
@@ -30,6 +41,7 @@ struct ClipUniform {
     interior: [f32; 4],
     fill: [f32; 4],
     stroke: [f32; 4],
+    mask_rect: [f32; 4],
     position: [f32; 2],
     anchor: [f32; 2],
     scale: [f32; 2],
@@ -39,10 +51,15 @@ struct ClipUniform {
     stroke_width: f32,
     radius: f32,
     opacity: f32,
+    mask_radius: f32,
+    mask_feather: f32,
     kind: u32,
     mode: u32,
     has_stroke: u32,
-    _pad: [u32; 2],
+    blend: u32,
+    mask_kind: u32,
+    mask_invert: u32,
+    _pad: u32,
 }
 
 const KIND_SOLID: u32 = 0;
@@ -59,15 +76,57 @@ const MODE_CENTER: u32 = 1;
 /// by span with one bilinear sample at the pixel center.
 const MODE_SPANS: u32 = 2;
 
+const MASK_NONE: u32 = 0;
+const MASK_RECT: u32 = 1;
+const MASK_ELLIPSE: u32 = 2;
+const MASK_LUMA: u32 = 3;
+
 /// Bytes per pixel of the working format.
 const TEXEL_BYTES: u32 = 8;
+
+/// A texture a draw reads.
+#[derive(Clone)]
+enum Tex {
+    /// The 1x1 transparent texture, where the draw has none.
+    Blank,
+    /// An uploaded asset, by id.
+    Asset(String),
+    /// A pooled texture of this frame: a nested composition's picture,
+    /// or a pass's backdrop copy.
+    Pooled(usize),
+}
+
+/// How a draw lands on the target.
+#[derive(Clone, Copy)]
+enum Blending {
+    /// Premultiplied "over", fixed-function.
+    Normal,
+    /// Colors summed, fixed-function.
+    Add,
+    /// One of the seven separable modes, composited in the shader from
+    /// a copy of the target.
+    Separable,
+    /// A fade's veil: the target blended toward the fill by this
+    /// fraction, fixed-function with a blend constant.
+    Veil(f32),
+}
 
 /// One clip to draw, in order.
 struct Draw {
     uniform: ClipUniform,
-    blend: BlendMode,
-    /// The image texture, by asset id; none for a solid or a shape.
-    image: Option<String>,
+    blending: Blending,
+    image: Tex,
+    mask: Tex,
+}
+
+/// The layers of one composition drawn into one texture.
+struct Pass {
+    /// The frame's own target, or a pooled texture.
+    target: Option<usize>,
+    width: u32,
+    height: u32,
+    background: Color,
+    draws: Vec<Draw>,
 }
 
 /// An image asset on the device.
@@ -76,6 +135,17 @@ struct Cached {
     width: u32,
     height: u32,
     content: Option<[u32; 4]>,
+}
+
+/// A texture the frame draws into or copies to, kept for the next
+/// frame that needs one of its size.
+struct Pooled {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    width: u32,
+    height: u32,
+    /// Taken by this frame.
+    busy: bool,
 }
 
 /// The frame texture and the buffer it is read back through.
@@ -93,8 +163,10 @@ struct Target {
 pub(crate) struct Compositor {
     normal: wgpu::RenderPipeline,
     add: wgpu::RenderPipeline,
+    separable: wgpu::RenderPipeline,
+    veil: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
-    /// One slot per clip, `slot` bytes apart, bound at a dynamic offset.
+    /// One slot per draw, `slot` bytes apart, bound at a dynamic offset.
     uniforms: wgpu::Buffer,
     slot: u64,
     capacity: usize,
@@ -102,9 +174,9 @@ pub(crate) struct Compositor {
     blank: wgpu::TextureView,
     target: Option<Target>,
     images: HashMap<String, Cached>,
-    /// Bind groups by image id (the empty id for the blank texture),
-    /// dropped when the uniform buffer is replaced.
-    bind_groups: HashMap<String, wgpu::BindGroup>,
+    pool: Vec<Pooled>,
+    /// The passes of the frame being planned, nested compositions first.
+    passes: Vec<Pass>,
 }
 
 impl Compositor {
@@ -115,6 +187,16 @@ impl Compositor {
             source: wgpu::ShaderSource::Wgsl(include_str!("composite.wgsl").into()),
         });
         let uniform_size = std::mem::size_of::<ClipUniform>() as u64;
+        let texture_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("geneva clip"),
             entries: &[
@@ -128,16 +210,9 @@ impl Compositor {
                     },
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                texture_entry(1),
+                texture_entry(2),
+                texture_entry(3),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -190,6 +265,23 @@ impl Compositor {
                 alpha: wgpu::BlendComponent::OVER,
             },
         );
+        // The shader composites from the backdrop copy and its result
+        // replaces the pixel.
+        let separable = pipeline("geneva composite separable", wgpu::BlendState::REPLACE);
+        // dst * (1 - a) + fill * a on every channel, `a` the blend
+        // constant: Frame::veil.
+        let constant = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Constant,
+            dst_factor: wgpu::BlendFactor::OneMinusConstant,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let veil = pipeline(
+            "geneva composite veil",
+            wgpu::BlendState {
+                color: constant,
+                alpha: constant,
+            },
+        );
         let align = u64::from(device.limits().min_uniform_buffer_offset_alignment);
         let slot = uniform_size.div_ceil(align) * align;
         let capacity = 64;
@@ -213,6 +305,8 @@ impl Compositor {
         Self {
             normal,
             add,
+            separable,
+            veil,
             layout,
             uniforms,
             slot,
@@ -220,7 +314,8 @@ impl Compositor {
             blank,
             target: None,
             images: HashMap::new(),
-            bind_groups: HashMap::new(),
+            pool: Vec::new(),
+            passes: Vec::new(),
         }
     }
 
@@ -238,13 +333,41 @@ impl Compositor {
         if width == 0 || height == 0 {
             return Ok(());
         }
-        let draws = self.plan(gpu, assets, comp, &comp.layers, width, height, t)?;
-        self.draw(gpu, width, height, comp.background, &draws);
+        let device = gpu.device();
+        if self
+            .target
+            .as_ref()
+            .is_none_or(|t| t.width != width || t.height != height)
+        {
+            self.target = Some(make_target(device, width, height));
+        }
+        for p in &mut self.pool {
+            p.busy = false;
+        }
+        self.passes.clear();
+        let planned = self.plan(
+            gpu,
+            assets,
+            comp,
+            &comp.layers,
+            width,
+            height,
+            comp.background,
+            t,
+            None,
+        );
+        if let Err(e) = planned {
+            self.passes.clear();
+            return Err(e);
+        }
+        self.execute(gpu);
         self.read_back(gpu, frame);
         Ok(())
     }
 
-    /// Decides what each visible clip draws, uploading images on the way.
+    /// Plans the pass that draws `layers` into `target` (the frame's own
+    /// when `None`), after the passes of the nested compositions it
+    /// shows; images and luma masks are uploaded on the way.
     #[allow(clippy::too_many_arguments)]
     fn plan<A: AssetSource>(
         &mut self,
@@ -254,8 +377,10 @@ impl Compositor {
         layers: &[ResolvedLayer],
         width: u32,
         height: u32,
+        background: Color,
         t: Ratio,
-    ) -> Result<Vec<Draw>, RenderError> {
+        target: Option<usize>,
+    ) -> Result<(), RenderError> {
         let mut draws = Vec::new();
         let frame_size = [width as f32, height as f32];
         for layer in layers {
@@ -264,11 +389,12 @@ impl Compositor {
                     continue;
                 }
                 let local = (t - clip.start).to_f64();
-                let opacity = clip.opacity.sample(local).clamp(0.0, 1.0);
+                let mut opacity = clip.opacity.sample(local).clamp(0.0, 1.0);
+                opacity *= transition_gain(layer, i, t);
                 if opacity <= 0.0 {
                     continue;
                 }
-                if let Some(what) = unsupported(layer, i) {
+                if let Some(what) = unsupported(clip) {
                     return Err(RenderError::Unsupported {
                         what: what.to_owned(),
                         path: clip.path.clone(),
@@ -279,7 +405,7 @@ impl Compositor {
                     opacity: opacity as f32,
                     ..ClipUniform::zeroed()
                 };
-                let mut image = None;
+                let mut image = Tex::Blank;
                 let (size, content) = match &clip.source {
                     ResolvedSource::Solid { color } => {
                         uniform.kind = KIND_SOLID;
@@ -309,12 +435,26 @@ impl Compositor {
                     }
                     ResolvedSource::Image { asset } => {
                         uniform.kind = KIND_IMAGE;
-                        let cached = self.upload(gpu, assets, comp, asset)?;
-                        image = Some(asset.clone());
-                        (
-                            (f64::from(cached.width), f64::from(cached.height)),
-                            cached.content,
-                        )
+                        let (w, h, content) = self.upload(gpu, assets, comp, asset)?;
+                        image = Tex::Asset(asset.clone());
+                        ((f64::from(w), f64::from(h)), content)
+                    }
+                    ResolvedSource::Composition(nested) => {
+                        uniform.kind = KIND_IMAGE;
+                        let texture = self.acquire(gpu, nested.width, nested.height);
+                        self.plan(
+                            gpu,
+                            assets,
+                            comp,
+                            &nested.layers,
+                            nested.width,
+                            nested.height,
+                            nested.background,
+                            (t - clip.start) * clip.speed,
+                            Some(texture),
+                        )?;
+                        image = Tex::Pooled(texture);
+                        ((f64::from(nested.width), f64::from(nested.height)), None)
                     }
                     _ => unreachable!("refused above"),
                 };
@@ -327,6 +467,27 @@ impl Compositor {
                 else {
                     continue;
                 };
+                let mut mask = Tex::Blank;
+                if let Some(m) = &clip.mask {
+                    // The mask's box is in the clip's box, which is the window.
+                    let [cx, cy, w, h] = window;
+                    let [mx, my, mw, mh] = m.rect_px(w, h);
+                    uniform.mask_rect = [cx + mx, cy + my, mw, mh].map(|v| v as f32);
+                    uniform.mask_radius = m.radius as f32;
+                    uniform.mask_feather = m.feather as f32;
+                    uniform.mask_invert = u32::from(m.invert);
+                    uniform.mask_kind = match &m.asset {
+                        Some(id) => {
+                            self.upload(gpu, assets, comp, id)?;
+                            mask = Tex::Asset(id.clone());
+                            MASK_LUMA
+                        }
+                        None => match m.shape {
+                            ShapeKind::Rect => MASK_RECT,
+                            ShapeKind::Ellipse => MASK_ELLIPSE,
+                        },
+                    };
+                }
                 uniform.bounds = place.bounds.map(|v| v as f32);
                 uniform.window = place.window.map(|v| v as f32);
                 uniform.position = place.position.map(|v| v as f32);
@@ -338,6 +499,7 @@ impl Compositor {
                     MODE_CENTER
                 } else if uniform.kind == KIND_IMAGE
                     && place.axis_aligned()
+                    && uniform.mask_kind == MASK_NONE
                     && place.scale[0].abs() >= 1.0
                     && place.scale[1].abs() >= 1.0
                 {
@@ -347,149 +509,269 @@ impl Compositor {
                 } else {
                     MODE_SUBSAMPLES
                 };
+                let (blending, code) = blending(clip.blend);
+                uniform.blend = code;
                 draws.push(Draw {
                     uniform,
-                    blend: clip.blend,
+                    blending,
                     image,
+                    mask,
                 });
             }
         }
-        Ok(draws)
+        // A fade dips the picture through a color, so the veil goes over
+        // everything the layers drew.
+        if let Some((color, alpha)) = fade_veil(layers, t) {
+            let alpha = alpha.clamp(0.0, 1.0) as f32;
+            if alpha > 0.0 {
+                draws.push(Draw {
+                    uniform: ClipUniform {
+                        bounds: [0.0, 0.0, frame_size[0], frame_size[1]],
+                        window: [0.0, 0.0, frame_size[0], frame_size[1]],
+                        fill: channels(color),
+                        scale: [1.0, 1.0],
+                        rotation: [1.0, 0.0],
+                        size: frame_size,
+                        frame: frame_size,
+                        opacity: 1.0,
+                        kind: KIND_SOLID,
+                        mode: MODE_CENTER,
+                        ..ClipUniform::zeroed()
+                    },
+                    blending: Blending::Veil(alpha),
+                    image: Tex::Blank,
+                    mask: Tex::Blank,
+                });
+            }
+        }
+        self.passes.push(Pass {
+            target,
+            width,
+            height,
+            background,
+            draws,
+        });
+        Ok(())
     }
 
-    /// The image asset `id` on the device, uploaded on first use.
+    /// The image asset `id` on the device, uploaded on first use: its
+    /// size and content box.
     fn upload<A: AssetSource>(
         &mut self,
         gpu: &Gpu,
         assets: &mut A,
         comp: &Composition,
         id: &str,
-    ) -> Result<&Cached, RenderError> {
+    ) -> Result<(u32, u32, Option<[u32; 4]>), RenderError> {
         if !self.images.contains_key(id) {
             let img = assets.image(comp, id)?;
             let cached = upload_image(gpu, id, img);
             self.images.insert(id.to_owned(), cached);
         }
-        Ok(&self.images[id])
+        let c = &self.images[id];
+        Ok((c.width, c.height, c.content))
     }
 
-    /// Records and submits the frame.
-    fn draw(&mut self, gpu: &Gpu, width: u32, height: u32, background: Color, draws: &[Draw]) {
-        let device = gpu.device();
-        if self
-            .target
-            .as_ref()
-            .is_none_or(|t| t.width != width || t.height != height)
+    /// A pooled texture of this size for the frame, made when none is free.
+    fn acquire(&mut self, gpu: &Gpu, width: u32, height: u32) -> usize {
+        let (width, height) = (width.max(1), height.max(1));
+        if let Some(i) = self
+            .pool
+            .iter()
+            .position(|p| !p.busy && p.width == width && p.height == height)
         {
-            self.target = Some(make_target(device, width, height));
+            self.pool[i].busy = true;
+            return i;
         }
-        if draws.len() > self.capacity {
+        let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
+            label: Some("geneva layer"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: WORKING_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.pool.push(Pooled {
+            texture,
+            view,
+            width,
+            height,
+            busy: true,
+        });
+        self.pool.len() - 1
+    }
+
+    fn view(&self, tex: &Tex) -> &wgpu::TextureView {
+        match tex {
+            Tex::Blank => &self.blank,
+            Tex::Asset(id) => &self.images[id].view,
+            Tex::Pooled(i) => &self.pool[*i].view,
+        }
+    }
+
+    fn texture_of(&self, target: Option<usize>) -> (&wgpu::Texture, &wgpu::TextureView) {
+        match target {
+            None => {
+                let t = self.target.as_ref().expect("made for the frame");
+                (&t.texture, &t.view)
+            }
+            Some(i) => (&self.pool[i].texture, &self.pool[i].view),
+        }
+    }
+
+    /// Records the planned passes and submits them, with the frame's own
+    /// target copied out to the staging buffer at the end.
+    fn execute(&mut self, gpu: &Gpu) {
+        let device = gpu.device();
+        let passes = std::mem::take(&mut self.passes);
+        let total: usize = passes.iter().map(|p| p.draws.len()).sum();
+        if total > self.capacity {
             let mut capacity = self.capacity;
-            while capacity < draws.len() {
+            while capacity < total {
                 capacity *= 2;
             }
             self.uniforms = uniform_buffer(device, self.slot, capacity);
             self.capacity = capacity;
-            self.bind_groups.clear();
         }
-        // Every clip's uniforms go up in one write, each at its slot.
-        let mut bytes = vec![0u8; self.slot as usize * draws.len().max(1)];
-        for (i, d) in draws.iter().enumerate() {
+        // Every draw's uniforms go up in one write, each at its slot.
+        let mut bytes = vec![0u8; self.slot as usize * total.max(1)];
+        for (i, d) in passes.iter().flat_map(|p| &p.draws).enumerate() {
             let at = i * self.slot as usize;
             bytes[at..at + std::mem::size_of::<ClipUniform>()]
                 .copy_from_slice(bytemuck::bytes_of(&d.uniform));
         }
         gpu.queue().write_buffer(&self.uniforms, 0, &bytes);
-        for d in draws {
-            let key = d.image.clone().unwrap_or_default();
-            if !self.bind_groups.contains_key(&key) {
-                let view = match &d.image {
-                    Some(id) => &self.images[id].view,
-                    None => &self.blank,
-                };
-                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("geneva clip"),
-                    layout: &self.layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                                buffer: &self.uniforms,
-                                offset: 0,
-                                size: wgpu::BufferSize::new(
-                                    std::mem::size_of::<ClipUniform>() as u64
-                                ),
-                            }),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(view),
-                        },
-                    ],
-                });
-                self.bind_groups.insert(key, bind_group);
-            }
-        }
-        let target = self.target.as_ref().expect("made above");
-        let clear = background.to_linear();
+        // A pass with a separable blend reads a copy of its target.
+        let backdrops: Vec<Option<usize>> = passes
+            .iter()
+            .map(|p| {
+                p.draws
+                    .iter()
+                    .any(|d| matches!(d.blending, Blending::Separable))
+                    .then(|| self.acquire(gpu, p.width, p.height))
+            })
+            .collect();
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("geneva frame"),
         });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("geneva composite"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target.view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: f64::from(clear.r),
-                            g: f64::from(clear.g),
-                            b: f64::from(clear.b),
-                            a: f64::from(clear.a),
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            for (i, d) in draws.iter().enumerate() {
-                pass.set_pipeline(match d.blend {
-                    BlendMode::Add => &self.add,
-                    _ => &self.normal,
+        let mut next_slot = 0u64;
+        for (pass, backdrop) in passes.iter().zip(&backdrops) {
+            let (target, view) = self.texture_of(pass.target);
+            let backdrop_view = backdrop.map_or(&self.blank, |i| &self.pool[i].view);
+            let bind_groups: Vec<wgpu::BindGroup> = pass
+                .draws
+                .iter()
+                .map(|d| {
+                    device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("geneva clip"),
+                        layout: &self.layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                    buffer: &self.uniforms,
+                                    offset: 0,
+                                    size: wgpu::BufferSize::new(
+                                        std::mem::size_of::<ClipUniform>() as u64
+                                    ),
+                                }),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::TextureView(self.view(&d.image)),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: wgpu::BindingResource::TextureView(self.view(&d.mask)),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 3,
+                                resource: wgpu::BindingResource::TextureView(backdrop_view),
+                            },
+                        ],
+                    })
+                })
+                .collect();
+            let clear = pass.background.to_linear();
+            let mut rpass = begin(
+                &mut encoder,
+                view,
+                wgpu::LoadOp::Clear(wgpu::Color {
+                    r: f64::from(clear.r),
+                    g: f64::from(clear.g),
+                    b: f64::from(clear.b),
+                    a: f64::from(clear.a),
+                }),
+            );
+            for (d, bind_group) in pass.draws.iter().zip(&bind_groups) {
+                if matches!(d.blending, Blending::Separable) {
+                    // The shader reads what the earlier draws left, so
+                    // the pass ends and the target is copied first.
+                    drop(rpass);
+                    let backdrop = &self.pool[backdrop.expect("acquired for the pass")];
+                    encoder.copy_texture_to_texture(
+                        target.as_image_copy(),
+                        backdrop.texture.as_image_copy(),
+                        wgpu::Extent3d {
+                            width: pass.width,
+                            height: pass.height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                    rpass = begin(&mut encoder, view, wgpu::LoadOp::Load);
+                }
+                rpass.set_pipeline(match d.blending {
+                    Blending::Normal => &self.normal,
+                    Blending::Add => &self.add,
+                    Blending::Separable => &self.separable,
+                    Blending::Veil(_) => &self.veil,
                 });
-                let key = d.image.clone().unwrap_or_default();
-                let offset = (i as u64 * self.slot) as wgpu::DynamicOffset;
-                pass.set_bind_group(0, &self.bind_groups[&key], &[offset]);
-                pass.draw(0..6, 0..1);
+                if let Blending::Veil(a) = d.blending {
+                    let a = f64::from(a);
+                    rpass.set_blend_constant(wgpu::Color {
+                        r: a,
+                        g: a,
+                        b: a,
+                        a,
+                    });
+                }
+                let offset = (next_slot * self.slot) as wgpu::DynamicOffset;
+                next_slot += 1;
+                rpass.set_bind_group(0, bind_group, &[offset]);
+                rpass.draw(0..6, 0..1);
             }
+            drop(rpass);
         }
+        let target = self.target.as_ref().expect("made for the frame");
         encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &target.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
+            target.texture.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
                 buffer: &target.staging,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(target.padded_row),
-                    rows_per_image: Some(height),
+                    rows_per_image: Some(target.height),
                 },
             },
             wgpu::Extent3d {
-                width,
-                height,
+                width: target.width,
+                height: target.height,
                 depth_or_array_layers: 1,
             },
         );
         gpu.queue().submit([encoder.finish()]);
+        self.passes = passes;
+        self.passes.clear();
     }
 
     /// Waits for the frame and copies it out of the staging buffer.
@@ -533,44 +815,58 @@ impl Compositor {
     }
 }
 
+/// Begins a pass onto `view`, loading what is there or clearing it.
+fn begin<'e>(
+    encoder: &'e mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    load: wgpu::LoadOp<wgpu::Color>,
+) -> wgpu::RenderPass<'e> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("geneva composite"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load,
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    })
+}
+
 /// Why a visible clip cannot be drawn yet, if it cannot.
-fn unsupported(layer: &ResolvedLayer, i: usize) -> Option<&'static str> {
-    let clip: &ResolvedClip = &layer.clips[i];
-    if clip.mask.is_some() {
-        return Some("a mask");
-    }
+fn unsupported(clip: &ResolvedClip) -> Option<&'static str> {
     if !clip.effects.is_empty() {
         return Some("the blur effect");
-    }
-    let mode = match clip.blend {
-        BlendMode::Normal | BlendMode::Add => None,
-        BlendMode::Multiply => Some("the multiply blend mode"),
-        BlendMode::Screen => Some("the screen blend mode"),
-        BlendMode::Overlay => Some("the overlay blend mode"),
-        BlendMode::Darken => Some("the darken blend mode"),
-        BlendMode::Lighten => Some("the lighten blend mode"),
-        BlendMode::Difference => Some("the difference blend mode"),
-        BlendMode::SoftLight => Some("the soft-light blend mode"),
-    };
-    if mode.is_some() {
-        return mode;
-    }
-    // The clip after this one takes it out through its own transition.
-    let next_in = layer
-        .clips
-        .get(i + 1)
-        .is_some_and(|next| next.transition_in.is_some());
-    if clip.transition_in.is_some() || clip.transition_out.is_some() || next_in {
-        return Some("a transition");
     }
     match clip.source {
         ResolvedSource::Solid { .. }
         | ResolvedSource::Shape { .. }
-        | ResolvedSource::Image { .. } => None,
-        ResolvedSource::Composition(_) => Some("a nested composition"),
+        | ResolvedSource::Image { .. }
+        | ResolvedSource::Composition(_) => None,
         ResolvedSource::Video { .. } => Some("a video source"),
         ResolvedSource::Html(_) => Some("a markup source"),
         ResolvedSource::Text(_) => Some("a text source"),
+    }
+}
+
+/// How a blend mode is drawn, and its code for the shader.
+fn blending(mode: BlendMode) -> (Blending, u32) {
+    match mode {
+        BlendMode::Normal => (Blending::Normal, 0),
+        BlendMode::Multiply => (Blending::Separable, 1),
+        BlendMode::Screen => (Blending::Separable, 2),
+        BlendMode::Overlay => (Blending::Separable, 3),
+        BlendMode::Darken => (Blending::Separable, 4),
+        BlendMode::Lighten => (Blending::Separable, 5),
+        BlendMode::Difference => (Blending::Separable, 6),
+        BlendMode::SoftLight => (Blending::Separable, 7),
+        BlendMode::Add => (Blending::Add, 8),
     }
 }
 
@@ -648,12 +944,7 @@ fn upload_image(gpu: &Gpu, id: &str, img: &Image) -> Cached {
             }
         }
         gpu.queue().write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
+            texture.as_image_copy(),
             &bytes,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,

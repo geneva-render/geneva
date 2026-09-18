@@ -9,14 +9,15 @@
 //! tolerance rather than byte for byte: the same device gives the same
 //! frame every run, and two devices agree to the tolerance.
 //!
-//! What draws so far: solid, shape and still-image clips, placed through
-//! the same [`geneva_render::Placement`] as the reference and sampled by
-//! the same rules, at the clip's opacity, blended normally or additively,
-//! with the frame read back into a [`Frame`]. Masks, the separable blend
-//! modes, transitions, nested compositions, blur, text, markup and video
-//! are refused with [`RenderError::Unsupported`] until their step of the
-//! plan. [`Gpu::probe`] picks the adapter, checks what the compositor
-//! needs of it, and describes it in a [`Report`].
+//! What draws so far: solid, shape, still-image and nested-composition
+//! clips, placed through the same [`geneva_render::Placement`] as the
+//! reference and sampled by the same rules, through shape and luma
+//! masks, at the clip's opacity with its transitions, in every blend
+//! mode of the format, with a fade's veil over the result, and the frame
+//! read back into a [`Frame`]. Blur, text, markup and video are refused
+//! with [`RenderError::Unsupported`] until their step of the plan.
+//! [`Gpu::probe`] picks the adapter, checks what the compositor needs of
+//! it, and describes it in a [`Report`].
 
 #![forbid(unsafe_code)]
 

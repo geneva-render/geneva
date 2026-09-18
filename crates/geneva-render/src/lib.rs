@@ -19,6 +19,7 @@ mod frame;
 mod html;
 mod placement;
 mod text;
+mod transitions;
 
 use geneva_color::Color;
 use geneva_timeline::{Composition, Ratio};
@@ -30,6 +31,7 @@ pub use cpu::CpuRenderer;
 pub use frame::Frame;
 pub use placement::{Placement, SUBSAMPLES, crop_window};
 pub use text::TextEngine;
+pub use transitions::{fade_veil, transition_gain};
 
 /// Errors that prevent a frame from being rendered.
 #[derive(Debug, Error)]

@@ -19,7 +19,7 @@ timeline JSON ──parse──▶ Timeline ──resolve──▶ Composition �
 | `geneva-html` | A strict HTML and CSS subset: parsing, the cascade, block and flexbox layout over taffy, and a display list of boxes, text runs and images. Not a browser; it has no inline layout, float, grid, transition or media query. | geneva-color, taffy |
 | `geneva-timeline` | The format: document types (also the JSON Schema source), exact `Ratio` time, parsing with path-precise errors, resolution into `Composition`, diagnostics. Markup and CSS inside a document are checked here, so their errors carry a path like every other. | geneva-anim, geneva-color, geneva-html |
 | `geneva-render` | The `Renderer` trait, `Frame`, asset loading, `CpuRenderer`, the text engine and the markup painter. | geneva-timeline, geneva-color, geneva-html |
-| `geneva-gpu` | The GPU renderer on `wgpu`: a device probe (Vulkan, Metal, DirectX 12; a software implementation such as Mesa's lavapipe counts when asked for) and a second `Renderer` built against the CPU one, which draws solid, shape and still-image clips so far and refuses the rest by name (E500). Behind the CLI's `gpu` feature, on by default; pure Rust, the device found at run time. | geneva-render, geneva-timeline, geneva-color, wgpu |
+| `geneva-gpu` | The GPU renderer on `wgpu`: a device probe (Vulkan, Metal, DirectX 12; a software implementation such as Mesa's lavapipe counts when asked for) and a second `Renderer` built against the CPU one, which draws everything but blur, text, markup and video so far and refuses those by name (E500). Behind the CLI's `gpu` feature, on by default; pure Rust, the device found at run time. | geneva-render, geneva-timeline, geneva-color, wgpu |
 | `geneva-golden` | Perceptual comparison (per-channel epsilon, PSNR, SSIM), diff images, audio comparison against a WAV reference on numbers rather than bytes, and the golden case runner. | geneva-render, geneva-timeline, geneva-audio |
 | `geneva-media-link` | The linker directives for the statically built media libraries, read from the prefix's pkg-config files. A build dependency of the two crates below, and nothing else. | none |
 | `geneva-media` | Probe, decode, encode and audio mixing over the bundled media libraries, behind the `media` feature; the only crate that knows about containers and codecs. The mixer brings a mix to a loudness target with the meter and limiter of `geneva-audio`. | geneva-render, geneva-timeline, geneva-color, geneva-anim, geneva-audio |
@@ -336,12 +336,12 @@ MPEG-TS carries no priming information, so its AAC starts 21 ms late.
 
 - **GPU renderer.** A second `Renderer` implementation with the same
   contract, validated against the CPU renderer by the golden harness.
-  Started: `geneva-gpu` finds and checks a device, draws solid, shape
-  and still-image clips through the same placement as the CPU renderer
-  (the goldens for them pass on both, and no pixel differs by more than
-  one 8-bit code), and refuses masks, the separable blend modes,
-  transitions, nested compositions, blur, text, markup and video by
-  name until their turn. `render --renderer gpu` reports the device but
+  Started: `geneva-gpu` finds and checks a device and draws solid,
+  shape, still-image and nested-composition clips through the same
+  placement as the CPU renderer, with masks, transitions and every
+  blend mode (the goldens for them pass on both, and no pixel differs
+  by more than one 8-bit code); it refuses blur, text, markup and video
+  by name until their turn. `render --renderer gpu` reports the device but
   does not composite on it yet, so every render is still composited on
   the CPU.
 - **Software H.265 encoding.** Only hardware encoders are available for it.

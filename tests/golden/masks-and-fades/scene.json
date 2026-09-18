@@ -1,0 +1,22 @@
+{
+  "geneva": "0.1",
+  "output": { "width": 320, "height": 180, "fps": 30, "duration": "3s", "background": "#1c2430" },
+  "assets": { "checker": { "src": "image-transform/checker.png" } },
+  "layers": [
+    { "id": "backdrop", "clips": [
+      { "source": { "kind": "solid", "color": "#405060" }, "duration": "1.5s" },
+      { "source": { "kind": "solid", "color": "#806040" }, "duration": "1.5s", "transition": { "kind": "crossfade", "duration": "1s" } } ] },
+    { "id": "rounded", "clips": [ { "source": { "kind": "image", "asset": "checker" },
+        "mask": { "radius": 10, "feather": 2 },
+        "transform": { "position": { "x": 70, "y": 60 }, "scale": 2.5 } } ] },
+    { "id": "hole", "clips": [ { "source": { "kind": "shape", "shape": "rect", "width": 100, "height": 100, "fill": "#ffb347" },
+        "mask": { "shape": "ellipse", "invert": true, "x": "20%", "y": "20%", "width": "60%", "height": "60%", "feather": 3 },
+        "transform": { "position": { "x": 230, "y": 70 }, "rotation": { "keyframes": [ { "t": 0, "v": 0 }, { "t": "3s", "v": 90 } ] } } } ] },
+    { "id": "luma", "clips": [ { "source": { "kind": "shape", "shape": "rect", "width": 120, "height": 40, "fill": "#ffffff" },
+        "mask": { "asset": "checker" },
+        "transform": { "position": { "x": 160, "y": 150 } } } ] },
+    { "id": "dip", "clips": [ { "source": { "kind": "shape", "shape": "ellipse", "width": 60, "height": 60, "fill": "#60c0ff" },
+        "start": "2s", "duration": "1s", "transition": { "kind": "fade", "duration": "0.6s", "color": "#000000" },
+        "transform": { "position": { "x": 60, "y": 140 } } } ] }
+  ]
+}

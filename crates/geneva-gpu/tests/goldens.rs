@@ -14,7 +14,14 @@ use geneva_gpu::{Gpu, GpuError, GpuRenderer, Preference};
 use geneva_render::{CpuRenderer, FileAssets, Frame, RenderError, Renderer};
 
 /// The cases that must pass on the GPU today.
-const DRAWN: &[&str] = &["solid-and-shapes", "image-transform", "hdr-to-sdr"];
+const DRAWN: &[&str] = &[
+    "solid-and-shapes",
+    "image-transform",
+    "hdr-to-sdr",
+    "blend-modes",
+    "nested-composition",
+    "masks-and-fades",
+];
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden")

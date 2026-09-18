@@ -16,12 +16,15 @@ the format version it was written for.
   --renderer auto|cpu|gpu` chooses the renderer: `auto` is the GPU where
   one can be used and the CPU otherwise, `gpu` takes any device and
   falls back to the CPU with a note when none opens. The renderer
-  draws solid, shape and still-image clips (placement, crop, opacity,
-  normal and add blending) through the same rules as the CPU renderer,
-  and refuses masks, the other blend modes, transitions, nested
-  compositions, blur, text, markup and video by name (E500) until they
-  are built. The render loop does not use it yet, so every choice still
-  composites on the CPU, and `gpu` reports what it found. The crate is
+  draws solid, shape, still-image and nested-composition clips
+  (placement, crop, shape and luma masks, opacity, transitions, every
+  blend mode, the fade's veil) through the same rules as the CPU
+  renderer, and refuses blur, text, markup and video by name (E500)
+  until they are built. The render loop does not use it yet, so every choice still
+  composites on the CPU, and `gpu` reports what it found. A new golden
+  case, `tests/golden/masks-and-fades`, pins masks (shape, feather,
+  invert, luma) and transitions (crossfade, fade) down on both
+  renderers; neither had a reference frame before. The crate is
   behind the CLI's `gpu` feature, on by default; the minimum Rust
   version moves to 1.87.
 - **E503** for a renderer whose device fails; the CPU renderer never
