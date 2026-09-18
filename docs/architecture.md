@@ -112,7 +112,10 @@ painted as a group into its own buffer and composited with those
 applied; the buffer covers only what its parent can show, taken back
 through the transform and padded for the blur, and a group that lands
 off the frame is skipped. A group whose animation moves a size lays the
-box out again each frame.
+box out again each frame. The painter's loops (boxes, shadows,
+pictures, polygon clips, laying a group onto its parent, the conversion
+to linear light) share their rows across the thread pool like the
+compositor's; text is shaped and rasterized on one thread.
 
 ## Stream copy
 

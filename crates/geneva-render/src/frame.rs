@@ -105,10 +105,20 @@ impl Frame {
 
     /// Converts to 8-bit straight-alpha sRGB, row-major RGBA bytes.
     pub fn to_rgba8(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(self.pixels.len() * 4);
-        for p in &self.pixels {
-            out.extend_from_slice(&p.to_srgb8());
+        use rayon::prelude::*;
+        let w = self.width as usize;
+        let mut out = vec![0u8; self.pixels.len() * 4];
+        if w == 0 {
+            return out;
         }
+        // Rows are independent, so they are converted in parallel.
+        out.par_chunks_mut(w * 4)
+            .zip(self.pixels.par_chunks(w))
+            .for_each(|(row, src)| {
+                for (px, p) in row.chunks_exact_mut(4).zip(src) {
+                    px.copy_from_slice(&p.to_srgb8());
+                }
+            });
         out
     }
 

@@ -15,6 +15,7 @@ use geneva_html::{Content, Group, Laid, Measure, Painted, Prepared, Text};
 use geneva_timeline::motion::{NodeMotion, Transform};
 use geneva_timeline::schema::{Shadow, Shadows, TextAlign, TextSource, TextStyle};
 use geneva_timeline::{Animated, FillTrack, ResolvedHtml, ResolvedText};
+use rayon::prelude::*;
 
 use crate::assets::Image;
 use crate::fill::{Fill, encoded};
@@ -243,9 +244,11 @@ fn srgb_to_linear(v: f32) -> f32 {
 
 /// The painter's image back in linear light.
 fn to_linear(image: &mut Image) {
-    for p in &mut image.pixels {
-        *p = decode_pixel(*p);
-    }
+    image.pixels.par_chunks_mut(1 << 12).for_each(|part| {
+        for p in part {
+            *p = decode_pixel(*p);
+        }
+    });
 }
 
 /// The rectangle one box can touch: its own, grown by what its shadows
@@ -931,29 +934,26 @@ fn composite(
     let (sw, sh) = (i64::from(src.width), i64::from(src.height));
     let (dw, dh) = (i64::from(dst.width), i64::from(dst.height));
     let Some(tr) = tr else {
-        // Straight on: pixel for pixel, offset by the two origins.
+        // Straight on: pixel for pixel, offset by the two origins. Rows
+        // are independent, so they go in parallel.
         let (ox, oy) = (layer.origin.0 - dst_origin.0, layer.origin.1 - dst_origin.1);
-        for sy in 0..sh {
-            let dy = sy + oy;
-            if dy < 0 || dy >= dh {
-                continue;
-            }
-            for sx in 0..sw {
-                let dx = sx + ox;
-                if dx < 0 || dx >= dw {
-                    continue;
-                }
-                let texel = src.pixels[(sy * sw + sx) as usize];
+        let (x0, x1) = (ox.max(0), (sw + ox).min(dw));
+        let (y0, y1) = (oy.max(0), (sh + oy).min(dh));
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        rows(dst, y0, y1).for_each(|(dy, row)| {
+            let src_row = &src.pixels[((dy - oy) * sw) as usize..][..sw as usize];
+            let py = (dy + dst_origin.1) as f64 + 0.5;
+            for dx in x0..x1 {
+                let texel = src_row[(dx - ox) as usize];
                 if texel.a <= 0.0 {
                     continue;
                 }
-                let (px, py) = (
-                    (dx + dst_origin.0) as f64 + 0.5,
-                    (dy + dst_origin.1) as f64 + 0.5,
-                );
-                over(dst, dx as usize, dy as usize, texel, opacity * clip(px, py));
+                let px = (dx + dst_origin.0) as f64 + 0.5;
+                over(row, dx as usize, texel, opacity * clip(px, py));
             }
-        }
+        });
         return;
     };
     // Through the transform: each destination pixel inside where the
@@ -992,11 +992,11 @@ fn composite(
     let (nx, ny) = (taps(tr.scale[0]), taps(tr.scale[1]));
     let norm = 1.0 / (nx * ny) as f32;
     let (fw, fh) = (sw as f64, sh as f64);
-    // Only the multi-tap path below fills this, and an empty vector has
-    // not allocated, so a group taking one tap a pixel never pays for it.
-    let mut sums: Vec<LinearRgba> = Vec::new();
 
-    for dy in y0..y1 {
+    // Rows are independent, so they go in parallel. Only the multi-tap
+    // path below fills the row's buffer of sums, and an empty vector has
+    // not allocated, so a group taking one tap a pixel never pays for it.
+    rows(dst, y0, y1).for_each_init(Vec::<LinearRgba>::new, |sums, (dy, row)| {
         let py_row = (dy + dst_origin.1) as f64;
         if nx == 1 && ny == 1 {
             // A group drawn at its own size or larger, which is most of
@@ -1011,13 +1011,13 @@ fn composite(
                     let texel = src.sample(u, v);
                     if texel.a > 0.0 {
                         let px = (dx + dst_origin.0) as f64 + 0.5;
-                        over(dst, dx as usize, dy as usize, texel, opacity * clip(px, py));
+                        over(row, dx as usize, texel, opacity * clip(px, py));
                     }
                 }
                 u += ax;
                 v += ay;
             }
-            continue;
+            return;
         }
         // Drawn smaller: several taps a pixel, so its edges do not
         // alias. The taps of a whole row are gathered before the row is
@@ -1051,15 +1051,9 @@ fn composite(
             let dx = x0 + k as i64;
             let texel = sum.scaled(norm);
             let px = (dx + dst_origin.0) as f64 + 0.5;
-            over(
-                dst,
-                dx as usize,
-                dy as usize,
-                texel,
-                opacity * clip(px, py_row + 0.5),
-            );
+            over(row, dx as usize, texel, opacity * clip(px, py_row + 0.5));
         }
-    }
+    });
 }
 
 /// Keeps what is inside the polygon, given in the surface's pixels, of a
@@ -1073,9 +1067,11 @@ fn mask_polygon(image: &mut Image, origin: (i64, i64), points: &[(f64, f64)]) {
         image.pixels.fill(LinearRgba::TRANSPARENT);
         return;
     }
-    let mut coverage = vec![0f32; w];
-    let mut crossings: Vec<(f64, i32)> = Vec::new();
-    for y in 0..h {
+    // Rows are independent, so they go in parallel, each thread with a
+    // coverage row and a crossings list of its own.
+    let scratch = || (vec![0f32; w], Vec::<(f64, i32)>::new());
+    rows(image, 0, h as i64).for_each_init(scratch, |(coverage, crossings), (y, row)| {
+        let y = y as usize;
         coverage.fill(0.0);
         for s in 0..SUB {
             let sy = origin.1 as f64 + y as f64 + (s as f64 + 0.5) / SUB as f64;
@@ -1092,7 +1088,7 @@ fn mask_polygon(image: &mut Image, origin: (i64, i64), points: &[(f64, f64)]) {
             crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
             let mut winding = 0;
             let mut start = 0.0;
-            for (x, dir) in &crossings {
+            for (x, dir) in crossings.iter() {
                 let was = winding;
                 winding += dir;
                 if was == 0 && winding != 0 {
@@ -1116,25 +1112,48 @@ fn mask_polygon(image: &mut Image, origin: (i64, i64), points: &[(f64, f64)]) {
                 }
             }
         }
-        let row = &mut image.pixels[y * w..(y + 1) * w];
-        for (p, c) in row.iter_mut().zip(&coverage) {
+        for (p, c) in row.iter_mut().zip(coverage.iter()) {
             let c = c.clamp(0.0, 1.0);
             if c < 1.0 {
                 *p = p.scaled(c);
             }
         }
-    }
+    });
 }
 
-/// A premultiplied pixel over another, at a coverage.
-fn over(dst: &mut Image, x: usize, y: usize, texel: LinearRgba, a: f32) {
+/// The rows `y0..y1` of an image as a parallel iterator, each with its
+/// index. Every painting loop is a loop over rows whose pixels depend
+/// on nothing but their own inputs, so the rows can be shared out
+/// across threads and the picture is the same whatever the order they
+/// finish in. A small box is not worth splitting: each job gets rows
+/// enough to hold about 32k pixels.
+fn rows(
+    image: &mut Image,
+    y0: i64,
+    y1: i64,
+) -> impl IndexedParallelIterator<Item = (i64, &mut [LinearRgba])> {
+    let w = image.width as usize;
+    let (y0, y1) = (
+        y0.max(0) as usize,
+        (y1.max(0) as usize).min(image.height as usize),
+    );
+    let (from, to) = (y0 * w, y1.max(y0) * w);
+    image.pixels[from..to]
+        .par_chunks_mut(w.max(1))
+        .with_min_len((1 << 15) / w.max(1) + 1)
+        .enumerate()
+        .map(move |(i, row)| (y0 as i64 + i as i64, row))
+}
+
+/// A premultiplied pixel over the one at `x` of a row, at a coverage.
+#[inline]
+fn over(row: &mut [LinearRgba], x: usize, texel: LinearRgba, a: f32) {
     if a <= 0.0 {
         return;
     }
-    let i = y * dst.width as usize + x;
-    let d = dst.pixels[i];
+    let d = row[x];
     let inv = 1.0 - texel.a * a;
-    dst.pixels[i] = LinearRgba {
+    row[x] = LinearRgba {
         r: texel.r * a + d.r * inv,
         g: texel.g * a + d.g * inv,
         b: texel.b * a + d.b * inv,
@@ -1185,7 +1204,9 @@ fn bounds(image: &Image, rect: Rectangle, grow: f64) -> (u32, u32, u32, u32) {
     (x0, y0, x1.max(x0), y1.max(y0))
 }
 
-fn blend(image: &mut Image, x: u32, y: u32, color: LinearRgba, alpha: f32) {
+/// A colour at an alpha over the pixel at `x` of a row.
+#[inline]
+fn blend(row: &mut [LinearRgba], x: usize, color: LinearRgba, alpha: f32) {
     if alpha <= 0.0 {
         return;
     }
@@ -1195,10 +1216,9 @@ fn blend(image: &mut Image, x: u32, y: u32, color: LinearRgba, alpha: f32) {
         b: color.b * alpha,
         a: color.a * alpha,
     };
-    let i = (y as usize) * image.width as usize + x as usize;
-    let dst = image.pixels[i];
+    let dst = row[x];
     let inv = 1.0 - src.a;
-    image.pixels[i] = LinearRgba {
+    row[x] = LinearRgba {
         r: src.r + dst.r * inv,
         g: src.g + dst.g * inv,
         b: src.b + dst.b * inv,
@@ -1274,9 +1294,10 @@ fn paint_box(image: &mut Image, b: &Painted) {
     });
     let (inner_rect, inner_radius) = inner(b);
     let (x0, y0, x1, y1) = bounds(image, b.rect, 1.0);
-    for y in y0..y1 {
+    rows(image, i64::from(y0), i64::from(y1)).for_each(|(y, row)| {
+        let py = y as f64 + 0.5;
         for x in x0..x1 {
-            let (px, py) = (f64::from(x) + 0.5, f64::from(y) + 0.5);
+            let px = f64::from(x) + 0.5;
             let outer = coverage(px, py, b.rect, b.paint.radius);
             if outer <= 0.0 {
                 continue;
@@ -1286,7 +1307,7 @@ fn paint_box(image: &mut Image, b: &Painted) {
                 continue;
             }
             if let Some(fill) = &fill {
-                blend(image, x, y, fill.at(px, py), outer * clip * b.opacity);
+                blend(row, x as usize, fill.at(px, py), outer * clip * b.opacity);
             }
             if !has_border {
                 continue;
@@ -1296,16 +1317,15 @@ fn paint_box(image: &mut Image, b: &Painted) {
                 let colour = b.paint.border_color[side(b, px, py)];
                 if colour.a > 0.0 {
                     blend(
-                        image,
-                        x,
-                        y,
+                        row,
+                        x as usize,
                         encoded(colour),
                         (outer - hole) * clip * b.opacity,
                     );
                 }
             }
         }
-    }
+    });
 }
 
 /// The box's shadows, the last in the list laid down first, as CSS
@@ -1328,14 +1348,16 @@ fn paint_one_shadow(image: &mut Image, b: &Painted, shadow: &geneva_html::style:
     ];
     let grow = shadow.blur.max(0.0) + 1.0;
     let (x0, y0, x1, y1) = bounds(image, rect, grow);
+    let colour = encoded(shadow.color);
     if shadow.blur <= 0.0 {
-        for y in y0..y1 {
+        rows(image, i64::from(y0), i64::from(y1)).for_each(|(y, row)| {
+            let py = y as f64 + 0.5;
             for x in x0..x1 {
-                let (px, py) = (f64::from(x) + 0.5, f64::from(y) + 0.5);
+                let px = f64::from(x) + 0.5;
                 let a = coverage(px, py, rect, b.paint.radius) * clip_coverage(b, px, py);
-                blend(image, x, y, encoded(shadow.color), a * b.opacity);
+                blend(row, x as usize, colour, a * b.opacity);
             }
-        }
+        });
         return;
     }
     // A blurred shadow is the box convolved with a Gaussian whose
@@ -1350,21 +1372,22 @@ fn paint_one_shadow(image: &mut Image, b: &Painted, shadow: &geneva_html::style:
     let ramp = |lo: f64, hi: f64, p: f64| 0.5 * (erf((p - lo) * k) - erf((p - hi) * k));
     let (left, top) = (f64::from(rect[0]), f64::from(rect[1]));
     let (right, bottom) = (left + f64::from(rect[2]), top + f64::from(rect[3]));
-    for y in y0..y1 {
+    rows(image, i64::from(y0), i64::from(y1)).for_each(|(y, row)| {
+        let py = y as f64 + 0.5;
+        let down = ramp(top, bottom, py);
         for x in x0..x1 {
-            let (px, py) = (f64::from(x) + 0.5, f64::from(y) + 0.5);
-            let a = (ramp(left, right, px) * ramp(top, bottom, py)).clamp(0.0, 1.0) as f32;
+            let px = f64::from(x) + 0.5;
+            let a = (ramp(left, right, px) * down).clamp(0.0, 1.0) as f32;
             if a > 0.0 {
                 blend(
-                    image,
-                    x,
-                    y,
-                    encoded(shadow.color),
+                    row,
+                    x as usize,
+                    colour,
                     a * clip_coverage(b, px, py) * b.opacity,
                 );
             }
         }
-    }
+    });
 }
 
 /// The error function, to within 1.5e-7 (Abramowitz and Stegun 7.1.26).
@@ -1439,29 +1462,20 @@ fn paint_image(image: &mut Image, b: &Painted, source: &Image) {
     let (x0, y0, x1, y1) = bounds(image, rect, 0.0);
     let sx = f64::from(source.width) / f64::from(rect[2]);
     let sy = f64::from(source.height) / f64::from(rect[3]);
-    for y in y0..y1 {
+    rows(image, i64::from(y0), i64::from(y1)).for_each(|(y, row)| {
+        let py = y as f64 + 0.5;
         for x in x0..x1 {
-            let (px, py) = (f64::from(x) + 0.5, f64::from(y) + 0.5);
+            let px = f64::from(x) + 0.5;
             let clip = clip_coverage(b, px, py);
             if clip <= 0.0 {
                 continue;
             }
             let u = (px - f64::from(rect[0])) * sx;
             let v = (py - f64::from(rect[1])) * sy;
-            let texel = source.sample(u, v);
             // The sampled pixel is already premultiplied.
-            let a = b.opacity * clip;
-            let i = (y as usize) * image.width as usize + x as usize;
-            let dst = image.pixels[i];
-            let inv = 1.0 - texel.a * a;
-            image.pixels[i] = LinearRgba {
-                r: texel.r * a + dst.r * inv,
-                g: texel.g * a + dst.g * inv,
-                b: texel.b * a + dst.b * inv,
-                a: texel.a * a + dst.a * inv,
-            };
+            over(row, x as usize, source.sample(u, v), b.opacity * clip);
         }
-    }
+    });
 }
 
 /// Lays a premultiplied image over the canvas at a point, under the box's
@@ -1474,9 +1488,10 @@ fn blit(image: &mut Image, b: &Painted, src: &Image, dx: f64, dy: f64, scale: f3
         src.height as f32 * scale,
     ];
     let (x0, y0, x1, y1) = bounds(image, rect, 0.0);
-    for y in y0..y1 {
+    rows(image, i64::from(y0), i64::from(y1)).for_each(|(y, row)| {
+        let py = y as f64 + 0.5;
         for x in x0..x1 {
-            let (px, py) = (f64::from(x) + 0.5, f64::from(y) + 0.5);
+            let px = f64::from(x) + 0.5;
             let clip = clip_coverage(b, px, py);
             if clip <= 0.0 {
                 continue;
@@ -1487,18 +1502,9 @@ fn blit(image: &mut Image, b: &Painted, src: &Image, dx: f64, dy: f64, scale: f3
                 continue;
             }
             let texel = src.pixels[(v as usize) * src.width as usize + u as usize];
-            let a = b.opacity * clip;
-            let i = (y as usize) * image.width as usize + x as usize;
-            let dst = image.pixels[i];
-            let inv = 1.0 - texel.a * a;
-            image.pixels[i] = LinearRgba {
-                r: texel.r * a + dst.r * inv,
-                g: texel.g * a + dst.g * inv,
-                b: texel.b * a + dst.b * inv,
-                a: texel.a * a + dst.a * inv,
-            };
+            over(row, x as usize, texel, b.opacity * clip);
         }
-    }
+    });
 }
 
 /// A colour with full alpha, for the places a `Color` is needed.

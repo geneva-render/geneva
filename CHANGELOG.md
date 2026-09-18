@@ -9,6 +9,22 @@ the format version it was written for.
 
 ### Changed
 
+- **The markup painter draws its rows on every core.** Painting a box,
+  its shadows and its picture, masking a group by its `clip-path`,
+  laying a group onto its parent and converting the finished box to
+  linear light were one thread's work from start to finish, whatever
+  the machine; they now share their rows across the thread pool the
+  compositor already uses. Every pixel depends on its own inputs alone,
+  so the picture is the same whatever order the rows finish in: the
+  opening example's 291 frames are byte for byte what they were, and
+  take 68 ms a frame instead of 149 on four cores, image export
+  included. Text is still shaped and rasterized on one thread.
+- **Frames are quantized to 8-bit sRGB by lookup.** Writing a PNG, a
+  poster or an image sequence evaluated the sRGB curve three times a
+  pixel; the codes now come from a table built once from the same
+  curve, which gives the same code for every value, and the rows are
+  converted in parallel. On an image sequence of the opening example
+  that was 15% of the instructions.
 - **The markup composite carries its sampling point along the row.** The
   inverse of a group's transform is affine, so it is held as two linear
   expressions in the destination pixel instead of being rebuilt from the
