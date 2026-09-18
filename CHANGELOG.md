@@ -7,6 +7,23 @@ the format version it was written for.
 
 ## Unreleased
 
+### Changed
+
+- **The markup composite carries its sampling point along the row.** The
+  inverse of a group's transform is affine, so it is held as two linear
+  expressions in the destination pixel instead of being rebuilt from the
+  rotation and the scale at every tap: the trigonometry and the two
+  divisions happen once for the group and one add an axis is left in the
+  loop. A group drawn at its own size or larger takes one tap a pixel and
+  has its own loop; one drawn smaller still takes up to sixteen. The
+  bilinear sampler indexes straight in where the 2x2 neighbourhood is
+  inside the image, and a clip's coverage is worked out once as a
+  rectangle where it is exactly one rather than per pixel. The opening
+  example's markup goes from 182 ms a frame to 139 ms at 960x540, a fifth
+  off, and every frame is byte for byte what it was. The plain
+  compositor is unchanged.
+
+
 ## 0.5.0 (2026-09-17)
 
 Timeline format 0.4. Documents saying `"geneva": "0.1"`, `"0.2"` or
