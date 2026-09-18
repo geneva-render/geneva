@@ -9,17 +9,26 @@ the format version it was written for.
 
 ### Fixed
 
-- **A font weight the family does not have no longer leaves the family.**
-  `font-weight: 600` over a family shipped in regular and bold drew in
-  whichever face the machine carried at exactly 600, because the
-  document's fonts sit in the same database as the machine's and an
-  exact weight in another family outranked the right family at the
-  nearest weight. On a Linux box with FreeSans installed that was
-  FreeSans; on a Mac it was not. The weight is now matched against the
-  family's own faces first, by the CSS rule, so the same document draws
-  the same everywhere. The `markup-card` references and the
-  `markup-opening` reference at 4.2s are regenerated: they had the
-  substituted face in them.
+- **Markup no longer borrows a face from whatever the machine has
+  installed.** A document's fonts sit in the same database as the
+  machine's, and an attribute no face of the named family had was matched
+  across all of them, where an exact weight or a real italic in another
+  family outranks the right family at the nearest weight or an upright
+  face. `font-weight: 600` over a family shipped in regular and bold drew
+  in FreeSans on a Linux box that has FreeSans installed, and in
+  something else on a Mac that does not. Three things close it. A family
+  a document ships now replaces the machine's copy: the installed faces
+  of that family are dropped, so the document draws in the version it
+  carries rather than in whichever version the machine has, and the
+  claim made in 0.5.0 that a shipped family wins is now what the code
+  does. A weight the family lacks is matched against its own faces by the
+  CSS rule. And a family with no italic face is drawn upright rather than
+  in another family's italic; there is still no synthetic oblique. The
+  `markup-card` references and the `markup-opening` reference at 4.2s are
+  regenerated: they had the substituted face in them. Found by running
+  the golden cases on a second machine for the first time, where the GPU
+  renderer agreed with the CPU renderer to within one code on every case
+  but both disagreed with the references.
 - **The renderer note no longer claims a composite that did not
   happen.** An output whose frames go straight from the decoder to the
   encoder reported `GPU ...: the frames were composited on the device`

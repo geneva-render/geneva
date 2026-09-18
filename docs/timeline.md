@@ -653,12 +653,22 @@ Colours are the ones the rest of the format takes. Anything else is W450:
 the declaration is skipped and the message names it, so the rest of the
 document still draws.
 
-A `font-weight` the family does not have is matched to one it does, by
-the CSS rule: above 500 the next heavier face, below 400 the next
-lighter, and between the two a heavier one up to 500 before a lighter
-one. A family shipped in regular and bold therefore draws
-`font-weight: 600` in its bold face on every machine, rather than in
-whatever face the machine happens to carry at that weight.
+A family a document ships replaces the machine's copy of it: once a
+`font` asset declares a family, the installed faces of that family are
+dropped, so the document draws in the version it carries rather than in
+whichever version the machine has. Families the document does not ship
+are untouched and still serve as the fallback for characters its own
+fonts lack.
+
+Within a family, an attribute no face of it has is settled against the
+faces it does have. A `font-weight` is matched by the CSS rule: above
+500 the next heavier face, below 400 the next lighter, and between the
+two a heavier one up to 500 before a lighter one. So a family shipped in
+regular and bold draws `font-weight: 600` in its bold face. A family
+with no italic face is drawn upright, since there is no synthetic
+oblique. Both are decided from the family alone, so a document draws the
+same on every machine rather than borrowing a face from whatever else is
+installed.
 
 ### Gradients
 

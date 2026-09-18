@@ -6,7 +6,7 @@
 //! every other source. A text source renders to an image that is then
 //! placed like any other box.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use cosmic_text::fontdb::Weight;
 use cosmic_text::{
@@ -34,6 +34,10 @@ pub struct TextEngine {
     scale: ScaleContext,
     /// Faces loaded from assets, by asset id.
     asset_faces: HashMap<String, LoadedFace>,
+    /// The faces the document shipped, by database id. A family with one
+    /// of these in it is the document's, and the machine's faces of that
+    /// family are dropped.
+    asset_ids: HashSet<cosmic_text::fontdb::ID>,
 }
 
 impl Default for TextEngine {
@@ -62,6 +66,7 @@ impl TextEngine {
             cache: SwashCache::new(),
             scale: ScaleContext::new(),
             asset_faces: HashMap::new(),
+            asset_ids: HashSet::new(),
         }
     }
 
@@ -76,13 +81,38 @@ impl TextEngine {
         let db = self.fonts.db_mut();
         let before: Vec<cosmic_text::fontdb::ID> = db.faces().map(|f| f.id).collect();
         db.load_font_data(data);
-        let face = db.faces().find(|f| !before.contains(&f.id))?;
+        let fresh: Vec<cosmic_text::fontdb::ID> = db
+            .faces()
+            .filter(|f| !before.contains(&f.id))
+            .map(|f| f.id)
+            .collect();
+        let face = db.faces().find(|f| fresh.contains(&f.id))?;
         let family = face.families.first().map(|(name, _)| name.clone())?;
         let loaded = LoadedFace {
             family: family.clone(),
             weight: face.weight,
             style: face.style,
         };
+        // Every face the file carries is the document's, a collection of
+        // several included.
+        self.asset_ids.extend(fresh.iter().copied());
+        // The machine's faces of this family go, so that a document that
+        // ships a family draws in it and not in the copy the machine
+        // happens to have, which can be another version or another set of
+        // weights. The families the document does not ship are untouched,
+        // and still serve as the fallback for what it does not cover.
+        let strangers: Vec<cosmic_text::fontdb::ID> = self
+            .fonts
+            .db()
+            .faces()
+            .filter(|f| f.families.iter().any(|(name, _)| *name == family))
+            .filter(|f| !self.asset_ids.contains(&f.id))
+            .map(|f| f.id)
+            .collect();
+        let db = self.fonts.db_mut();
+        for id in strangers {
+            db.remove_face(id);
+        }
         self.asset_faces.insert(asset_id.to_owned(), loaded);
         Some(family)
     }
@@ -295,44 +325,49 @@ impl TextEngine {
         image
     }
 
-    /// The weight to ask for, snapped to one the family actually carries.
+    /// The style and weight to ask for, snapped to what the family
+    /// actually carries.
     ///
     /// The font database holds the machine's fonts beside the document's,
-    /// and a weight no face of the family has is then matched across all
-    /// of them: a Mac has faces at 500 and 600 (the system families do),
-    /// a Linux box usually has none, so `font-weight: 600` over a family
-    /// shipped at 400 and 700 drew in a different typeface on the two.
-    /// The CSS rule is applied here instead, over the family's own faces,
-    /// so a document draws the same everywhere. A family the database
-    /// does not have is left alone, since the fallback is the machine's
-    /// either way.
-    fn available_weight(&self, family: Option<&str>, weight: u16, italic: bool) -> u16 {
+    /// and an attribute no face of the family has is then matched across
+    /// all of them: an exact weight or a real italic in another family
+    /// outranks the right family at the nearest weight or an upright
+    /// face. A Mac carries faces at 500 and 600, this Linux box carries
+    /// FreeSans at 600, and neither carries the other, so the same
+    /// document drew in three typefaces on three machines. Both axes are
+    /// settled here instead, over the family's own faces, so the family
+    /// match is exact and nothing else can outrank it.
+    ///
+    /// A family with no italic face is drawn upright rather than in
+    /// another family's italic. There is no synthetic oblique.
+    ///
+    /// A family the database does not have is left alone, since it falls
+    /// back to the machine's fonts either way.
+    fn available_face(&self, family: Option<&str>, weight: u16, italic: bool) -> (u16, bool) {
         let Some(family) = family else {
-            return weight;
+            return (weight, italic);
         };
-        let wanted = if italic { Style::Italic } else { Style::Normal };
-        let of_family = |style: Option<Style>| -> Vec<u16> {
-            let mut weights: Vec<u16> = self
-                .fonts
-                .db()
-                .faces()
-                .filter(|f| f.families.iter().any(|(name, _)| name == family))
-                .filter(|f| style.is_none_or(|s| f.style == s))
-                .map(|f| f.weight.0)
-                .collect();
-            weights.sort_unstable();
-            weights.dedup();
-            weights
-        };
-        // The faces of the style asked for, or the family's whole set
-        // where it has none: a family with one upright face answers an
-        // italic request with it, as the database would.
-        let mut weights = of_family(Some(wanted));
-        if weights.is_empty() {
-            weights = of_family(None);
+        let faces: Vec<(u16, bool)> = self
+            .fonts
+            .db()
+            .faces()
+            .filter(|f| f.families.iter().any(|(name, _)| name == family))
+            .map(|f| (f.weight.0, f.style != Style::Normal))
+            .collect();
+        if faces.is_empty() {
+            return (weight, italic);
         }
+        // The style the family has, upright where it has no italic.
+        let italic = italic && faces.iter().any(|(_, slanted)| *slanted);
+        let mut weights: Vec<u16> = faces
+            .iter()
+            .filter(|(_, slanted)| *slanted == italic)
+            .map(|(w, _)| *w)
+            .collect();
+        weights.sort_unstable();
+        weights.dedup();
         if weights.is_empty() || weights.contains(&weight) {
-            return weight;
+            return (weight, italic);
         }
         // CSS Fonts 4, 5.2: below 400 look down first, above 500 look up
         // first, and between the two look up to 500 before looking down.
@@ -350,7 +385,7 @@ impl TextEngine {
                 .or_else(|| nearest_below(weight))
                 .or_else(|| nearest_above(weight))
         };
-        picked.unwrap_or(weight)
+        (picked.unwrap_or(weight), italic)
     }
 
     /// Resolves a style block against defaults (and a parent for highlights).
@@ -379,7 +414,7 @@ impl TextEngine {
             .or_else(|| parent.and_then(|p| p.italic))
             .or_else(|| face.map(|f| f.style != Style::Normal))
             .unwrap_or(false);
-        let weight = self.available_weight(family.as_deref(), weight, italic);
+        let (weight, italic) = self.available_face(family.as_deref(), weight, italic);
         Resolved {
             family,
             size: pick(&|s| s.size).unwrap_or(DEFAULT_SIZE).max(1.0) as f32,
@@ -691,40 +726,103 @@ fn fill_rounded_rect(
 }
 
 #[cfg(test)]
-mod weight_tests {
+mod face_tests {
     use super::*;
+
+    fn liberation() -> (Vec<u8>, Vec<u8>) {
+        let root = "../../tests/golden/fonts";
+        (
+            std::fs::read(format!("{root}/LiberationSans-Regular.ttf"))
+                .expect("the golden root ships it"),
+            std::fs::read(format!("{root}/LiberationSans-Bold.ttf"))
+                .expect("the golden root ships it"),
+        )
+    }
 
     /// A family shipped at 400 and 700 answers every weight with one of
     /// the two, by the CSS rule, whatever the machine's own fonts are.
     #[test]
     fn a_weight_the_family_lacks_snaps_to_one_it_has() {
         let mut engine = TextEngine::new();
-        let regular = std::fs::read("../../tests/golden/fonts/LiberationSans-Regular.ttf")
-            .expect("the golden root ships Liberation Sans");
-        let bold = std::fs::read("../../tests/golden/fonts/LiberationSans-Bold.ttf")
-            .expect("the golden root ships Liberation Sans Bold");
+        let (regular, bold) = liberation();
         let family = engine.add_font("sans", regular).expect("a usable face");
         engine.add_font("sans-bold", bold).expect("a usable face");
-        let at = |w: u16| engine.available_weight(Some(&family), w, false);
+        let at = |w: u16| engine.available_face(Some(&family), w, false).0;
         assert_eq!(at(400), 400);
         assert_eq!(at(700), 700);
         // Above 500 looks up first: 600 is Bold, not Regular.
         assert_eq!(at(600), 700);
         assert_eq!(at(800), 700);
-        // 500 looks up to 500 and finds nothing, so it looks down.
+        // 500 looks up as far as 500, finds nothing, and looks down.
         assert_eq!(at(500), 400);
         // Below 400 looks down first, and there is nothing below.
         assert_eq!(at(300), 400);
     }
 
-    /// A family the database does not have is left to the fallback.
+    /// A family with no italic face is drawn upright rather than in some
+    /// other family's italic.
     #[test]
-    fn an_unknown_family_keeps_the_weight_it_asked_for() {
+    fn an_italic_the_family_lacks_falls_back_to_upright() {
+        let mut engine = TextEngine::new();
+        let (regular, bold) = liberation();
+        let family = engine.add_font("sans", regular).expect("a usable face");
+        engine.add_font("sans-bold", bold).expect("a usable face");
+        assert_eq!(
+            engine.available_face(Some(&family), 400, true),
+            (400, false)
+        );
+        // And the weight is still settled within the upright faces.
+        assert_eq!(
+            engine.available_face(Some(&family), 600, true),
+            (700, false)
+        );
+    }
+
+    /// A family the document ships replaces the machine's copy of it, so
+    /// the document draws in the faces it carries rather than in whatever
+    /// version the machine has.
+    #[test]
+    fn a_shipped_family_replaces_the_installed_one() {
+        let mut engine = TextEngine::new();
+        let (regular, bold) = liberation();
+        // Stand in for an installed copy: straight into the database,
+        // as loading the system fonts does.
+        engine.fonts.db_mut().load_font_data(regular.clone());
+        let installed: Vec<_> = engine
+            .fonts
+            .db()
+            .faces()
+            .filter(|f| f.families.iter().any(|(n, _)| n == "Liberation Sans"))
+            .map(|f| f.id)
+            .collect();
+        assert!(!installed.is_empty(), "the stand-in is in the database");
+        let family = engine.add_font("sans", regular).expect("a usable face");
+        engine.add_font("sans-bold", bold).expect("a usable face");
+        let left: Vec<_> = engine
+            .fonts
+            .db()
+            .faces()
+            .filter(|f| f.families.iter().any(|(n, _)| *n == family))
+            .map(|f| f.id)
+            .collect();
+        assert_eq!(left.len(), 2, "the document's two faces, and no others");
+        for id in left {
+            assert!(
+                engine.asset_ids.contains(&id),
+                "every face left is the document's"
+            );
+        }
+    }
+
+    /// A family nobody shipped is left to the machine, which is what
+    /// fallback is for.
+    #[test]
+    fn an_unknown_family_keeps_what_it_asked_for() {
         let engine = TextEngine::new();
         assert_eq!(
-            engine.available_weight(Some("No Such Family"), 600, false),
-            600
+            engine.available_face(Some("No Such Family"), 600, true),
+            (600, true)
         );
-        assert_eq!(engine.available_weight(None, 600, false), 600);
+        assert_eq!(engine.available_face(None, 600, false), (600, false));
     }
 }
