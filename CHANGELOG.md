@@ -7,6 +7,25 @@ the format version it was written for.
 
 ## Unreleased
 
+### Fixed
+
+- **A font weight the family does not have no longer leaves the family.**
+  `font-weight: 600` over a family shipped in regular and bold drew in
+  whichever face the machine carried at exactly 600, because the
+  document's fonts sit in the same database as the machine's and an
+  exact weight in another family outranked the right family at the
+  nearest weight. On a Linux box with FreeSans installed that was
+  FreeSans; on a Mac it was not. The weight is now matched against the
+  family's own faces first, by the CSS rule, so the same document draws
+  the same everywhere. The `markup-card` references and the
+  `markup-opening` reference at 4.2s are regenerated: they had the
+  substituted face in them.
+- **The renderer note no longer claims a composite that did not
+  happen.** An output whose frames go straight from the decoder to the
+  encoder reported `GPU ...: the frames were composited on the device`
+  beside the note saying the frames were not composited at all. The
+  note is now printed only when the compositor draws.
+
 ## 0.6.0 (2026-09-18)
 
 ### Added

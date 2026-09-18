@@ -2407,10 +2407,17 @@ mod imp {
             notes.push(note);
         }
         notes.extend(encoder.video_setting_notes());
+        // A direct or base source hands the encoder the decoder's frames,
+        // so nothing is composited and the renderer is never asked for a
+        // frame. It is still built, since a later frame can need it, but
+        // its note would claim a composite that does not happen.
+        let composites = direct.is_none() && base.is_none();
         let mut renderer = if has_video {
             let (renderer, renderer_notes) =
                 super::choose_renderer(overrides.renderer, root, comp.color.is_hdr());
-            notes.extend(renderer_notes);
+            if composites {
+                notes.extend(renderer_notes);
+            }
             Some(renderer)
         } else {
             None

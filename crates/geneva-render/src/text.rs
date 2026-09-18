@@ -295,6 +295,64 @@ impl TextEngine {
         image
     }
 
+    /// The weight to ask for, snapped to one the family actually carries.
+    ///
+    /// The font database holds the machine's fonts beside the document's,
+    /// and a weight no face of the family has is then matched across all
+    /// of them: a Mac has faces at 500 and 600 (the system families do),
+    /// a Linux box usually has none, so `font-weight: 600` over a family
+    /// shipped at 400 and 700 drew in a different typeface on the two.
+    /// The CSS rule is applied here instead, over the family's own faces,
+    /// so a document draws the same everywhere. A family the database
+    /// does not have is left alone, since the fallback is the machine's
+    /// either way.
+    fn available_weight(&self, family: Option<&str>, weight: u16, italic: bool) -> u16 {
+        let Some(family) = family else {
+            return weight;
+        };
+        let wanted = if italic { Style::Italic } else { Style::Normal };
+        let of_family = |style: Option<Style>| -> Vec<u16> {
+            let mut weights: Vec<u16> = self
+                .fonts
+                .db()
+                .faces()
+                .filter(|f| f.families.iter().any(|(name, _)| name == family))
+                .filter(|f| style.is_none_or(|s| f.style == s))
+                .map(|f| f.weight.0)
+                .collect();
+            weights.sort_unstable();
+            weights.dedup();
+            weights
+        };
+        // The faces of the style asked for, or the family's whole set
+        // where it has none: a family with one upright face answers an
+        // italic request with it, as the database would.
+        let mut weights = of_family(Some(wanted));
+        if weights.is_empty() {
+            weights = of_family(None);
+        }
+        if weights.is_empty() || weights.contains(&weight) {
+            return weight;
+        }
+        // CSS Fonts 4, 5.2: below 400 look down first, above 500 look up
+        // first, and between the two look up to 500 before looking down.
+        let nearest_above = |from: u16| weights.iter().copied().find(|w| *w >= from);
+        let nearest_below = |from: u16| weights.iter().rev().copied().find(|w| *w <= from);
+        let picked = if weight < 400 {
+            nearest_below(weight).or_else(|| nearest_above(weight))
+        } else if weight > 500 {
+            nearest_above(weight).or_else(|| nearest_below(weight))
+        } else {
+            weights
+                .iter()
+                .copied()
+                .find(|w| *w > weight && *w <= 500)
+                .or_else(|| nearest_below(weight))
+                .or_else(|| nearest_above(weight))
+        };
+        picked.unwrap_or(weight)
+    }
+
     /// Resolves a style block against defaults (and a parent for highlights).
     ///
     /// A font asset supplies its face's weight and style unless the style
@@ -321,6 +379,7 @@ impl TextEngine {
             .or_else(|| parent.and_then(|p| p.italic))
             .or_else(|| face.map(|f| f.style != Style::Normal))
             .unwrap_or(false);
+        let weight = self.available_weight(family.as_deref(), weight, italic);
         Resolved {
             family,
             size: pick(&|s| s.size).unwrap_or(DEFAULT_SIZE).max(1.0) as f32,
@@ -628,5 +687,44 @@ fn fill_rounded_rect(
                 blend_pixel(image, x as i32, y as i32, color.scaled(cov));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod weight_tests {
+    use super::*;
+
+    /// A family shipped at 400 and 700 answers every weight with one of
+    /// the two, by the CSS rule, whatever the machine's own fonts are.
+    #[test]
+    fn a_weight_the_family_lacks_snaps_to_one_it_has() {
+        let mut engine = TextEngine::new();
+        let regular = std::fs::read("../../tests/golden/fonts/LiberationSans-Regular.ttf")
+            .expect("the golden root ships Liberation Sans");
+        let bold = std::fs::read("../../tests/golden/fonts/LiberationSans-Bold.ttf")
+            .expect("the golden root ships Liberation Sans Bold");
+        let family = engine.add_font("sans", regular).expect("a usable face");
+        engine.add_font("sans-bold", bold).expect("a usable face");
+        let at = |w: u16| engine.available_weight(Some(&family), w, false);
+        assert_eq!(at(400), 400);
+        assert_eq!(at(700), 700);
+        // Above 500 looks up first: 600 is Bold, not Regular.
+        assert_eq!(at(600), 700);
+        assert_eq!(at(800), 700);
+        // 500 looks up to 500 and finds nothing, so it looks down.
+        assert_eq!(at(500), 400);
+        // Below 400 looks down first, and there is nothing below.
+        assert_eq!(at(300), 400);
+    }
+
+    /// A family the database does not have is left to the fallback.
+    #[test]
+    fn an_unknown_family_keeps_the_weight_it_asked_for() {
+        let engine = TextEngine::new();
+        assert_eq!(
+            engine.available_weight(Some("No Such Family"), 600, false),
+            600
+        );
+        assert_eq!(engine.available_weight(None, 600, false), 600);
     }
 }

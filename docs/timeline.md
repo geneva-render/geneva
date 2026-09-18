@@ -653,6 +653,13 @@ Colours are the ones the rest of the format takes. Anything else is W450:
 the declaration is skipped and the message names it, so the rest of the
 document still draws.
 
+A `font-weight` the family does not have is matched to one it does, by
+the CSS rule: above 500 the next heavier face, below 400 the next
+lighter, and between the two a heavier one up to 500 before a lighter
+one. A family shipped in regular and bold therefore draws
+`font-weight: 600` in its bold face on every machine, rather than in
+whatever face the machine happens to carry at that weight.
+
 ### Gradients
 
 `background` takes `linear-gradient()` and `radial-gradient()` as well as
