@@ -128,15 +128,30 @@ impl Image {
         let fy = y - 0.5;
         let (x0, tx) = split(fx);
         let (y0, ty) = split(fy);
-        let lerp = |a: LinearRgba, b: LinearRgba, t: f32| LinearRgba {
-            r: a.r + (b.r - a.r) * t,
-            g: a.g + (b.g - a.g) * t,
-            b: a.b + (b.b - a.b) * t,
-            a: a.a + (b.a - a.a) * t,
-        };
+        // The 2x2 neighbourhood is inside for every sample but those on
+        // the outermost half-pixel, so the common case indexes straight
+        // in rather than testing four bounds twice over.
+        let (w, h) = (i64::from(self.width), i64::from(self.height));
+        if x0 >= 0 && y0 >= 0 && x0 + 1 < w && y0 + 1 < h {
+            let row = y0 as usize * self.width as usize + x0 as usize;
+            let next = row + self.width as usize;
+            let top = lerp(self.pixels[row], self.pixels[row + 1], tx);
+            let bottom = lerp(self.pixels[next], self.pixels[next + 1], tx);
+            return lerp(top, bottom, ty);
+        }
         let top = lerp(self.texel(x0, y0), self.texel(x0 + 1, y0), tx);
         let bottom = lerp(self.texel(x0, y0 + 1), self.texel(x0 + 1, y0 + 1), tx);
         lerp(top, bottom, ty)
+    }
+}
+
+#[inline]
+fn lerp(a: LinearRgba, b: LinearRgba, t: f32) -> LinearRgba {
+    LinearRgba {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: a.a + (b.a - a.a) * t,
     }
 }
 

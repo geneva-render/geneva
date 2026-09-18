@@ -897,10 +897,35 @@ fn composite(
         mask_polygon(&mut layer.image, layer.origin, points);
     }
     let opacity = group.opacity.clamp(0.0, 1.0);
+    // Where the clip covers a pixel whole, which is everywhere but a
+    // half-pixel band at its edge and its rounded corners. Inside this
+    // rectangle the coverage is exactly one, so the square root and the
+    // branches in `distance` are skipped, which is most of the pixels
+    // of a full-frame group.
+    let solid = group.clip.map(|(rect, radius)| {
+        let inset = radius.iter().fold(0.5f64, |a, r| a.max(*r));
+        [
+            f64::from(rect[0]) + inset,
+            f64::from(rect[1]) + inset,
+            f64::from(rect[0] + rect[2]) - inset,
+            f64::from(rect[1] + rect[3]) - inset,
+        ]
+    });
     let clip = |px: f64, py: f64| -> f32 {
-        group
-            .clip
-            .map_or(1.0, |(rect, radius)| coverage(px, py, rect, radius))
+        match group.clip {
+            None => 1.0,
+            Some((rect, radius)) => {
+                if let Some(s) = solid
+                    && px >= s[0]
+                    && py >= s[1]
+                    && px <= s[2]
+                    && py <= s[3]
+                {
+                    return 1.0;
+                }
+                coverage(px, py, rect, radius)
+            }
+        }
     };
     let src = &layer.image;
     let (sw, sh) = (i64::from(src.width), i64::from(src.height));
@@ -943,47 +968,96 @@ fn composite(
     let y0 = (l[1].floor() as i64 - dst_origin.1).max(0);
     let x1 = (l[2].ceil() as i64 - dst_origin.0).min(dw);
     let y1 = (l[3].ceil() as i64 - dst_origin.1).min(dh);
-    // `inverse` with its trigonometry done once for the whole group.
+    if x1 <= x0 || y1 <= y0 {
+        return;
+    }
+    // The inverse is affine, so it is held as two linear expressions in
+    // the destination pixel rather than rebuilt from the rotation and the
+    // scale at every tap:
+    //     u = ax * px + bx * py + cx
+    //     v = ay * px + by * py + cy
+    // in the buffer's own pixels, the buffer's origin folded into the
+    // constants. The trigonometry and the two divisions happen once for
+    // the whole group. Along a row `py` is fixed, so the part that
+    // changes is one add per pixel.
     let (sin, cos) = tr.rotate.to_radians().sin_cos();
-    let back = |px: f64, py: f64| -> (f64, f64) {
-        let (dx, dy) = (
-            px - centre.0 - tr.translate[0],
-            py - centre.1 - tr.translate[1],
-        );
-        let (rx, ry) = (dx * cos + dy * sin, -dx * sin + dy * cos);
-        (centre.0 + rx / tr.scale[0], centre.1 + ry / tr.scale[1])
-    };
+    let (inv_sx, inv_sy) = (1.0 / tr.scale[0], 1.0 / tr.scale[1]);
+    let (ax, bx) = (cos * inv_sx, sin * inv_sx);
+    let (ay, by) = (-sin * inv_sy, cos * inv_sy);
+    let (tx, ty) = (centre.0 + tr.translate[0], centre.1 + tr.translate[1]);
+    let cx = centre.0 - ax * tx - bx * ty - layer.origin.0 as f64;
+    let cy = centre.1 - ay * tx - by * ty - layer.origin.1 as f64;
+
     let taps = |scale: f64| ((1.0 / scale.abs().max(1e-3)).ceil() as usize).clamp(1, 4);
     let (nx, ny) = (taps(tr.scale[0]), taps(tr.scale[1]));
     let norm = 1.0 / (nx * ny) as f32;
+    let (fw, fh) = (sw as f64, sh as f64);
+    // Only the multi-tap path below fills this, and an empty vector has
+    // not allocated, so a group taking one tap a pixel never pays for it.
+    let mut sums: Vec<LinearRgba> = Vec::new();
+
     for dy in y0..y1 {
-        for dx in x0..x1 {
-            let mut sum = LinearRgba::TRANSPARENT;
-            for j in 0..ny {
-                for i in 0..nx {
-                    let px = (dx + dst_origin.0) as f64 + (i as f64 + 0.5) / nx as f64;
-                    let py = (dy + dst_origin.1) as f64 + (j as f64 + 0.5) / ny as f64;
-                    let (lx, ly) = back(px, py);
-                    let (u, v) = (lx - layer.origin.0 as f64, ly - layer.origin.1 as f64);
-                    if u < 0.0 || v < 0.0 || u >= sw as f64 || v >= sh as f64 {
-                        continue;
+        let py_row = (dy + dst_origin.1) as f64;
+        if nx == 1 && ny == 1 {
+            // A group drawn at its own size or larger, which is most of
+            // them: one tap a pixel, written straight out, with the
+            // sampling point carried along the row.
+            let py = py_row + 0.5;
+            let px0 = (x0 + dst_origin.0) as f64 + 0.5;
+            let mut u = ax * px0 + bx * py + cx;
+            let mut v = ay * px0 + by * py + cy;
+            for dx in x0..x1 {
+                if u >= 0.0 && v >= 0.0 && u < fw && v < fh {
+                    let texel = src.sample(u, v);
+                    if texel.a > 0.0 {
+                        let px = (dx + dst_origin.0) as f64 + 0.5;
+                        over(dst, dx as usize, dy as usize, texel, opacity * clip(px, py));
                     }
-                    let s = src.sample(u, v);
-                    sum.r += s.r;
-                    sum.g += s.g;
-                    sum.b += s.b;
-                    sum.a += s.a;
+                }
+                u += ax;
+                v += ay;
+            }
+            continue;
+        }
+        // Drawn smaller: several taps a pixel, so its edges do not
+        // alias. The taps of a whole row are gathered before the row is
+        // written, which keeps the same one add a pixel per tap.
+        sums.clear();
+        sums.resize((x1 - x0) as usize, LinearRgba::TRANSPARENT);
+        for j in 0..ny {
+            let py = py_row + (j as f64 + 0.5) / ny as f64;
+            let (row_u, row_v) = (bx * py + cx, by * py + cy);
+            for i in 0..nx {
+                let px0 = (x0 + dst_origin.0) as f64 + (i as f64 + 0.5) / nx as f64;
+                let mut u = ax * px0 + row_u;
+                let mut v = ay * px0 + row_v;
+                for sum in sums.iter_mut() {
+                    if u >= 0.0 && v >= 0.0 && u < fw && v < fh {
+                        let s = src.sample(u, v);
+                        sum.r += s.r;
+                        sum.g += s.g;
+                        sum.b += s.b;
+                        sum.a += s.a;
+                    }
+                    u += ax;
+                    v += ay;
                 }
             }
+        }
+        for (k, sum) in sums.iter().enumerate() {
             if sum.a <= 0.0 {
                 continue;
             }
+            let dx = x0 + k as i64;
             let texel = sum.scaled(norm);
-            let (px, py) = (
-                (dx + dst_origin.0) as f64 + 0.5,
-                (dy + dst_origin.1) as f64 + 0.5,
+            let px = (dx + dst_origin.0) as f64 + 0.5;
+            over(
+                dst,
+                dx as usize,
+                dy as usize,
+                texel,
+                opacity * clip(px, py_row + 0.5),
             );
-            over(dst, dx as usize, dy as usize, texel, opacity * clip(px, py));
         }
     }
 }
