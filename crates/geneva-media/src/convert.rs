@@ -16,7 +16,7 @@ use geneva_render::{Frame, Image};
 use rayon::prelude::*;
 
 /// Number of entries in the 16-bit code lookup tables.
-const LUT_SIZE: usize = 1 << 16;
+pub const LUT_SIZE: usize = 1 << 16;
 
 /// A lookup table over 16-bit codes.
 type Lut = [f32; LUT_SIZE];
@@ -63,8 +63,22 @@ fn from_linear_hdr_lut(transfer: Transfer) -> &'static Lut {
     })
 }
 
+/// The table the pack encodes light through: for an SDR output, the
+/// transfer function over linear `[0, 1]`, one entry per 16-bit step of
+/// the input; for an HDR output (`hdr`), the same over `[0, peak]`
+/// indexed by the fourth root of the fraction of [`hdr_peak`]. A
+/// renderer that packs on its own device uploads this table so that it
+/// quantizes exactly as [`frame_to_planes_into`] does.
+pub fn encode_table(transfer: Transfer, hdr: bool) -> &'static [f32; LUT_SIZE] {
+    if hdr {
+        from_linear_hdr_lut(transfer)
+    } else {
+        from_linear_lut(transfer)
+    }
+}
+
 /// The light an HDR transfer can carry, in units of reference white.
-fn hdr_peak(transfer: Transfer) -> f64 {
+pub fn hdr_peak(transfer: Transfer) -> f64 {
     match transfer {
         Transfer::Pq => 10_000.0 / geneva_color::hdr::REFERENCE_WHITE_NITS,
         Transfer::Hlg => 1000.0 / geneva_color::hdr::REFERENCE_WHITE_NITS,

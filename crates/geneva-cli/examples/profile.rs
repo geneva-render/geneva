@@ -1,5 +1,7 @@
 //! Times the CPU compositor and the plane conversion on the check scene
-//! and on variants of it, so that the cost of each element shows.
+//! and on variants of it, so that the cost of each element shows, and
+//! the GPU renderer rendering and packing the same frames when a device
+//! can be opened (any device, a software one included).
 //!
 //!     cargo run --release -p geneva-cli --example profile
 
@@ -81,11 +83,57 @@ fn time(name: &str, width: u32, height: u32, layers: &[&str], frames: u32) {
         convert_ms += started.elapsed().as_secs_f64() * 1e3;
         std::hint::black_box(planes);
     }
+    let gpu_ms = gpu_time(&comp, width, height, tags, frames);
     println!(
-        "{name:<34} {width}x{height}  render {:6.2} ms  convert {:6.2} ms",
+        "{name:<34} {width}x{height}  render {:6.2} ms  convert {:6.2} ms  gpu {}",
         render_ms / f64::from(frames),
-        convert_ms / f64::from(frames)
+        convert_ms / f64::from(frames),
+        gpu_ms.map_or("n/a".to_owned(), |ms| format!("{ms:6.2} ms"))
     );
+}
+
+/// The frames rendered and packed on the device, prepared one ahead as
+/// `geneva render` does, in milliseconds a frame; `None` without a
+/// device.
+fn gpu_time(
+    comp: &Composition,
+    width: u32,
+    height: u32,
+    tags: geneva_color::ResolvedTags,
+    frames: u32,
+) -> Option<f64> {
+    use geneva_gpu::{Gpu, GpuRenderer, Preference};
+    use geneva_media::convert::{PlaneFormat, Planes};
+    use geneva_media::{PlaneRenderer, PlaneTarget};
+    let gpu = Gpu::probe(Preference::from_env(Preference::Any)).ok()?;
+    let mut renderer = GpuRenderer::new(gpu, ImageAssets(gradient(width, height)));
+    let format = PlaneFormat::Yuv420p8;
+    let mut planes = Planes::new(format, width, height);
+    let mut draw = |t: Ratio, next: Option<Ratio>| {
+        if let Some(next) = next {
+            renderer.prepare_planes(comp, next, &[(tags, format)]);
+        }
+        renderer
+            .render_planes(
+                comp,
+                t,
+                &mut [PlaneTarget {
+                    tags,
+                    format,
+                    planes: &mut planes,
+                }],
+                None,
+            )
+            .unwrap();
+    };
+    draw(Ratio::ZERO, None);
+    let started = Instant::now();
+    for n in 0..frames {
+        let t = Ratio::new(i64::from(n), 30);
+        let next = (n + 1 < frames).then(|| Ratio::new(i64::from(n + 1), 30));
+        draw(t, next);
+    }
+    Some(started.elapsed().as_secs_f64() * 1e3 / f64::from(frames))
 }
 
 fn scaled(scale: &str, rotation: &str) -> String {

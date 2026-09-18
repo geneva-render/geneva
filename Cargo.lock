@@ -857,6 +857,7 @@ dependencies = [
  "bytemuck",
  "geneva-color",
  "geneva-golden",
+ "geneva-media",
  "geneva-render",
  "geneva-timeline",
  "half",

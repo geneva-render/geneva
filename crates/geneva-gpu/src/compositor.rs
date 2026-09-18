@@ -26,11 +26,22 @@
 //! copies the target to a backdrop texture, and draws with a pipeline
 //! that replaces the pixel with what the shader composites from the
 //! copy.
+//!
+//! The frame leaves the device through a ring of three staging buffers:
+//! [`Compositor::submit`] records the frame, the pack of it into each
+//! output's planes (`pack.wgsl`, one pass per plane into an integer
+//! texture) and the copies into one slot's buffer, and returns a
+//! [`Job`]; [`Compositor::finish`] waits for that submission alone, maps
+//! the buffer and copies the rows out. With a frame in flight while the
+//! next is planned, the painting of one overlaps the drawing of the
+//! other.
 
 use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
-use geneva_color::{Color, LinearRgba, Primaries, Transfer, matrix, primaries};
+use geneva_color::{Color, LinearRgba, Primaries, ResolvedTags, Transfer, matrix, primaries};
+use geneva_media::PlaneTarget;
+use geneva_media::convert::{PlaneFormat, encode_table, hdr_peak};
 use geneva_render::{
     AssetSource, Frame, Image, Paint, Painter, Placement, RenderError, VideoPlanes, box_radii,
     crop_window, fade_veil, transition_gain,
@@ -200,21 +211,73 @@ struct Kept {
 struct Pooled {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
+    format: wgpu::TextureFormat,
     width: u32,
     height: u32,
     /// Taken by this frame.
     busy: bool,
 }
 
-/// The frame texture and the buffer it is read back through.
+/// What one pack pass tells `pack.wgsl`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+struct PackUniform {
+    yuv: [f32; 4],
+    coef: [f32; 4],
+    m0: [f32; 4],
+    m1: [f32; 4],
+    m2: [f32; 4],
+    max: f32,
+    hdr_peak: f32,
+    hdr: u32,
+    mode: u32,
+    block: [u32; 2],
+    size: [u32; 2],
+}
+
+/// Where one plane, or the frame, lands in a slot's buffer.
+#[derive(Debug, Clone, Copy)]
+struct Region {
+    offset: u64,
+    /// Bytes per row in the buffer, a multiple of 256.
+    padded_row: u32,
+    /// Texels per row.
+    width: u32,
+    height: u32,
+    bytes_per_texel: u32,
+}
+
+/// One slot of the staging ring.
+struct Slot {
+    buffer: Option<wgpu::Buffer>,
+    size: u64,
+    /// Submitted and not yet finished.
+    busy: bool,
+}
+
+/// How many frames may be in flight: the one being finished, the one
+/// prepared behind it, and one more for a frame asked for whole.
+const RING: usize = 3;
+
+/// A frame submitted to the device and not yet read back.
+pub(crate) struct Job {
+    slot: usize,
+    submission: wgpu::SubmissionIndex,
+    width: u32,
+    height: u32,
+    background: Color,
+    /// The frame whole, when it was asked for.
+    frame: Option<Region>,
+    /// The planes of each output, in the outputs' order.
+    planes: Vec<Vec<Region>>,
+}
+
+/// The frame texture.
 struct Target {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
-    staging: wgpu::Buffer,
     width: u32,
     height: u32,
-    /// Bytes per row of the staging buffer, a multiple of 256.
-    padded_row: u32,
 }
 
 /// Everything a frame is drawn with, kept between frames.
@@ -236,6 +299,21 @@ pub(crate) struct Compositor {
     blur_uniforms: wgpu::Buffer,
     blur_slot: u64,
     blur_capacity: usize,
+    /// The pack into 8-bit planes, 16-bit planes, and RGBA bytes.
+    pack_r8: wgpu::RenderPipeline,
+    pack_r16: wgpu::RenderPipeline,
+    pack_rgba8: wgpu::RenderPipeline,
+    pack_layout: wgpu::BindGroupLayout,
+    /// One slot per pack pass.
+    pack_uniforms: wgpu::Buffer,
+    pack_slot: u64,
+    pack_capacity: usize,
+    /// The encode tables uploaded so far, by transfer and HDR.
+    encode_tables: HashMap<(Transfer, bool), wgpu::Buffer>,
+    /// Plane output textures by format and size.
+    outputs: Vec<Pooled>,
+    /// The staging ring.
+    slots: Vec<Slot>,
     /// A 1x1 transparent texture bound where a draw has no picture.
     blank: wgpu::TextureView,
     /// A 1x1 texture of the planes' format, bound where a draw has none.
@@ -441,6 +519,81 @@ impl Compositor {
             multiview_mask: None,
             cache: None,
         });
+        let pack_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("geneva pack"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("pack.wgsl").into()),
+        });
+        let pack_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("geneva pack"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<PackUniform>() as u64
+                        ),
+                    },
+                    count: None,
+                },
+                texture_entry(1, float),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new((LUT_SIZE * 4) as u64),
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let pack_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("geneva pack"),
+            bind_group_layouts: &[Some(&pack_layout)],
+            immediate_size: 0,
+        });
+        let pack = |label: &str, entry: &str, format: wgpu::TextureFormat| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pack_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &pack_shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &pack_shader,
+                    entry_point: Some(entry),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pack_r8 = pack("geneva pack 8-bit", "fs_plane", wgpu::TextureFormat::R8Uint);
+        let pack_r16 = pack(
+            "geneva pack 16-bit",
+            "fs_plane",
+            wgpu::TextureFormat::R16Uint,
+        );
+        let pack_rgba8 = pack(
+            "geneva pack rgba",
+            "fs_rgba",
+            wgpu::TextureFormat::Rgba8Uint,
+        );
         let align = u64::from(device.limits().min_uniform_buffer_offset_alignment);
         let slot = uniform_size.div_ceil(align) * align;
         let capacity = 64;
@@ -448,6 +601,9 @@ impl Compositor {
         let blur_slot = (std::mem::size_of::<BoxUniform>() as u64).div_ceil(align) * align;
         let blur_capacity = 16;
         let blur_uniforms = uniform_buffer(device, blur_slot, blur_capacity);
+        let pack_slot = (std::mem::size_of::<PackUniform>() as u64).div_ceil(align) * align;
+        let pack_capacity = 8;
+        let pack_uniforms = uniform_buffer(device, pack_slot, pack_capacity);
         let blank = make_texture(device, "geneva blank", WORKING_FORMAT, 1, 1, false)
             .create_view(&wgpu::TextureViewDescriptor::default());
         let blank_plane = make_texture(
@@ -474,6 +630,22 @@ impl Compositor {
             blur_uniforms,
             blur_slot,
             blur_capacity,
+            pack_r8,
+            pack_r16,
+            pack_rgba8,
+            pack_layout,
+            pack_uniforms,
+            pack_slot,
+            pack_capacity,
+            encode_tables: HashMap::new(),
+            outputs: Vec::new(),
+            slots: (0..RING)
+                .map(|_| Slot {
+                    buffer: None,
+                    size: 0,
+                    busy: false,
+                })
+                .collect(),
             blank,
             blank_plane,
             target: None,
@@ -492,7 +664,7 @@ impl Compositor {
     }
 
     /// Draws the frame of `comp` at `t` into `frame`, painting sources
-    /// with `painter`.
+    /// with `painter`: a submit and a finish, one after the other.
     pub(crate) fn render<A: AssetSource>(
         &mut self,
         gpu: &Gpu,
@@ -501,18 +673,32 @@ impl Compositor {
         t: Ratio,
         frame: &mut Frame,
     ) -> Result<(), RenderError> {
+        let job = self.submit(gpu, painter, comp, t, &[], true)?;
+        self.finish(gpu, job, &mut [], Some(frame));
+        Ok(())
+    }
+
+    /// Records the frame of `comp` at `t`, its pack into each output's
+    /// planes, and the copies into a free slot of the ring, and submits
+    /// them; with `with_frame`, the frame whole as well. A slot must be
+    /// free: at most [`RING`] jobs are in flight.
+    pub(crate) fn submit<A: AssetSource>(
+        &mut self,
+        gpu: &Gpu,
+        painter: &mut Painter<A>,
+        comp: &Composition,
+        t: Ratio,
+        outputs: &[(ResolvedTags, PlaneFormat)],
+        with_frame: bool,
+    ) -> Result<Job, RenderError> {
         let (width, height) = (comp.width, comp.height);
-        frame.reset(width, height, comp.background);
-        if width == 0 || height == 0 {
-            return Ok(());
-        }
         let device = gpu.device();
         if self
             .target
             .as_ref()
             .is_none_or(|t| t.width != width || t.height != height)
         {
-            self.target = Some(make_target(device, width, height));
+            self.target = Some(make_target(device, width.max(1), height.max(1)));
         }
         self.tick += 1;
         for p in self
@@ -520,29 +706,336 @@ impl Compositor {
             .iter_mut()
             .chain(self.planes.iter_mut())
             .chain(self.layers.iter_mut())
+            .chain(self.outputs.iter_mut())
         {
             p.busy = false;
         }
         self.passes.clear();
-        let planned = self.plan(
-            gpu,
-            painter,
-            comp,
-            &comp.layers,
-            width,
-            height,
-            comp.background,
-            t,
-            None,
-        );
-        if let Err(e) = planned {
-            self.passes.clear();
-            return Err(e);
+        if width > 0 && height > 0 {
+            let planned = self.plan(
+                gpu,
+                painter,
+                comp,
+                &comp.layers,
+                width,
+                height,
+                comp.background,
+                t,
+                None,
+            );
+            if let Err(e) = planned {
+                self.passes.clear();
+                return Err(e);
+            }
         }
         self.evict();
-        self.execute(gpu);
-        self.read_back(gpu, frame);
-        Ok(())
+        // Where everything lands in the slot's buffer.
+        let mut size = 0u64;
+        let mut region = |texels: u32, rows: u32, bytes_per_texel: u32| {
+            let align = u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+            let padded_row =
+                (u64::from(texels) * u64::from(bytes_per_texel)).div_ceil(align) * align;
+            let r = Region {
+                offset: size,
+                padded_row: padded_row as u32,
+                width: texels,
+                height: rows,
+                bytes_per_texel,
+            };
+            size += padded_row * u64::from(rows);
+            r
+        };
+        let frame = with_frame.then(|| region(width, height, TEXEL_BYTES));
+        let planes: Vec<Vec<Region>> = outputs
+            .iter()
+            .map(|(_, format)| {
+                (0..format.plane_count())
+                    .map(|k| {
+                        let (w, h) = format.plane_size(k, width, height);
+                        if format.is_rgb() {
+                            region((w / 4) as u32, h as u32, 4)
+                        } else {
+                            region(w as u32, h as u32, format.bytes_per_sample() as u32)
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        let slot = self
+            .slots
+            .iter()
+            .position(|s| !s.busy)
+            .expect("a slot of the ring is free");
+        if self.slots[slot].buffer.is_none() || self.slots[slot].size < size {
+            self.slots[slot].buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("geneva readback"),
+                size: size.max(wgpu::MAP_ALIGNMENT),
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.slots[slot].size = size.max(wgpu::MAP_ALIGNMENT);
+        }
+        self.slots[slot].busy = true;
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("geneva frame"),
+        });
+        if width > 0 && height > 0 {
+            self.execute(gpu, &mut encoder);
+        }
+        // Handles of their own, so the copies borrow nothing of `self`
+        // while the pack passes take it mutably.
+        let target = self.target.as_ref().expect("made above").texture.clone();
+        let buffer = self.slots[slot].buffer.clone().expect("made above");
+        let copy = |encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture, r: &Region| {
+            encoder.copy_texture_to_buffer(
+                texture.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: r.offset,
+                        bytes_per_row: Some(r.padded_row),
+                        rows_per_image: Some(r.height),
+                    },
+                },
+                wgpu::Extent3d {
+                    width: r.width,
+                    height: r.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        };
+        if let Some(r) = &frame {
+            if width > 0 && height > 0 {
+                copy(&mut encoder, &target, r);
+            }
+        }
+        if width > 0 && height > 0 && !outputs.is_empty() {
+            self.pack(gpu, &mut encoder, outputs, &planes, &copy);
+        }
+        let submission = gpu.queue().submit([encoder.finish()]);
+        Ok(Job {
+            slot,
+            submission,
+            width,
+            height,
+            background: comp.background,
+            frame,
+            planes,
+        })
+    }
+
+    /// Records the pack passes of the frame into each output's planes,
+    /// and their copies into the slot's buffer.
+    fn pack(
+        &mut self,
+        gpu: &Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        outputs: &[(ResolvedTags, PlaneFormat)],
+        regions: &[Vec<Region>],
+        copy: &dyn Fn(&mut wgpu::CommandEncoder, &wgpu::Texture, &Region),
+    ) {
+        let device = gpu.device();
+        let target = self.target.as_ref().expect("made for the frame");
+        let (width, height) = (target.width, target.height);
+        // The uniforms of every pack pass go up in one write, and every
+        // table they read exists before the bind groups are made.
+        let mut uniforms = Vec::new();
+        for (tags, format) in outputs {
+            for k in 0..format.plane_count() {
+                uniforms.push(pack_uniform(*tags, *format, k, width, height));
+            }
+            self.encode_table(gpu, tags.transfer, tags.is_hdr());
+        }
+        if uniforms.len() > self.pack_capacity {
+            let mut capacity = self.pack_capacity;
+            while capacity < uniforms.len() {
+                capacity *= 2;
+            }
+            self.pack_uniforms = uniform_buffer(device, self.pack_slot, capacity);
+            self.pack_capacity = capacity;
+        }
+        let mut bytes = vec![0u8; self.pack_slot as usize * uniforms.len()];
+        for (i, u) in uniforms.iter().enumerate() {
+            let at = i * self.pack_slot as usize;
+            bytes[at..at + std::mem::size_of::<PackUniform>()]
+                .copy_from_slice(bytemuck::bytes_of(u));
+        }
+        gpu.queue().write_buffer(&self.pack_uniforms, 0, &bytes);
+        // The plane textures, taken before any borrow of the pools.
+        let mut textures: Vec<Vec<usize>> = Vec::new();
+        for ((_, format), planes) in outputs.iter().zip(regions) {
+            let texture_format = if format.is_rgb() {
+                wgpu::TextureFormat::Rgba8Uint
+            } else if format.bytes_per_sample() == 2 {
+                wgpu::TextureFormat::R16Uint
+            } else {
+                wgpu::TextureFormat::R8Uint
+            };
+            textures.push(
+                planes
+                    .iter()
+                    .map(|r| {
+                        acquire_in(
+                            &mut self.outputs,
+                            gpu,
+                            texture_format,
+                            r.width,
+                            r.height,
+                            true,
+                        )
+                    })
+                    .collect(),
+            );
+        }
+        let target = self.target.as_ref().expect("made for the frame");
+        let mut pass_index = 0u64;
+        for ((tags, format), (planes, textures)) in
+            outputs.iter().zip(regions.iter().zip(&textures))
+        {
+            let table = &self.encode_tables[&(tags.transfer, tags.is_hdr())];
+            let pipeline = if format.is_rgb() {
+                &self.pack_rgba8
+            } else if format.bytes_per_sample() == 2 {
+                &self.pack_r16
+            } else {
+                &self.pack_r8
+            };
+            for (r, &texture) in planes.iter().zip(textures) {
+                let out = &self.outputs[texture];
+                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("geneva pack"),
+                    layout: &self.pack_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: &self.pack_uniforms,
+                                offset: 0,
+                                size: wgpu::BufferSize::new(
+                                    std::mem::size_of::<PackUniform>() as u64
+                                ),
+                            }),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(&target.view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: table.as_entire_binding(),
+                        },
+                    ],
+                });
+                {
+                    let mut rpass =
+                        begin(encoder, &out.view, wgpu::LoadOp::Clear(wgpu::Color::BLACK));
+                    rpass.set_pipeline(pipeline);
+                    let offset = (pass_index * self.pack_slot) as wgpu::DynamicOffset;
+                    rpass.set_bind_group(0, &bind_group, &[offset]);
+                    rpass.draw(0..3, 0..1);
+                }
+                pass_index += 1;
+                copy(encoder, &out.texture, r);
+            }
+        }
+    }
+
+    /// The output's encode table on the device, uploaded on first use.
+    fn encode_table(&mut self, gpu: &Gpu, transfer: Transfer, hdr: bool) -> &wgpu::Buffer {
+        self.encode_tables
+            .entry((transfer, hdr))
+            .or_insert_with(|| {
+                let buffer = gpu.device().create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("geneva encode"),
+                    size: (LUT_SIZE * 4) as u64,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                gpu.queue().write_buffer(
+                    &buffer,
+                    0,
+                    bytemuck::cast_slice(encode_table(transfer, hdr).as_slice()),
+                );
+                buffer
+            })
+    }
+
+    /// Waits for `job`'s submission alone, and copies its planes into
+    /// `targets` (in the outputs' order it was submitted with) and its
+    /// frame into `frame`, when it carried one. The slot is free again
+    /// after; the job is taken by value so that it is finished once.
+    #[allow(clippy::needless_pass_by_value)]
+    pub(crate) fn finish(
+        &mut self,
+        gpu: &Gpu,
+        job: Job,
+        targets: &mut [PlaneTarget<'_>],
+        frame: Option<&mut Frame>,
+    ) {
+        let slot = &self.slots[job.slot];
+        let buffer = slot.buffer.as_ref().expect("submitted with a buffer");
+        let slice = buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        gpu.device()
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(job.submission.clone()),
+                timeout: None,
+            })
+            .expect("the device answers");
+        rx.recv()
+            .expect("the map callback runs")
+            .expect("the staging buffer maps");
+        {
+            let data = slice.get_mapped_range().expect("mapped above");
+            let rows = |r: &Region| {
+                let row_bytes = r.width as usize * r.bytes_per_texel as usize;
+                data[r.offset as usize..]
+                    .chunks_exact(r.padded_row as usize)
+                    .take(r.height as usize)
+                    .map(move |row| &row[..row_bytes])
+            };
+            if let Some(frame) = frame {
+                frame.reset(job.width, job.height, job.background);
+                if let Some(r) = &job.frame {
+                    let pixels = frame.pixels_mut();
+                    for (y, row) in rows(r).enumerate() {
+                        let out = &mut pixels[y * r.width as usize..][..r.width as usize];
+                        for (p, texel) in out.iter_mut().zip(row.chunks_exact(8)) {
+                            let half = |i: usize| {
+                                f16::from_bits(u16::from_le_bytes([texel[i], texel[i + 1]]))
+                                    .to_f32()
+                            };
+                            *p = LinearRgba {
+                                r: half(0),
+                                g: half(2),
+                                b: half(4),
+                                a: half(6),
+                            };
+                        }
+                    }
+                }
+            }
+            for (regions, target) in job.planes.iter().zip(targets.iter_mut()) {
+                for (r, plane) in regions.iter().zip(target.planes.planes.iter_mut()) {
+                    for (y, row) in rows(r).enumerate() {
+                        let at = y * plane.stride;
+                        plane.data[at..at + row.len()].copy_from_slice(row);
+                    }
+                }
+            }
+        }
+        buffer.unmap();
+        self.slots[job.slot].busy = false;
+    }
+
+    /// Gives a job's slot up without reading it; the job is taken by
+    /// value so that it is released once.
+    #[allow(clippy::needless_pass_by_value)]
+    pub(crate) fn release(&mut self, job: Job) {
+        self.slots[job.slot].busy = false;
     }
 
     /// Plans the pass that draws `layers` into `target` (the frame's own
@@ -1072,9 +1565,8 @@ impl Compositor {
         }
     }
 
-    /// Records the planned passes and submits them, with the frame's own
-    /// target copied out to the staging buffer at the end.
-    fn execute(&mut self, gpu: &Gpu) {
+    /// Records the planned passes into `encoder`.
+    fn execute(&mut self, gpu: &Gpu, encoder: &mut wgpu::CommandEncoder) {
         let device = gpu.device();
         let passes = std::mem::take(&mut self.passes);
         // Every composite draw's uniforms go up in one write, each at
@@ -1152,9 +1644,6 @@ impl Compositor {
                 _ => None,
             })
             .collect();
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("geneva frame"),
-        });
         let mut next_slot = 0u64;
         let mut next_box = 0u64;
         let transparent = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
@@ -1175,7 +1664,7 @@ impl Compositor {
                         .collect();
                     let clear = background.to_linear();
                     let mut rpass = begin(
-                        &mut encoder,
+                        encoder,
                         view,
                         wgpu::LoadOp::Clear(wgpu::Color {
                             r: f64::from(clear.r),
@@ -1200,7 +1689,7 @@ impl Compositor {
                                     depth_or_array_layers: 1,
                                 },
                             );
-                            rpass = begin(&mut encoder, view, wgpu::LoadOp::Load);
+                            rpass = begin(encoder, view, wgpu::LoadOp::Load);
                         }
                         rpass.set_pipeline(match d.blending {
                             Blending::Normal => &self.normal,
@@ -1226,7 +1715,7 @@ impl Compositor {
                 }
                 Pass::Layer { target, draw } => {
                     let bind_group = self.bind_group(device, draw, &self.blank);
-                    let mut rpass = begin(&mut encoder, &self.layers[*target].view, transparent);
+                    let mut rpass = begin(encoder, &self.layers[*target].view, transparent);
                     rpass.set_pipeline(&self.layer);
                     let offset = (next_slot * self.slot) as wgpu::DynamicOffset;
                     next_slot += 1;
@@ -1256,7 +1745,7 @@ impl Compositor {
                             },
                         ],
                     });
-                    let mut rpass = begin(&mut encoder, &self.layers[*to].view, transparent);
+                    let mut rpass = begin(encoder, &self.layers[*to].view, transparent);
                     rpass.set_pipeline(&self.blur);
                     let offset = (next_box * self.blur_slot) as wgpu::DynamicOffset;
                     next_box += 1;
@@ -1265,66 +1754,8 @@ impl Compositor {
                 }
             }
         }
-        let target = self.target.as_ref().expect("made for the frame");
-        encoder.copy_texture_to_buffer(
-            target.texture.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &target.staging,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(target.padded_row),
-                    rows_per_image: Some(target.height),
-                },
-            },
-            wgpu::Extent3d {
-                width: target.width,
-                height: target.height,
-                depth_or_array_layers: 1,
-            },
-        );
-        gpu.queue().submit([encoder.finish()]);
         self.passes = passes;
         self.passes.clear();
-    }
-
-    /// Waits for the frame and copies it out of the staging buffer.
-    fn read_back(&self, gpu: &Gpu, frame: &mut Frame) {
-        let target = self.target.as_ref().expect("drawn");
-        let slice = target.staging.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        gpu.device()
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("the device answers");
-        rx.recv()
-            .expect("the map callback runs")
-            .expect("the staging buffer maps");
-        {
-            let data = slice.get_mapped_range().expect("mapped above");
-            let row_bytes = target.width as usize * TEXEL_BYTES as usize;
-            let pixels = frame.pixels_mut();
-            for (y, row) in data
-                .chunks_exact(target.padded_row as usize)
-                .take(target.height as usize)
-                .enumerate()
-            {
-                let out = &mut pixels[y * target.width as usize..][..target.width as usize];
-                for (p, texel) in out.iter_mut().zip(row[..row_bytes].chunks_exact(8)) {
-                    let half = |i: usize| {
-                        f16::from_bits(u16::from_le_bytes([texel[i], texel[i + 1]])).to_f32()
-                    };
-                    *p = LinearRgba {
-                        r: half(0),
-                        g: half(2),
-                        b: half(4),
-                        a: half(6),
-                    };
-                }
-            }
-        }
-        target.staging.unmap();
     }
 }
 
@@ -1487,7 +1918,7 @@ fn acquire_in(
     let (width, height) = (width.max(1), height.max(1));
     if let Some(i) = pool
         .iter()
-        .position(|p| !p.busy && p.width == width && p.height == height)
+        .position(|p| !p.busy && p.format == format && p.width == width && p.height == height)
     {
         pool[i].busy = true;
         return i;
@@ -1504,6 +1935,7 @@ fn acquire_in(
     pool.push(Pooled {
         texture,
         view,
+        format,
         width,
         height,
         busy: true,
@@ -1523,25 +1955,66 @@ fn make_target(device: &wgpu::Device, width: u32, height: u32) -> Target {
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: WORKING_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    let padded_row = (width * TEXEL_BYTES).div_ceil(align) * align;
-    let staging = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("geneva readback"),
-        size: u64::from(padded_row) * u64::from(height),
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
     Target {
         texture,
         view,
-        staging,
         width,
         height,
-        padded_row,
+    }
+}
+
+/// What one pack pass tells the shader, as `frame_to_planes_into` sets
+/// it up: the range's scales and offsets at the layout's depth, the
+/// matrix's coefficients, the output's primaries when they differ from
+/// the working space, the HDR table and peak, the plane's role and the
+/// chroma block.
+fn pack_uniform(
+    tags: ResolvedTags,
+    format: PlaneFormat,
+    plane: usize,
+    width: u32,
+    height: u32,
+) -> PackUniform {
+    let bits = format.bits();
+    let shift = bits - 8;
+    let max = ((1u32 << bits) - 1) as f32;
+    let (y_scale, y_off, c_scale) = match tags.range {
+        geneva_color::Range::Full => (max, 0.0, max),
+        geneva_color::Range::Limited => (
+            (219u32 << shift) as f32,
+            (16u32 << shift) as f32,
+            (224u32 << shift) as f32,
+        ),
+    };
+    let c_off = (1u32 << (bits - 1)) as f32;
+    let (kr, kb) = matrix::luma_coefficients(tags.matrix).unwrap_or((0.2126, 0.0722));
+    let kg = 1.0 - kr - kb;
+    let to_output = primaries::conversion(Primaries::Bt709, tags.primaries);
+    let row = |r: [f64; 3]| [r[0] as f32, r[1] as f32, r[2] as f32, 0.0];
+    let (dx, dy) = format.chroma_divisors();
+    PackUniform {
+        yuv: [y_scale, y_off, c_scale, c_off],
+        coef: [
+            kr as f32,
+            kb as f32,
+            kg as f32,
+            if to_output.is_some() { 1.0 } else { 0.0 },
+        ],
+        m0: to_output.map_or([0.0; 4], |m| row(m[0])),
+        m1: to_output.map_or([0.0; 4], |m| row(m[1])),
+        m2: to_output.map_or([0.0; 4], |m| row(m[2])),
+        max,
+        hdr_peak: hdr_peak(tags.transfer) as f32,
+        hdr: u32::from(tags.is_hdr()),
+        mode: if format.is_rgb() { 3 } else { plane as u32 },
+        block: [dx as u32, dy as u32],
+        size: [width, height],
     }
 }
 

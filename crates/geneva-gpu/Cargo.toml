@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 bytemuck = { workspace = true }
 geneva-color = { workspace = true }
+geneva-media = { workspace = true }
 half = { workspace = true }
 geneva-render = { workspace = true }
 geneva-timeline = { workspace = true }

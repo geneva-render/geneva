@@ -118,7 +118,10 @@ cat > "$work/styled.json" <<'JSON'
       "shadow": "0 4px 12px #000c", "outline": "3px #101820", "background": "#ffffff20", "padding": "16px", "radius": 12 } } ] } ] }
 JSON
 
-run "render timeline (720p, shapes+text)" "$work/rendered.mp4" "$geneva" render "$work/shapes.json" -o "$work/rendered.mp4"; noff
+run "render timeline (720p, shapes+text)" "$work/rendered.mp4" "$geneva" render "$work/shapes.json" -o "$work/rendered.mp4" --renderer cpu; noff
+# The same scene composited on the GPU; the note in the log names the
+# device, or says why the CPU was used instead.
+run "render timeline (720p, GPU)" "$work/rendered-gpu.mp4" "$geneva" render "$work/shapes.json" -o "$work/rendered-gpu.mp4" --renderer gpu; noff
 if [ -z "$input" ]; then input=$work/rendered.mp4; echo "no input given; using the rendered clip"; fi
 run "frame to PNG" "$work/logo.png" "$geneva" frame "$work/logo.json" -o "$work/logo.png"; noff
 

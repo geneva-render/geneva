@@ -27,16 +27,49 @@
 mod compositor;
 mod device;
 
+use std::collections::VecDeque;
+
+use geneva_color::ResolvedTags;
+use geneva_media::convert::PlaneFormat;
+use geneva_media::{PlaneRenderer, PlaneTarget};
 use geneva_render::{AssetSource, Frame, Painter, RenderError, Renderer};
 use geneva_timeline::{Composition, Ratio};
 
 pub use device::{Gpu, GpuError, Preference, Report};
 
 /// Renders frames on a device.
+///
+/// As a [`PlaneRenderer`] it packs the frame into the encoder's planes
+/// on the device too, and reads back three bytes a pixel rather than
+/// sixteen. [`PlaneRenderer::prepare_planes`] submits the next frame
+/// while the current one is read back, so the painting and uploading of
+/// one frame overlap the drawing of the other; up to two frames are held
+/// in flight this way, and a frame asked for that is not the prepared
+/// one is drawn afresh.
 pub struct GpuRenderer<A: AssetSource> {
     gpu: Gpu,
     painter: Painter<A>,
     compositor: compositor::Compositor,
+    /// Frames submitted ahead, oldest first.
+    pending: VecDeque<Pending>,
+}
+
+/// A frame in flight and what it was submitted for.
+struct Pending {
+    key: Key,
+    job: compositor::Job,
+}
+
+/// What a prepared frame answers to.
+#[derive(PartialEq)]
+struct Key {
+    /// The composition, by address: prepared for one document, drawn
+    /// for the same one.
+    comp: usize,
+    width: u32,
+    height: u32,
+    t: Ratio,
+    outputs: Vec<(ResolvedTags, PlaneFormat)>,
 }
 
 impl<A: AssetSource> GpuRenderer<A> {
@@ -47,6 +80,7 @@ impl<A: AssetSource> GpuRenderer<A> {
             gpu,
             painter: Painter::new(assets),
             compositor,
+            pending: VecDeque::new(),
         }
     }
 
@@ -58,6 +92,93 @@ impl<A: AssetSource> GpuRenderer<A> {
     /// The asset source, for registering fonts or media.
     pub fn assets_mut(&mut self) -> &mut A {
         self.painter.assets_mut()
+    }
+
+    /// Gives up every frame prepared ahead.
+    fn drop_pending(&mut self) {
+        while let Some(p) = self.pending.pop_front() {
+            self.compositor.release(p.job);
+        }
+    }
+
+    fn key(comp: &Composition, t: Ratio, outputs: &[(ResolvedTags, PlaneFormat)]) -> Key {
+        Key {
+            comp: std::ptr::from_ref(comp) as usize,
+            width: comp.width,
+            height: comp.height,
+            t,
+            outputs: outputs.to_vec(),
+        }
+    }
+}
+
+impl<A: AssetSource> PlaneRenderer for GpuRenderer<A> {
+    fn render_planes(
+        &mut self,
+        comp: &Composition,
+        t: Ratio,
+        targets: &mut [PlaneTarget<'_>],
+        frame: Option<&mut Frame>,
+    ) -> Result<(), RenderError> {
+        if t < Ratio::ZERO || t >= comp.duration {
+            return Err(RenderError::OutOfRange {
+                time: t,
+                duration: comp.duration,
+            });
+        }
+        let outputs: Vec<(ResolvedTags, PlaneFormat)> =
+            targets.iter().map(|p| (p.tags, p.format)).collect();
+        let key = Self::key(comp, t, &outputs);
+        // Frames prepared for another document, or for an earlier time,
+        // are never asked for again.
+        while let Some(p) = self.pending.front() {
+            if p.key.comp != key.comp || p.key.t < t {
+                let p = self.pending.pop_front().expect("checked above");
+                self.compositor.release(p.job);
+            } else {
+                break;
+            }
+        }
+        // The frame prepared ahead is this one when it was asked for
+        // the same time and outputs, and without the frame whole.
+        let ready = frame.is_none() && self.pending.front().is_some_and(|p| p.key == key);
+        let job = if ready {
+            self.pending.pop_front().expect("checked above").job
+        } else {
+            self.compositor.submit(
+                &self.gpu,
+                &mut self.painter,
+                comp,
+                t,
+                &outputs,
+                frame.is_some(),
+            )?
+        };
+        self.compositor.finish(&self.gpu, job, targets, frame);
+        Ok(())
+    }
+
+    fn prepare_planes(
+        &mut self,
+        comp: &Composition,
+        t: Ratio,
+        outputs: &[(ResolvedTags, PlaneFormat)],
+    ) {
+        if t < Ratio::ZERO || t >= comp.duration || self.pending.len() >= 2 {
+            return;
+        }
+        let key = Self::key(comp, t, outputs);
+        if self.pending.iter().any(|p| p.key == key) {
+            return;
+        }
+        // An error here comes again from the render that follows, where
+        // it is reported.
+        if let Ok(job) =
+            self.compositor
+                .submit(&self.gpu, &mut self.painter, comp, t, outputs, false)
+        {
+            self.pending.push_back(Pending { key, job });
+        }
     }
 }
 
@@ -82,6 +203,7 @@ impl<A: AssetSource> Renderer for GpuRenderer<A> {
                 duration: comp.duration,
             });
         }
+        self.drop_pending();
         self.compositor
             .render(&self.gpu, &mut self.painter, comp, t, frame)
     }

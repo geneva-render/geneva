@@ -195,9 +195,7 @@ pub struct RenderOverrides {
 /// Which renderer composites the frames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
 pub enum RendererChoice {
-    /// The GPU where the machine has one the renderer can draw with, the
-    /// CPU otherwise. Until the render loop runs on the GPU renderer,
-    /// this is the CPU.
+    /// The GPU where the machine has a hardware one, the CPU otherwise.
     #[default]
     Auto,
     /// The CPU reference renderer.
@@ -207,34 +205,64 @@ pub enum RendererChoice {
     Gpu,
 }
 
-/// What the choice of renderer came to, as notes for the report. The
-/// GPU renderer draws everything the CPU renderer draws, but the render
-/// loop is not on it yet, so every choice composites on the CPU;
-/// asking for the GPU probes the device and says what was found, which
-/// is the fallback path exercised end to end.
+/// The renderer `choice` comes to on this machine, reading assets under
+/// `root`, and what the report says about it: nothing for the CPU when
+/// it was the default; the device when the GPU is used; why not when it
+/// was asked for and could not be. `auto` takes a hardware device only,
+/// `gpu` a software one too (`GENEVA_GPU=software` forces the software
+/// one for either).
 #[cfg(feature = "media")]
-pub fn renderer_notes(choice: RendererChoice) -> Vec<String> {
-    match choice {
-        RendererChoice::Auto | RendererChoice::Cpu => Vec::new(),
-        RendererChoice::Gpu => vec![gpu_note()],
+pub fn choose_renderer(
+    choice: RendererChoice,
+    root: &std::path::Path,
+    keep_hdr: bool,
+) -> (Box<dyn geneva_media::PlaneRenderer>, Vec<String>) {
+    use geneva_media::{FramePacker, MediaAssets, PlaneRenderer};
+    use geneva_render::CpuRenderer;
+    let assets = || MediaAssets::new(root).keep_hdr(keep_hdr);
+    let cpu = |notes: Vec<String>| -> (Box<dyn PlaneRenderer>, Vec<String>) {
+        (
+            Box::new(FramePacker::new(CpuRenderer::new(assets()))),
+            notes,
+        )
+    };
+    if choice == RendererChoice::Cpu {
+        return cpu(Vec::new());
     }
-}
-
-#[cfg(all(feature = "media", feature = "gpu"))]
-fn gpu_note() -> String {
-    use geneva_gpu::{Gpu, Preference};
-    match Gpu::probe(Preference::from_env(Preference::Any)) {
-        Ok(gpu) => format!(
-            "GPU {}: the GPU renderer is not in the render loop yet, so the frames were composited on the CPU",
-            gpu.report().line()
-        ),
-        Err(e) => format!("no usable GPU ({e}); the frames were composited on the CPU"),
+    #[cfg(feature = "gpu")]
+    {
+        use geneva_gpu::{Gpu, GpuRenderer, Preference};
+        let wanted = if choice == RendererChoice::Gpu {
+            Preference::Any
+        } else {
+            Preference::Hardware
+        };
+        match Gpu::probe(Preference::from_env(wanted)) {
+            Ok(gpu) => {
+                let line = gpu.report().line();
+                (
+                    Box::new(GpuRenderer::new(gpu, assets())),
+                    vec![format!(
+                        "GPU {line}: the frames were composited on the device"
+                    )],
+                )
+            }
+            Err(e) if choice == RendererChoice::Gpu => cpu(vec![format!(
+                "no usable GPU ({e}); the frames were composited on the CPU"
+            )]),
+            Err(_) => cpu(Vec::new()),
+        }
     }
-}
-
-#[cfg(all(feature = "media", not(feature = "gpu")))]
-fn gpu_note() -> String {
-    "this build has no GPU renderer; the frames were composited on the CPU".to_owned()
+    #[cfg(not(feature = "gpu"))]
+    {
+        if choice == RendererChoice::Gpu {
+            cpu(vec![
+                "this build has no GPU renderer; the frames were composited on the CPU".to_owned(),
+            ])
+        } else {
+            cpu(Vec::new())
+        }
+    }
 }
 
 /// What a render produced.
@@ -1059,8 +1087,9 @@ mod imp {
         let mut poster_fallback: Option<Vec<u8>> = None;
         let mut previous_gist: Option<Vec<f32>> = None;
 
-        notes.extend(super::renderer_notes(overrides.renderer));
-        let mut renderer = CpuRenderer::new(MediaAssets::new(root).keep_hdr(comp.color.is_hdr()));
+        let (mut renderer, renderer_notes) =
+            super::choose_renderer(overrides.renderer, root, comp.color.is_hdr());
+        notes.extend(renderer_notes);
         let mut frame = geneva_render::Frame::new(0, 0, geneva_color::Color::BLACK);
         let mut render_error: Option<RenderError> = None;
         let mut done = 0u64;
@@ -1137,6 +1166,10 @@ mod imp {
                 }
             }
             let mut canvas_pool = geneva_media::convert::PlanePool::default();
+            let layouts: Vec<(
+                geneva_color::ResolvedTags,
+                geneva_media::convert::PlaneFormat,
+            )> = canvases.iter().map(|(t, f, _)| (*t, *f)).collect();
 
             // With no video to write, only the frames the pictures need
             // are composited, and the loop ends once they have them.
@@ -1188,14 +1221,28 @@ mod imp {
                 // picture takes are composited.
                 let composited = !direct_mode || poster_wants || tile_wants;
                 if composited {
-                    if let Err(e) = renderer.render_into(comp, t, &mut frame) {
+                    // The frame packed into every canvas, and kept whole
+                    // when a picture wants it; the next frame is started
+                    // first, so a renderer that can draws it meanwhile.
+                    let mut targets: Vec<geneva_media::PlaneTarget<'_>> = if direct_mode {
+                        Vec::new()
+                    } else {
+                        canvases
+                            .iter_mut()
+                            .map(|(tags, format, planes)| geneva_media::PlaneTarget {
+                                tags: *tags,
+                                format: *format,
+                                planes,
+                            })
+                            .collect()
+                    };
+                    if !direct_mode && n + 1 < frames {
+                        renderer.prepare_planes(comp, comp.frame_time(n + 1), &layouts);
+                    }
+                    let whole = (poster_wants || tile_wants).then_some(&mut frame);
+                    if let Err(e) = renderer.render_planes(comp, t, &mut targets, whole) {
                         render_error = Some(e);
                         break;
-                    }
-                }
-                if !direct_mode {
-                    for (tags, format, planes) in &mut canvases {
-                        geneva_media::convert::frame_to_planes_into(&frame, *tags, *format, planes);
                     }
                 }
                 for (sink, feed) in video_sinks.iter_mut().zip(video_feeds.iter_mut()) {
@@ -2360,10 +2407,20 @@ mod imp {
             notes.push(note);
         }
         notes.extend(encoder.video_setting_notes());
-        if has_video {
-            notes.extend(super::renderer_notes(overrides.renderer));
-        }
-        let mut renderer = CpuRenderer::new(MediaAssets::new(root).keep_hdr(comp.color.is_hdr()));
+        let mut renderer = if has_video {
+            let (renderer, renderer_notes) =
+                super::choose_renderer(overrides.renderer, root, comp.color.is_hdr());
+            notes.extend(renderer_notes);
+            Some(renderer)
+        } else {
+            None
+        };
+        // The overlays over a copied picture are drawn on the CPU: they
+        // are small, and their blend onto the packed planes is the
+        // CPU's.
+        let mut overlays = base
+            .is_some()
+            .then(|| CpuRenderer::new(MediaAssets::new(root).keep_hdr(comp.color.is_hdr())));
         let total = if has_video { comp.frame_count() } else { 0 };
         let video_format = if has_video {
             Some(encoder.video_format().map_err(media_err)?)
@@ -2459,7 +2516,6 @@ mod imp {
                     },
                 )
             });
-            let mut frame = geneva_render::Frame::new(0, 0, geneva_color::Color::BLACK);
             // One output frame, by whichever path applies.
             let mut produce = |n: u64| -> Result<geneva_media::convert::Planes, RenderError> {
                 let t = comp.frame_time(n);
@@ -2471,17 +2527,32 @@ mod imp {
                 }
                 if let Some(b) = base.as_mut() {
                     let mut planes = b.frame_with(t, &mut pool).map_err(media_err)?;
-                    if let Some((overlay, rect)) = renderer.render_overlays(comp, t)? {
+                    let overlays = overlays.as_mut().expect("made with the base");
+                    if let Some((overlay, rect)) = overlays.render_overlays(comp, t)? {
                         let tags = output_tags.expect("video output has tags");
                         geneva_media::convert::blend_overlay(&mut planes, &overlay, rect, tags);
                         composited += 1;
                     }
                     return Ok(planes);
                 }
-                renderer.render_into(comp, t, &mut frame)?;
+                let renderer = renderer.as_mut().expect("a video output has a renderer");
                 let (color, format) = video_format.expect("video output has a format");
-                let mut planes = pool.take(format, frame.width(), frame.height());
-                geneva_media::convert::frame_to_planes_into(&frame, color, format, &mut planes);
+                let mut planes = pool.take(format, comp.width, comp.height);
+                // The next frame is started first, so a renderer that
+                // can draws it while this one is read back.
+                if n + 1 < total {
+                    renderer.prepare_planes(comp, comp.frame_time(n + 1), &[(color, format)]);
+                }
+                renderer.render_planes(
+                    comp,
+                    t,
+                    &mut [geneva_media::PlaneTarget {
+                        tags: color,
+                        format,
+                        planes: &mut planes,
+                    }],
+                    None,
+                )?;
                 Ok(planes)
             };
             let mut done = 0u64;

@@ -9,24 +9,28 @@ the format version it was written for.
 
 ### Added
 
-- **The start of the GPU renderer.** A new crate, `geneva-gpu`, finds a
-  device through `wgpu` (Vulkan on Linux, Metal on macOS, DirectX 12 on
+- **The GPU renderer.** A new crate, `geneva-gpu`, renders on a device
+  through `wgpu` (Vulkan on Linux, Metal on macOS, DirectX 12 on
   Windows; a software implementation such as Mesa's lavapipe when asked
-  for) and checks it can render and blend the working format. `render
-  --renderer auto|cpu|gpu` chooses the renderer: `auto` is the GPU where
-  one can be used and the CPU otherwise, `gpu` takes any device and
-  falls back to the CPU with a note when none opens. The renderer
-  draws every source (placement, crop, shape and luma masks, opacity,
-  transitions, every blend mode, the fade's veil, nested compositions)
-  through the same rules as the CPU renderer: text and markup are
-  painted on the CPU by a painter both renderers share and uploaded,
-  pictures that do not change are kept on the device under a 96 MB
-  budget, and an 8-bit 4:2:0 video frame goes up as its planes and is
+  for). `render --renderer auto|cpu|gpu` chooses the renderer: `auto`
+  is the GPU where the machine has a hardware one and the CPU
+  otherwise, `gpu` takes any device and falls back to the CPU with a
+  note when none opens; the report's notes name the device. The
+  renderer draws every source (placement, crop, shape and luma masks,
+  opacity, transitions, every blend mode, the fade's veil, nested
+  compositions) through the same rules as the CPU renderer: text and
+  markup are painted on the CPU by a painter both renderers share and
+  uploaded, pictures that do not change are kept on the device under a
+  96 MB budget, an 8-bit 4:2:0 video frame goes up as its planes and is
   converted to linear light on the device by the same arithmetic as
   the CPU conversion (HDR, RGB and rotated frames go up as the picture
   the decoder converts), and a blurred clip is drawn onto a layer and
-  blurred by the same three box blurs, in f32 as on the CPU. The render loop does not use it yet, so every choice still
-  composites on the CPU, and `gpu` reports what it found. A new golden
+  blurred by the same three box blurs, in f32 as on the CPU. The frame
+  is packed into the encoder's planes on the device too, for every
+  layout the encoders take, SDR and HDR, and read back through a ring
+  of staging buffers with the next frame already drawing. Every golden
+  case agrees with the CPU renderer to within one 8-bit code. `frame`
+  and the overlays over a copied picture stay on the CPU. A new golden
   case, `tests/golden/masks-and-fades`, pins masks (shape, feather,
   invert, luma) and transitions (crossfade, fade) down on both
   renderers; neither had a reference frame before, and neither had the

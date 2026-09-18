@@ -23,6 +23,7 @@ mod info;
 mod levels;
 #[cfg(feature = "media")]
 pub mod mix;
+mod render;
 #[cfg(feature = "media")]
 mod spool;
 pub mod subtitles;
@@ -48,6 +49,7 @@ pub use codecs::{
 pub use info::{AudioInfo, MediaInfo, SubtitleInfo, VideoInfo};
 #[cfg(feature = "media")]
 pub use levels::measure_audio;
+pub use render::{FramePacker, PlaneRenderer, PlaneTarget};
 
 /// Errors from reading or writing media.
 #[derive(Debug, Error)]

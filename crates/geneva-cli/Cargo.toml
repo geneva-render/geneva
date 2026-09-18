@@ -50,4 +50,4 @@ workspace = true
 
 [[example]]
 name = "profile"
-required-features = ["media"]
+required-features = ["media", "gpu"]

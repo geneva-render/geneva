@@ -53,7 +53,9 @@ contract (`render_frame` is the allocating convenience). A `Frame` is
 premultiplied linear-light RGBA; conversion to 8-bit sRGB or to the
 encoder's Y'CbCr happens at the edge.
 
-`CpuRenderer` is the reference implementation:
+`CpuRenderer` is the reference implementation, and `GpuRenderer` in
+`geneva-gpu` a second one with the same contract, checked against it
+by the golden harness (see [GPU renderer](#gpu-renderer)).
 
 - For each clip visible at the requested time, it samples the clip's tracks
   at clip-local time and builds an affine placement (fit → anchor → scale →
@@ -117,6 +119,45 @@ box out again each frame. The painter's loops (boxes, shadows,
 pictures, polygon clips, laying a group onto its parent, the conversion
 to linear light) share their rows across the thread pool like the
 compositor's; text is shaped and rasterized on one thread.
+
+## GPU renderer
+
+`geneva-gpu` is a second `Renderer` on `wgpu` (Vulkan, Metal, DirectX
+12; WGSL), pure Rust, the device found at run time. `render --renderer
+auto` takes a hardware device where there is one and the CPU otherwise;
+`gpu` takes a software device too. What it shares with the CPU renderer
+it shares as code rather than as a copy: the placement of a clip
+(`Placement`), what transitions do to opacity and the fade's veil, and
+the painter above the composite (image assets, text shaped and drawn,
+markup prepared once per clip). What it transcribes it transcribes
+function by function into `composite.wgsl`, `blur.wgsl` and
+`pack.wgsl`: the sampling rules (one center sample when pixel-aligned,
+the 2x2 subsamples otherwise, the span rule for magnified pictures),
+the shape and mask signed distances, bilinear reads with texel centers
+at half integers, the separable blend modes from a copy of the target,
+the 4:2:0 conversion of a video frame from its planes, the three box
+blurs, and the pack into the encoder's planes with the same tables.
+
+The working format is `Rgba16Float`, premultiplied linear light; blur
+layers are `Rgba32Float`, since six passes at half precision would
+drift. Pictures that do not change (an image asset, static text, a
+still markup box) are kept on the device under a 96 MB budget, least
+recently drawn out first; a video frame or an animated picture goes up
+each frame. The frame leaves the device packed: one pass per plane into
+an integer texture, copied into one of three staging buffers, so a
+1080p 4:2:0 frame reads back as 3 MB rather than the 16 MB of an f32
+frame, and the next frame is submitted before the current one is
+mapped, which overlaps the painting and uploading of one with the
+drawing of the other.
+
+Every golden case renders on both and agrees to within one 8-bit code;
+`cargo test -p geneva-gpu -- --nocapture` prints the per-frame table.
+The CPU renderer stays the reference and the fallback: `frame`, the
+overlays over a copied picture, and any machine without a device use
+it. Not done: 16-bit and HDR video sources are converted by the decoder
+and uploaded as pictures rather than as planes; the markup painter runs
+on the CPU and its box is uploaded whole; and the numbers are lavapipe's
+until a hardware device is measured.
 
 ## Stream copy
 
@@ -334,18 +375,4 @@ MPEG-TS carries no priming information, so its AAC starts 21 ms late.
 
 ## Not here yet
 
-- **GPU renderer.** A second `Renderer` implementation with the same
-  contract, validated against the CPU renderer by the golden harness.
-  Started: `geneva-gpu` finds and checks a device and draws every
-  source through the same placement as the CPU renderer, with masks,
-  transitions and every blend mode: text and markup are painted on the
-  CPU by the painter both renderers share and uploaded, an 8-bit 4:2:0
-  video frame is uploaded as its planes and converted on the device,
-  any other video frame as the picture the decoder converts, and a
-  blurred clip goes through the same layer, downscale and three box
-  blurs. Every golden case passes on both, and no pixel differs by
-  more than one 8-bit code. What is missing is the render loop: `geneva
-  render` still composites on the CPU whatever `--renderer` says. `render --renderer gpu` reports the device but
-  does not composite on it yet, so every render is still composited on
-  the CPU.
 - **Software H.265 encoding.** Only hardware encoders are available for it.
