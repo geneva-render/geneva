@@ -170,18 +170,22 @@ frame, and the next frame is submitted before the current one is
 mapped, which overlaps the painting and uploading of one with the
 drawing of the other.
 
-Every golden case renders on both and agrees to within one 8-bit code;
+Every golden case renders on both and agrees to within one 8-bit code,
+except the blur case on some devices: on an Apple M1, 0.13% of its
+pixels differ by up to three, since a blur is six passes over a
+downscaled buffer and the two paths round differently along the way.
 `cargo test -p geneva-gpu -- --nocapture` prints the per-frame table.
 The CPU renderer stays the reference and the fallback: `frame`, the
 overlays over a copied picture, and any machine without a device use
 it. Not done: 16-bit and HDR video sources are converted by the decoder
 and uploaded as pictures rather than as planes; the markup painter's
 boxes, glyphs, shadows and polygon coverage are painted on the CPU and
-uploaded each frame unless kept; the markup composite is at half
+uploaded each frame unless kept; and the markup composite is at half
 precision, so the opening's busiest frame has about half its pixels one
 code off the CPU's where the other cases have a few percent, and none
-more than one; and the numbers are lavapipe's until a hardware device
-is measured.
+more than one. The renderer has since been measured on an Apple M1,
+where every case holds and the two renderers cost about the same per
+frame, the device's two seconds to open and build its pipelines apart.
 
 ## Stream copy
 

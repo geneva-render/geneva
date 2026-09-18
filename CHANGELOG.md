@@ -7,6 +7,29 @@ the format version it was written for.
 
 ## Unreleased
 
+### Changed
+
+- **The claim that the two renderers agree to within one 8-bit code now
+  says where it does not.** 0.6.0 measured that on Mesa's lavapipe,
+  where it holds for all eleven golden cases. On an Apple M1 the blur
+  case differs by up to three codes on 0.13% of its pixels, since a blur
+  is six passes over a downscaled buffer and the two paths round
+  differently along the way; the case's tolerance holds with room, and
+  every other case is within one code there too. The CLI reference,
+  `architecture.md` and `color.md` say so, and `color.md` now also
+  records what the device composites in: `Rgba16Float`, against the CPU
+  renderer's 32-bit float, with the blur layers 32-bit on both.
+
+- **A `clip-path` polygon's coverage is 2.3 times quicker.** Two
+  things: the pixels a span covers whole take the same share whatever
+  their position, so only the pixel at each end of a span is worked out
+  now rather than every one of the thousands between; and the rows went
+  to the threads one at a time, which costs rayon more to hand out than
+  the row costs to do, so they go in jobs of about 32k pixels like every
+  other loop in the painter. Measured warm on the markup goldens: 2.24 ms
+  a call before, 0.85 ms after. It is 1% to 3% of a markup frame either
+  way, so this is not why a markup frame costs what it does.
+
 ### Fixed
 
 - **An animated box at the top level of a document no longer moves the

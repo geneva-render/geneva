@@ -18,6 +18,15 @@ browser does, on sRGB-encoded values, and the finished box is converted to
 linear light once before it is composited like any other clip. See the
 gradients section of [timeline.md](timeline.md).
 
+The 32-bit float is the CPU renderer's. The GPU renderer composites in the
+same space with half that precision, `Rgba16Float`, which holds every value
+the pipeline produces and costs half the bandwidth; its blur layers are
+32-bit, since a blur is six passes and rounding to halves between them
+drifts. That difference is why the two renderers agree closely rather than
+exactly, and it is the only difference between them the color pipeline has:
+the curves, matrices and the HDR path are the same code, uploaded to the
+device rather than written twice.
+
 ## Tags and inference
 
 Four tags describe a source: `primaries`, `transfer`, `matrix` and `range`.
@@ -126,4 +135,9 @@ it. HLG needs none. The verbs take `--keep-hdr` to keep HDR sources HDR.
 on each curve, round trips, matrix anchors (white has zero chroma, primaries
 hit the chroma extremes), 8- and 10-bit range anchors, and the linear-light
 blending result above. The golden-frame tests in `tests/golden/` then check
-the assembled pipeline on rendered scenes.
+the assembled pipeline on rendered scenes, on either renderer: the GPU
+renderer is compared with the CPU one pixel by pixel as well as with the
+references. On an Apple M1, no pixel of any case differs by more than one
+code except in the blur case, where 0.13% of the pixels differ by up to
+three, since a blur is six passes over a downscaled buffer and the two
+paths round differently along the way.

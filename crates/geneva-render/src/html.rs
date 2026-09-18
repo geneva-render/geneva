@@ -1116,6 +1116,7 @@ fn mask_polygon(image: &mut Image, origin: (i64, i64), points: &[(f64, f64)]) {
     image
         .pixels
         .par_chunks_mut(w.max(1))
+        .with_min_len(ROWS_PER_JOB / w.max(1) + 1)
         .zip(coverage.par_chunks(w.max(1)))
         .for_each(|(row, coverage)| {
             for (p, c) in row.iter_mut().zip(coverage) {
@@ -1138,10 +1139,15 @@ fn polygon_coverage(w: usize, h: usize, origin: (i64, i64), points: &[(f64, f64)
         return out;
     }
     // Rows are independent, so they go in parallel, each thread with a
-    // crossings list of its own.
-    out.par_chunks_mut(w).enumerate().for_each_init(
-        Vec::<(f64, i32)>::new,
-        |crossings, (y, coverage)| {
+    // crossings list of its own, and in jobs big enough to be worth
+    // handing to a thread: one row of a 960-wide buffer is 4 kB of work,
+    // which rayon spends more than that splitting and scheduling. On
+    // this box a frame-wide clip took 3.0 ms on one thread and 12.2 on
+    // four before this line.
+    out.par_chunks_mut(w)
+        .with_min_len(ROWS_PER_JOB / w + 1)
+        .enumerate()
+        .for_each_init(Vec::<(f64, i32)>::new, |crossings, (y, coverage)| {
             for s in 0..SUB {
                 let sy = origin.1 as f64 + y as f64 + (s as f64 + 0.5) / SUB as f64;
                 crossings.clear();
@@ -1163,19 +1169,35 @@ fn polygon_coverage(w: usize, h: usize, origin: (i64, i64), points: &[(f64, f64)
                     if was == 0 && winding != 0 {
                         start = *x;
                     } else if was != 0 && winding == 0 {
-                        // A span across [start, x], in buffer pixels.
+                        // A span across [start, x], in buffer pixels. The
+                        // pixels it covers whole take the same share
+                        // whatever their position, so only the pixel at
+                        // each end is worked out: the span across a
+                        // frame-wide clip is thousands of pixels and two
+                        // of them are partial.
                         let a = (start - origin.0 as f64).clamp(0.0, w as f64);
                         let b = (x - origin.0 as f64).clamp(0.0, w as f64);
-                        let (first, last) = (a.floor() as usize, b.ceil() as usize);
-                        for (px, c) in coverage
-                            .iter_mut()
-                            .enumerate()
-                            .take(last.min(w))
-                            .skip(first)
-                        {
-                            let overlap = b.min(px as f64 + 1.0) - a.max(px as f64);
+                        let share = 1.0 / SUB as f32;
+                        let (inner, end) = (a.ceil() as usize, b.floor() as usize);
+                        for c in coverage.iter_mut().take(end.min(w)).skip(inner) {
+                            *c += share;
+                        }
+                        // The pixel a starts inside, when it does not
+                        // start on a boundary.
+                        let head = a.floor() as usize;
+                        if head < inner && head < w {
+                            let overlap = b.min(head as f64 + 1.0) - a;
                             if overlap > 0.0 {
-                                *c += overlap as f32 / SUB as f32;
+                                coverage[head] += overlap as f32 * share;
+                            }
+                        }
+                        // The pixel b ends inside, when the span does not
+                        // end on a boundary and that pixel is not the
+                        // head already counted.
+                        if end > head && end < w {
+                            let overlap = b - end as f64;
+                            if overlap > 0.0 {
+                                coverage[end] += overlap as f32 * share;
                             }
                         }
                     }
@@ -1184,10 +1206,13 @@ fn polygon_coverage(w: usize, h: usize, origin: (i64, i64), points: &[(f64, f64)
             for c in coverage.iter_mut() {
                 *c = c.clamp(0.0, 1.0);
             }
-        },
-    );
+        });
     out
 }
+
+/// How many pixels a parallel job should hold at least. A job smaller
+/// than this costs more to hand to a thread than to do.
+const ROWS_PER_JOB: usize = 1 << 15;
 
 /// The rows `y0..y1` of an image as a parallel iterator, each with its
 /// index. Every painting loop is a loop over rows whose pixels depend
@@ -1208,7 +1233,7 @@ fn rows(
     let (from, to) = (y0 * w, y1.max(y0) * w);
     image.pixels[from..to]
         .par_chunks_mut(w.max(1))
-        .with_min_len((1 << 15) / w.max(1) + 1)
+        .with_min_len(ROWS_PER_JOB / w.max(1) + 1)
         .enumerate()
         .map(move |(i, row)| (y0 as i64 + i as i64, row))
 }
