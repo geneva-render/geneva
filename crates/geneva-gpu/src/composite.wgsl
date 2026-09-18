@@ -1,13 +1,15 @@
 // The composite of one clip onto the frame: a transcription of the CPU
 // renderer's sampling and blending rules (crates/geneva-render/src/cpu.rs
-// and placement.rs), so that the two renderers draw the same pixels and
-// differ only in arithmetic.
+// and placement.rs) and of the media crate's 4:2:0 conversion
+// (crates/geneva-media/src/convert.rs, yuv420p8_into), so that the two
+// renderers draw the same pixels and differ only in arithmetic.
 //
 // One draw covers the placement's bounds with two triangles. The fragment
 // shader maps each output pixel back into the clip's paint through the
 // inverse affine, samples the paint there (a solid, a shape's signed
-// distance, or an image read bilinearly with texel centers at half
-// integers), scales it by the mask's coverage and the opacity, and either
+// distance, or a picture read bilinearly with texel centers at half
+// integers; a video frame's texels are converted from its planes as they
+// are read), scales it by the mask's coverage and the opacity, and either
 // hands the premultiplied color to fixed-function blending ("over", "add",
 // or a fade's veil) or, for a separable blend mode, reads the backdrop
 // and composites in the shader.
@@ -26,6 +28,16 @@ struct Clip {
     stroke: vec4<f32>,
     // The mask shape's box in paint pixels: x, y, width, height.
     mask_rect: vec4<f32>,
+    // A video frame's range: the luma offset, the luma scale, the chroma
+    // scale, unused.
+    yuv: vec4<f32>,
+    // A video frame's matrix: kr, kb, kg, and whether `m0..m2` apply.
+    coef: vec4<f32>,
+    // Rows of the matrix taking the frame's primaries into the working
+    // space.
+    m0: vec4<f32>,
+    m1: vec4<f32>,
+    m2: vec4<f32>,
     // The anchor's place in the output.
     position: vec2<f32>,
     // The anchor, in paint pixels.
@@ -43,7 +55,7 @@ struct Clip {
     opacity: f32,
     mask_radius: f32,
     mask_feather: f32,
-    // 0 solid, 1 rectangle, 2 ellipse, 3 image.
+    // 0 solid, 1 rectangle, 2 ellipse, 3 picture.
     kind: u32,
     // 0 four subsamples, 1 one center sample, 2 one center sample inside
     // `interior` and four subsamples elsewhere.
@@ -55,12 +67,20 @@ struct Clip {
     // 0 none, 1 rectangle, 2 ellipse, 3 luma image.
     mask_kind: u32,
     mask_invert: u32,
+    // Where a picture's texels come from: 0 the `image` texture, 1 the
+    // 8-bit 4:2:0 planes.
+    source: u32,
 };
 
 @group(0) @binding(0) var<uniform> clip: Clip;
 @group(0) @binding(1) var image: texture_2d<f32>;
 @group(0) @binding(2) var mask: texture_2d<f32>;
 @group(0) @binding(3) var backdrop: texture_2d<f32>;
+@group(0) @binding(4) var plane_y: texture_2d<u32>;
+@group(0) @binding(5) var plane_cb: texture_2d<u32>;
+@group(0) @binding(6) var plane_cr: texture_2d<u32>;
+// The frame's transfer function, 16-bit code to linear light.
+@group(0) @binding(7) var<storage, read> to_linear: array<f32>;
 
 struct Vertex {
     @builtin(position) position: vec4<f32>,
@@ -102,12 +122,82 @@ fn lerp(a: vec4<f32>, b: vec4<f32>, t: f32) -> vec4<f32> {
     return a + (b - a) * t;
 }
 
-// The texel at integer coordinates, transparent outside the image
+// The index into a 16-bit code table for a normalized value (lut_index).
+fn lut_index(v: f32) -> i32 {
+    let i = i32(v * 65535.0 + 0.5);
+    return clamp(i, 0, 65535);
+}
+
+// One texel of a video frame from its 8-bit 4:2:0 planes, in linear light
+// (yuv420p8_into): chroma upsampled bilinearly at the usual siting,
+// co-sited with the even luma columns and centered between luma rows.
+fn yuv_texel(x: i32, y: i32) -> vec4<f32> {
+    let d = vec2<i32>(textureDimensions(plane_y));
+    let cw = (d.x + 1) / 2;
+    let ch = (d.y + 1) / 2;
+    // The chroma row this luma row belongs to, and the neighbour it is
+    // interpolated with: the one above for an even row, the one below
+    // for an odd row, at a quarter of the weight.
+    let cy = y / 2;
+    var other: i32;
+    if y % 2 == 0 {
+        other = max(cy - 1, 0);
+    } else {
+        other = min(cy + 1, ch - 1);
+    }
+    let cx = x / 2;
+    let c_scale = clip.yuv.z;
+    let cb_a = (0.75 * f32(textureLoad(plane_cb, vec2<i32>(cx, cy), 0).r)
+        + 0.25 * f32(textureLoad(plane_cb, vec2<i32>(cx, other), 0).r) - 128.0) * c_scale;
+    let cr_a = (0.75 * f32(textureLoad(plane_cr, vec2<i32>(cx, cy), 0).r)
+        + 0.25 * f32(textureLoad(plane_cr, vec2<i32>(cx, other), 0).r) - 128.0) * c_scale;
+    var cbn = cb_a;
+    var crn = cr_a;
+    if x % 2 != 0 {
+        // The odd columns are the mean of their two neighbours.
+        let nx = min(cx + 1, cw - 1);
+        let cb_b = (0.75 * f32(textureLoad(plane_cb, vec2<i32>(nx, cy), 0).r)
+            + 0.25 * f32(textureLoad(plane_cb, vec2<i32>(nx, other), 0).r) - 128.0) * c_scale;
+        let cr_b = (0.75 * f32(textureLoad(plane_cr, vec2<i32>(nx, cy), 0).r)
+            + 0.25 * f32(textureLoad(plane_cr, vec2<i32>(nx, other), 0).r) - 128.0) * c_scale;
+        cbn = 0.5 * (cb_a + cb_b);
+        crn = 0.5 * (cr_a + cr_b);
+    }
+    let yn = (f32(textureLoad(plane_y, vec2<i32>(x, y), 0).r) - clip.yuv.x) * clip.yuv.y;
+    let kr = clip.coef.x;
+    let kb = clip.coef.y;
+    let kg = clip.coef.z;
+    let r = yn + 2.0 * (1.0 - kr) * crn;
+    let b = yn + 2.0 * (1.0 - kb) * cbn;
+    let g = (yn - kr * r - kb * b) / kg;
+    var rgb = vec3<f32>(to_linear[lut_index(r)], to_linear[lut_index(g)], to_linear[lut_index(b)]);
+    if clip.coef.w != 0.0 {
+        rgb = vec3<f32>(
+            clip.m0.x * rgb.x + clip.m0.y * rgb.y + clip.m0.z * rgb.z,
+            clip.m1.x * rgb.x + clip.m1.y * rgb.y + clip.m1.z * rgb.z,
+            clip.m2.x * rgb.x + clip.m2.y * rgb.y + clip.m2.z * rgb.z,
+        );
+    }
+    return vec4<f32>(rgb, 1.0);
+}
+
+// The picture's size in texels.
+fn picture_size() -> vec2<i32> {
+    if clip.source == 1u {
+        return vec2<i32>(textureDimensions(plane_y));
+    }
+    return vec2<i32>(textureDimensions(image));
+}
+
+// The texel at integer coordinates, transparent outside the picture
 // (Image::texel).
 fn texel(x: i32, y: i32) -> vec4<f32> {
-    let d = vec2<i32>(textureDimensions(image));
+    let d = picture_size();
     if x < 0 || y < 0 || x >= d.x || y >= d.y {
         return vec4<f32>(0.0);
+    }
+    if clip.source == 1u {
+        return yuv_texel(x, y);
     }
     return textureLoad(image, vec2<i32>(x, y), 0);
 }

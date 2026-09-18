@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use geneva_render::{AssetSource, FileAssets, Image, RenderError};
+use geneva_render::{AssetSource, FileAssets, Image, RenderError, VideoPlanes};
 use geneva_timeline::{Composition, Ratio};
 
 use crate::codecs::VideoReader;
@@ -77,6 +77,31 @@ impl AssetSource for MediaAssets {
         id: &str,
     ) -> Result<std::sync::Arc<Vec<u8>>, RenderError> {
         self.images.font(comp, id)
+    }
+
+    fn video_planes(
+        &mut self,
+        comp: &Composition,
+        id: &str,
+        source_time: Ratio,
+    ) -> Result<Option<VideoPlanes<'_>>, RenderError> {
+        let reader = self.video(comp, id)?;
+        let planes = reader
+            .planes_at(source_time)
+            .map_err(|e| RenderError::Asset {
+                id: id.to_owned(),
+                reason: e.to_string(),
+            })?;
+        Ok(planes.map(|(p, width, height, tags)| VideoPlanes {
+            width,
+            height,
+            y: p.y,
+            cb: p.cb,
+            cr: p.cr,
+            y_stride: p.y_stride,
+            c_stride: p.c_stride,
+            tags,
+        }))
     }
 
     fn video_frame(

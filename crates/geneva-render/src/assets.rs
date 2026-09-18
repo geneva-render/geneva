@@ -175,6 +175,34 @@ fn srgb_lut() -> &'static [f32; 256] {
     })
 }
 
+/// A decoded video frame as the decoder holds it, for a renderer that
+/// converts to linear light on its own device: 8-bit 4:2:0 Y'CbCr, the
+/// chroma planes `ceil(width / 2)` by `ceil(height / 2)`, every plane
+/// row-major with its own stride in bytes. This is the one layout the CPU
+/// path converts without a widening pass ([`Transfer`], matrix and
+/// range from `tags`), and only for SDR material shown unrotated; any
+/// other frame comes through [`AssetSource::video_frame`] as a picture.
+#[derive(Debug, Clone, Copy)]
+pub struct VideoPlanes<'a> {
+    /// Width in luma samples.
+    pub width: u32,
+    /// Height in luma rows.
+    pub height: u32,
+    /// Luma.
+    pub y: &'a [u8],
+    /// Cb.
+    pub cb: &'a [u8],
+    /// Cr.
+    pub cr: &'a [u8],
+    /// Bytes per luma row.
+    pub y_stride: usize,
+    /// Bytes per chroma row.
+    pub c_stride: usize,
+    /// The frame's color tags, resolved: transfer, matrix and range are
+    /// what the conversion applies.
+    pub tags: ResolvedTags,
+}
+
 /// Supplies decoded assets to a renderer.
 pub trait AssetSource {
     /// Loads the image asset with the given id.
@@ -196,6 +224,20 @@ pub trait AssetSource {
             id: id.to_owned(),
             reason: "this asset source cannot load fonts".to_owned(),
         })
+    }
+
+    /// The planes of the frame of a video asset shown at `source_time`,
+    /// when the decoder holds it in the layout [`VideoPlanes`] describes;
+    /// `None` when it does not, and the frame is to be taken as a picture
+    /// from [`video_frame`](Self::video_frame). The default has none.
+    fn video_planes(
+        &mut self,
+        comp: &Composition,
+        id: &str,
+        source_time: Ratio,
+    ) -> Result<Option<VideoPlanes<'_>>, RenderError> {
+        let _ = (comp, id, source_time);
+        Ok(None)
     }
 
     /// Returns the frame of a video asset shown at `source_time`.

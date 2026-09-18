@@ -21,6 +21,9 @@ const DRAWN: &[&str] = &[
     "blend-modes",
     "nested-composition",
     "masks-and-fades",
+    "text-basics",
+    "markup-card",
+    "markup-opening",
 ];
 
 fn root() -> PathBuf {

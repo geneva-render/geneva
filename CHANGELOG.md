@@ -16,15 +16,22 @@ the format version it was written for.
   --renderer auto|cpu|gpu` chooses the renderer: `auto` is the GPU where
   one can be used and the CPU otherwise, `gpu` takes any device and
   falls back to the CPU with a note when none opens. The renderer
-  draws solid, shape, still-image and nested-composition clips
-  (placement, crop, shape and luma masks, opacity, transitions, every
-  blend mode, the fade's veil) through the same rules as the CPU
-  renderer, and refuses blur, text, markup and video by name (E500)
-  until they are built. The render loop does not use it yet, so every choice still
+  draws every source (placement, crop, shape and luma masks, opacity,
+  transitions, every blend mode, the fade's veil, nested compositions)
+  through the same rules as the CPU renderer: text and markup are
+  painted on the CPU by a painter both renderers share and uploaded,
+  pictures that do not change are kept on the device under a 96 MB
+  budget, and an 8-bit 4:2:0 video frame goes up as its planes and is
+  converted to linear light on the device by the same arithmetic as
+  the CPU conversion (HDR, RGB and rotated frames go up as the picture
+  the decoder converts). The blur effect is refused by name (E500)
+  until it is built. The render loop does not use it yet, so every choice still
   composites on the CPU, and `gpu` reports what it found. A new golden
   case, `tests/golden/masks-and-fades`, pins masks (shape, feather,
   invert, luma) and transitions (crossfade, fade) down on both
-  renderers; neither had a reference frame before. The crate is
+  renderers; neither had a reference frame before. `AssetSource` gains
+  `video_planes`, which the media asset source answers for frames the
+  decoder holds as 8-bit 4:2:0 SDR shown unrotated. The crate is
   behind the CLI's `gpu` feature, on by default; the minimum Rust
   version moves to 1.87.
 - **E503** for a renderer whose device fails; the CPU renderer never

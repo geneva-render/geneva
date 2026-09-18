@@ -885,6 +885,7 @@ dependencies = [
  "geneva-audio",
  "geneva-color",
  "geneva-golden",
+ "geneva-gpu",
  "geneva-media-link",
  "geneva-render",
  "geneva-timeline",

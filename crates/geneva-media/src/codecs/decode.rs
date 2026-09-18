@@ -8,7 +8,7 @@ use ffmpeg_next::software::{resampling, scaling};
 use ffmpeg_next::util::channel_layout::ChannelLayout;
 use ffmpeg_next::util::format::{Pixel, Sample, sample};
 use ffmpeg_next::util::frame;
-use geneva_color::{ColorTags, ResolvedTags};
+use geneva_color::{ColorTags, Matrix, ResolvedTags};
 use geneva_render::Image;
 use geneva_timeline::Ratio;
 
@@ -353,6 +353,46 @@ impl VideoReader {
         Ok(current.image.as_ref().expect("converted above"))
     }
 
+    /// The frame at `t` as 8-bit 4:2:0 planes with the tags that convert
+    /// them, when that is how the stream holds it and the frame is SDR
+    /// and shown unrotated: the case [`frame_at`](Self::frame_at) converts
+    /// straight to linear light, which a renderer with a device of its
+    /// own converts there instead. `None` for every other stream, whose
+    /// frames go through [`frame_at`](Self::frame_at).
+    pub fn planes_at(
+        &mut self,
+        t: Ratio,
+    ) -> Result<Option<(Planes420<'_>, u32, u32, ResolvedTags)>, MediaError> {
+        self.advance_to(t)?;
+        if self.rotation != 0 || self.hdr.is_some() || self.tags.matrix == Matrix::Identity {
+            return Ok(None);
+        }
+        let raw = &self
+            .current
+            .as_ref()
+            .expect("advance_to leaves a frame")
+            .raw;
+        if !matches!(raw.format(), Pixel::YUV420P | Pixel::YUVJ420P) {
+            return Ok(None);
+        }
+        let mut tags = self.tags;
+        if raw.format() == Pixel::YUVJ420P {
+            tags.range = geneva_color::Range::Full;
+        }
+        Ok(Some((
+            Planes420 {
+                y: raw.data(0),
+                cb: raw.data(1),
+                cr: raw.data(2),
+                y_stride: raw.stride(0),
+                c_stride: raw.stride(1),
+            },
+            raw.width(),
+            raw.height(),
+            tags,
+        )))
+    }
+
     /// Like [`frame_at`](Self::frame_at), but returns the decoded frame in
     /// the stream's own pixel format, without conversion.
     pub fn raw_frame_at(&mut self, t: Ratio) -> Result<&frame::Video, MediaError> {
@@ -468,7 +508,7 @@ impl VideoReader {
         // widening pass; a full-range JPEG layout keeps its range here
         // since nothing compresses it on the way.
         if matches!(raw.format(), Pixel::YUV420P | Pixel::YUVJ420P)
-            && self.tags.matrix != geneva_color::Matrix::Identity
+            && self.tags.matrix != Matrix::Identity
             && self.hdr.is_none()
         {
             let mut tags = self.tags;

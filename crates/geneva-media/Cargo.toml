@@ -36,6 +36,7 @@ geneva-media-link = { workspace = true }
 
 [dev-dependencies]
 geneva-golden = { workspace = true }
+geneva-gpu = { workspace = true }
 tempfile = "3.10"
 
 # This crate owns the FFI boundary and needs `unsafe` in one audited place
