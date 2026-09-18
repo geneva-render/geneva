@@ -7,6 +7,8 @@ the format version it was written for.
 
 ## Unreleased
 
+## 0.6.0 (2026-09-18)
+
 ### Added
 
 - **The GPU renderer.** A new crate, `geneva-gpu`, renders on a device
