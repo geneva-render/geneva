@@ -119,8 +119,7 @@ cat > "$work/markup.html" <<'HTML'
   .blob.teal { left: -40%; top: -70%; background: radial-gradient(circle at 50% 50%, rgba(0,238,225,.35) 0%, rgba(0,238,225,.12) 40%, rgba(0,238,225,0) 70%) }
   .blob.gold { right: -50%; bottom: -80%; background: radial-gradient(circle at 50% 50%, rgba(255,210,51,.3) 0%, rgba(255,210,51,.1) 38%, rgba(255,210,51,0) 68%); animation-delay: -2.5s }
   @keyframes drift { from { transform: none } to { transform: translate(14%, 9%) scale(1.12) rotate(12deg) } }
-  .mesh, .scene { position: absolute; inset: 0 }
-  .scene { display: flex; align-items: center; justify-content: center }
+  .scene { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center }
   .card { display: flex; flex-direction: column; width: 620px; padding: 36px 44px; border-radius: 28px; overflow: hidden; background: rgba(12,40,44,.82);
     box-shadow: 0 24px 64px rgba(0,0,0,.5); animation: card-in .9s cubic-bezier(.2,.8,.3,1) forwards, card-out .8s 4.1s ease-in forwards }
   @keyframes card-in { from { opacity: 0; transform: translateY(70px) scale(.92) } to { opacity: 1; transform: none } }
@@ -134,7 +133,8 @@ cat > "$work/markup.html" <<'HTML'
     clip-path: polygon(0 0, 0 0, 0 100%, 0 100%); animation: wipe 1.6s 1.3s cubic-bezier(.62,.03,.31,1) forwards }
   @keyframes wipe { to { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%) } }
 </style>
-<div class="mesh"><div class="blob teal"></div><div class="blob gold"></div></div>
+<div class="blob teal"></div>
+<div class="blob gold"></div>
 <div class="scene"><div class="card">
   <div class="title"><span class="c" style="animation-delay:.25s">g</span><span class="c" style="animation-delay:.32s">e</span><span class="c" style="animation-delay:.39s">n</span><span class="c" style="animation-delay:.46s">e</span><span class="c" style="animation-delay:.53s">v</span><span class="c" style="animation-delay:.6s">a</span><span class="c" style="animation-delay:.67s">&nbsp;</span><span class="c" style="animation-delay:.74s">c</span><span class="c" style="animation-delay:.81s">h</span><span class="c" style="animation-delay:.88s">e</span><span class="c" style="animation-delay:.95s">c</span><span class="c" style="animation-delay:1.02s">k</span></div>
   <div class="sub">MARKUP ON EITHER RENDERER</div>

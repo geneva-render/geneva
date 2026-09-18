@@ -178,7 +178,8 @@ back.
 
 A rule can also come from the markup a clip draws: `@keyframes` inside an
 [HTML source](#markup) is in scope for that clip, and if its outermost
-element carries an `animation`, that is what the clip plays. A rule named
+element, the one top-level element of the document, carries an
+`animation`, that is what the clip plays. A rule named
 in both places is the document's, and says so (W451).
 
 A property set at only one offset of a rule has nothing to interpolate
@@ -742,14 +743,23 @@ clip plays, so a file that moves in a browser moves here too:
 <div class="card">...</div>
 ```
 
+The outermost element is the document's one top-level element, the box
+that is the whole picture. A document whose top level holds several
+elements has none, since the clip moves the picture and that would move
+every one of them: there each `animation` is played inside, as below.
+Wrapping the boxes in a single element makes the wrapper outermost and
+gives the clip something to play again.
+
 The clip's own `animation` replaces it, since only the document knows
 where the clip sits in time; when both are set, W451 says which one won.
 The clip plays `transform` and `opacity`; a rule it is given that sets
 anything else is E442, and it holds the animation's start and end
 outside its runs whatever `animation-fill-mode` says.
 
-An `animation` on an element **inside** the outermost one is played
-there, the way a browser plays it. The element is composited as a group:
+An `animation` anywhere the clip does not play, which is any element
+**inside** the outermost one and every animated element of a document
+that has no outermost element, is played there, the way a browser plays
+it. The element is composited as a group:
 its subtree is painted into a buffer of its own and laid onto the
 picture with the transform, opacity and blur the animation gives it at
 that moment. Several animations on one element stack in the order they

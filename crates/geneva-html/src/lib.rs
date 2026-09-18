@@ -96,9 +96,13 @@ pub struct Prepared {
     pub inert: Vec<String>,
     /// `@keyframes` rules from the stylesheet, untouched.
     pub keyframes: std::collections::BTreeMap<String, KeyframesRule>,
-    /// The `animation` on the outermost element. Layout and paint do not
-    /// play it; it is what the clip drawing this markup animates with, so
-    /// a file that moves in a browser moves here too.
+    /// The `animation` on the outermost element, when the document has
+    /// one: the root's single element child, which is the whole picture.
+    /// Layout and paint do not play it; it is what the clip drawing this
+    /// markup animates with, so a file that moves in a browser moves here
+    /// too. `None` where the root has several children, since moving the
+    /// picture for one of them would move the rest with it; their
+    /// animations are in [`Prepared::inner_animations`] instead.
     pub animation: Option<AnimationSpec>,
     /// The element that carries that animation.
     pub animated_node: Option<NodeId>,
@@ -161,8 +165,11 @@ impl Prepared {
         )
     }
 
-    /// Every element inside the outermost one that carries an
-    /// `animation`, with what it says. These are the renderer's to play.
+    /// Every element carrying an `animation` that the clip does not play,
+    /// with what it says. These are the renderer's to play, each
+    /// composited as a group of its own. That is every animated element
+    /// but the outermost one, and every one of them where the document
+    /// has no outermost element for the clip to move.
     #[must_use]
     pub fn inner_animations(&self) -> Vec<(NodeId, &AnimationSpec)> {
         self.styles
@@ -276,12 +283,25 @@ nothing here; a browser ignores it too"
     // The outermost element's animation is the clip's to play; one on an
     // element inside it is the renderer's, which composites that element
     // as a group of its own.
-    let outermost: Vec<NodeId> = doc
-        .children(doc.root)
+    //
+    // The clip moves the whole picture, so the outermost element can only
+    // be the clip's when it is the whole picture: the root's one element
+    // child, with nothing drawn beside it. A document whose root has
+    // several children has no outermost element in that sense, and the
+    // first of them is a box among siblings: moving the picture for its
+    // animation would move the others with it. Every animation there is
+    // played inside, each element composited as its own group, which is
+    // what a browser does with any of them.
+    let kids = doc.children(doc.root);
+    let outermost: Vec<NodeId> = kids
         .iter()
         .copied()
         .filter(|id| doc.nodes[*id].element().is_some())
         .collect();
+    let loose_text = kids
+        .iter()
+        .any(|id| doc.nodes[*id].text().is_some_and(|t| !t.trim().is_empty()));
+    let alone = outermost.len() == 1 && !loose_text;
     let mut animation = None;
     let mut animated = None;
     let mut animated_node = None;
@@ -289,7 +309,7 @@ nothing here; a browser ignores it too"
         let Some(spec) = &computed.animation else {
             continue;
         };
-        if outermost.first() == Some(&id) {
+        if alone && outermost.first() == Some(&id) {
             animation = Some(spec.clone());
             animated = Some(computed.clone());
             animated_node = Some(id);
@@ -389,6 +409,82 @@ mod tests {
         )
         .unwrap();
         assert!(p.unmatched.is_empty(), "{:?}", p.unmatched);
+    }
+
+    #[test]
+    fn a_first_child_with_siblings_is_not_the_clips_to_play() {
+        // The clip moves the whole picture, so it can only play the
+        // animation of an element that is the whole picture. Here the
+        // animated box is one of three, and playing it on the clip moved
+        // the other two with it: the blob drifted and the scene behind it
+        // drifted too.
+        let p = prepare(
+            "<style>@keyframes drift { from { transform: none } \
+             to { transform: translate(10px) rotate(12deg) } }\
+             .blob { position: absolute; animation: drift 5s }</style>\
+             <div class=blob></div><div class=blob></div><div class=scene>hi</div>",
+            "",
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(p.animation.is_none(), "the clip plays nothing");
+        assert!(p.animated_node.is_none());
+        // Both blobs are the renderer's, each its own group.
+        assert_eq!(p.inner_animations().len(), 2);
+    }
+
+    #[test]
+    fn a_lone_first_child_is_still_the_clips_to_play() {
+        // The wrapper a document puts round the same boxes makes the
+        // outermost element the whole picture again, and the clip plays
+        // what it carries.
+        let p = prepare(
+            "<style>@keyframes drift { from { transform: none } \
+             to { transform: translate(10px) } }\
+             .mesh { animation: drift 5s }</style>\
+             <div class=mesh><div class=blob></div><div class=blob></div></div>",
+            "",
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            p.animation.as_ref().and_then(|a| a.shorthand.as_deref()),
+            Some("drift 5s")
+        );
+        assert_eq!(p.inner_animations().len(), 0);
+    }
+
+    #[test]
+    fn text_beside_the_outermost_element_keeps_the_clip_out_of_it() {
+        // Text straight under the root draws beside the element, so the
+        // element is not the whole picture and moving the picture would
+        // move the text with it.
+        let p = prepare(
+            "<style>@keyframes drift { from { transform: none } \
+             to { transform: translate(10px) } }\
+             .card { animation: drift 5s }</style>\
+             loose text<div class=card></div>",
+            "",
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(p.animation.is_none());
+        assert_eq!(p.inner_animations().len(), 1);
+        // Whitespace between the root and its one child is not text that
+        // draws, so it does not keep the clip out.
+        let q = prepare(
+            "<style>@keyframes drift { from { transform: none } \
+             to { transform: translate(10px) } }\
+             .card { animation: drift 5s }</style>\
+             \n  <div class=card></div>\n",
+            "",
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            q.animation.as_ref().and_then(|a| a.shorthand.as_deref()),
+            Some("drift 5s")
+        );
     }
 
     #[test]

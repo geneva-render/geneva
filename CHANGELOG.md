@@ -9,6 +9,21 @@ the format version it was written for.
 
 ### Fixed
 
+- **An animated box at the top level of a document no longer moves the
+  whole picture with it.** The clip plays the animation of the markup's
+  outermost element, which moves the finished picture rather than that
+  one box. Where the document's top level held several elements, the
+  first of them was still treated as outermost, so its animation moved
+  its siblings too: two drifting blobs and a card written as three
+  top-level boxes drew the card rotating and sliding with the first blob,
+  on both renderers. A document whose top level holds more than one
+  element now has no outermost element, and every animation in it is
+  played where it is written, each element composited as its own group.
+  Documents with one top-level element, which is most of them, are
+  unaffected. The scene in `check.sh` had a wrapper round its blobs to
+  avoid this and is written without it now, which renders the same to the
+  pixel.
+
 - **Markup no longer borrows a face from whatever the machine has
   installed.** A document's fonts sit in the same database as the
   machine's, and an attribute no face of the named family had was matched
