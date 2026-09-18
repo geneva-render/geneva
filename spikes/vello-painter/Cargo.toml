@@ -1,0 +1,20 @@
+[package]
+name = "vello-painter-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Not a member of the workspace: this is the spike of plan step 8, kept
+# with the code it measures and built by hand, never by the gate.
+
+[dependencies]
+geneva-html = { path = "../../crates/geneva-html" }
+geneva-render = { path = "../../crates/geneva-render" }
+geneva-golden = { path = "../../crates/geneva-golden" }
+geneva-timeline = { path = "../../crates/geneva-timeline" }
+geneva-color = { path = "../../crates/geneva-color" }
+vello_cpu = "0.2"
+vello_common = "0.2"
+swash = "0.2"
+
+[workspace]
