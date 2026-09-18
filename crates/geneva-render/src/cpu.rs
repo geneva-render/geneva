@@ -163,6 +163,32 @@ impl<A: AssetSource> CpuRenderer<A> {
         Ok(())
     }
 
+    /// Registers every font asset of the composition, once each, so that
+    /// markup can name them by id or by family.
+    fn load_font_assets(&mut self, comp: &Composition) -> Result<(), RenderError> {
+        let mut ids: Vec<&String> = comp
+            .assets
+            .iter()
+            .filter(|(id, a)| {
+                a.kind == geneva_timeline::schema::AssetKind::Font && !self.text.has_font(id)
+            })
+            .map(|(id, _)| id)
+            .collect();
+        // In a fixed order, so two faces of one family register the same
+        // way every run.
+        ids.sort();
+        for id in ids {
+            let data = self.assets.font(comp, id)?;
+            if self.text.add_font(id, data.as_ref().clone()).is_none() {
+                return Err(RenderError::Asset {
+                    id: id.to_owned(),
+                    reason: "not a usable font file".to_owned(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// What a clip paints at time `t` (`local` is the clip-relative time),
     /// or `None` when it paints nothing.
     fn paint_for(
@@ -216,6 +242,11 @@ impl<A: AssetSource> CpuRenderer<A> {
                 )?))
             }
             ResolvedSource::Html(html) => {
+                // Markup names a font by `font-family`, which may be the id
+                // of a font asset or the family a font asset carries, so
+                // every font asset is registered before the markup is
+                // drawn; the ones the markup does not name cost a read.
+                self.load_font_assets(comp)?;
                 // The markup is parsed and its pictures read once per
                 // clip. With nothing inside it moving, the box is drawn
                 // once too and reused for every frame; an animation on an

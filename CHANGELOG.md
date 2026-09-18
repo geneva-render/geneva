@@ -9,6 +9,16 @@ the format version it was written for.
 
 ### Changed
 
+- **Markup can name a font asset.** Every `font` asset of a document is
+  registered before a markup box is drawn, so `font-family` may name
+  one by its id or by the family the file carries, and a family that is
+  both an asset and installed comes from the asset on every machine.
+  Before, markup saw installed fonts only, so a document that shipped
+  its fonts still rendered its markup with whatever the machine had.
+  Two golden cases pin the markup painter down on the opening and the
+  lower-third examples (`tests/golden/markup-opening`,
+  `tests/golden/markup-card`), with the Liberation faces from the
+  golden root.
 - **The markup painter draws its rows on every core.** Painting a box,
   its shadows and its picture, masking a group by its `clip-path`,
   laying a group onto its parent and converting the finished box to

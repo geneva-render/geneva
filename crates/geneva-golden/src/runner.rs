@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use geneva_render::{CpuRenderer, Renderer};
-use geneva_timeline::{Time, load};
+use geneva_timeline::{AssetInfo, Ratio, Time, load_with};
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -15,6 +15,29 @@ use crate::compare::{Comparison, Rgba8Image, Tolerance, compare, diff_image};
 /// Environment variable that, when set, rewrites reference frames instead
 /// of comparing against them.
 pub const UPDATE_ENV: &str = "GENEVA_UPDATE_GOLDEN";
+
+/// The files under the golden root, for the markup and stylesheets a
+/// scene points at. Media durations are not probed: a golden scene says
+/// how long its clips are.
+struct RootFiles(PathBuf);
+
+impl AssetInfo for RootFiles {
+    fn duration(&self, _: &str, _: &str) -> Option<Ratio> {
+        None
+    }
+
+    fn text(&self, _: &str, src: &str) -> Option<String> {
+        fs::read_to_string(self.0.join(src)).ok()
+    }
+
+    fn read(&self, path: &str) -> Option<String> {
+        fs::read_to_string(self.0.join(path)).ok()
+    }
+
+    fn exists(&self, path: &str) -> Option<bool> {
+        Some(self.0.join(path).is_file())
+    }
+}
 
 /// The `golden.json` file that accompanies each scene.
 #[derive(Debug, Deserialize)]
@@ -224,7 +247,14 @@ pub fn run_case_with(
                 reason: e.to_string(),
             }
         })?;
-    let loaded = load(&read(&case_dir.join("scene.json"))?);
+    // Assets resolve against the golden root so cases can share files such
+    // as fonts; markup is read from there too, so its errors are reported
+    // and its text reaches the renderer.
+    let root = case_dir.parent().unwrap_or(case_dir);
+    let loaded = load_with(
+        &read(&case_dir.join("scene.json"))?,
+        &RootFiles(root.to_path_buf()),
+    );
     let Some(comp) = loaded.composition else {
         let text = loaded
             .diagnostics
@@ -234,9 +264,6 @@ pub fn run_case_with(
         return Err(GoldenError::Scene(text));
     };
     let update = std::env::var_os(UPDATE_ENV).is_some();
-    // Assets resolve against the golden root so cases can share files such
-    // as fonts.
-    let root = case_dir.parent().unwrap_or(case_dir);
     let mut renderer = CpuRenderer::with_asset_root(root);
     let expected_dir = case_dir.join("expected");
     let mut frames = Vec::new();

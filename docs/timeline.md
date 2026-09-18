@@ -942,3 +942,7 @@ is accepted and ignored.
 Text uses fonts from `font` assets first and falls back to fonts installed
 on the system. Output that depends on system fonts can differ between
 machines; ship the fonts as assets when the result must be identical.
+Markup is the same: `font-family` may name a `font` asset by its id or
+by the family the file carries, and every font asset of the document is
+registered before a markup box is drawn, so a family that is both an
+asset and installed comes from the asset on every machine.

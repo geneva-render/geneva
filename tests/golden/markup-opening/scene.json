@@ -1,0 +1,12 @@
+{
+  "geneva": "0.4",
+  "output": { "width": 960, "height": 540, "fps": 30, "duration": "9.7s", "background": "black" },
+  "assets": {
+    "opening": { "src": "markup-opening/opening.html" },
+    "sans": { "src": "fonts/LiberationSans-Regular.ttf" },
+    "sans-bold": { "src": "fonts/LiberationSans-Bold.ttf" }
+  },
+  "layers": [
+    { "id": "opening", "clips": [ { "source": { "kind": "html", "asset": "opening" }, "duration": "9.7s" } ] }
+  ]
+}

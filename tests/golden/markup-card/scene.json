@@ -1,0 +1,12 @@
+{
+  "geneva": "0.4",
+  "output": { "width": 1280, "height": 720, "fps": 30, "duration": "4s", "background": "#2a3a4a" },
+  "assets": {
+    "card": { "src": "markup-card/card.html" },
+    "sans": { "src": "fonts/LiberationSans-Regular.ttf" },
+    "sans-bold": { "src": "fonts/LiberationSans-Bold.ttf" }
+  },
+  "layers": [
+    { "id": "lower-third", "clips": [ { "source": { "kind": "html", "asset": "card" }, "duration": "4s" } ] }
+  ]
+}
