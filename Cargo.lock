@@ -854,11 +854,14 @@ dependencies = [
 name = "geneva-gpu"
 version = "0.5.0"
 dependencies = [
+ "bytemuck",
  "geneva-color",
  "geneva-golden",
  "geneva-render",
  "geneva-timeline",
+ "half",
  "pollster",
+ "serde_json",
  "thiserror 2.0.20",
  "wgpu",
 ]

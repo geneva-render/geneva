@@ -196,7 +196,8 @@ pub struct RenderOverrides {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
 pub enum RendererChoice {
     /// The GPU where the machine has one the renderer can draw with, the
-    /// CPU otherwise. Until the GPU renderer draws, this is the CPU.
+    /// CPU otherwise. Until the render loop runs on the GPU renderer,
+    /// this is the CPU.
     #[default]
     Auto,
     /// The CPU reference renderer.
@@ -207,9 +208,10 @@ pub enum RendererChoice {
 }
 
 /// What the choice of renderer came to, as notes for the report. The
-/// GPU renderer draws nothing yet, so every choice composites on the
-/// CPU; asking for the GPU probes the device and says what was found,
-/// which is the fallback path exercised end to end.
+/// GPU renderer draws solids, shapes and still images so far and the
+/// render loop is not on it yet, so every choice composites on the CPU;
+/// asking for the GPU probes the device and says what was found, which
+/// is the fallback path exercised end to end.
 #[cfg(feature = "media")]
 pub fn renderer_notes(choice: RendererChoice) -> Vec<String> {
     match choice {
@@ -223,7 +225,7 @@ fn gpu_note() -> String {
     use geneva_gpu::{Gpu, Preference};
     match Gpu::probe(Preference::from_env(Preference::Any)) {
         Ok(gpu) => format!(
-            "GPU {}: the GPU renderer draws nothing yet, so the frames were composited on the CPU",
+            "GPU {}: the GPU renderer is not in the render loop yet, so the frames were composited on the CPU",
             gpu.report().line()
         ),
         Err(e) => format!("no usable GPU ({e}); the frames were composited on the CPU"),

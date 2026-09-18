@@ -195,6 +195,86 @@ impl CaseOutcome {
     }
 }
 
+/// A case as loaded: the scene the runner renders and the times it
+/// renders it at, for a caller that renders it another way too (a second
+/// renderer compared with the first, pixel by pixel).
+#[derive(Debug)]
+pub struct Case {
+    /// Case name (directory name).
+    pub name: String,
+    /// The golden root (the case's parent), which asset paths are
+    /// relative to.
+    pub root: PathBuf,
+    /// The scene, resolved.
+    pub composition: Composition,
+    /// The frames the case lists: the time as written, and resolved.
+    pub frames: Vec<(String, Ratio)>,
+    /// The case's tolerance.
+    pub tolerance: Tolerance,
+}
+
+/// Reads a case's `golden.json` and `scene.json`, resolving the scene
+/// against the golden root.
+pub fn load_case(case_dir: &Path) -> Result<Case, GoldenError> {
+    let name = case_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("case")
+        .to_owned();
+    let (spec, comp, root) = load_case_parts(case_dir)?;
+    let mut frames = Vec::new();
+    for time_text in &spec.frames {
+        let time = Time::parse(time_text)
+            .map_err(|e| GoldenError::Render {
+                time: time_text.clone(),
+                reason: e,
+            })?
+            .resolve(comp.fps);
+        frames.push((time_text.clone(), time));
+    }
+    Ok(Case {
+        name,
+        root,
+        composition: comp,
+        frames,
+        tolerance: spec.tolerance,
+    })
+}
+
+/// The spec, the resolved scene and the golden root of a case.
+fn load_case_parts(case_dir: &Path) -> Result<(CaseSpec, Composition, PathBuf), GoldenError> {
+    let read = |p: &Path| {
+        fs::read_to_string(p).map_err(|e| GoldenError::Io {
+            path: p.to_owned(),
+            reason: e.to_string(),
+        })
+    };
+    let spec: CaseSpec =
+        serde_json::from_str(&read(&case_dir.join("golden.json"))?).map_err(|e| {
+            GoldenError::Io {
+                path: case_dir.join("golden.json"),
+                reason: e.to_string(),
+            }
+        })?;
+    // Assets resolve against the golden root so cases can share files such
+    // as fonts; markup is read from there too, so its errors are reported
+    // and its text reaches the renderer.
+    let root = case_dir.parent().unwrap_or(case_dir);
+    let loaded = load_with(
+        &read(&case_dir.join("scene.json"))?,
+        &RootFiles(root.to_path_buf()),
+    );
+    let Some(comp) = loaded.composition else {
+        let text = loaded
+            .diagnostics
+            .iter()
+            .map(ToString::to_string)
+            .collect::<String>();
+        return Err(GoldenError::Scene(text));
+    };
+    Ok((spec, comp, root.to_path_buf()))
+}
+
 /// Lists case directories (those containing `scene.json`) under `root`,
 /// sorted by name.
 pub fn discover_cases(root: &Path) -> Vec<PathBuf> {
@@ -249,35 +329,8 @@ pub fn run_case_on(
         .and_then(|n| n.to_str())
         .unwrap_or("case")
         .to_owned();
-    let read = |p: &Path| {
-        fs::read_to_string(p).map_err(|e| GoldenError::Io {
-            path: p.to_owned(),
-            reason: e.to_string(),
-        })
-    };
-    let spec: CaseSpec =
-        serde_json::from_str(&read(&case_dir.join("golden.json"))?).map_err(|e| {
-            GoldenError::Io {
-                path: case_dir.join("golden.json"),
-                reason: e.to_string(),
-            }
-        })?;
-    // Assets resolve against the golden root so cases can share files such
-    // as fonts; markup is read from there too, so its errors are reported
-    // and its text reaches the renderer.
-    let root = case_dir.parent().unwrap_or(case_dir);
-    let loaded = load_with(
-        &read(&case_dir.join("scene.json"))?,
-        &RootFiles(root.to_path_buf()),
-    );
-    let Some(comp) = loaded.composition else {
-        let text = loaded
-            .diagnostics
-            .iter()
-            .map(ToString::to_string)
-            .collect::<String>();
-        return Err(GoldenError::Scene(text));
-    };
+    let (spec, comp, root) = load_case_parts(case_dir)?;
+    let root = root.as_path();
     let update = std::env::var_os(UPDATE_ENV).is_some();
     let mut renderer = make(root);
     let expected_dir = case_dir.join("expected");

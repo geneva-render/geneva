@@ -8,7 +8,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+bytemuck = { workspace = true }
 geneva-color = { workspace = true }
+half = { workspace = true }
 geneva-render = { workspace = true }
 geneva-timeline = { workspace = true }
 pollster = { workspace = true }
@@ -17,6 +19,7 @@ wgpu = { workspace = true }
 
 [dev-dependencies]
 geneva-golden = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

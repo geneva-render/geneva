@@ -9,12 +9,18 @@
 //! tolerance rather than byte for byte: the same device gives the same
 //! frame every run, and two devices agree to the tolerance.
 //!
-//! What exists so far is the device: [`Gpu::probe`] picks an adapter,
-//! checks what the compositor needs of it, and describes it in a
-//! [`Report`]. Nothing draws yet, and [`Renderer::render_into`] says so.
+//! What draws so far: solid, shape and still-image clips, placed through
+//! the same [`geneva_render::Placement`] as the reference and sampled by
+//! the same rules, at the clip's opacity, blended normally or additively,
+//! with the frame read back into a [`Frame`]. Masks, the separable blend
+//! modes, transitions, nested compositions, blur, text, markup and video
+//! are refused with [`RenderError::Unsupported`] until their step of the
+//! plan. [`Gpu::probe`] picks the adapter, checks what the compositor
+//! needs of it, and describes it in a [`Report`].
 
 #![forbid(unsafe_code)]
 
+mod compositor;
 mod device;
 
 use geneva_render::{AssetSource, Frame, RenderError, Renderer};
@@ -26,12 +32,18 @@ pub use device::{Gpu, GpuError, Preference, Report};
 pub struct GpuRenderer<A: AssetSource> {
     gpu: Gpu,
     assets: A,
+    compositor: compositor::Compositor,
 }
 
 impl<A: AssetSource> GpuRenderer<A> {
     /// A renderer on `gpu`, reading assets from `assets`.
     pub fn new(gpu: Gpu, assets: A) -> Self {
-        Self { gpu, assets }
+        let compositor = compositor::Compositor::new(&gpu);
+        Self {
+            gpu,
+            assets,
+            compositor,
+        }
     }
 
     /// The device this renderer draws on.
@@ -58,7 +70,7 @@ impl<A: AssetSource> Renderer for GpuRenderer<A> {
         &mut self,
         comp: &Composition,
         t: Ratio,
-        _frame: &mut Frame,
+        frame: &mut Frame,
     ) -> Result<(), RenderError> {
         if t < Ratio::ZERO || t >= comp.duration {
             return Err(RenderError::OutOfRange {
@@ -66,11 +78,7 @@ impl<A: AssetSource> Renderer for GpuRenderer<A> {
                 duration: comp.duration,
             });
         }
-        Err(RenderError::Backend {
-            reason: format!(
-                "the GPU renderer draws nothing yet (device: {})",
-                self.gpu.report().name
-            ),
-        })
+        self.compositor
+            .render(&self.gpu, &mut self.assets, comp, t, frame)
     }
 }

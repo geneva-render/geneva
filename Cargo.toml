@@ -48,6 +48,8 @@ cosmic-text = { version = "0.19", default-features = false, features = ["std", "
 swash = "0.2"
 taffy = { version = "0.9", default-features = false, features = ["std", "flexbox", "block_layout", "content_size", "calc", "taffy_tree"] }
 pollster = "0.4"
+bytemuck = { version = "1.20", features = ["derive"] }
+half = "2.4"
 wgpu = { version = "30", default-features = false, features = ["vulkan", "metal", "dx12", "wgsl"] }
 ffmpeg-next = { version = "9", default-features = false, features = ["codec", "format", "software-scaling", "software-resampling"] }
 

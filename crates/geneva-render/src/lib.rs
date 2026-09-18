@@ -17,6 +17,7 @@ mod cpu;
 mod fill;
 mod frame;
 mod html;
+mod placement;
 mod text;
 
 use geneva_color::Color;
@@ -27,12 +28,15 @@ pub use assets::{AssetSource, FileAssets, Image, NoAssets};
 pub use blur::gaussian_blur;
 pub use cpu::CpuRenderer;
 pub use frame::Frame;
+pub use placement::{Placement, SUBSAMPLES, crop_window};
 pub use text::TextEngine;
 
 /// Errors that prevent a frame from being rendered.
 #[derive(Debug, Error)]
 pub enum RenderError {
-    /// A source kind this renderer does not implement yet.
+    /// A source kind, or a feature, this renderer does not implement
+    /// yet. The CPU renderer implements everything; the GPU renderer
+    /// refuses what it does not draw yet, by name.
     #[error("{what} is not supported by this renderer (clip at {path})")]
     Unsupported {
         /// Description of the unsupported feature.

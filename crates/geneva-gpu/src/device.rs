@@ -86,7 +86,10 @@ pub enum GpuError {
     },
 }
 
-/// An open device, with the queue the compositor submits to.
+/// An open device, with the queue the compositor submits to. Cloning
+/// shares the device: two renderers on one `Gpu` draw on the same
+/// hardware, one after the other.
+#[derive(Clone)]
 pub struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,

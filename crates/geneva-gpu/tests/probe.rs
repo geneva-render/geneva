@@ -48,22 +48,48 @@ fn a_software_adapter_is_only_picked_when_asked() {
 }
 
 #[test]
-fn the_renderer_says_it_draws_nothing_yet() {
+fn an_empty_scene_is_its_background_and_times_are_checked() {
     let Ok(gpu) = Gpu::probe(Preference::Any) else {
         return;
     };
     let loaded = load(
-        r#"{"geneva":"0.4","output":{"width":16,"height":16,"fps":30,"duration":"1s"},"layers":[]}"#,
+        r##"{"geneva":"0.4","output":{"width":16,"height":16,"fps":30,"duration":"1s","background":"#336699"},"layers":[]}"##,
     );
     let comp = loaded.composition.expect("a valid scene");
     let mut renderer = GpuRenderer::new(gpu, NoAssets);
     let mut frame = Frame::new(0, 0, geneva_color::Color::BLACK);
-    match renderer.render_into(&comp, Ratio::ZERO, &mut frame) {
-        Err(RenderError::Backend { reason }) => assert!(reason.contains("draws nothing yet")),
-        other => panic!("expected the backend error, got {other:?}"),
+    renderer
+        .render_into(&comp, Ratio::ZERO, &mut frame)
+        .expect("an empty scene renders");
+    assert_eq!((frame.width(), frame.height()), (16, 16));
+    let want = comp.background.to_linear();
+    for p in frame.pixels() {
+        for (got, want) in [(p.r, want.r), (p.g, want.g), (p.b, want.b), (p.a, want.a)] {
+            assert!(
+                (got - want).abs() < 1e-3f32,
+                "pixel {p:?} is not the background"
+            );
+        }
     }
     assert!(matches!(
         renderer.render_into(&comp, Ratio::from_int(5), &mut frame),
         Err(RenderError::OutOfRange { .. })
     ));
+}
+
+#[test]
+fn what_is_not_drawn_yet_is_refused_by_name() {
+    let Ok(gpu) = Gpu::probe(Preference::Any) else {
+        return;
+    };
+    let loaded = load(
+        r##"{"geneva":"0.4","output":{"width":16,"height":16,"fps":30,"duration":"1s"},
+        "layers":[{"clips":[{"source":{"kind":"solid","color":"#fff"},"blend":"multiply"}]}]}"##,
+    );
+    let comp = loaded.composition.expect("a valid scene");
+    let mut renderer = GpuRenderer::new(gpu, NoAssets);
+    match renderer.render_frame(&comp, Ratio::ZERO) {
+        Err(RenderError::Unsupported { what, .. }) => assert_eq!(what, "the multiply blend mode"),
+        other => panic!("expected the unsupported error, got {other:?}"),
+    }
 }

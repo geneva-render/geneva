@@ -16,6 +16,6 @@ mod runner;
 pub use audio::{AudioComparison, AudioTolerance, Samples, compare_audio, from_wav, to_wav};
 pub use compare::{Comparison, Rgba8Image, Tolerance, compare, diff_image};
 pub use runner::{
-    AudioOutcome, CaseOutcome, FrameOutcome, GoldenError, Mix, discover_cases, run_case,
-    run_case_on, run_case_with,
+    AudioOutcome, Case, CaseOutcome, FrameOutcome, GoldenError, Mix, discover_cases, load_case,
+    run_case, run_case_on, run_case_with,
 };

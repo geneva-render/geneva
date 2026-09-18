@@ -170,8 +170,8 @@ struct RenderArgs {
     no_audio: bool,
     /// Which renderer composites the frames: auto (the GPU where one
     /// can be used, otherwise the CPU), cpu, or gpu (the CPU when no
-    /// device opens, with a note). The GPU renderer draws nothing yet,
-    /// so every choice composites on the CPU for now.
+    /// device opens, with a note). The render loop is not on the GPU
+    /// renderer yet, so every choice composites on the CPU for now.
     #[arg(long, value_enum, default_value = "auto")]
     renderer: media::RendererChoice,
     /// Cut on the exact frame instead of moving cuts to keyframes. With an
