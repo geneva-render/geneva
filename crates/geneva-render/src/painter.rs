@@ -17,6 +17,7 @@ use geneva_timeline::{Composition, Ratio, ResolvedClip, ResolvedSource};
 
 use crate::RenderError;
 use crate::assets::{AssetSource, Image};
+use crate::html::MarkupLayers;
 use crate::text::TextEngine;
 
 /// A markup source ready to draw.
@@ -127,6 +128,89 @@ impl<A: AssetSource> Painter<A> {
         Ok(())
     }
 
+    /// The markup of `clip` prepared, once per clip, and the key it is
+    /// kept under. Markup names a font by `font-family`, which may be
+    /// the id of a font asset or the family a font asset carries, so
+    /// every font asset is registered first; the ones the markup does
+    /// not name cost a read.
+    fn scene(
+        &mut self,
+        comp: &Composition,
+        clip: &ResolvedClip,
+        html: &geneva_timeline::ResolvedHtml,
+    ) -> Result<u64, RenderError> {
+        self.load_font_assets(comp)?;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        clip.path.hash(&mut hasher);
+        let scene_key = hasher.finish();
+        if !self.html_cache.contains_key(&scene_key) {
+            let prepared = crate::html::prepare(html).map_err(|reason| RenderError::Asset {
+                id: clip.path.clone(),
+                reason,
+            })?;
+            // A picture in markup is a path relative to the markup, as
+            // it is on a page; the resolver has already checked the
+            // shape and that the file is there.
+            let mut images = HashMap::new();
+            for src in geneva_html::image_sources(&prepared) {
+                let path = if html.base.is_empty() {
+                    src.clone()
+                } else {
+                    format!("{}/{src}", html.base.trim_end_matches('/'))
+                };
+                if let Ok(image) = self.assets.image_at(&path) {
+                    images.insert(src, crate::html::to_encoded(image.clone()));
+                }
+            }
+            self.html_cache.insert(
+                scene_key,
+                Scene {
+                    prepared,
+                    images,
+                    still: None,
+                    groups: crate::html::GroupCache::default(),
+                },
+            );
+        }
+        Ok(scene_key)
+    }
+
+    /// What `clip` paints at time `t` as layers still to composite, when
+    /// it is markup with an animation inside: the boxes painted, the
+    /// groups left with their opacity, blur, clips and transform for a
+    /// renderer that composites them itself. `None` for any other
+    /// source, and for markup with nothing moving, which [`Self::paint`]
+    /// draws once and keeps whole.
+    pub fn markup_layers(
+        &mut self,
+        comp: &Composition,
+        clip: &ResolvedClip,
+        local: f64,
+    ) -> Result<Option<MarkupLayers<'_>>, RenderError> {
+        let ResolvedSource::Html(html) = &clip.source else {
+            return Ok(None);
+        };
+        if html.motion.is_empty() {
+            return Ok(None);
+        }
+        let scene_key = self.scene(comp, clip, html)?;
+        let scene = self.html_cache.get_mut(&scene_key).expect("inserted above");
+        let layers = crate::html::render_layers(
+            html,
+            &scene.prepared,
+            &mut self.text,
+            &scene.images,
+            local,
+            &mut scene.groups,
+            scene_key,
+        )
+        .map_err(|reason| RenderError::Asset {
+            id: clip.path.clone(),
+            reason,
+        })?;
+        Ok(Some(layers))
+    }
+
     /// What `clip` paints at time `t` (`local` is the clip-relative time,
     /// in seconds). A nested composition is the renderer's to draw, since
     /// it is a frame of its own; asking for one here is an error.
@@ -182,48 +266,10 @@ impl<A: AssetSource> Painter<A> {
                 )?))
             }
             ResolvedSource::Html(html) => {
-                // Markup names a font by `font-family`, which may be the id
-                // of a font asset or the family a font asset carries, so
-                // every font asset is registered before the markup is
-                // drawn; the ones the markup does not name cost a read.
-                self.load_font_assets(comp)?;
-                // The markup is parsed and its pictures read once per
-                // clip. With nothing inside it moving, the box is drawn
-                // once too and reused for every frame; an animation on an
+                // With nothing inside the markup moving, the box is drawn
+                // once and reused for every frame; an animation on an
                 // element inside means a fresh drawing at each time.
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                clip.path.hash(&mut hasher);
-                let scene_key = hasher.finish();
-                if !self.html_cache.contains_key(&scene_key) {
-                    let prepared =
-                        crate::html::prepare(html).map_err(|reason| RenderError::Asset {
-                            id: clip.path.clone(),
-                            reason,
-                        })?;
-                    // A picture in markup is a path relative to the
-                    // markup, as it is on a page; the resolver has already
-                    // checked the shape and that the file is there.
-                    let mut images = HashMap::new();
-                    for src in geneva_html::image_sources(&prepared) {
-                        let path = if html.base.is_empty() {
-                            src.clone()
-                        } else {
-                            format!("{}/{src}", html.base.trim_end_matches('/'))
-                        };
-                        if let Ok(image) = self.assets.image_at(&path) {
-                            images.insert(src, crate::html::to_encoded(image.clone()));
-                        }
-                    }
-                    self.html_cache.insert(
-                        scene_key,
-                        Scene {
-                            prepared,
-                            images,
-                            still: None,
-                            groups: crate::html::GroupCache::default(),
-                        },
-                    );
-                }
+                let scene_key = self.scene(comp, clip, html)?;
                 let scene = self.html_cache.get_mut(&scene_key).expect("inserted above");
                 let failed = |reason| RenderError::Asset {
                     id: clip.path.clone(),

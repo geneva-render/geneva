@@ -112,6 +112,40 @@ cat > "$work/logo.json" <<'JSON'
               { "clips": [ { "source": { "kind": "text", "text": "LOGO", "size": 64, "color": "#1d2230" } } ] } ] }
 JSON
 printf '1\n00:00:00,500 --> 00:00:02,500\nFirst subtitle\n\n2\n00:00:03,000 --> 00:00:04,500\nSecond <i>subtitle</i>\n\n3\n00:00:04,500 --> 00:00:05,000\nA third cue long enough that it has to fold onto more than one line, and then some, to see what the fitting does with it\n' > "$work/en.srt"
+cat > "$work/markup.html" <<'HTML'
+<style>
+  body { margin: 0; width: 960px; height: 540px; background: #0b1418; font-family: sans-serif; color: #eefbf4; overflow: hidden }
+  .blob { position: absolute; width: 120%; height: 180%; animation: drift 5s cubic-bezier(.45,0,.25,1) infinite alternate }
+  .blob.teal { left: -40%; top: -70%; background: radial-gradient(circle at 50% 50%, rgba(0,238,225,.35) 0%, rgba(0,238,225,.12) 40%, rgba(0,238,225,0) 70%) }
+  .blob.gold { right: -50%; bottom: -80%; background: radial-gradient(circle at 50% 50%, rgba(255,210,51,.3) 0%, rgba(255,210,51,.1) 38%, rgba(255,210,51,0) 68%); animation-delay: -2.5s }
+  @keyframes drift { from { transform: none } to { transform: translate(14%, 9%) scale(1.12) rotate(12deg) } }
+  .mesh, .scene { position: absolute; inset: 0 }
+  .scene { display: flex; align-items: center; justify-content: center }
+  .card { display: flex; flex-direction: column; width: 620px; padding: 36px 44px; border-radius: 28px; overflow: hidden; background: rgba(12,40,44,.82);
+    box-shadow: 0 24px 64px rgba(0,0,0,.5); animation: card-in .9s cubic-bezier(.2,.8,.3,1) forwards, card-out .8s 4.1s ease-in forwards }
+  @keyframes card-in { from { opacity: 0; transform: translateY(70px) scale(.92) } to { opacity: 1; transform: none } }
+  @keyframes card-out { to { opacity: 0; transform: scale(.7); filter: blur(10px) } }
+  .title { display: flex; font-size: 76px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1 }
+  .c { display: block; opacity: 0; animation: type .45s cubic-bezier(.2,.75,.3,1) forwards }
+  @keyframes type { from { opacity: 0; filter: blur(8px); transform: translateY(18px) scale(1.3) } to { opacity: 1; filter: blur(0); transform: none } }
+  .sub { margin-top: 10px; font-size: 24px; letter-spacing: .12em; color: #8fd4c8; opacity: 0; animation: rise .6s 1.1s ease-out forwards }
+  @keyframes rise { from { opacity: 0; transform: translateY(12px) } to { opacity: 1; transform: none } }
+  .bar { height: 6px; margin-top: 26px; background: linear-gradient(90deg, #00eee1, #ffd233);
+    clip-path: polygon(0 0, 0 0, 0 100%, 0 100%); animation: wipe 1.6s 1.3s cubic-bezier(.62,.03,.31,1) forwards }
+  @keyframes wipe { to { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%) } }
+</style>
+<div class="mesh"><div class="blob teal"></div><div class="blob gold"></div></div>
+<div class="scene"><div class="card">
+  <div class="title"><span class="c" style="animation-delay:.25s">g</span><span class="c" style="animation-delay:.32s">e</span><span class="c" style="animation-delay:.39s">n</span><span class="c" style="animation-delay:.46s">e</span><span class="c" style="animation-delay:.53s">v</span><span class="c" style="animation-delay:.6s">a</span><span class="c" style="animation-delay:.67s">&nbsp;</span><span class="c" style="animation-delay:.74s">c</span><span class="c" style="animation-delay:.81s">h</span><span class="c" style="animation-delay:.88s">e</span><span class="c" style="animation-delay:.95s">c</span><span class="c" style="animation-delay:1.02s">k</span></div>
+  <div class="sub">MARKUP ON EITHER RENDERER</div>
+  <div class="bar"></div>
+</div></div>
+HTML
+cat > "$work/markup.json" <<'JSON'
+{ "geneva": "0.4", "output": { "width": 960, "height": 540, "fps": 30, "duration": "5s", "background": "black" },
+  "assets": { "markup": { "src": "markup.html" } },
+  "layers": [ { "clips": [ { "source": { "kind": "html", "asset": "markup" }, "duration": "5s" } ] } ] }
+JSON
 cat > "$work/styled.json" <<'JSON'
 { "geneva": "0.1", "output": { "width": 1280, "height": 720, "fps": 30, "duration": "3s", "background": "#1d2230" },
   "layers": [ { "clips": [ { "source": { "kind": "text", "text": "CSS shorthands", "font": "italic 600 72px/1.2 sans-serif", "color": "#ffdd00",
@@ -156,6 +190,11 @@ run "subtitles extract (vtt)" "$work/back.vtt" "$geneva" subtitles "$work/subbed
 run "subtitles burn-in, --fit (5s)" "$work/burned.mp4" "$geneva" subtitles "$work/trim-exact.mp4" -o "$work/burned.mp4" --burn "$work/en.srt" --fit
 if [ -n "$ffmpeg" ] && "$ffmpeg" -hide_banner -filters 2>/dev/null | grep -q ' subtitles '; then ff -i "$work/trim-exact.mp4" -vf "subtitles=$work/en.srt" "${ffh264[@]}" -c:a copy "$work/ff-burned.mp4"; else noff; fi
 run "text with CSS shorthands (3s)" "$work/styled.mp4" "$geneva" render "$work/styled.json" -o "$work/styled.mp4"; noff
+# Animated markup (letters typed in with a blur, a card with a rounded
+# clip and a polygon wipe, drifting gradients): the boxes are painted on
+# the CPU either way, the groups composited on the renderer chosen.
+run "render markup (960x540, 5s)" "$work/markup.mp4" "$geneva" render "$work/markup.json" -o "$work/markup.mp4" --renderer cpu; noff
+run "render markup (960x540, 5s, GPU)" "$work/markup-gpu.mp4" "$geneva" render "$work/markup.json" -o "$work/markup-gpu.mp4" --renderer gpu; noff
 run "targets table" - "$geneva" targets; noff
 run "trim for tiktok (--for, 9:16 canvas)" "$work/tiktok.mp4" "$geneva" trim "$input" -o "$work/tiktok.mp4" --from 2s --duration 5s --for tiktok
 ff -ss 2 -i "$input" -t 5 -vf "scale='min(1080,iw)':-2,pad=iw:iw*16/9:0:(oh-ih)/2" "${ffh264[@]}" -g 60 -movflags +faststart -c:a aac -b:a 128k "$work/ff-tiktok.mp4"

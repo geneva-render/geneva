@@ -129,14 +129,34 @@ auto` takes a hardware device where there is one and the CPU otherwise;
 it shares as code rather than as a copy: the placement of a clip
 (`Placement`), what transitions do to opacity and the fade's veil, and
 the painter above the composite (image assets, text shaped and drawn,
-markup prepared once per clip). What it transcribes it transcribes
-function by function into `composite.wgsl`, `blur.wgsl` and
-`pack.wgsl`: the sampling rules (one center sample when pixel-aligned,
-the 2x2 subsamples otherwise, the span rule for magnified pictures),
-the shape and mask signed distances, bilinear reads with texel centers
-at half integers, the separable blend modes from a copy of the target,
-the 4:2:0 conversion of a video frame from its planes, the three box
-blurs, and the pack into the encoder's planes with the same tables.
+markup prepared once per clip, laid out and its boxes painted). What
+it transcribes it transcribes function by function into
+`composite.wgsl`, `blur.wgsl`, `markup.wgsl` and `pack.wgsl`: the
+sampling rules (one center sample when pixel-aligned, the 2x2
+subsamples otherwise, the span rule for magnified pictures), the shape
+and mask signed distances, bilinear reads with texel centers at half
+integers, the separable blend modes from a copy of the target, the
+4:2:0 conversion of a video frame from its planes, the three box
+blurs, the composite of a markup group and the decode of the finished
+box, and the pack into the encoder's planes with the same tables.
+
+A markup box with an animation inside is painted on the CPU as far as
+its boxes: the markup painter walks the same display list with the
+same caches and hands over runs of painted pixels and the groups they
+sit in, each with its opacity, blur, clips and transform still to
+apply. The device composites those in the painter's encoded space, as
+the CPU painter does: a run is uploaded and laid straight; a group's
+buffer is its run, or its own items composited into a pooled texture
+first; a blurred buffer goes through the same box blurs on a layer; a
+polygon clip goes up as coverage over the buffer; and the buffer is
+laid through the transform's inverse with the same taps, under the
+opacity and the rounded clip's coverage, by premultiplied "over". One
+pass then decodes the finished box to linear light, and it is placed
+as a picture. The pictures of groups that do not change from frame to
+frame are kept on the device as the painter keeps them on the CPU. The
+same walk composited on the CPU through the painter's own code is the
+box the painter paints, which a test holds it to; the device's
+composite is held to the CPU's frame by the golden tolerance.
 
 The working format is `Rgba16Float`, premultiplied linear light; blur
 layers are `Rgba32Float`, since six passes at half precision would
@@ -155,9 +175,13 @@ Every golden case renders on both and agrees to within one 8-bit code;
 The CPU renderer stays the reference and the fallback: `frame`, the
 overlays over a copied picture, and any machine without a device use
 it. Not done: 16-bit and HDR video sources are converted by the decoder
-and uploaded as pictures rather than as planes; the markup painter runs
-on the CPU and its box is uploaded whole; and the numbers are lavapipe's
-until a hardware device is measured.
+and uploaded as pictures rather than as planes; the markup painter's
+boxes, glyphs, shadows and polygon coverage are painted on the CPU and
+uploaded each frame unless kept; the markup composite is at half
+precision, so the opening's busiest frame has about half its pixels one
+code off the CPU's where the other cases have a few percent, and none
+more than one; and the numbers are lavapipe's until a hardware device
+is measured.
 
 ## Stream copy
 

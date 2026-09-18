@@ -15,8 +15,11 @@
 //! sampled by the same rules, through shape and luma masks, at the
 //! clip's opacity with its transitions, in every blend mode of the
 //! format, with a fade's veil over the result, and the frame read back
-//! into a [`Frame`]. Text and markup are painted on the CPU by the
-//! shared [`geneva_render::Painter`] and uploaded; an 8-bit 4:2:0 video
+//! into a [`Frame`]. Text is painted on the CPU by the shared
+//! [`geneva_render::Painter`] and uploaded; a markup box's boxes are
+//! painted by the same painter and its groups (opacity, blur, clips,
+//! transforms) composited on the device, in the painter's encoded
+//! space, then decoded to linear light there; an 8-bit 4:2:0 video
 //! frame is uploaded as its planes and converted on the device; a
 //! blurred clip is drawn onto a layer and blurred by the same three box
 //! blurs. [`Gpu::probe`] picks the adapter, checks what the compositor

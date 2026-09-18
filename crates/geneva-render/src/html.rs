@@ -21,6 +21,10 @@ use crate::assets::Image;
 use crate::fill::{Fill, encoded};
 use crate::text::TextEngine;
 
+mod layers;
+
+pub use layers::{MarkupGroup, MarkupItem, MarkupLayers, MarkupRun, render_layers};
+
 /// The engine and the images an HTML box needs, gathered before layout so
 /// that neither borrow fights the other.
 struct Context<'a> {
@@ -143,6 +147,22 @@ pub fn render(
     t: f64,
     cache: &mut GroupCache,
 ) -> Result<Image, String> {
+    let (laid, transforms) = lay_out(html, prepared, text, images, t)?;
+    let mut surface = paint(&laid, &transforms, text, images, cache);
+    to_linear(&mut surface);
+    Ok(surface)
+}
+
+/// Lays the document out at `t`, with the animated styles of the moment
+/// over it, and samples each group's transform against the box it
+/// settled on: what painting starts from, whoever composites.
+fn lay_out(
+    html: &ResolvedHtml,
+    prepared: &Prepared,
+    text: &mut TextEngine,
+    images: &HashMap<String, Image>,
+    t: f64,
+) -> Result<(Laid, Vec<Option<Transform>>), String> {
     let mut context = Context {
         text,
         images,
@@ -178,9 +198,7 @@ pub fn render(
                 .filter(|tr| !tr.is_identity())
         })
         .collect();
-    let mut surface = paint(&laid, &transforms, context.text, images, cache);
-    to_linear(&mut surface);
-    Ok(surface)
+    Ok((laid, transforms))
 }
 
 /// A pixel of the painter's working space, which is a browser's: sRGB-
@@ -494,6 +512,10 @@ struct Cached {
     boxes: Vec<Painted>,
     image: Image,
     origin: (i64, i64),
+    /// Which painting this is, counted over the cache: a renderer that
+    /// keeps a copy of the picture (a texture) tells one painting from
+    /// the next by it.
+    generation: u64,
 }
 
 impl Cached {
@@ -549,6 +571,9 @@ pub struct GroupCache {
     /// not painted into the cache again.
     give_up: HashMap<usize, u8>,
     bytes: usize,
+    /// Paintings so far, so that each picture kept has a number of its
+    /// own.
+    generation: u64,
 }
 
 /// Pictures below this many pixels are not worth keeping: the copy out
@@ -573,11 +598,13 @@ impl GroupCache {
         self.bytes = 0;
     }
 
-    fn insert(&mut self, group: usize, entry: Cached) {
+    fn insert(&mut self, group: usize, mut entry: Cached) {
         if let Some(old) = self.entries.remove(&group) {
             self.bytes -= old.image.pixels.len() * size_of::<LinearRgba>();
         }
         self.bytes += entry.image.pixels.len() * size_of::<LinearRgba>();
+        entry.generation = self.generation;
+        self.generation += 1;
         self.entries.insert(group, entry);
     }
 }
@@ -676,6 +703,7 @@ fn fill_cache(
                 boxes,
                 image: layer.image,
                 origin: layer.origin,
+                generation: 0,
             };
             // The clamp in `Layer::over` can cut a picture that reaches
             // far past the surface down to less than the frame asks for.
@@ -717,6 +745,33 @@ fn shifted(b: &Painted, origin: (i64, i64)) -> Painted {
     out
 }
 
+/// What the surface can be marked in: its own boxes and the top-level
+/// groups where they land, as the surface's content rectangle. The
+/// compositor reads that rather than all of it.
+fn content_of(laid: &Laid, placed: &[Option<Bounds>], surface: (u32, u32)) -> Option<[u32; 4]> {
+    let (width, height) = surface;
+    let mut touched: Option<Bounds> = None;
+    for b in &laid.boxes {
+        if b.group.is_none() && b.opacity > 0.0 {
+            touched = Some(union(touched, reach_of(b)));
+        }
+    }
+    for (g, group) in laid.groups.iter().enumerate() {
+        if group.parent.is_none() {
+            if let Some(r) = placed[g] {
+                touched = Some(union(touched, r));
+            }
+        }
+    }
+    touched.map(|[x0, y0, x1, y1]| {
+        let x = x0.floor().clamp(0.0, f64::from(width)) as u32;
+        let y = y0.floor().clamp(0.0, f64::from(height)) as u32;
+        let right = x1.ceil().clamp(0.0, f64::from(width)) as u32;
+        let bottom = y1.ceil().clamp(0.0, f64::from(height)) as u32;
+        [x, y, right.saturating_sub(x), bottom.saturating_sub(y)]
+    })
+}
+
 /// Paints the display list in order. Boxes on the surface are painted
 /// straight onto it; a group's boxes go into a buffer of its own, which
 /// is composited into whatever holds the group when its last box is
@@ -732,29 +787,7 @@ fn paint(
     let height = laid.size.1.ceil().max(1.0) as u32;
     let (own, placed, natural) =
         group_bounds(laid, transforms, (f64::from(width), f64::from(height)));
-    // What the surface can be marked in: its own boxes and the top-level
-    // groups where they land. The compositor reads that rather than all
-    // of it.
-    let mut touched: Option<Bounds> = None;
-    for b in &laid.boxes {
-        if b.group.is_none() && b.opacity > 0.0 {
-            touched = Some(union(touched, reach_of(b)));
-        }
-    }
-    for (g, group) in laid.groups.iter().enumerate() {
-        if group.parent.is_none() {
-            if let Some(r) = placed[g] {
-                touched = Some(union(touched, r));
-            }
-        }
-    }
-    let content = touched.map(|[x0, y0, x1, y1]| {
-        let x = x0.floor().clamp(0.0, f64::from(width)) as u32;
-        let y = y0.floor().clamp(0.0, f64::from(height)) as u32;
-        let right = x1.ceil().clamp(0.0, f64::from(width)) as u32;
-        let bottom = y1.ceil().clamp(0.0, f64::from(height)) as u32;
-        [x, y, right.saturating_sub(x), bottom.saturating_sub(y)]
-    });
+    let content = content_of(laid, &placed, (width, height));
     let mut surface = Image {
         width,
         height,
@@ -980,16 +1013,8 @@ fn composite(
     // constants. The trigonometry and the two divisions happen once for
     // the whole group. Along a row `py` is fixed, so the part that
     // changes is one add per pixel.
-    let (sin, cos) = tr.rotate.to_radians().sin_cos();
-    let (inv_sx, inv_sy) = (1.0 / tr.scale[0], 1.0 / tr.scale[1]);
-    let (ax, bx) = (cos * inv_sx, sin * inv_sx);
-    let (ay, by) = (-sin * inv_sy, cos * inv_sy);
-    let (tx, ty) = (centre.0 + tr.translate[0], centre.1 + tr.translate[1]);
-    let cx = centre.0 - ax * tx - bx * ty - layer.origin.0 as f64;
-    let cy = centre.1 - ay * tx - by * ty - layer.origin.1 as f64;
-
-    let taps = |scale: f64| ((1.0 / scale.abs().max(1e-3)).ceil() as usize).clamp(1, 4);
-    let (nx, ny) = (taps(tr.scale[0]), taps(tr.scale[1]));
+    let [ax, bx, cx, ay, by, cy] = affine_inverse(tr, centre, layer.origin);
+    let (nx, ny) = taps_of(tr);
     let norm = 1.0 / (nx * ny) as f32;
     let (fw, fh) = (sw as f64, sh as f64);
 
@@ -1056,69 +1081,112 @@ fn composite(
     });
 }
 
+/// The inverse of a group's transform about `centre`, as the six
+/// constants of two linear expressions in a surface point `(px, py)`:
+///     u = ax * px + bx * py + cx
+///     v = ay * px + by * py + cy
+/// in the pixels of a buffer whose top-left pixel sits at `origin`,
+/// returned as `[ax, bx, cx, ay, by, cy]`. [`inverse`] undone once for
+/// the whole group rather than at every tap.
+fn affine_inverse(tr: &Transform, centre: (f64, f64), origin: (i64, i64)) -> [f64; 6] {
+    let (sin, cos) = tr.rotate.to_radians().sin_cos();
+    let (inv_sx, inv_sy) = (1.0 / tr.scale[0], 1.0 / tr.scale[1]);
+    let (ax, bx) = (cos * inv_sx, sin * inv_sx);
+    let (ay, by) = (-sin * inv_sy, cos * inv_sy);
+    let (tx, ty) = (centre.0 + tr.translate[0], centre.1 + tr.translate[1]);
+    let cx = centre.0 - ax * tx - bx * ty - origin.0 as f64;
+    let cy = centre.1 - ay * tx - by * ty - origin.1 as f64;
+    [ax, bx, cx, ay, by, cy]
+}
+
+/// How many taps a pixel takes along each axis under a transform: one
+/// for a group drawn at its own size or larger, up to four for one drawn
+/// smaller, so its edges do not alias.
+fn taps_of(tr: &Transform) -> (usize, usize) {
+    let taps = |scale: f64| ((1.0 / scale.abs().max(1e-3)).ceil() as usize).clamp(1, 4);
+    (taps(tr.scale[0]), taps(tr.scale[1]))
+}
+
 /// Keeps what is inside the polygon, given in the surface's pixels, of a
-/// buffer whose top-left pixel sits at `origin`. Coverage is measured on
-/// four scanlines per row with exact horizontal overlap, and the fill
-/// rule is nonzero, as CSS's is.
+/// buffer whose top-left pixel sits at `origin`: each pixel is scaled by
+/// its [`polygon_coverage`].
 fn mask_polygon(image: &mut Image, origin: (i64, i64), points: &[(f64, f64)]) {
-    const SUB: usize = 4;
     let (w, h) = (image.width as usize, image.height as usize);
-    if points.len() < 3 {
-        image.pixels.fill(LinearRgba::TRANSPARENT);
-        return;
+    let coverage = polygon_coverage(w, h, origin, points);
+    image
+        .pixels
+        .par_chunks_mut(w.max(1))
+        .zip(coverage.par_chunks(w.max(1)))
+        .for_each(|(row, coverage)| {
+            for (p, c) in row.iter_mut().zip(coverage) {
+                if *c < 1.0 {
+                    *p = p.scaled(*c);
+                }
+            }
+        });
+}
+
+/// The coverage in `[0, 1]` of a polygon, given in the surface's pixels,
+/// over each pixel of a `w` by `h` buffer whose top-left pixel sits at
+/// `origin`, row-major. Coverage is measured on four scanlines per row
+/// with exact horizontal overlap, and the fill rule is nonzero, as
+/// CSS's is. A polygon of fewer than three points covers nothing.
+fn polygon_coverage(w: usize, h: usize, origin: (i64, i64), points: &[(f64, f64)]) -> Vec<f32> {
+    const SUB: usize = 4;
+    let mut out = vec![0f32; w * h];
+    if points.len() < 3 || w == 0 || h == 0 {
+        return out;
     }
     // Rows are independent, so they go in parallel, each thread with a
-    // coverage row and a crossings list of its own.
-    let scratch = || (vec![0f32; w], Vec::<(f64, i32)>::new());
-    rows(image, 0, h as i64).for_each_init(scratch, |(coverage, crossings), (y, row)| {
-        let y = y as usize;
-        coverage.fill(0.0);
-        for s in 0..SUB {
-            let sy = origin.1 as f64 + y as f64 + (s as f64 + 0.5) / SUB as f64;
-            crossings.clear();
-            for i in 0..points.len() {
-                let (x0, y0) = points[i];
-                let (x1, y1) = points[(i + 1) % points.len()];
-                if (y0 <= sy) == (y1 <= sy) {
-                    continue;
+    // crossings list of its own.
+    out.par_chunks_mut(w).enumerate().for_each_init(
+        Vec::<(f64, i32)>::new,
+        |crossings, (y, coverage)| {
+            for s in 0..SUB {
+                let sy = origin.1 as f64 + y as f64 + (s as f64 + 0.5) / SUB as f64;
+                crossings.clear();
+                for i in 0..points.len() {
+                    let (x0, y0) = points[i];
+                    let (x1, y1) = points[(i + 1) % points.len()];
+                    if (y0 <= sy) == (y1 <= sy) {
+                        continue;
+                    }
+                    let t = (sy - y0) / (y1 - y0);
+                    crossings.push((x0 + t * (x1 - x0), if y1 > y0 { 1 } else { -1 }));
                 }
-                let t = (sy - y0) / (y1 - y0);
-                crossings.push((x0 + t * (x1 - x0), if y1 > y0 { 1 } else { -1 }));
-            }
-            crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let mut winding = 0;
-            let mut start = 0.0;
-            for (x, dir) in crossings.iter() {
-                let was = winding;
-                winding += dir;
-                if was == 0 && winding != 0 {
-                    start = *x;
-                } else if was != 0 && winding == 0 {
-                    // A span across [start, x], in buffer pixels.
-                    let a = (start - origin.0 as f64).clamp(0.0, w as f64);
-                    let b = (x - origin.0 as f64).clamp(0.0, w as f64);
-                    let (first, last) = (a.floor() as usize, b.ceil() as usize);
-                    for (px, c) in coverage
-                        .iter_mut()
-                        .enumerate()
-                        .take(last.min(w))
-                        .skip(first)
-                    {
-                        let overlap = b.min(px as f64 + 1.0) - a.max(px as f64);
-                        if overlap > 0.0 {
-                            *c += overlap as f32 / SUB as f32;
+                crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let mut winding = 0;
+                let mut start = 0.0;
+                for (x, dir) in crossings.iter() {
+                    let was = winding;
+                    winding += dir;
+                    if was == 0 && winding != 0 {
+                        start = *x;
+                    } else if was != 0 && winding == 0 {
+                        // A span across [start, x], in buffer pixels.
+                        let a = (start - origin.0 as f64).clamp(0.0, w as f64);
+                        let b = (x - origin.0 as f64).clamp(0.0, w as f64);
+                        let (first, last) = (a.floor() as usize, b.ceil() as usize);
+                        for (px, c) in coverage
+                            .iter_mut()
+                            .enumerate()
+                            .take(last.min(w))
+                            .skip(first)
+                        {
+                            let overlap = b.min(px as f64 + 1.0) - a.max(px as f64);
+                            if overlap > 0.0 {
+                                *c += overlap as f32 / SUB as f32;
+                            }
                         }
                     }
                 }
             }
-        }
-        for (p, c) in row.iter_mut().zip(coverage.iter()) {
-            let c = c.clamp(0.0, 1.0);
-            if c < 1.0 {
-                *p = p.scaled(c);
+            for c in coverage.iter_mut() {
+                *c = c.clamp(0.0, 1.0);
             }
-        }
-    });
+        },
+    );
+    out
 }
 
 /// The rows `y0..y1` of an image as a parallel iterator, each with its

@@ -19,13 +19,24 @@
 //! it, blurred by the same three box blurs as row and column passes
 //! (`blur.wgsl`), and laid back with one bilinear sample per pixel.
 //!
-//! A frame is a list of passes, nested compositions and blur layers
-//! first: each composition renders its layers into a texture (a pooled
-//! one for a nested composition, the frame's own for the top). Normal
-//! and add blending are fixed-function; a separable mode ends the pass,
-//! copies the target to a backdrop texture, and draws with a pipeline
-//! that replaces the pixel with what the shader composites from the
-//! copy.
+//! A markup box with an animation inside comes from the painter as
+//! layers rather than as a picture: runs of painted pixels and the
+//! groups they sit in. `markup.wgsl` transcribes the painter's own
+//! composite of a group (the transform's inverse, the taps of a group
+//! drawn smaller, the rounded clip's coverage, the polygon clip as
+//! coverage over the buffer, opacity, premultiplied "over") in the
+//! painter's encoded space, and the decode of the finished box to
+//! linear light; a blurred group goes through the box blurs on a layer
+//! first. The runs go up as pictures, kept under the painter's key
+//! where the painter keeps them.
+//!
+//! A frame is a list of passes, nested compositions, markup boxes and
+//! blur layers first: each composition renders its layers into a
+//! texture (a pooled one for a nested composition, the frame's own for
+//! the top). Normal and add blending are fixed-function; a separable
+//! mode ends the pass, copies the target to a backdrop texture, and
+//! draws with a pipeline that replaces the pixel with what the shader
+//! composites from the copy.
 //!
 //! The frame leaves the device through a ring of three staging buffers:
 //! [`Compositor::submit`] records the frame, the pack of it into each
@@ -43,8 +54,8 @@ use geneva_color::{Color, LinearRgba, Primaries, ResolvedTags, Transfer, matrix,
 use geneva_media::PlaneTarget;
 use geneva_media::convert::{PlaneFormat, encode_table, hdr_peak};
 use geneva_render::{
-    AssetSource, Frame, Image, Paint, Painter, Placement, RenderError, VideoPlanes, box_radii,
-    crop_window, fade_veil, transition_gain,
+    AssetSource, Frame, Image, MarkupItem, MarkupLayers, Paint, Painter, Placement, RenderError,
+    VideoPlanes, box_radii, crop_window, fade_veil, transition_gain,
 };
 use geneva_timeline::schema::{BlendMode, ShapeKind};
 use geneva_timeline::{Composition, Ratio, ResolvedEffect, ResolvedLayer, ResolvedSource};
@@ -175,14 +186,22 @@ enum Pass {
     },
     /// A clip drawn onto a transparent blur layer.
     Layer { target: usize, draw: Box<Draw> },
-    /// One box blur of a layer into another, along the rows or down the
-    /// columns.
+    /// One box blur of a texture into a layer, along the rows or down
+    /// the columns.
     Blur {
-        from: usize,
+        from: Tex,
         to: usize,
         radius: u32,
         vertical: bool,
     },
+    /// The layers of a markup box, or of one group in it, composited
+    /// into one texture in the painter's encoded space: a pooled
+    /// texture for a surface or a group's buffer, a blur layer for a
+    /// buffer about to be blurred.
+    Markup { target: Tex, draws: Vec<GroupDraw> },
+    /// A finished markup surface turned into linear light, texel for
+    /// texel, into a pooled texture.
+    Decode { from: usize, to: usize },
 }
 
 /// What one box blur pass tells `blur.wgsl`.
@@ -192,6 +211,35 @@ struct BoxUniform {
     radius: i32,
     vertical: u32,
     _pad: [u32; 2],
+}
+
+/// What one group draw tells `markup.wgsl`. Mirrors `struct Group`
+/// there, field for field, in its layout.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+struct GroupUniform {
+    bounds: [f32; 4],
+    window: [f32; 4],
+    clip: [f32; 4],
+    radius: [f32; 4],
+    inverse_a: [f32; 4],
+    inverse_c: [f32; 2],
+    target: [f32; 2],
+    origin: [f32; 2],
+    taps: [u32; 2],
+    opacity: f32,
+    has_clip: u32,
+    has_mask: u32,
+    _pad: u32,
+}
+
+/// One run or group of a markup box laid into a target, in order.
+struct GroupDraw {
+    uniform: GroupUniform,
+    /// The buffer's pixels.
+    image: Tex,
+    /// The polygon clip's coverage over the buffer, in the mask pool.
+    mask: Option<usize>,
 }
 
 /// The format of blur layers: the CPU blurs in f32 and so does this,
@@ -308,6 +356,18 @@ pub(crate) struct Compositor {
     pack_uniforms: wgpu::Buffer,
     pack_slot: u64,
     pack_capacity: usize,
+    /// The composite of a markup group onto a surface or a buffer, onto
+    /// a blur layer, and the decode of a finished surface.
+    group: wgpu::RenderPipeline,
+    group_layer: wgpu::RenderPipeline,
+    decode: wgpu::RenderPipeline,
+    group_layout: wgpu::BindGroupLayout,
+    /// One slot per group draw.
+    group_uniforms: wgpu::Buffer,
+    group_slot: u64,
+    group_capacity: usize,
+    /// Polygon clip coverages by size, one texel per buffer pixel.
+    masks: Vec<Pooled>,
     /// The encode tables uploaded so far, by transfer and HDR.
     encode_tables: HashMap<(Transfer, bool), wgpu::Buffer>,
     /// Plane output textures by format and size.
@@ -594,10 +654,97 @@ impl Compositor {
             "fs_rgba",
             wgpu::TextureFormat::Rgba8Uint,
         );
+        let markup_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("geneva markup"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("markup.wgsl").into()),
+        });
+        let group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("geneva group"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<GroupUniform>() as u64,
+                        ),
+                    },
+                    count: None,
+                },
+                texture_entry(1, float),
+                texture_entry(2, float),
+            ],
+        });
+        let group_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("geneva group"),
+                bind_group_layouts: &[Some(&group_layout)],
+                immediate_size: 0,
+            });
+        let markup = |label: &str,
+                      vertex: &str,
+                      fragment: &str,
+                      format: wgpu::TextureFormat,
+                      blend: Option<wgpu::BlendState>| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&group_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &markup_shader,
+                    entry_point: Some(vertex),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &markup_shader,
+                    entry_point: Some(fragment),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        // A group over what is under it: premultiplied "over", the
+        // painter's `over`, fixed-function.
+        let group = markup(
+            "geneva group",
+            "vs_main",
+            "fs_group",
+            WORKING_FORMAT,
+            Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+        );
+        // A buffer onto a transparent blur layer, written as it is.
+        let group_layer = markup(
+            "geneva group layer",
+            "vs_main",
+            "fs_group",
+            LAYER_FORMAT,
+            None,
+        );
+        let decode = markup(
+            "geneva decode",
+            "vs_full",
+            "fs_decode",
+            WORKING_FORMAT,
+            None,
+        );
         let align = u64::from(device.limits().min_uniform_buffer_offset_alignment);
         let slot = uniform_size.div_ceil(align) * align;
         let capacity = 64;
         let uniforms = uniform_buffer(device, slot, capacity);
+        let group_slot = (std::mem::size_of::<GroupUniform>() as u64).div_ceil(align) * align;
+        let group_capacity = 64;
+        let group_uniforms = uniform_buffer(device, group_slot, group_capacity);
         let blur_slot = (std::mem::size_of::<BoxUniform>() as u64).div_ceil(align) * align;
         let blur_capacity = 16;
         let blur_uniforms = uniform_buffer(device, blur_slot, blur_capacity);
@@ -637,6 +784,14 @@ impl Compositor {
             pack_uniforms,
             pack_slot,
             pack_capacity,
+            group,
+            group_layer,
+            decode,
+            group_layout,
+            group_uniforms,
+            group_slot,
+            group_capacity,
+            masks: Vec::new(),
             encode_tables: HashMap::new(),
             outputs: Vec::new(),
             slots: (0..RING)
@@ -707,6 +862,7 @@ impl Compositor {
             .chain(self.planes.iter_mut())
             .chain(self.layers.iter_mut())
             .chain(self.outputs.iter_mut())
+            .chain(self.masks.iter_mut())
         {
             p.busy = false;
         }
@@ -1120,6 +1276,18 @@ impl Compositor {
                             picture = Some((f64::from(w), f64::from(h), None));
                         }
                     }
+                    ResolvedSource::Html(html) if !html.motion.is_empty() => {
+                        // Markup with an animation inside: its boxes
+                        // are painted on the CPU and its groups
+                        // composited here; the finished box is decoded
+                        // to linear light and drawn as a picture.
+                        if let Some(layers) = painter.markup_layers(comp, clip, local)? {
+                            let (w, h, content) = (layers.width, layers.height, layers.content);
+                            image = self.plan_markup(gpu, &layers);
+                            uniform.kind = KIND_IMAGE;
+                            picture = Some((f64::from(w), f64::from(h), content));
+                        }
+                    }
                     _ => {}
                 }
                 if picture.is_none() {
@@ -1322,7 +1490,7 @@ impl Compositor {
             }
             for vertical in [false, true] {
                 self.passes.push(Pass::Blur {
-                    from,
+                    from: Tex::Layer(from),
                     to,
                     radius: radius as u32,
                     vertical,
@@ -1363,6 +1531,226 @@ impl Compositor {
             planes: None,
             transfer: Transfer::Srgb,
         });
+    }
+
+    /// Plans a markup box from its layers: the runs and groups
+    /// composited into a pooled texture in the painter's encoded space,
+    /// as the CPU painter composites them, then decoded to linear light
+    /// into another. Returns the decoded picture.
+    fn plan_markup(&mut self, gpu: &Gpu, layers: &MarkupLayers<'_>) -> Tex {
+        let (width, height) = (layers.width, layers.height);
+        let surface = self.acquire(gpu, width, height);
+        let draws = self.plan_markup_items(gpu, &layers.items, (0, 0), (width, height));
+        self.passes.push(Pass::Markup {
+            target: Tex::Pooled(surface),
+            draws,
+        });
+        let decoded = self.acquire(gpu, width, height);
+        self.passes.push(Pass::Decode {
+            from: surface,
+            to: decoded,
+        });
+        Tex::Pooled(decoded)
+    }
+
+    /// The draws that lay `items` into a target whose top-left pixel
+    /// sits at `origin` on the markup surface and is `size` wide. A run
+    /// is uploaded (or found kept under its key) and laid straight. A
+    /// group's buffer is its one run when that covers it whole, and
+    /// otherwise its items composited into a pooled texture by a pass
+    /// of their own; a blurred buffer is drawn onto a layer and blurred
+    /// by the same three box blurs as the CPU; a polygon clip goes up
+    /// as coverage; and the buffer is laid under the group's opacity,
+    /// rounded clip and transform.
+    fn plan_markup_items(
+        &mut self,
+        gpu: &Gpu,
+        items: &[MarkupItem<'_>],
+        origin: (i64, i64),
+        size: (u32, u32),
+    ) -> Vec<GroupDraw> {
+        let mut draws = Vec::new();
+        for item in items {
+            match item {
+                MarkupItem::Run(run) => {
+                    let image = match run.key {
+                        Some(key) => self.keep(gpu, key, &run.image),
+                        None => self.upload_once(gpu, &run.image),
+                    };
+                    let [_, _, w, h] = run.window;
+                    let bounds = [
+                        run.origin.0,
+                        run.origin.1,
+                        run.origin.0 + i64::from(w),
+                        run.origin.1 + i64::from(h),
+                    ];
+                    let inverse = [
+                        1.0,
+                        0.0,
+                        -(run.origin.0 as f64),
+                        0.0,
+                        1.0,
+                        -(run.origin.1 as f64),
+                    ];
+                    let uniform = group_uniform(
+                        bounds,
+                        run.window,
+                        inverse,
+                        (1, 1),
+                        1.0,
+                        None,
+                        false,
+                        origin,
+                        size,
+                    );
+                    if let Some(uniform) = uniform {
+                        draws.push(GroupDraw {
+                            uniform,
+                            image,
+                            mask: None,
+                        });
+                    }
+                }
+                MarkupItem::Group(group) => {
+                    let Some(bounds) = group.bounds() else {
+                        continue;
+                    };
+                    let (gw, gh) = group.size();
+                    let buffer_origin = group.origin();
+                    let whole = match group.items.as_slice() {
+                        [MarkupItem::Run(run)]
+                            if run.origin == buffer_origin
+                                && run.window[2] == gw
+                                && run.window[3] == gh =>
+                        {
+                            Some(run)
+                        }
+                        _ => None,
+                    };
+                    let (mut image, mut window) = match whole {
+                        Some(run) => {
+                            let image = match run.key {
+                                Some(key) => self.keep(gpu, key, &run.image),
+                                None => self.upload_once(gpu, &run.image),
+                            };
+                            (image, run.window)
+                        }
+                        None => {
+                            let target = self.acquire(gpu, gw, gh);
+                            let inner =
+                                self.plan_markup_items(gpu, &group.items, buffer_origin, (gw, gh));
+                            self.passes.push(Pass::Markup {
+                                target: Tex::Pooled(target),
+                                draws: inner,
+                            });
+                            (Tex::Pooled(target), [0, 0, gw, gh])
+                        }
+                    };
+                    if group.blur > 0.0 {
+                        // The buffer onto a layer of its size, then the
+                        // box blurs, pixels beyond the buffer counting
+                        // as transparent (blur_pixels).
+                        let first = self.acquire_layer(gpu, gw, gh);
+                        let onto = group_uniform(
+                            group.buffer,
+                            window,
+                            [
+                                1.0,
+                                0.0,
+                                -(buffer_origin.0 as f64),
+                                0.0,
+                                1.0,
+                                -(buffer_origin.1 as f64),
+                            ],
+                            (1, 1),
+                            1.0,
+                            None,
+                            false,
+                            buffer_origin,
+                            (gw, gh),
+                        )
+                        .expect("the buffer covers its own layer");
+                        self.passes.push(Pass::Markup {
+                            target: Tex::Layer(first),
+                            draws: vec![GroupDraw {
+                                uniform: onto,
+                                image,
+                                mask: None,
+                            }],
+                        });
+                        let (mut from, mut to) = (first, self.acquire_layer(gpu, gw, gh));
+                        for radius in box_radii(group.blur) {
+                            if radius == 0 {
+                                continue;
+                            }
+                            for vertical in [false, true] {
+                                self.passes.push(Pass::Blur {
+                                    from: Tex::Layer(from),
+                                    to,
+                                    radius: radius as u32,
+                                    vertical,
+                                });
+                                std::mem::swap(&mut from, &mut to);
+                            }
+                        }
+                        image = Tex::Layer(from);
+                        window = [0, 0, gw, gh];
+                    }
+                    let mask = group
+                        .mask()
+                        .map(|coverage| self.upload_mask(gpu, gw, gh, &coverage));
+                    let uniform = group_uniform(
+                        bounds,
+                        window,
+                        group.inverse(),
+                        group.taps(),
+                        group.opacity.clamp(0.0, 1.0),
+                        group.clip,
+                        mask.is_some(),
+                        origin,
+                        size,
+                    );
+                    if let Some(uniform) = uniform {
+                        draws.push(GroupDraw {
+                            uniform,
+                            image,
+                            mask,
+                        });
+                    }
+                }
+            }
+        }
+        draws
+    }
+
+    /// A polygon clip's coverage in a pooled mask texture of the
+    /// buffer's size.
+    fn upload_mask(&mut self, gpu: &Gpu, width: u32, height: u32, coverage: &[f32]) -> usize {
+        let i = acquire_in(
+            &mut self.masks,
+            gpu,
+            wgpu::TextureFormat::R32Float,
+            width,
+            height,
+            false,
+        );
+        if width > 0 && height > 0 {
+            gpu.queue().write_texture(
+                self.masks[i].texture.as_image_copy(),
+                bytemuck::cast_slice(coverage),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(width * 4),
+                    rows_per_image: Some(height),
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        i
     }
 
     /// The picture under `key`, uploaded on first use and kept while
@@ -1555,6 +1943,39 @@ impl Compositor {
         })
     }
 
+    /// The bindings of one group draw, or of a decode reading `image`.
+    fn group_bind_group(
+        &self,
+        device: &wgpu::Device,
+        image: &Tex,
+        mask: Option<usize>,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("geneva group"),
+            layout: &self.group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.group_uniforms,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(std::mem::size_of::<GroupUniform>() as u64),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(self.view(image)),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(
+                        mask.map_or(&self.blank, |i| &self.masks[i].view),
+                    ),
+                },
+            ],
+        })
+    }
+
     fn texture_of(&self, target: Option<usize>) -> (&wgpu::Texture, &wgpu::TextureView) {
         match target {
             None => {
@@ -1577,7 +1998,7 @@ impl Compositor {
             .flat_map(|p| match p {
                 Pass::Composite { draws, .. } => draws.iter().collect::<Vec<_>>(),
                 Pass::Layer { draw, .. } => vec![draw.as_ref()],
-                Pass::Blur { .. } => Vec::new(),
+                Pass::Blur { .. } | Pass::Markup { .. } | Pass::Decode { .. } => Vec::new(),
             })
             .collect();
         if draws.len() > self.capacity {
@@ -1623,6 +2044,30 @@ impl Compositor {
                 .copy_from_slice(bytemuck::bytes_of(b));
         }
         gpu.queue().write_buffer(&self.blur_uniforms, 0, &bytes);
+        // The group draws' uniforms, in the order the markup passes draw
+        // them.
+        let groups: Vec<&GroupDraw> = passes
+            .iter()
+            .flat_map(|p| match p {
+                Pass::Markup { draws, .. } => draws.iter().collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .collect();
+        if groups.len() > self.group_capacity {
+            let mut capacity = self.group_capacity;
+            while capacity < groups.len() {
+                capacity *= 2;
+            }
+            self.group_uniforms = uniform_buffer(device, self.group_slot, capacity);
+            self.group_capacity = capacity;
+        }
+        let mut bytes = vec![0u8; self.group_slot as usize * groups.len().max(1)];
+        for (i, g) in groups.iter().enumerate() {
+            let at = i * self.group_slot as usize;
+            bytes[at..at + std::mem::size_of::<GroupUniform>()]
+                .copy_from_slice(bytemuck::bytes_of(&g.uniform));
+        }
+        gpu.queue().write_buffer(&self.group_uniforms, 0, &bytes);
         // Every transfer table a draw reads exists before the bind groups
         // are made, and a pass with a separable blend reads a copy of its
         // target.
@@ -1646,6 +2091,7 @@ impl Compositor {
             .collect();
         let mut next_slot = 0u64;
         let mut next_box = 0u64;
+        let mut next_group = 0u64;
         let transparent = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
         for (pass, backdrop) in passes.iter().zip(&backdrops) {
             match pass {
@@ -1722,6 +2168,31 @@ impl Compositor {
                     rpass.set_bind_group(0, &bind_group, &[offset]);
                     rpass.draw(0..6, 0..1);
                 }
+                Pass::Markup { target, draws } => {
+                    let bind_groups: Vec<wgpu::BindGroup> = draws
+                        .iter()
+                        .map(|d| self.group_bind_group(device, &d.image, d.mask))
+                        .collect();
+                    let pipeline = match target {
+                        Tex::Layer(_) => &self.group_layer,
+                        _ => &self.group,
+                    };
+                    let mut rpass = begin(encoder, self.view(target), transparent);
+                    rpass.set_pipeline(pipeline);
+                    for bind_group in &bind_groups {
+                        let offset = (next_group * self.group_slot) as wgpu::DynamicOffset;
+                        next_group += 1;
+                        rpass.set_bind_group(0, bind_group, &[offset]);
+                        rpass.draw(0..6, 0..1);
+                    }
+                }
+                Pass::Decode { from, to } => {
+                    let bind_group = self.group_bind_group(device, &Tex::Pooled(*from), None);
+                    let mut rpass = begin(encoder, &self.pool[*to].view, transparent);
+                    rpass.set_pipeline(&self.decode);
+                    rpass.set_bind_group(0, &bind_group, &[0]);
+                    rpass.draw(0..3, 0..1);
+                }
                 Pass::Blur { from, to, .. } => {
                     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("geneva blur"),
@@ -1739,9 +2210,7 @@ impl Compositor {
                             },
                             wgpu::BindGroupEntry {
                                 binding: 1,
-                                resource: wgpu::BindingResource::TextureView(
-                                    &self.layers[*from].view,
-                                ),
+                                resource: wgpu::BindingResource::TextureView(self.view(from)),
                             },
                         ],
                     });
@@ -1836,6 +2305,68 @@ fn set_conversion(uniform: &mut ClipUniform, p: &VideoPlanes<'_>) {
         uniform.m1 = row(m[1]);
         uniform.m2 = row(m[2]);
     }
+}
+
+/// What one group draw tells the shader, laying a buffer into a target
+/// whose top-left pixel sits at `origin` on the markup surface and is
+/// `size` wide: the pixels drawn (`bounds`, on the surface, cut to the
+/// target, as `composite` cuts them), the buffer's `window` in its
+/// texture, the inverse map from a surface point to a buffer pixel, the
+/// taps a pixel takes, and the opacity and rounded clip the sample is
+/// scaled by. `None` when nothing of the buffer lands on the target.
+#[allow(clippy::too_many_arguments)]
+fn group_uniform(
+    bounds: [i64; 4],
+    window: [u32; 4],
+    inverse: [f64; 6],
+    taps: (u32, u32),
+    opacity: f32,
+    clip: Option<([f32; 4], [f64; 4])>,
+    has_mask: bool,
+    origin: (i64, i64),
+    size: (u32, u32),
+) -> Option<GroupUniform> {
+    let target = [
+        origin.0,
+        origin.1,
+        origin.0 + i64::from(size.0),
+        origin.1 + i64::from(size.1),
+    ];
+    let cut = [
+        bounds[0].max(target[0]),
+        bounds[1].max(target[1]),
+        bounds[2].min(target[2]),
+        bounds[3].min(target[3]),
+    ];
+    if cut[2] <= cut[0] || cut[3] <= cut[1] {
+        return None;
+    }
+    let (rect, radius) = clip.unwrap_or(([0.0; 4], [0.0; 4]));
+    Some(GroupUniform {
+        bounds: [
+            (cut[0] - origin.0) as f32,
+            (cut[1] - origin.1) as f32,
+            (cut[2] - origin.0) as f32,
+            (cut[3] - origin.1) as f32,
+        ],
+        window: window.map(|v| v as f32),
+        clip: rect,
+        radius: radius.map(|v| v as f32),
+        inverse_a: [
+            inverse[0] as f32,
+            inverse[1] as f32,
+            inverse[3] as f32,
+            inverse[4] as f32,
+        ],
+        inverse_c: [inverse[2] as f32, inverse[5] as f32],
+        target: [size.0 as f32, size.1 as f32],
+        origin: [origin.0 as f32, origin.1 as f32],
+        taps: [taps.0, taps.1],
+        opacity,
+        has_clip: u32::from(clip.is_some()),
+        has_mask: u32::from(has_mask),
+        _pad: 0,
+    })
 }
 
 /// The key a luma mask's image asset is kept under: the one the

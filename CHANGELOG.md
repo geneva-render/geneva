@@ -18,9 +18,15 @@ the format version it was written for.
   note when none opens; the report's notes name the device. The
   renderer draws every source (placement, crop, shape and luma masks,
   opacity, transitions, every blend mode, the fade's veil, nested
-  compositions) through the same rules as the CPU renderer: text and
-  markup are painted on the CPU by a painter both renderers share and
-  uploaded, pictures that do not change are kept on the device under a
+  compositions) through the same rules as the CPU renderer: text is
+  painted on the CPU by a painter both renderers share and uploaded;
+  a markup box's boxes are painted by the same painter and its groups
+  (opacity, blur, rounded and polygon clips, transforms) are
+  composited on the device in the painter's encoded space, the
+  finished box decoded to linear light there, and the pictures of
+  groups that do not change from frame to frame are kept on the device
+  as the painter keeps them; pictures that do not change are kept on
+  the device under a
   96 MB budget, an 8-bit 4:2:0 video frame goes up as its planes and is
   converted to linear light on the device by the same arithmetic as
   the CPU conversion (HDR, RGB and rotated frames go up as the picture
