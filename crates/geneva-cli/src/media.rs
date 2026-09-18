@@ -176,6 +176,10 @@ mod progress_tests {
 
 /// Encoder settings the command line may override.
 pub struct RenderOverrides {
+    /// Read by the composited paths, which a build without `media` does
+    /// not have.
+    #[cfg_attr(not(feature = "media"), allow(dead_code))]
+    pub renderer: RendererChoice,
     pub crf: Option<u8>,
     pub preset: Option<String>,
     pub no_audio: bool,
@@ -186,6 +190,49 @@ pub struct RenderOverrides {
     /// copy paths read it, which a build without `media` does not have.
     #[cfg_attr(not(feature = "media"), allow(dead_code))]
     pub picture_as_is: bool,
+}
+
+/// Which renderer composites the frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum RendererChoice {
+    /// The GPU where the machine has one the renderer can draw with, the
+    /// CPU otherwise. Until the GPU renderer draws, this is the CPU.
+    #[default]
+    Auto,
+    /// The CPU reference renderer.
+    Cpu,
+    /// The GPU renderer, on whatever device there is, a software one
+    /// included; the CPU when none can be opened, with a note saying so.
+    Gpu,
+}
+
+/// What the choice of renderer came to, as notes for the report. The
+/// GPU renderer draws nothing yet, so every choice composites on the
+/// CPU; asking for the GPU probes the device and says what was found,
+/// which is the fallback path exercised end to end.
+#[cfg(feature = "media")]
+pub fn renderer_notes(choice: RendererChoice) -> Vec<String> {
+    match choice {
+        RendererChoice::Auto | RendererChoice::Cpu => Vec::new(),
+        RendererChoice::Gpu => vec![gpu_note()],
+    }
+}
+
+#[cfg(all(feature = "media", feature = "gpu"))]
+fn gpu_note() -> String {
+    use geneva_gpu::{Gpu, Preference};
+    match Gpu::probe(Preference::from_env(Preference::Any)) {
+        Ok(gpu) => format!(
+            "GPU {}: the GPU renderer draws nothing yet, so the frames were composited on the CPU",
+            gpu.report().line()
+        ),
+        Err(e) => format!("no usable GPU ({e}); the frames were composited on the CPU"),
+    }
+}
+
+#[cfg(all(feature = "media", not(feature = "gpu")))]
+fn gpu_note() -> String {
+    "this build has no GPU renderer; the frames were composited on the CPU".to_owned()
 }
 
 /// What a render produced.
@@ -1010,6 +1057,7 @@ mod imp {
         let mut poster_fallback: Option<Vec<u8>> = None;
         let mut previous_gist: Option<Vec<f32>> = None;
 
+        notes.extend(super::renderer_notes(overrides.renderer));
         let mut renderer = CpuRenderer::new(MediaAssets::new(root).keep_hdr(comp.color.is_hdr()));
         let mut frame = geneva_render::Frame::new(0, 0, geneva_color::Color::BLACK);
         let mut render_error: Option<RenderError> = None;
@@ -2310,6 +2358,9 @@ mod imp {
             notes.push(note);
         }
         notes.extend(encoder.video_setting_notes());
+        if has_video {
+            notes.extend(super::renderer_notes(overrides.renderer));
+        }
         let mut renderer = CpuRenderer::new(MediaAssets::new(root).keep_hdr(comp.color.is_hdr()));
         let total = if has_video { comp.frame_count() } else { 0 };
         let video_format = if has_video {

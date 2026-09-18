@@ -168,6 +168,12 @@ struct RenderArgs {
     /// Write no audio track.
     #[arg(long)]
     no_audio: bool,
+    /// Which renderer composites the frames: auto (the GPU where one
+    /// can be used, otherwise the CPU), cpu, or gpu (the CPU when no
+    /// device opens, with a note). The GPU renderer draws nothing yet,
+    /// so every choice composites on the CPU for now.
+    #[arg(long, value_enum, default_value = "auto")]
+    renderer: media::RendererChoice,
     /// Cut on the exact frame instead of moving cuts to keyframes. With an
     /// H.264 source and the system's x264, only the frames from a cut to
     /// the next keyframe are re-encoded and the rest is copied (smart
@@ -567,6 +573,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 }
             }
             let overrides = media::RenderOverrides {
+                renderer: args.renderer,
                 crf: args.crf,
                 preset: args.preset.clone(),
                 no_audio: args.no_audio,
@@ -837,6 +844,7 @@ fn run_verb(
     let mut loaded = load_text(&text, &compiled.root, true, false);
     loaded.diagnostics.extend(extra);
     let overrides = media::RenderOverrides {
+        renderer: media::RendererChoice::Auto,
         crf: encode.crf,
         preset: encode.preset.clone(),
         no_audio: encode.no_audio,

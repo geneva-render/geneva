@@ -56,6 +56,14 @@ pub enum RenderError {
         /// Composition duration.
         duration: Ratio,
     },
+    /// The renderer's device failed, or cannot do what the frame needs:
+    /// a GPU that was lost, or ran out of memory, or a renderer that
+    /// does not draw yet. The CPU renderer never returns it.
+    #[error("the renderer's device failed: {reason}")]
+    Backend {
+        /// What went wrong.
+        reason: String,
+    },
 }
 
 impl RenderError {
@@ -65,6 +73,7 @@ impl RenderError {
             Self::Unsupported { .. } => "E500",
             Self::Asset { .. } => "E501",
             Self::OutOfRange { .. } => "E502",
+            Self::Backend { .. } => "E503",
         }
     }
 }

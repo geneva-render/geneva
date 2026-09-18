@@ -12,10 +12,14 @@ name = "geneva"
 path = "src/main.rs"
 
 [features]
-default = ["media"]
+default = ["media", "gpu"]
 # Media probing, video decoding and rendering to files, with the media
 # libraries built by scripts/build-media-libs.sh linked statically.
 media = ["geneva-media/media"]
+# The GPU renderer (crates/geneva-gpu, on wgpu), picked by `render
+# --renderer`. Pure Rust; the device is found at run time, so a build with
+# it runs on a machine without one.
+gpu = ["dep:geneva-gpu"]
 # Speech denoising with the DeepFilterNet model embedded in the binary,
 # under --denoise and output.audio.denoise.
 denoise = ["media", "geneva-media/denoise"]
@@ -25,6 +29,7 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 geneva-audio = { workspace = true }
 geneva-color = { workspace = true }
+geneva-gpu = { workspace = true, optional = true }
 geneva-media = { workspace = true }
 geneva-render = { workspace = true }
 geneva-timeline = { workspace = true }

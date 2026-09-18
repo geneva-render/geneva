@@ -8,6 +8,7 @@ members = [
     "crates/geneva-html",
     "crates/geneva-render",
     "crates/geneva-golden",
+    "crates/geneva-gpu",
     "crates/geneva-media",
     "crates/geneva-media-link",
     "crates/geneva-cli",
@@ -16,7 +17,7 @@ members = [
 [workspace.package]
 version = "0.5.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.87"
 license = "MIT"
 repository = "https://github.com/geneva-render/geneva"
 homepage = "https://github.com/geneva-render/geneva"
@@ -30,6 +31,7 @@ geneva-timeline = { path = "crates/geneva-timeline", version = "0.5.0" }
 geneva-html = { path = "crates/geneva-html", version = "0.5.0" }
 geneva-render = { path = "crates/geneva-render", version = "0.5.0" }
 geneva-golden = { path = "crates/geneva-golden", version = "0.5.0" }
+geneva-gpu = { path = "crates/geneva-gpu", version = "0.5.0" }
 geneva-media = { path = "crates/geneva-media", version = "0.5.0", default-features = false }
 geneva-media-link = { path = "crates/geneva-media-link", version = "0.5.0" }
 
@@ -45,6 +47,8 @@ thiserror = "2.0"
 cosmic-text = { version = "0.19", default-features = false, features = ["std", "swash"] }
 swash = "0.2"
 taffy = { version = "0.9", default-features = false, features = ["std", "flexbox", "block_layout", "content_size", "calc", "taffy_tree"] }
+pollster = "0.4"
+wgpu = { version = "30", default-features = false, features = ["vulkan", "metal", "dx12", "wgsl"] }
 ffmpeg-next = { version = "9", default-features = false, features = ["codec", "format", "software-scaling", "software-resampling"] }
 
 [workspace.lints.rust]

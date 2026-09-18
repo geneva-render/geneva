@@ -131,6 +131,7 @@ These are produced when rendering, not by `validate`.
 | E500 | The clip uses a source kind this renderer does not implement yet. |
 | E501 | An asset file could not be opened, read or decoded. With `--probe` this is reported at validation time, at `/assets/<id>/src`. |
 | E502 | The requested time is outside the composition. |
+| E503 | The renderer's device failed or cannot do what the frame needs (a GPU lost or out of memory). The CPU renderer never reports it. |
 
 ## Notes from rendering
 

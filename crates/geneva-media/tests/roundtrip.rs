@@ -1301,7 +1301,11 @@ fn stripes_frame(width: u32, height: u32, period: usize) -> Frame {
     let mut frame = Frame::new(width, height, Color::BLACK);
     let w = width as usize;
     for (i, px) in frame.pixels_mut().iter_mut().enumerate() {
-        let v = if (i % w) / period % 2 == 0 { 30 } else { 225 };
+        let v = if ((i % w) / period).is_multiple_of(2) {
+            30
+        } else {
+            225
+        };
         *px = Color::from_rgba8(v, v, v, 255).to_linear();
     }
     frame

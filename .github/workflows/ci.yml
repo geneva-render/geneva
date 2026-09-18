@@ -34,7 +34,7 @@ jobs:
           key: media-${{ hashFiles('scripts/build-media-libs.sh') }}
       - name: Install build tools (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake meson ninja-build nasm pkg-config clang zlib1g-dev libx264-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake meson ninja-build nasm pkg-config clang zlib1g-dev libx264-dev mesa-vulkan-drivers
       - name: Install build tools (macOS)
         if: runner.os == 'macOS'
         run: brew install cmake meson ninja nasm pkg-config
@@ -66,7 +66,7 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test --workspace --no-default-features
       - name: Schema is up to date
-        run: cargo run -q -p geneva-cli -- schema | diff - schema/geneva-timeline-0.3.schema.json
+        run: cargo run -q -p geneva-cli -- schema | diff - schema/geneva-timeline-0.4.schema.json
       - name: Upload golden failures
         if: failure()
         uses: actions/upload-artifact@v4

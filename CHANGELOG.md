@@ -7,6 +7,21 @@ the format version it was written for.
 
 ## Unreleased
 
+### Added
+
+- **The start of the GPU renderer.** A new crate, `geneva-gpu`, finds a
+  device through `wgpu` (Vulkan on Linux, Metal on macOS, DirectX 12 on
+  Windows; a software implementation such as Mesa's lavapipe when asked
+  for) and checks it can render and blend the working format. `render
+  --renderer auto|cpu|gpu` chooses the renderer: `auto` is the GPU where
+  one can be used and the CPU otherwise, `gpu` takes any device and
+  falls back to the CPU with a note when none opens. Nothing draws on
+  the device yet, so every choice composites on the CPU for now, and
+  `gpu` reports what it found. The crate is behind the CLI's `gpu`
+  feature, on by default; the minimum Rust version moves to 1.87.
+- **E503** for a renderer whose device fails; the CPU renderer never
+  reports it.
+
 ### Changed
 
 - **Markup can name a font asset.** Every `font` asset of a document is

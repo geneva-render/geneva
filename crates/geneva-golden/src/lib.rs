@@ -17,5 +17,5 @@ pub use audio::{AudioComparison, AudioTolerance, Samples, compare_audio, from_wa
 pub use compare::{Comparison, Rgba8Image, Tolerance, compare, diff_image};
 pub use runner::{
     AudioOutcome, CaseOutcome, FrameOutcome, GoldenError, Mix, discover_cases, run_case,
-    run_case_with,
+    run_case_on, run_case_with,
 };

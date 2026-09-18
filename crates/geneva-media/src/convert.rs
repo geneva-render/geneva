@@ -248,7 +248,7 @@ pub fn yuv420p8_into(
             // it is interpolated with: the one above for an even row, the
             // one below for an odd row, at a quarter of the weight.
             let cy = row / 2;
-            let other = if row % 2 == 0 {
+            let other = if row.is_multiple_of(2) {
                 cy.saturating_sub(1)
             } else {
                 (cy + 1).min(ch - 1)
@@ -268,7 +268,7 @@ pub fn yuv420p8_into(
             }
             for (x, px) in out.iter_mut().enumerate() {
                 let cx = x / 2;
-                let (cbn, crn) = if x % 2 == 0 {
+                let (cbn, crn) = if x.is_multiple_of(2) {
                     chroma[cx]
                 } else {
                     let (a, b) = (chroma[cx], chroma[(cx + 1).min(cw - 1)]);
@@ -599,8 +599,8 @@ pub fn frame_to_planes_into(
     // one pass per pair of rows over 2×2 blocks with no per-sample
     // branching, which is what the generic loop below costs most on.
     if format == PlaneFormat::Yuv420p8
-        && w % 2 == 0
-        && height % 2 == 0
+        && w.is_multiple_of(2)
+        && height.is_multiple_of(2)
         && hdr_lut.is_none()
         && to_output.is_none()
     {

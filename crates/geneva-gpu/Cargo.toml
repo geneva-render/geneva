@@ -1,0 +1,22 @@
+[package]
+name = "geneva-gpu"
+description = "The GPU renderer of the Geneva engine, on wgpu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+geneva-color = { workspace = true }
+geneva-render = { workspace = true }
+geneva-timeline = { workspace = true }
+pollster = { workspace = true }
+thiserror = { workspace = true }
+wgpu = { workspace = true }
+
+[dev-dependencies]
+geneva-golden = { workspace = true }
+
+[lints]
+workspace = true

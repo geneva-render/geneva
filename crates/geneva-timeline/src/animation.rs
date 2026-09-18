@@ -35,7 +35,7 @@ impl Direction {
             Self::Normal => false,
             Self::Reverse => true,
             Self::Alternate => i % 2 == 1,
-            Self::AlternateReverse => i % 2 == 0,
+            Self::AlternateReverse => i.is_multiple_of(2),
         }
     }
 }

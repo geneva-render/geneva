@@ -688,7 +688,7 @@ fn human_seconds(secs: f64) -> String {
     let s = secs.round() as u64;
     if s >= 3600 {
         format!("{} h", s / 3600)
-    } else if s >= 60 && s % 60 == 0 {
+    } else if s >= 60 && s.is_multiple_of(60) {
         format!("{} min", s / 60)
     } else if s >= 60 {
         format!("{}:{:02} min", s / 60, s % 60)

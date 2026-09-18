@@ -229,6 +229,21 @@ pub fn run_case_with(
     failure_dir: &Path,
     mix: Option<&Mix>,
 ) -> Result<CaseOutcome, GoldenError> {
+    let mut cpu =
+        |root: &Path| -> Box<dyn Renderer> { Box::new(CpuRenderer::with_asset_root(root)) };
+    run_case_on(case_dir, failure_dir, &mut cpu, mix)
+}
+
+/// [`run_case_with`] on a renderer of the caller's choosing, built for
+/// the golden root (the case's parent, which asset paths are relative
+/// to). This is how a second renderer is checked against the references
+/// the CPU renderer wrote, under the case's tolerance.
+pub fn run_case_on(
+    case_dir: &Path,
+    failure_dir: &Path,
+    make: &mut dyn FnMut(&Path) -> Box<dyn Renderer>,
+    mix: Option<&Mix>,
+) -> Result<CaseOutcome, GoldenError> {
     let name = case_dir
         .file_name()
         .and_then(|n| n.to_str())
@@ -264,7 +279,7 @@ pub fn run_case_with(
         return Err(GoldenError::Scene(text));
     };
     let update = std::env::var_os(UPDATE_ENV).is_some();
-    let mut renderer = CpuRenderer::with_asset_root(root);
+    let mut renderer = make(root);
     let expected_dir = case_dir.join("expected");
     let mut frames = Vec::new();
     for time_text in &spec.frames {
