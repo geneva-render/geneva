@@ -261,14 +261,9 @@ impl Placement {
 
     /// The same placement in another frame: output coordinates are moved
     /// by `offset` and then multiplied by `factor`, and the bounds are
-    /// clamped to the new frame's size.
-    pub(crate) fn moved(
-        &self,
-        offset: [f64; 2],
-        factor: f64,
-        frame_w: u32,
-        frame_h: u32,
-    ) -> Option<Self> {
+    /// clamped to the new frame's size. This is how a clip is drawn onto
+    /// the layer a blur runs on.
+    pub fn moved(&self, offset: [f64; 2], factor: f64, frame_w: u32, frame_h: u32) -> Option<Self> {
         let position = [
             (self.position[0] + offset[0]) * factor,
             (self.position[1] + offset[1]) * factor,

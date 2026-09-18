@@ -208,9 +208,8 @@ pub enum RendererChoice {
 }
 
 /// What the choice of renderer came to, as notes for the report. The
-/// GPU renderer draws everything but the blur effect so far and the
-/// render loop is not on it yet, so every choice composites on the
-/// CPU;
+/// GPU renderer draws everything the CPU renderer draws, but the render
+/// loop is not on it yet, so every choice composites on the CPU;
 /// asking for the GPU probes the device and says what was found, which
 /// is the fallback path exercised end to end.
 #[cfg(feature = "media")]

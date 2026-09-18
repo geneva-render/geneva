@@ -24,14 +24,18 @@ the format version it was written for.
   budget, and an 8-bit 4:2:0 video frame goes up as its planes and is
   converted to linear light on the device by the same arithmetic as
   the CPU conversion (HDR, RGB and rotated frames go up as the picture
-  the decoder converts). The blur effect is refused by name (E500)
-  until it is built. The render loop does not use it yet, so every choice still
+  the decoder converts), and a blurred clip is drawn onto a layer and
+  blurred by the same three box blurs, in f32 as on the CPU. The render loop does not use it yet, so every choice still
   composites on the CPU, and `gpu` reports what it found. A new golden
   case, `tests/golden/masks-and-fades`, pins masks (shape, feather,
   invert, luma) and transitions (crossfade, fade) down on both
-  renderers; neither had a reference frame before. `AssetSource` gains
-  `video_planes`, which the media asset source answers for frames the
-  decoder holds as 8-bit 4:2:0 SDR shown unrotated. The crate is
+  renderers; neither had a reference frame before, and neither had the
+  blur effect, which `tests/golden/blur` now pins down (a wide blur on
+  a cover-fit image, a small one on a moving shape, an animated one
+  under a screen blend, a blurred masked shape at the frame's edge).
+  `AssetSource` gains `video_planes`, which the media asset source
+  answers for frames the decoder holds as 8-bit 4:2:0 SDR shown
+  unrotated. The crate is
   behind the CLI's `gpu` feature, on by default; the minimum Rust
   version moves to 1.87.
 - **E503** for a renderer whose device fails; the CPU renderer never

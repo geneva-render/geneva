@@ -3,8 +3,8 @@
 //! frame's planes, nested compositions, the backdrop copy a separable
 //! blend reads), the target and its readback.
 //!
-//! What draws here is what `composite.wgsl` transcribes from the CPU
-//! renderer and the media crate: every source but a blurred one. Solids
+//! What draws here is what `composite.wgsl` and `blur.wgsl` transcribe
+//! from the CPU renderer and the media crate: every source. Solids
 //! and shapes are described to the shader; image assets, text and
 //! markup are painted by the shared [`Painter`] and uploaded as
 //! textures, kept under the painter's key while a byte budget allows;
@@ -14,27 +14,29 @@
 //! drawn into a pooled texture first. Clips are placed through the same
 //! [`Placement`] the reference uses, through shape and luma masks, at
 //! the clip's opacity with its transitions, blended by any of the
-//! format's modes, with a fade's veil over the result. The blur effect
-//! is refused with [`RenderError::Unsupported`] until its step of the
-//! plan.
+//! format's modes, with a fade's veil over the result. A blurred clip is
+//! drawn onto a transparent layer sized and downscaled as the CPU sizes
+//! it, blurred by the same three box blurs as row and column passes
+//! (`blur.wgsl`), and laid back with one bilinear sample per pixel.
 //!
-//! A frame is a list of passes, nested compositions first: each renders
-//! its layers into a texture (a pooled one for a nested composition, the
-//! frame's own for the top). Normal and add blending are fixed-function;
-//! a separable mode ends the pass, copies the target to a backdrop
-//! texture, and draws with a pipeline that replaces the pixel with what
-//! the shader composites from the copy.
+//! A frame is a list of passes, nested compositions and blur layers
+//! first: each composition renders its layers into a texture (a pooled
+//! one for a nested composition, the frame's own for the top). Normal
+//! and add blending are fixed-function; a separable mode ends the pass,
+//! copies the target to a backdrop texture, and draws with a pipeline
+//! that replaces the pixel with what the shader composites from the
+//! copy.
 
 use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
 use geneva_color::{Color, LinearRgba, Primaries, Transfer, matrix, primaries};
 use geneva_render::{
-    AssetSource, Frame, Image, Paint, Painter, Placement, RenderError, VideoPlanes, crop_window,
-    fade_veil, transition_gain,
+    AssetSource, Frame, Image, Paint, Painter, Placement, RenderError, VideoPlanes, box_radii,
+    crop_window, fade_veil, transition_gain,
 };
 use geneva_timeline::schema::{BlendMode, ShapeKind};
-use geneva_timeline::{Composition, Ratio, ResolvedLayer, ResolvedSource};
+use geneva_timeline::{Composition, Ratio, ResolvedEffect, ResolvedLayer, ResolvedSource};
 use half::f16;
 
 use crate::device::{Gpu, WORKING_FORMAT};
@@ -118,6 +120,8 @@ enum Tex {
     /// A pooled texture of this frame: a picture made for it, a nested
     /// composition's frame, or a pass's backdrop copy.
     Pooled(usize),
+    /// A blur layer of this frame, at f32.
+    Layer(usize),
 }
 
 /// How a draw lands on the target.
@@ -147,15 +151,41 @@ struct Draw {
     transfer: Transfer,
 }
 
-/// The layers of one composition drawn into one texture.
-struct Pass {
-    /// The frame's own target, or a pooled texture.
-    target: Option<usize>,
-    width: u32,
-    height: u32,
-    background: Color,
-    draws: Vec<Draw>,
+/// One pass of the frame.
+enum Pass {
+    /// The layers of one composition drawn into one texture.
+    Composite {
+        /// The frame's own target, or a pooled texture.
+        target: Option<usize>,
+        width: u32,
+        height: u32,
+        background: Color,
+        draws: Vec<Draw>,
+    },
+    /// A clip drawn onto a transparent blur layer.
+    Layer { target: usize, draw: Box<Draw> },
+    /// One box blur of a layer into another, along the rows or down the
+    /// columns.
+    Blur {
+        from: usize,
+        to: usize,
+        radius: u32,
+        vertical: bool,
+    },
 }
+
+/// What one box blur pass tells `blur.wgsl`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+struct BoxUniform {
+    radius: i32,
+    vertical: u32,
+    _pad: [u32; 2],
+}
+
+/// The format of blur layers: the CPU blurs in f32 and so does this,
+/// rather than rounding to halves between six passes.
+const LAYER_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 
 /// A picture kept on the device.
 struct Kept {
@@ -193,11 +223,19 @@ pub(crate) struct Compositor {
     add: wgpu::RenderPipeline,
     separable: wgpu::RenderPipeline,
     veil: wgpu::RenderPipeline,
+    /// The composite onto a transparent blur layer, at f32.
+    layer: wgpu::RenderPipeline,
+    blur: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
+    blur_layout: wgpu::BindGroupLayout,
     /// One slot per draw, `slot` bytes apart, bound at a dynamic offset.
     uniforms: wgpu::Buffer,
     slot: u64,
     capacity: usize,
+    /// One slot per blur pass.
+    blur_uniforms: wgpu::Buffer,
+    blur_slot: u64,
+    blur_capacity: usize,
     /// A 1x1 transparent texture bound where a draw has no picture.
     blank: wgpu::TextureView,
     /// A 1x1 texture of the planes' format, bound where a draw has none.
@@ -212,6 +250,8 @@ pub(crate) struct Compositor {
     pool: Vec<Pooled>,
     /// Plane textures by size.
     planes: Vec<Pooled>,
+    /// Blur layers by size, at f32.
+    layers: Vec<Pooled>,
     /// The transfer tables uploaded so far.
     luts: HashMap<Transfer, wgpu::Buffer>,
     /// The passes of the frame being planned, nested compositions first.
@@ -275,54 +315,61 @@ impl Compositor {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline = |label: &str, blend: wgpu::BlendState| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    buffers: &[],
-                },
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: WORKING_FORMAT,
-                        blend: Some(blend),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
+        let pipeline =
+            |label: &str, format: wgpu::TextureFormat, blend: Option<wgpu::BlendState>| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(&pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("vs_main"),
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        buffers: &[],
+                    },
+                    primitive: wgpu::PrimitiveState::default(),
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some("fs_main"),
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format,
+                            blend,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            };
         // Premultiplied "over": src + dst * (1 - src.a), every channel.
         let normal = pipeline(
             "geneva composite normal",
-            wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+            WORKING_FORMAT,
+            Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         );
         // Add: the colors sum; the alpha is sa + da - sa * da, which is
         // "over" on the alpha channel.
         let add = pipeline(
             "geneva composite add",
-            wgpu::BlendState {
+            WORKING_FORMAT,
+            Some(wgpu::BlendState {
                 color: wgpu::BlendComponent {
                     src_factor: wgpu::BlendFactor::One,
                     dst_factor: wgpu::BlendFactor::One,
                     operation: wgpu::BlendOperation::Add,
                 },
                 alpha: wgpu::BlendComponent::OVER,
-            },
+            }),
         );
         // The shader composites from the backdrop copy and its result
         // replaces the pixel.
-        let separable = pipeline("geneva composite separable", wgpu::BlendState::REPLACE);
+        let separable = pipeline(
+            "geneva composite separable",
+            WORKING_FORMAT,
+            Some(wgpu::BlendState::REPLACE),
+        );
         // dst * (1 - a) + fill * a on every channel, `a` the blend
         // constant: Frame::veil.
         let constant = wgpu::BlendComponent {
@@ -332,15 +379,75 @@ impl Compositor {
         };
         let veil = pipeline(
             "geneva composite veil",
-            wgpu::BlendState {
+            WORKING_FORMAT,
+            Some(wgpu::BlendState {
                 color: constant,
                 alpha: constant,
-            },
+            }),
         );
+        // Onto a transparent layer, writing the sample as it is, which is
+        // "over" onto transparency; f32 targets cannot blend without a
+        // feature and need not here.
+        let layer = pipeline("geneva composite layer", LAYER_FORMAT, None);
+        let blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("geneva blur"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("blur.wgsl").into()),
+        });
+        let blur_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("geneva blur"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<BoxUniform>() as u64
+                        ),
+                    },
+                    count: None,
+                },
+                texture_entry(1, float),
+            ],
+        });
+        let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("geneva blur"),
+            bind_group_layouts: &[Some(&blur_layout)],
+            immediate_size: 0,
+        });
+        let blur = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("geneva blur"),
+            layout: Some(&blur_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &blur_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &blur_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: LAYER_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let align = u64::from(device.limits().min_uniform_buffer_offset_alignment);
         let slot = uniform_size.div_ceil(align) * align;
         let capacity = 64;
         let uniforms = uniform_buffer(device, slot, capacity);
+        let blur_slot = (std::mem::size_of::<BoxUniform>() as u64).div_ceil(align) * align;
+        let blur_capacity = 16;
+        let blur_uniforms = uniform_buffer(device, blur_slot, blur_capacity);
         let blank = make_texture(device, "geneva blank", WORKING_FORMAT, 1, 1, false)
             .create_view(&wgpu::TextureViewDescriptor::default());
         let blank_plane = make_texture(
@@ -357,10 +464,16 @@ impl Compositor {
             add,
             separable,
             veil,
+            layer,
+            blur,
             layout,
+            blur_layout,
             uniforms,
             slot,
             capacity,
+            blur_uniforms,
+            blur_slot,
+            blur_capacity,
             blank,
             blank_plane,
             target: None,
@@ -369,6 +482,7 @@ impl Compositor {
             tick: 0,
             pool: Vec::new(),
             planes: Vec::new(),
+            layers: Vec::new(),
             luts: HashMap::new(),
             passes: Vec::new(),
         };
@@ -401,7 +515,12 @@ impl Compositor {
             self.target = Some(make_target(device, width, height));
         }
         self.tick += 1;
-        for p in self.pool.iter_mut().chain(self.planes.iter_mut()) {
+        for p in self
+            .pool
+            .iter_mut()
+            .chain(self.planes.iter_mut())
+            .chain(self.layers.iter_mut())
+        {
             p.busy = false;
         }
         self.passes.clear();
@@ -455,12 +574,14 @@ impl Compositor {
                 if opacity <= 0.0 {
                     continue;
                 }
-                if !clip.effects.is_empty() {
-                    return Err(RenderError::Unsupported {
-                        what: "the blur effect".to_owned(),
-                        path: clip.path.clone(),
-                    });
-                }
+                // The blurs on the clip, combined into one deviation.
+                let sigma = clip
+                    .effects
+                    .iter()
+                    .map(|e| match e {
+                        ResolvedEffect::Blur(radius) => radius.sample(local).max(0.0),
+                    })
+                    .fold(0.0f64, |acc, s| (acc * acc + s * s).sqrt());
                 let mut uniform = ClipUniform {
                     frame: frame_size,
                     opacity: opacity as f32,
@@ -587,37 +708,22 @@ impl Compositor {
                         },
                     };
                 }
-                uniform.bounds = place.bounds.map(|v| v as f32);
-                uniform.window = place.window.map(|v| v as f32);
-                uniform.position = place.position.map(|v| v as f32);
-                uniform.anchor = place.anchor.map(|v| v as f32);
-                uniform.scale = place.scale.map(|v| v as f32);
-                uniform.rotation = [place.cos as f32, place.sin as f32];
-                uniform.size = [size.0 as f32, size.1 as f32];
-                uniform.mode = if place.pixel_aligned {
-                    MODE_CENTER
-                } else if uniform.kind == KIND_IMAGE
-                    && place.axis_aligned()
-                    && uniform.mask_kind == MASK_NONE
-                    && place.scale[0].abs() >= 1.0
-                    && place.scale[1].abs() >= 1.0
-                {
-                    let interior = place.interior(size.0 as u32, size.1 as u32);
-                    uniform.interior = interior.map(|v| v as f32);
-                    MODE_SPANS
-                } else {
-                    MODE_SUBSAMPLES
-                };
+                set_placement(&mut uniform, &place, size);
                 let (blending, code) = blending(clip.blend);
                 uniform.blend = code;
-                draws.push(Draw {
+                let draw = Draw {
                     uniform,
                     blending,
                     image,
                     mask,
                     planes,
                     transfer,
-                });
+                };
+                if sigma > 0.0 {
+                    self.plan_blur(gpu, &mut draws, draw, &place, sigma, width, height);
+                } else {
+                    draws.push(draw);
+                }
             }
         }
         // A fade dips the picture through a color, so the veil goes over
@@ -647,7 +753,7 @@ impl Compositor {
                 });
             }
         }
-        self.passes.push(Pass {
+        self.passes.push(Pass::Composite {
             target,
             width,
             height,
@@ -655,6 +761,115 @@ impl Compositor {
             draws,
         });
         Ok(())
+    }
+
+    /// Plans a blurred clip as the CPU renderer draws one: the clip goes
+    /// onto a transparent layer covering everything its blur can reach
+    /// in the frame, `k` times smaller for a wide blur, the layer is
+    /// blurred by three box blurs each way, and the result is laid onto
+    /// the frame at the clip's opacity and blend mode, one bilinear
+    /// sample per pixel.
+    #[allow(clippy::too_many_arguments)]
+    fn plan_blur(
+        &mut self,
+        gpu: &Gpu,
+        draws: &mut Vec<Draw>,
+        draw: Draw,
+        place: &Placement,
+        sigma: f64,
+        width: u32,
+        height: u32,
+    ) {
+        let reach = (3.0 * sigma).ceil();
+        let (fw, fh) = (f64::from(width), f64::from(height));
+        let x0 = (place.extent[0] - reach).max(-reach).floor();
+        let y0 = (place.extent[1] - reach).max(-reach).floor();
+        let x1 = (place.extent[2] + reach).min(fw + reach).ceil();
+        let y1 = (place.extent[3] + reach).min(fh + reach).ceil();
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let k = if sigma >= 4.0 {
+            (sigma / 2.0).floor().min(8.0)
+        } else {
+            1.0
+        };
+        let lw = ((x1 - x0) / k).ceil().max(1.0) as u32;
+        let lh = ((y1 - y0) / k).ceil().max(1.0) as u32;
+        // Nothing of the clip lands on the layer: the blurred layer is
+        // transparent and lays nothing.
+        let Some(moved) = place.moved([-x0, -y0], 1.0 / k, lw, lh) else {
+            return;
+        };
+        let size = (
+            f64::from(draw.uniform.size[0]),
+            f64::from(draw.uniform.size[1]),
+        );
+        let mut on_layer = draw.uniform;
+        set_placement(&mut on_layer, &moved, size);
+        on_layer.frame = [lw as f32, lh as f32];
+        on_layer.opacity = 1.0;
+        on_layer.blend = 0;
+        let first = self.acquire_layer(gpu, lw, lh);
+        self.passes.push(Pass::Layer {
+            target: first,
+            draw: Box::new(Draw {
+                uniform: on_layer,
+                blending: Blending::Normal,
+                image: draw.image,
+                mask: draw.mask,
+                planes: draw.planes,
+                transfer: draw.transfer,
+            }),
+        });
+        let (mut from, mut to) = (first, self.acquire_layer(gpu, lw, lh));
+        for radius in box_radii(sigma / k) {
+            if radius == 0 {
+                continue;
+            }
+            for vertical in [false, true] {
+                self.passes.push(Pass::Blur {
+                    from,
+                    to,
+                    radius: radius as u32,
+                    vertical,
+                });
+                std::mem::swap(&mut from, &mut to);
+            }
+        }
+        // The layer laid back (composite_layer): its pixel (0, 0) at the
+        // layer's origin, each pixel `k` frame pixels wide, one sample at
+        // each frame pixel's center.
+        let bx0 = x0.max(0.0) as u32;
+        let by0 = y0.max(0.0) as u32;
+        let bx1 = ((x0 + f64::from(lw) * k).ceil().max(0.0) as u32).min(width);
+        let by1 = ((y0 + f64::from(lh) * k).ceil().max(0.0) as u32).min(height);
+        if bx0 >= bx1 || by0 >= by1 {
+            return;
+        }
+        let laid = ClipUniform {
+            bounds: [bx0 as f32, by0 as f32, bx1 as f32, by1 as f32],
+            window: [0.0, 0.0, lw as f32, lh as f32],
+            position: [x0 as f32, y0 as f32],
+            anchor: [0.0, 0.0],
+            scale: [k as f32, k as f32],
+            rotation: [1.0, 0.0],
+            size: [lw as f32, lh as f32],
+            frame: draw.uniform.frame,
+            opacity: draw.uniform.opacity,
+            kind: KIND_IMAGE,
+            mode: MODE_CENTER,
+            blend: draw.uniform.blend,
+            ..ClipUniform::zeroed()
+        };
+        draws.push(Draw {
+            uniform: laid,
+            blending: draw.blending,
+            image: Tex::Layer(from),
+            mask: Tex::Blank,
+            planes: None,
+            transfer: Transfer::Srgb,
+        });
     }
 
     /// The picture under `key`, uploaded on first use and kept while
@@ -765,6 +980,11 @@ impl Compositor {
         acquire_in(&mut self.pool, gpu, WORKING_FORMAT, width, height, true)
     }
 
+    /// A pooled blur layer of this size for the frame.
+    fn acquire_layer(&mut self, gpu: &Gpu, width: u32, height: u32) -> usize {
+        acquire_in(&mut self.layers, gpu, LAYER_FORMAT, width, height, true)
+    }
+
     /// A pooled plane texture of this size for the frame.
     fn acquire_plane(&mut self, gpu: &Gpu, width: u32, height: u32) -> usize {
         acquire_in(
@@ -782,7 +1002,64 @@ impl Compositor {
             Tex::Blank => &self.blank,
             Tex::Cached(key) => &self.kept[key].view,
             Tex::Pooled(i) => &self.pool[*i].view,
+            Tex::Layer(i) => &self.layers[*i].view,
         }
+    }
+
+    /// The bindings of one composite draw.
+    fn bind_group(
+        &self,
+        device: &wgpu::Device,
+        d: &Draw,
+        backdrop: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        let plane = |k: usize| match d.planes {
+            Some(p) => &self.planes[p[k]].view,
+            None => &self.blank_plane,
+        };
+        let uniform = wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+            buffer: &self.uniforms,
+            offset: 0,
+            size: wgpu::BufferSize::new(std::mem::size_of::<ClipUniform>() as u64),
+        });
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("geneva clip"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform,
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(self.view(&d.image)),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(self.view(&d.mask)),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(backdrop),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(plane(0)),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(plane(1)),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(plane(2)),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: self.luts[&d.transfer].as_entire_binding(),
+                },
+            ],
+        })
     }
 
     fn texture_of(&self, target: Option<usize>) -> (&wgpu::Texture, &wgpu::TextureView) {
@@ -800,148 +1077,193 @@ impl Compositor {
     fn execute(&mut self, gpu: &Gpu) {
         let device = gpu.device();
         let passes = std::mem::take(&mut self.passes);
-        let total: usize = passes.iter().map(|p| p.draws.len()).sum();
-        if total > self.capacity {
+        // Every composite draw's uniforms go up in one write, each at
+        // its slot, in the order the passes draw them; the blur passes'
+        // in another.
+        let draws: Vec<&Draw> = passes
+            .iter()
+            .flat_map(|p| match p {
+                Pass::Composite { draws, .. } => draws.iter().collect::<Vec<_>>(),
+                Pass::Layer { draw, .. } => vec![draw.as_ref()],
+                Pass::Blur { .. } => Vec::new(),
+            })
+            .collect();
+        if draws.len() > self.capacity {
             let mut capacity = self.capacity;
-            while capacity < total {
+            while capacity < draws.len() {
                 capacity *= 2;
             }
             self.uniforms = uniform_buffer(device, self.slot, capacity);
             self.capacity = capacity;
         }
-        // Every draw's uniforms go up in one write, each at its slot.
-        let mut bytes = vec![0u8; self.slot as usize * total.max(1)];
-        for (i, d) in passes.iter().flat_map(|p| &p.draws).enumerate() {
+        let mut bytes = vec![0u8; self.slot as usize * draws.len().max(1)];
+        for (i, d) in draws.iter().enumerate() {
             let at = i * self.slot as usize;
             bytes[at..at + std::mem::size_of::<ClipUniform>()]
                 .copy_from_slice(bytemuck::bytes_of(&d.uniform));
         }
         gpu.queue().write_buffer(&self.uniforms, 0, &bytes);
+        let boxes: Vec<BoxUniform> = passes
+            .iter()
+            .filter_map(|p| match p {
+                Pass::Blur {
+                    radius, vertical, ..
+                } => Some(BoxUniform {
+                    radius: *radius as i32,
+                    vertical: u32::from(*vertical),
+                    _pad: [0; 2],
+                }),
+                _ => None,
+            })
+            .collect();
+        if boxes.len() > self.blur_capacity {
+            let mut capacity = self.blur_capacity;
+            while capacity < boxes.len() {
+                capacity *= 2;
+            }
+            self.blur_uniforms = uniform_buffer(device, self.blur_slot, capacity);
+            self.blur_capacity = capacity;
+        }
+        let mut bytes = vec![0u8; self.blur_slot as usize * boxes.len().max(1)];
+        for (i, b) in boxes.iter().enumerate() {
+            let at = i * self.blur_slot as usize;
+            bytes[at..at + std::mem::size_of::<BoxUniform>()]
+                .copy_from_slice(bytemuck::bytes_of(b));
+        }
+        gpu.queue().write_buffer(&self.blur_uniforms, 0, &bytes);
         // Every transfer table a draw reads exists before the bind groups
         // are made, and a pass with a separable blend reads a copy of its
         // target.
-        for d in passes.iter().flat_map(|p| &p.draws) {
+        for d in &draws {
             self.lut(gpu, d.transfer);
         }
         let backdrops: Vec<Option<usize>> = passes
             .iter()
-            .map(|p| {
-                p.draws
+            .map(|p| match p {
+                Pass::Composite {
+                    draws,
+                    width,
+                    height,
+                    ..
+                } => draws
                     .iter()
                     .any(|d| matches!(d.blending, Blending::Separable))
-                    .then(|| self.acquire(gpu, p.width, p.height))
+                    .then(|| self.acquire(gpu, *width, *height)),
+                _ => None,
             })
             .collect();
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("geneva frame"),
         });
         let mut next_slot = 0u64;
+        let mut next_box = 0u64;
+        let transparent = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
         for (pass, backdrop) in passes.iter().zip(&backdrops) {
-            let (target, view) = self.texture_of(pass.target);
-            let backdrop_view = backdrop.map_or(&self.blank, |i| &self.pool[i].view);
-            let bind_groups: Vec<wgpu::BindGroup> = pass
-                .draws
-                .iter()
-                .map(|d| {
-                    let plane = |k: usize| match d.planes {
-                        Some(p) => &self.planes[p[k]].view,
-                        None => &self.blank_plane,
-                    };
-                    device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("geneva clip"),
-                        layout: &self.layout,
+            match pass {
+                Pass::Composite {
+                    target,
+                    width,
+                    height,
+                    background,
+                    draws,
+                } => {
+                    let (target, view) = self.texture_of(*target);
+                    let backdrop_view = backdrop.map_or(&self.blank, |i| &self.pool[i].view);
+                    let bind_groups: Vec<wgpu::BindGroup> = draws
+                        .iter()
+                        .map(|d| self.bind_group(device, d, backdrop_view))
+                        .collect();
+                    let clear = background.to_linear();
+                    let mut rpass = begin(
+                        &mut encoder,
+                        view,
+                        wgpu::LoadOp::Clear(wgpu::Color {
+                            r: f64::from(clear.r),
+                            g: f64::from(clear.g),
+                            b: f64::from(clear.b),
+                            a: f64::from(clear.a),
+                        }),
+                    );
+                    for (d, bind_group) in draws.iter().zip(&bind_groups) {
+                        if matches!(d.blending, Blending::Separable) {
+                            // The shader reads what the earlier draws
+                            // left, so the pass ends and the target is
+                            // copied first.
+                            drop(rpass);
+                            let backdrop = &self.pool[backdrop.expect("acquired for the pass")];
+                            encoder.copy_texture_to_texture(
+                                target.as_image_copy(),
+                                backdrop.texture.as_image_copy(),
+                                wgpu::Extent3d {
+                                    width: *width,
+                                    height: *height,
+                                    depth_or_array_layers: 1,
+                                },
+                            );
+                            rpass = begin(&mut encoder, view, wgpu::LoadOp::Load);
+                        }
+                        rpass.set_pipeline(match d.blending {
+                            Blending::Normal => &self.normal,
+                            Blending::Add => &self.add,
+                            Blending::Separable => &self.separable,
+                            Blending::Veil(_) => &self.veil,
+                        });
+                        if let Blending::Veil(a) = d.blending {
+                            let a = f64::from(a);
+                            rpass.set_blend_constant(wgpu::Color {
+                                r: a,
+                                g: a,
+                                b: a,
+                                a,
+                            });
+                        }
+                        let offset = (next_slot * self.slot) as wgpu::DynamicOffset;
+                        next_slot += 1;
+                        rpass.set_bind_group(0, bind_group, &[offset]);
+                        rpass.draw(0..6, 0..1);
+                    }
+                    drop(rpass);
+                }
+                Pass::Layer { target, draw } => {
+                    let bind_group = self.bind_group(device, draw, &self.blank);
+                    let mut rpass = begin(&mut encoder, &self.layers[*target].view, transparent);
+                    rpass.set_pipeline(&self.layer);
+                    let offset = (next_slot * self.slot) as wgpu::DynamicOffset;
+                    next_slot += 1;
+                    rpass.set_bind_group(0, &bind_group, &[offset]);
+                    rpass.draw(0..6, 0..1);
+                }
+                Pass::Blur { from, to, .. } => {
+                    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("geneva blur"),
+                        layout: &self.blur_layout,
                         entries: &[
                             wgpu::BindGroupEntry {
                                 binding: 0,
                                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                                    buffer: &self.uniforms,
+                                    buffer: &self.blur_uniforms,
                                     offset: 0,
                                     size: wgpu::BufferSize::new(
-                                        std::mem::size_of::<ClipUniform>() as u64
+                                        std::mem::size_of::<BoxUniform>() as u64
                                     ),
                                 }),
                             },
                             wgpu::BindGroupEntry {
                                 binding: 1,
-                                resource: wgpu::BindingResource::TextureView(self.view(&d.image)),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 2,
-                                resource: wgpu::BindingResource::TextureView(self.view(&d.mask)),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 3,
-                                resource: wgpu::BindingResource::TextureView(backdrop_view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 4,
-                                resource: wgpu::BindingResource::TextureView(plane(0)),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 5,
-                                resource: wgpu::BindingResource::TextureView(plane(1)),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 6,
-                                resource: wgpu::BindingResource::TextureView(plane(2)),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 7,
-                                resource: self.luts[&d.transfer].as_entire_binding(),
+                                resource: wgpu::BindingResource::TextureView(
+                                    &self.layers[*from].view,
+                                ),
                             },
                         ],
-                    })
-                })
-                .collect();
-            let clear = pass.background.to_linear();
-            let mut rpass = begin(
-                &mut encoder,
-                view,
-                wgpu::LoadOp::Clear(wgpu::Color {
-                    r: f64::from(clear.r),
-                    g: f64::from(clear.g),
-                    b: f64::from(clear.b),
-                    a: f64::from(clear.a),
-                }),
-            );
-            for (d, bind_group) in pass.draws.iter().zip(&bind_groups) {
-                if matches!(d.blending, Blending::Separable) {
-                    // The shader reads what the earlier draws left, so
-                    // the pass ends and the target is copied first.
-                    drop(rpass);
-                    let backdrop = &self.pool[backdrop.expect("acquired for the pass")];
-                    encoder.copy_texture_to_texture(
-                        target.as_image_copy(),
-                        backdrop.texture.as_image_copy(),
-                        wgpu::Extent3d {
-                            width: pass.width,
-                            height: pass.height,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-                    rpass = begin(&mut encoder, view, wgpu::LoadOp::Load);
-                }
-                rpass.set_pipeline(match d.blending {
-                    Blending::Normal => &self.normal,
-                    Blending::Add => &self.add,
-                    Blending::Separable => &self.separable,
-                    Blending::Veil(_) => &self.veil,
-                });
-                if let Blending::Veil(a) = d.blending {
-                    let a = f64::from(a);
-                    rpass.set_blend_constant(wgpu::Color {
-                        r: a,
-                        g: a,
-                        b: a,
-                        a,
                     });
+                    let mut rpass = begin(&mut encoder, &self.layers[*to].view, transparent);
+                    rpass.set_pipeline(&self.blur);
+                    let offset = (next_box * self.blur_slot) as wgpu::DynamicOffset;
+                    next_box += 1;
+                    rpass.set_bind_group(0, &bind_group, &[offset]);
+                    rpass.draw(0..3, 0..1);
                 }
-                let offset = (next_slot * self.slot) as wgpu::DynamicOffset;
-                next_slot += 1;
-                rpass.set_bind_group(0, bind_group, &[offset]);
-                rpass.draw(0..6, 0..1);
             }
-            drop(rpass);
         }
         let target = self.target.as_ref().expect("made for the frame");
         encoder.copy_texture_to_buffer(
@@ -1028,6 +1350,34 @@ fn begin<'e>(
         occlusion_query_set: None,
         multiview_mask: None,
     })
+}
+
+/// Where the draw lands and how it samples: the placement's map, its
+/// bounds, and the sampling rule (one center sample when pixel-aligned,
+/// one center sample inside the interior of an axis-aligned magnified
+/// picture without a mask, four subsamples otherwise).
+fn set_placement(uniform: &mut ClipUniform, place: &Placement, size: (f64, f64)) {
+    uniform.bounds = place.bounds.map(|v| v as f32);
+    uniform.window = place.window.map(|v| v as f32);
+    uniform.position = place.position.map(|v| v as f32);
+    uniform.anchor = place.anchor.map(|v| v as f32);
+    uniform.scale = place.scale.map(|v| v as f32);
+    uniform.rotation = [place.cos as f32, place.sin as f32];
+    uniform.size = [size.0 as f32, size.1 as f32];
+    uniform.mode = if place.pixel_aligned {
+        MODE_CENTER
+    } else if uniform.kind == KIND_IMAGE
+        && place.axis_aligned()
+        && uniform.mask_kind == MASK_NONE
+        && place.scale[0].abs() >= 1.0
+        && place.scale[1].abs() >= 1.0
+    {
+        let interior = place.interior(size.0 as u32, size.1 as u32);
+        uniform.interior = interior.map(|v| v as f32);
+        MODE_SPANS
+    } else {
+        MODE_SUBSAMPLES
+    };
 }
 
 /// The conversion of a video frame's planes, as `yuv420p8_into` sets it

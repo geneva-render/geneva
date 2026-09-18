@@ -1,0 +1,21 @@
+{
+  "geneva": "0.1",
+  "output": { "width": 320, "height": 180, "fps": 30, "duration": "2s", "background": "#182028" },
+  "assets": { "checker": { "src": "image-transform/checker.png" } },
+  "layers": [
+    { "id": "fill", "clips": [ { "source": { "kind": "image", "asset": "checker" }, "fit": "cover",
+        "effects": [ { "kind": "blur", "radius": 30 } ],
+        "transform": { "position": { "x": "50%", "y": "50%" } } } ] },
+    { "id": "card", "clips": [ { "source": { "kind": "shape", "shape": "rect", "width": 140, "height": 80, "fill": "#ffb347", "radius": 16 },
+        "effects": [ { "kind": "blur", "radius": 3 } ],
+        "transform": { "position": { "keyframes": [ { "t": 0, "v": { "x": 90, "y": 70 } }, { "t": "2s", "v": { "x": 130, "y": 100 } } ] } } } ] },
+    { "id": "glow", "clips": [ { "source": { "kind": "shape", "shape": "ellipse", "width": 90, "height": 90, "fill": "#60c0ff" },
+        "effects": [ { "kind": "blur", "radius": { "keyframes": [ { "t": 0, "v": 0 }, { "t": "2s", "v": 12 } ] } } ],
+        "opacity": 0.8, "blend": "screen",
+        "transform": { "position": { "x": 240, "y": 90 } } } ] },
+    { "id": "edge", "clips": [ { "source": { "kind": "shape", "shape": "rect", "width": 60, "height": 60, "fill": "#ffffff" },
+        "effects": [ { "kind": "blur", "radius": 6 } ],
+        "mask": { "shape": "ellipse", "feather": 2 },
+        "transform": { "position": { "x": 300, "y": 170 }, "rotation": 30 } } ] }
+  ]
+}

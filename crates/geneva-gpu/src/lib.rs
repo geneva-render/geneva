@@ -9,7 +9,7 @@
 //! tolerance rather than byte for byte: the same device gives the same
 //! frame every run, and two devices agree to the tolerance.
 //!
-//! What draws so far: everything but the blur effect. Solids, shapes,
+//! What draws: everything the CPU renderer draws. Solids, shapes,
 //! image assets, text, markup, video and nested compositions, placed
 //! through the same [`geneva_render::Placement`] as the reference and
 //! sampled by the same rules, through shape and luma masks, at the
@@ -17,10 +17,10 @@
 //! format, with a fade's veil over the result, and the frame read back
 //! into a [`Frame`]. Text and markup are painted on the CPU by the
 //! shared [`geneva_render::Painter`] and uploaded; an 8-bit 4:2:0 video
-//! frame is uploaded as its planes and converted on the device. A
-//! blurred clip is refused with [`RenderError::Unsupported`] until its
-//! step of the plan. [`Gpu::probe`] picks the adapter, checks what the
-//! compositor needs of it, and describes it in a [`Report`].
+//! frame is uploaded as its planes and converted on the device; a
+//! blurred clip is drawn onto a layer and blurred by the same three box
+//! blurs. [`Gpu::probe`] picks the adapter, checks what the compositor
+//! needs of it, and describes it in a [`Report`].
 
 #![forbid(unsafe_code)]
 

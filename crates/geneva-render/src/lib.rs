@@ -27,7 +27,7 @@ use geneva_timeline::{Composition, Ratio};
 use thiserror::Error;
 
 pub use assets::{AssetSource, FileAssets, Image, NoAssets, VideoPlanes};
-pub use blur::gaussian_blur;
+pub use blur::{box_radii, gaussian_blur};
 pub use cpu::CpuRenderer;
 pub use frame::Frame;
 pub use painter::{Paint, Painted, Painter};

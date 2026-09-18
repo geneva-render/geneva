@@ -76,20 +76,3 @@ fn an_empty_scene_is_its_background_and_times_are_checked() {
         Err(RenderError::OutOfRange { .. })
     ));
 }
-
-#[test]
-fn what_is_not_drawn_yet_is_refused_by_name() {
-    let Ok(gpu) = Gpu::probe(Preference::Any) else {
-        return;
-    };
-    let loaded = load(
-        r##"{"geneva":"0.4","output":{"width":16,"height":16,"fps":30,"duration":"1s"},
-        "layers":[{"clips":[{"source":{"kind":"solid","color":"#fff"},"effects":[{"kind":"blur","radius":4}]}]}]}"##,
-    );
-    let comp = loaded.composition.expect("a valid scene");
-    let mut renderer = GpuRenderer::new(gpu, NoAssets);
-    match renderer.render_frame(&comp, Ratio::ZERO) {
-        Err(RenderError::Unsupported { what, .. }) => assert_eq!(what, "the blur effect"),
-        other => panic!("expected the unsupported error, got {other:?}"),
-    }
-}

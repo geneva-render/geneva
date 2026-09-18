@@ -34,8 +34,10 @@ pub(crate) fn blur_pixels(pixels: &mut [LinearRgba], w: usize, h: usize, sigma: 
 }
 
 /// The radii of three box blurs that together approximate a Gaussian of
-/// standard deviation `sigma`.
-fn box_radii(sigma: f64) -> [usize; 3] {
+/// standard deviation `sigma`; each is applied along the rows and then
+/// down the columns, and a radius of 0 is skipped. Public so that
+/// another renderer blurs by the same three boxes.
+pub fn box_radii(sigma: f64) -> [usize; 3] {
     let n = 3.0;
     let ideal = (12.0 * sigma * sigma / n + 1.0).sqrt();
     let mut lower = ideal.floor() as i64;
