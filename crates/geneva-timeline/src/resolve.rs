@@ -646,6 +646,14 @@ pub trait AssetInfo {
         None
     }
 
+    /// The natural size of a picture or a video asset, for the check on
+    /// a clip that names no `fit`. `None` where the caller cannot tell,
+    /// so validation without files stays quiet.
+    fn size(&self, asset_id: &str, src: &str) -> Option<(u32, u32)> {
+        let _ = (asset_id, src);
+        None
+    }
+
     /// Whether a file under the asset root is there, for a picture markup
     /// points at. `None` where the caller cannot tell, so validation
     /// without files stays quiet.
@@ -2272,6 +2280,7 @@ transitions in over the same join"
             if let Some(crop) = &clip.crop {
                 self.check_crop(crop, &cpath.key("crop"));
             }
+            self.check_fit(clip, frame, &cpath, assets);
             let mask = clip
                 .mask
                 .as_ref()
@@ -2716,6 +2725,97 @@ transitions in over the same join"
     /// A crop's edges must lie inside the source and its size must be
     /// positive; what that means in pixels depends on the source, so the
     /// checks are on the values as written.
+    /// Warns when a clip that names no `fit` lands in the frame in a way
+    /// its author probably did not mean: a picture bigger than the frame
+    /// drawn at its own size, so the edges are cut, or a video
+    /// letterboxed into a small part of the frame.
+    ///
+    /// The defaults are right for what each source is usually for, a
+    /// picture placed where it is put and a video shown whole, and this
+    /// says so where the result is surprising rather than changing them.
+    /// A clip that carries a `crop` or a `scale` is left alone: both are
+    /// a decision about size, and whoever made it does not need telling.
+    fn check_fit(
+        &mut self,
+        clip: &Clip,
+        frame: FrameSize,
+        cpath: &Path,
+        assets: &BTreeMap<String, ResolvedAsset>,
+    ) {
+        if clip.fit.is_some()
+            || clip.crop.is_some()
+            || clip.animation.is_some()
+            || clip.transform.as_ref().is_some_and(|t| t.scale.is_some())
+        {
+            return;
+        }
+        let (asset_id, video) = match &clip.source {
+            Source::Image { asset } => (asset, false),
+            Source::Video { asset, .. } => (asset, true),
+            _ => return,
+        };
+        let Some((sw, sh)) = assets
+            .get(asset_id)
+            .and_then(|a| self.info.size(asset_id, &a.src))
+        else {
+            return;
+        };
+        if sw == 0 || sh == 0 || frame.width == 0 || frame.height == 0 {
+            return;
+        }
+        let (sw, sh) = (f64::from(sw), f64::from(sh));
+        let (fw, fh) = (f64::from(frame.width), f64::from(frame.height));
+        let path = cpath.key("fit");
+        if video {
+            // A video is shown whole, so the question is how much of the
+            // frame is left over. Bars down two sides of a 4:3 picture on
+            // a 16:9 frame are ordinary; a 16:9 picture on a 9:16 frame
+            // reaches under a third of it, which is usually a reframe
+            // nobody asked for.
+            let scale = (fw / sw).min(fh / sh);
+            let covered = (sw * scale * sh * scale) / (fw * fh);
+            if covered < 0.67 {
+                self.push(
+                    Diagnostic::warning(
+                        "W404",
+                        path,
+                        format!(
+                            "the video is {sw:.0}x{sh:.0} in a {fw:.0}x{fh:.0} frame and is shown \
+whole, so it covers {:.0}% of it and the rest is background",
+                            covered * 100.0
+                        ),
+                    )
+                    .with_help(
+                        "that is what \"fit\": \"contain\" does, which is the default for a \
+video; \"cover\" fills the frame and crops the edges instead, and the verbs' --fill blur puts a \
+blurred copy behind",
+                    ),
+                );
+            }
+        } else if sw > fw * 1.05 || sh > fh * 1.05 {
+            // A picture is drawn at its own size, which is what an
+            // overlay wants and what a photo from a camera does not: a
+            // 4000x3000 picture on a 1920x1080 frame shows its middle.
+            let shown = (fw / sw).min(1.0) * (fh / sh).min(1.0);
+            self.push(
+                Diagnostic::warning(
+                    "W404",
+                    path,
+                    format!(
+                        "the picture is {sw:.0}x{sh:.0} in a {fw:.0}x{fh:.0} frame and is drawn at \
+its own size, so about {:.0}% of it is shown and the frame cuts the rest",
+                        shown * 100.0
+                    ),
+                )
+                .with_help(
+                    "that is what \"fit\": \"none\" does, which is the default for a picture, \
+since a picture is usually placed where it is put; \"contain\" shows the whole of it and \"cover\" \
+fills the frame",
+                ),
+            );
+        }
+    }
+
     fn check_crop(&mut self, crop: &Crop, path: &Path) {
         let edges = [("x", crop.x), ("y", crop.y)];
         for (name, v) in edges {

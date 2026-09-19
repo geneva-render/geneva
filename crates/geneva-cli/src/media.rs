@@ -407,6 +407,8 @@ pub struct ProbedAssets {
     /// and checked the way a browser would resolve it.
     root: std::path::PathBuf,
     durations: std::collections::HashMap<String, Ratio>,
+    /// Natural sizes, for the check on a clip that names no `fit`.
+    sizes: std::collections::HashMap<String, (u32, u32)>,
     /// Markup read from html assets, so the resolver checks it before
     /// anything is rendered.
     texts: std::collections::HashMap<String, String>,
@@ -423,6 +425,10 @@ impl ProbedAssets {
 impl AssetInfo for ProbedAssets {
     fn duration(&self, asset_id: &str, _: &str) -> Option<Ratio> {
         self.durations.get(asset_id).copied()
+    }
+
+    fn size(&self, asset_id: &str, _: &str) -> Option<(u32, u32)> {
+        self.sizes.get(asset_id).copied()
     }
 
     fn text(&self, asset_id: &str, _: &str) -> Option<String> {
@@ -485,6 +491,15 @@ pub fn probe_assets(text: &str, root: &Path, measure: bool) -> ProbedAssets {
             }
             continue;
         }
+        // A picture's size comes from its header, which is a few bytes
+        // rather than a decode, and is what the check on a clip with no
+        // `fit` compares with the frame.
+        if matches!(kind, Some(geneva_timeline::schema::AssetKind::Image)) {
+            if let Ok(size) = image::image_dimensions(&path) {
+                out.sizes.insert(id.clone(), size);
+            }
+            continue;
+        }
         if !matches!(
             kind,
             Some(
@@ -504,6 +519,9 @@ pub fn probe_assets(text: &str, root: &Path, measure: bool) -> ProbedAssets {
                     .or_else(|| info.audio.as_ref().and_then(|a| a.duration));
                 if let Some(d) = duration {
                     out.durations.insert(id.clone(), d);
+                }
+                if let Some(v) = info.video.as_ref() {
+                    out.sizes.insert(id.clone(), (v.width, v.height));
                 }
                 if measure && info.audio.is_some() {
                     match imp::measure_audio(&path) {

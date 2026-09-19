@@ -862,3 +862,69 @@ fn an_easing_shapes_the_transition_ramp() {
         assert_eq!(t.incoming(Ratio::from_int(1)), 1.0);
     }
 }
+
+/// Asset facts for the `fit` checks: one size, whatever is asked for.
+struct Sized(u32, u32);
+
+impl geneva_timeline::AssetInfo for Sized {
+    fn duration(&self, _: &str, _: &str) -> Option<Ratio> {
+        None
+    }
+
+    fn size(&self, _: &str, _: &str) -> Option<(u32, u32)> {
+        Some((self.0, self.1))
+    }
+}
+
+fn with_size(text: &str, w: u32, h: u32) -> Vec<&'static str> {
+    geneva_timeline::load_with(text, &Sized(w, h))
+        .diagnostics
+        .iter()
+        .map(|d| d.code)
+        .collect()
+}
+
+#[test]
+fn a_picture_bigger_than_the_frame_and_drawn_at_its_own_size_is_named() {
+    // The frame is 640x360. A picture from a camera shows its middle
+    // ninth, which is not what anyone means by placing it.
+    let text = doc(r#""assets":{"p":{"src":"p.png","kind":"image"}},
+        "layers":[{"clips":[{"source":{"kind":"image","asset":"p"},"duration":"1s"}]}]"#);
+    assert!(with_size(&text, 4000, 3000).contains(&"W404"));
+    // A logo placed where it is put is the ordinary case and says
+    // nothing, however small it is.
+    assert!(!with_size(&text, 200, 60).contains(&"W404"));
+    // Nor does one the same size as the frame.
+    assert!(!with_size(&text, 640, 360).contains(&"W404"));
+}
+
+#[test]
+fn a_video_letterboxed_into_a_corner_of_the_frame_is_named() {
+    // 16:9 into the 640x360 frame is the frame, and 4:3 into it is
+    // ordinary pillarboxing; a 9:16 phone clip covers a fifth of it.
+    let text = doc(r#""assets":{"v":{"src":"v.mp4"}},
+        "layers":[{"clips":[{"source":{"kind":"video","asset":"v"},"duration":"1s"}]}]"#);
+    assert!(!with_size(&text, 1920, 1080).contains(&"W404"));
+    assert!(!with_size(&text, 1440, 1080).contains(&"W404"));
+    assert!(with_size(&text, 1080, 1920).contains(&"W404"));
+}
+
+#[test]
+fn a_clip_that_says_what_it_wants_is_left_alone() {
+    // A fit, a crop, a scale or an animation is a decision about size,
+    // and the check does not second-guess any of them.
+    for extra in [
+        r#","fit":"contain""#,
+        r#","crop":{"width":600,"height":300}"#,
+        r#","transform":{"scale":0.1}"#,
+    ] {
+        let text = doc(&format!(
+            r#""assets":{{"p":{{"src":"p.png","kind":"image"}}}},
+            "layers":[{{"clips":[{{"source":{{"kind":"image","asset":"p"}},"duration":"1s"{extra}}}]}}]"#
+        ));
+        assert!(
+            !with_size(&text, 4000, 3000).contains(&"W404"),
+            "said something about {extra}"
+        );
+    }
+}

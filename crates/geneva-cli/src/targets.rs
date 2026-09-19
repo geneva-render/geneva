@@ -35,7 +35,8 @@ pub struct Target {
     pub max_width: u32,
     pub max_height: u32,
     /// Fixed 9:16 orientation: a landscape source is fitted onto a
-    /// portrait canvas.
+    /// portrait canvas, over a blurred copy of itself unless the caller
+    /// asks for bars or for a crop.
     pub portrait: bool,
     pub max_fps: f64,
     /// CRF for best, good and eco at 1080p and below; two less at 4K.
@@ -367,6 +368,10 @@ pub struct Options<'a> {
     pub extension: Option<&'a str>,
     /// Whether a picture that does not cover the canvas gets a blurred,
     /// scaled-up copy of itself behind it instead of bars.
+    /// Fill the space around a picture that does not cover the frame
+    /// with a blurred, scaled-up copy of it. True unless the caller asked
+    /// for bars: a landscape video on a portrait canvas is what this is
+    /// for, and bars are what nobody posts.
     pub fill_blur: bool,
     /// The source's picture already meets the target, so it is copied
     /// and the quality settings are only a fallback. They are still
@@ -448,11 +453,11 @@ pub fn apply(tl: &mut Timeline, facts: &Facts, opts: &Options<'_>) -> Vec<Diagno
             ));
         } else if t.portrait && w > h && opts.fill_blur && crate::verbs::add_blur_fill(tl, w, h) {
             why.push(format!(
-                "{w}×{h} shown whole on a {ow}×{oh} portrait canvas over a blurred, scaled-up copy of itself (--fill blur; 9:16, never upscaled)"
+                "{w}×{h} shown whole on a {ow}×{oh} portrait canvas over a blurred, scaled-up copy of itself (9:16, never upscaled; --fill bars leaves the background instead, --fit cover crops)"
             ));
         } else if t.portrait && w > h {
             why.push(format!(
-                "{w}×{h} fitted onto a {ow}×{oh} portrait canvas (9:16, never upscaled; --fit cover crops instead, --fill blur fills with a blurred copy)"
+                "{w}×{h} fitted onto a {ow}×{oh} portrait canvas over the background (9:16, never upscaled; --fit cover crops instead)"
             ));
         } else {
             why.push(format!(

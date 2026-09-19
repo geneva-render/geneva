@@ -96,7 +96,7 @@ mode). A sprite sheet's `.vtt` map is its own row (`kind`
 | `--renderer auto\|cpu\|gpu` | Which renderer composites the frames. `auto` takes the GPU where the machine has a hardware one (discrete, integrated, or a virtual machine's) and the CPU otherwise; `gpu` takes whatever device opens, a software one such as Mesa's lavapipe included, and falls back to the CPU with a note when none does; `cpu` is the reference renderer. On the GPU the frame is composited and packed into the encoder's planes on the device, and the next frame is drawn while the current one is read back. The report's notes name the device. The two renderers agree to within one 8-bit code on every golden case but the blur one, where a few pixels differ by up to three on some devices; the overlays over a copied picture, and `frame`, are always drawn on the CPU. `GENEVA_GPU=software` makes either choice take the software device, for checking. |
 | `--exact` | Cut on the exact frame instead of moving cuts to keyframes; see [smart cut](#smart-cut). |
 | `--for TARGET`, `--quality`, `--budget` | Encode for a destination; see [targets](#targets). On `render` the timeline's size is kept; only the encode block is set. |
-| `--fill bars\|blur` | What surrounds a picture that does not cover its frame (a landscape video on a portrait canvas): the background color, or a blurred, scaled-up copy of the picture behind it. Verbs only. |
+| `--fill bars\|blur` | What surrounds a picture that does not cover its frame (a landscape video on a portrait canvas): the background color, or a blurred, scaled-up copy of the picture behind it. A `--for` target that builds a portrait canvas fills with the blurred copy unless this says `bars`; a `--width`/`--height` resize leaves bars unless this says `blur`, since the sizes given are a request for those sizes and not for a second pass over the source. Verbs only. |
 
 When the composition uses its sources as they are, the coded streams are
 copied instead of re-encoded and the report says so
@@ -214,11 +214,13 @@ fitted to it like a whole picture would be. The region goes straight
 from the decoder to the encoder, so a crop costs no more than a resize.
 
 `--fit` also decides how the picture meets a canvas that `--for` builds:
-a landscape video on a 9:16 target gets bars by default and is cropped
-to its center with `--fit cover`. `--fill blur` keeps the whole picture
-and fills the rest with a blurred, scaled-up copy of it, the way the
-phone editors do; the copy is a first layer named `fill` with no audio,
-visible with `--show-timeline`.
+a landscape video on a 9:16 target keeps its whole picture over a
+blurred, scaled-up copy of itself, the way the phone editors fill a
+Reel, and `--fit cover` crops it to its center instead. The blurred copy
+is a first layer named `fill` with no audio, visible with
+`--show-timeline`; it decodes the source a second time, so the render
+costs about twice what bars would. `--fill bars` asks for the background
+color instead, which is what this did before 0.7.
 
 ```sh
 geneva convert talk.mov -o talk.mp4
@@ -361,14 +363,13 @@ The rules, in order:
 1. Never upscale. The ceiling only ever shrinks a picture, to even
    dimensions.
 2. Keep the aspect, unless the target is 9:16: a landscape source is then
-   fitted onto a portrait canvas of its own width, with the background
-   (black by default) above and below, so that nothing is lost. `--fit
-   cover` on `convert` and `resize` (or on the clip, in a timeline) crops
-   to the center instead, keeping the source's full height; a blind
-   crop keeps the middle third of a 16:9 picture, so use it for content
-   that sits in the middle. `--fill blur` keeps the whole picture and
-   puts a blurred, scaled-up copy of it behind, the way phone editors
-   fill a Reel.
+   fitted onto a portrait canvas of its own width, so that nothing is
+   lost, over a blurred, scaled-up copy of itself, the way phone editors
+   fill a Reel. `--fill bars` puts the background color (black by
+   default) above and below instead. `--fit cover` on `convert` and
+   `resize` (or on the clip, in a timeline) crops to the center instead,
+   keeping the source's full height; a blind crop keeps the middle third
+   of a 16:9 picture, so use it for content that sits in the middle.
 3. H.264 High everywhere, with the level the size and frame rate need
    (`3.1` for 720p, `4.0` or `4.2` for 1080p, `5.1` or `5.2` for 4K), so
    old decoders know what to expect. `--codec` overrides.

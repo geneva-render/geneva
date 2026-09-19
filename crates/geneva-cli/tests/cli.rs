@@ -167,11 +167,28 @@ fn crop_takes_the_region_straight_from_the_decoder() {
     let info = run_json(&["probe"], &[&out]);
     assert_eq!(info["video"]["width"], 96);
     assert_eq!(info["video"]["height"], 54);
-    // A portrait target with a blurred fill: the picture whole over a
-    // blurred, cover-fitted, silent copy of itself, composited.
+    // A portrait target fills with the blurred copy by default: the
+    // picture whole over a blurred, cover-fitted, silent copy of itself,
+    // composited. Bars are what `--fill bars` asks for.
+    let bars = dir.path().join("bars.mp4");
+    let doc = run_json(
+        &["convert", "--for", "tiktok", "--fill", "bars", "-o"],
+        &[&bars, &media_dir().join("clip.mp4")],
+    );
+    assert!(
+        !doc["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["message"]
+                .as_str()
+                .unwrap()
+                .contains("blurred, scaled-up copy")),
+        "bars were asked for: {doc:#}"
+    );
     let out = dir.path().join("reel.mp4");
     let doc = run_json(
-        &["convert", "--for", "tiktok", "--fill", "blur", "-o"],
+        &["convert", "--for", "tiktok", "-o"],
         &[&out, &media_dir().join("clip.mp4")],
     );
     assert_eq!(doc["mode"], "render", "{doc:#}");
@@ -190,15 +207,7 @@ fn crop_takes_the_region_straight_from_the_decoder() {
     assert_eq!(info["video"]["width"], 192);
     assert_eq!(info["video"]["height"], 342);
     let shown = geneva()
-        .args([
-            "convert",
-            "--for",
-            "tiktok",
-            "--fill",
-            "blur",
-            "--show-timeline",
-            "-o",
-        ])
+        .args(["convert", "--for", "tiktok", "--show-timeline", "-o"])
         .arg(&out)
         .arg(media_dir().join("clip.mp4"))
         .output()
@@ -1008,7 +1017,11 @@ fn targets_pick_size_codec_quality_and_caps_from_the_table() {
     );
     assert_eq!(shown["output"]["width"], 192);
     assert_eq!(shown["output"]["height"], 342);
-    assert_eq!(shown["layers"][0]["clips"][0]["fit"], "contain");
+    // The blurred copy is the first layer and the picture the second,
+    // which is what a portrait canvas does unless bars are asked for.
+    assert_eq!(shown["layers"][0]["id"], "fill");
+    assert_eq!(shown["layers"][0]["clips"][0]["fit"], "cover");
+    assert_eq!(shown["layers"][1]["clips"][0]["fit"], "contain");
     assert_eq!(shown["output"]["encode"]["video"]["crf"], 26);
     let shown = run_json(
         &[

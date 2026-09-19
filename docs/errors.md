@@ -114,6 +114,7 @@ result is not what was intended. Notes are informational.
 | W401 | Output width or height is odd; most codecs need even dimensions. |
 | W402 | `subtitles --burn` found no cues in the file; the picture is written unchanged. |
 | W403 | A burned-in subtitle cue extends off-screen. The message gives the box size and by how much it leaves the frame; the path names the clip. |
+| W404 | A clip names no `fit` and lands in the frame in a way its author probably did not mean: a picture bigger than the frame, drawn at its own size so the edges are cut, or a video shown whole in under two thirds of the frame. The message gives both sizes and the share. The defaults are right for what each source is usually for, so this says where the result is surprising rather than changing them; a clip with a `crop`, a `scale` or an `animation` is left alone, since each is a decision about size. Needs the source's size, so it appears where the assets are read: `render`, `frame`, the verbs, and `validate --probe`. |
 | N404 | (note) A burned-in subtitle cue lies outside the title-safe area (`--safe`, 5% in from each edge by default). |
 | N405 | (note) A burned-in subtitle cue was shrunk to fit (`--fit`); the message gives the sizes. |
 | N410 | (note) What `--for TARGET` chose and why: size, codec and level, quality, caps, keyframes, audio. |

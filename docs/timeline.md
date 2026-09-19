@@ -328,7 +328,7 @@ contain other compositions up to 8 levels deep, and never themselves (E207).
 | `duration` | no | see timing rules | How long it lasts. |
 | `transition` | no | | How this clip arrives from the one before it. See [Transitions](#transitions). |
 | `crop` | no | the whole source | A rectangle of the source that becomes the clip's box; see below. |
-| `fit` | no | `contain` for video, `none` otherwise | `none`, `contain`, `cover`, `fill`: how the source box is sized to the frame before the transform. |
+| `fit` | no | `contain` for video, `none` otherwise | `none`, `contain`, `cover`, `fill`: how the source box is sized to the frame before the transform. The defaults suit what each source is usually for: a video is shown whole, and a picture, a text box or a markup box is drawn at the size it has, which is what placing one means. W404 names the cases where that turns out badly, a picture larger than the frame or a video left in a corner of it. |
 | `effects` | no | `[]` | Effects on the placed picture, in order; see below. |
 | `mask` | no | | A shape cut from the clip's box, or a luma image over it; see below. |
 | `speed` | no | `1` | How fast the source plays: `2` is twice as fast, `0.5` half speed. The clip lasts its source range divided by it; a video's audio is resampled, so the pitch follows; the clip's own keyframes stay in output time. A clip with a speed is always composited. |

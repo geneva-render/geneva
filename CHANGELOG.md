@@ -7,7 +7,34 @@ the format version it was written for.
 
 ## Unreleased
 
+### Added
+
+- **W404 names a clip whose placement is probably not what was meant.**
+  A `fit` is only needed when the source and the frame are different
+  shapes, and the defaults suit what each source is usually for: a video
+  is shown whole, and a picture, a text box or a markup box is drawn at
+  the size it has. Two cases make that surprising, and both are now
+  said out loud with the sizes and the share: a picture bigger than the
+  frame, drawn at its own size so the frame cuts its edges (a 4000x3000
+  photo on a 1920x1080 frame shows a ninth of itself), and a video shown
+  whole in under two thirds of the frame (16:9 on a 9:16 canvas covers
+  32%). A clip carrying a `crop`, a `scale` or an `animation` is left
+  alone, since each is already a decision about size. The check needs
+  the source's own size, so it appears wherever the assets are read:
+  `render`, `frame`, the verbs, and `validate --probe`.
+
 ### Changed
+
+- **A `--for` target that builds a portrait canvas fills with a blurred
+  copy of the picture.** A landscape video on a 9:16 canvas was
+  letterboxed unless `--fill blur` asked for better, which is not what
+  anyone posts. The blurred, scaled-up copy behind the whole picture is
+  what phone editors do and what this does now; `--fill bars` asks for
+  the background colour, and `--fit cover` still crops instead. The copy
+  decodes the source a second time, so such a render costs about twice
+  what bars would. A `--width`/`--height` resize is unchanged: sizes
+  given by hand are a request for those sizes, not for a second pass
+  over the source.
 
 - **The claim that the two renderers agree to within one 8-bit code now
   says where it does not.** 0.6.0 measured that on Mesa's lavapipe,

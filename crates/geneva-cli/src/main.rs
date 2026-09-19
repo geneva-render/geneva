@@ -822,7 +822,9 @@ fn run_verb(
                 true,
                 output,
                 !encode.no_audio,
-                encode.fill == Some(verbs::FillArg::Blur),
+                // The blurred copy is what a reframe wants, so it is
+                // what a portrait target does unless bars are asked for.
+                encode.fill != Some(verbs::FillArg::Bars),
                 picture_as_is,
             )?;
             extra.extend(notes);
