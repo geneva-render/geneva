@@ -105,6 +105,17 @@ the format version it was written for.
   blur's own rounding rather than any one device: an Apple M1 through
   Metal and an RTX 4090 through Vulkan report the same 71 pixels.
 
+- **A font family the machine does not have is reported (W405).** A
+  document naming `Inter` on a machine without it still renders, in
+  whatever the shaper falls back to, so the only sign is that the
+  picture differs elsewhere. The warning names the family, says the text
+  will be drawn in something else, and suggests the fix: carry the file
+  as an asset of kind `font` and name that asset id, which keeps the
+  document the same everywhere. `validate` reports it too, without
+  opening any asset file, since the fonts are on the machine either way.
+  Families named inside markup CSS are not checked yet, only the `font`
+  of a text or captions source.
+
 ### Fixed
 
 - **An animated box at the top level of a document no longer moves the

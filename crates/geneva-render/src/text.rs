@@ -75,6 +75,18 @@ impl TextEngine {
         self.asset_faces.contains_key(asset_id)
     }
 
+    /// Whether the machine has any face of a family, by the same name
+    /// matching the shaper uses. A document naming a family that is not
+    /// here still renders, in whatever the shaper falls back to, which is
+    /// a different picture on a different machine: this is what lets that
+    /// be reported rather than discovered later.
+    pub fn family_is_available(&self, family: &str) -> bool {
+        self.fonts
+            .db()
+            .faces()
+            .any(|f| f.families.iter().any(|(name, _)| name == family))
+    }
+
     /// Registers a font file's bytes under an asset id. Returns the family
     /// name the file declares, or `None` if it contains no usable face.
     pub fn add_font(&mut self, asset_id: &str, data: Vec<u8>) -> Option<String> {

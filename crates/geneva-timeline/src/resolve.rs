@@ -654,6 +654,15 @@ pub trait AssetInfo {
         None
     }
 
+    /// Whether this machine has a font family, for the check on a style
+    /// that names one. `None` where the caller has no font database, so
+    /// validation somewhere else stays quiet rather than guessing about
+    /// a machine it cannot see.
+    fn has_font_family(&self, family: &str) -> Option<bool> {
+        let _ = family;
+        None
+    }
+
     /// Whether a file under the asset root is there, for a picture markup
     /// points at. `None` where the caller cannot tell, so validation
     /// without files stays quiet.
@@ -2870,6 +2879,42 @@ fills the frame",
         px
     }
 
+    /// Warns when a style names a font family this machine does not have.
+    ///
+    /// The text still draws, in whatever the shaper falls back to, which
+    /// is a different picture on a different machine and the kind of
+    /// difference that is only noticed once the file is somewhere else.
+    /// A family that is the id of a font asset is fine by definition:
+    /// the document carries the file, which is the fix this suggests.
+    fn check_font(
+        &mut self,
+        family: Option<&str>,
+        path: &Path,
+        assets: &BTreeMap<String, ResolvedAsset>,
+    ) {
+        let Some(family) = family else {
+            return;
+        };
+        if assets.contains_key(family) {
+            return;
+        }
+        if self.info.has_font_family(family) != Some(false) {
+            return;
+        }
+        self.push(
+            Diagnostic::warning(
+                "W405",
+                path.clone(),
+                format!(
+                    "no font family called {family:?} is installed here, so the text will be drawn in whatever the machine falls back to, and another machine may fall back to something else"
+                ),
+            )
+            .with_help(
+                "add the font file as an asset of kind \"font\" and name that asset id here, which keeps the document the same everywhere",
+            ),
+        );
+    }
+
     fn resolve_text(
         &mut self,
         text: &TextSource,
@@ -2895,6 +2940,14 @@ fills the frame",
                     e,
                 ));
             }
+        }
+        self.check_font(expanded.style.font.as_deref(), &spath.key("font"), assets);
+        if let Some(h) = &expanded.highlight {
+            self.check_font(
+                h.font.as_deref(),
+                &spath.key("highlight").key("font"),
+                assets,
+            );
         }
         let text = &expanded;
         let mut words = Vec::new();

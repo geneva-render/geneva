@@ -1243,7 +1243,7 @@ fn load_text(text: &str, root: &Path, probe: bool, measure: bool) -> Loaded {
         loaded.diagnostics.extend(info.diagnostics());
         loaded
     } else {
-        geneva_timeline::load(text)
+        geneva_timeline::load_with(text, &media::ProbedAssets::fonts_only())
     };
     loaded.diagnostics.extend(unbuilt_features(&loaded));
     loaded.diagnostics.sort_by(|a, b| {

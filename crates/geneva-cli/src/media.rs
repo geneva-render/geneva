@@ -424,6 +424,10 @@ pub struct ProbedAssets {
     /// anything is rendered.
     texts: std::collections::HashMap<String, String>,
     problems: Vec<Diagnostic>,
+    /// The machine's fonts, read once and only when a document names a
+    /// family. Scanning the font directories costs more than most
+    /// documents need, and one without text should not pay it.
+    fonts: std::cell::OnceCell<geneva_render::TextEngine>,
 }
 
 impl ProbedAssets {
@@ -431,11 +435,35 @@ impl ProbedAssets {
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
         self.problems.clone()
     }
+
+    /// Knows nothing about the assets and everything about the machine's
+    /// fonts. `validate` does not open asset files, deliberately, so that
+    /// a document can be checked away from its material; the fonts are
+    /// not material, they are on the machine either way, so the check on
+    /// a family a document names works there too.
+    pub fn fonts_only() -> Self {
+        Self {
+            root: std::path::PathBuf::new(),
+            durations: std::collections::HashMap::new(),
+            sizes: std::collections::HashMap::new(),
+            texts: std::collections::HashMap::new(),
+            problems: Vec::new(),
+            fonts: std::cell::OnceCell::new(),
+        }
+    }
 }
 
 impl AssetInfo for ProbedAssets {
     fn duration(&self, asset_id: &str, _: &str) -> Option<Ratio> {
         self.durations.get(asset_id).copied()
+    }
+
+    fn has_font_family(&self, family: &str) -> Option<bool> {
+        Some(
+            self.fonts
+                .get_or_init(geneva_render::TextEngine::new)
+                .family_is_available(family),
+        )
     }
 
     fn size(&self, asset_id: &str, _: &str) -> Option<(u32, u32)> {
