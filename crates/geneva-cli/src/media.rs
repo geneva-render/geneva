@@ -423,6 +423,10 @@ pub struct ProbedAssets {
     /// Markup read from html assets, so the resolver checks it before
     /// anything is rendered.
     texts: std::collections::HashMap<String, String>,
+    /// The family each font asset declares, by asset id. Markup names a
+    /// carried font by its family, not by the asset id, so the check on
+    /// a family has to know these to stay quiet about them.
+    asset_families: std::collections::HashMap<String, String>,
     problems: Vec<Diagnostic>,
     /// The machine's fonts, read once and only when a document names a
     /// family. Scanning the font directories costs more than most
@@ -447,6 +451,7 @@ impl ProbedAssets {
             durations: std::collections::HashMap::new(),
             sizes: std::collections::HashMap::new(),
             texts: std::collections::HashMap::new(),
+            asset_families: std::collections::HashMap::new(),
             problems: Vec::new(),
             fonts: std::cell::OnceCell::new(),
         }
@@ -459,6 +464,9 @@ impl AssetInfo for ProbedAssets {
     }
 
     fn has_font_family(&self, family: &str) -> Option<bool> {
+        if self.asset_families.values().any(|f| f == family) {
+            return Some(true);
+        }
         Some(
             self.fonts
                 .get_or_init(geneva_render::TextEngine::new)
@@ -527,6 +535,19 @@ pub fn probe_assets(text: &str, root: &Path, measure: bool) -> ProbedAssets {
                     .with_value(asset.src.clone())
                     .with_help(format!("expected the file at {}", path.display())),
                 ),
+            }
+            continue;
+        }
+        // A font asset declares a family of its own, and markup names it
+        // by that family as readily as by the asset id. Reading it here
+        // is what stops the check below from reporting a document that
+        // carries its font, which is the very thing the check asks for.
+        if matches!(kind, Some(geneva_timeline::schema::AssetKind::Font)) {
+            if let Ok(data) = std::fs::read(&path) {
+                let mut engine = geneva_render::TextEngine::new();
+                if let Some(family) = engine.add_font(id, data) {
+                    out.asset_families.insert(id.clone(), family);
+                }
             }
             continue;
         }

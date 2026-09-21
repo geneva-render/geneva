@@ -195,6 +195,22 @@ pub fn image_sources(prepared: &Prepared) -> Vec<String> {
         .collect()
 }
 
+/// Every font family the computed styles name, once each and in order.
+///
+/// A family here is either a family the machine has or the id of a font
+/// asset the document carries, which the painter registers by both. The
+/// caller is the one that knows which, so this only reports what was
+/// asked for.
+pub fn font_families(prepared: &Prepared) -> Vec<String> {
+    let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    for style in &prepared.styles {
+        if let Some(family) = style.text.family.as_deref() {
+            seen.insert(family);
+        }
+    }
+    seen.into_iter().map(str::to_owned).collect()
+}
+
 /// The `href` of every `<link rel="stylesheet">` in some markup, so that
 /// a caller can read them before preparing it. This crate never touches
 /// the filesystem.

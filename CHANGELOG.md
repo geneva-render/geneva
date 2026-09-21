@@ -111,10 +111,14 @@ the format version it was written for.
   picture differs elsewhere. The warning names the family, says the text
   will be drawn in something else, and suggests the fix: carry the file
   as an asset of kind `font` and name that asset id, which keeps the
-  document the same everywhere. `validate` reports it too, without
-  opening any asset file, since the fonts are on the machine either way.
-  Families named inside markup CSS are not checked yet, only the `font`
-  of a text or captions source.
+  document the same everywhere. A family that one of the document's own
+  font assets declares counts as present, so carrying the file is enough
+  to silence it, which is what the goldens already do. Markup is covered
+  too: a `font-family` in its CSS is checked the same way, which is where
+  most families are named, since a card written for a browser asks for
+  its font by name. `validate` reports a text source's family without
+  opening any asset file, since the fonts are on the machine either way;
+  a markup family needs the markup read, so that one wants `--probe`.
 
 ### Fixed
 

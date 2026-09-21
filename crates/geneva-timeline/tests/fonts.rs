@@ -7,6 +7,22 @@
 
 use geneva_timeline::{AssetInfo, Ratio, resolve_with};
 
+/// Markup naming a family in its CSS, which is how a font is asked for
+/// there: `font-family` takes a name, not an asset id.
+fn markup_codes(css_family: &str, info: &dyn AssetInfo, assets: &str) -> Vec<String> {
+    let html =
+        format!("<style>.c {{ font-family: {css_family} }}</style><div class=\"c\">Hi</div>");
+    let text = format!(
+        r#"{{"geneva":"0.3","output":{{"width":320,"height":180,"fps":25,"duration":"1s"}},
+        "assets":{{{assets}}},
+        "layers":[{{"id":"m","clips":[{{"source":{{"kind":"html","html":{}}}}}]}}]}}"#,
+        serde_json::to_string(&html).unwrap()
+    );
+    let timeline = geneva_timeline::parse(&text).unwrap();
+    let (_, diagnostics) = resolve_with(&timeline, info);
+    diagnostics.iter().map(|d| d.code.to_string()).collect()
+}
+
 /// A machine with one font on it, and nothing else to say.
 struct OneFont(&'static str);
 
@@ -83,4 +99,39 @@ fn the_font_shorthand_is_checked_by_its_family() {
     assert!(d.contains(&"W405".to_owned()), "{d:?}");
     let ok = codes("600 40px/1.2 DejaVu Sans", &OneFont("DejaVu Sans"), "");
     assert!(!ok.contains(&"W405".to_owned()), "{ok:?}");
+}
+
+/// The same check reaches families named inside markup CSS, which is
+/// where most of them are named: a card written for a browser asks for
+/// its font with `font-family`, never with an asset id.
+#[test]
+fn a_family_named_in_markup_css_is_reported() {
+    let d = markup_codes("Nonesuch Sans", &OneFont("DejaVu Sans"), "");
+    assert!(d.contains(&"W405".to_owned()), "{d:?}");
+    let ok = markup_codes("DejaVu Sans", &OneFont("DejaVu Sans"), "");
+    assert!(!ok.contains(&"W405".to_owned()), "{ok:?}");
+}
+
+/// A machine that carries the font as an asset and names it in CSS by
+/// the family the file declares is doing exactly what the warning asks
+/// for, so it must not be warned at. The caller reports that family as
+/// present, which is what the CLI does after reading the file.
+#[test]
+fn markup_naming_a_carried_font_by_its_family_stays_quiet() {
+    struct Carried;
+    impl AssetInfo for Carried {
+        fn duration(&self, _: &str, _: &str) -> Option<Ratio> {
+            None
+        }
+        // The machine has nothing; the family comes from the asset.
+        fn has_font_family(&self, family: &str) -> Option<bool> {
+            Some(family == "Brand Sans")
+        }
+    }
+    let d = markup_codes(
+        "Brand Sans",
+        &Carried,
+        r#""brand":{"src":"Brand.ttf","kind":"font"}"#,
+    );
+    assert!(!d.contains(&"W405".to_owned()), "{d:?}");
 }

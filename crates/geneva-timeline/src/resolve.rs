@@ -2891,6 +2891,7 @@ fills the frame",
         family: Option<&str>,
         path: &Path,
         assets: &BTreeMap<String, ResolvedAsset>,
+        in_markup: bool,
     ) {
         let Some(family) = family else {
             return;
@@ -2909,9 +2910,11 @@ fills the frame",
                     "no font family called {family:?} is installed here, so the text will be drawn in whatever the machine falls back to, and another machine may fall back to something else"
                 ),
             )
-            .with_help(
-                "add the font file as an asset of kind \"font\" and name that asset id here, which keeps the document the same everywhere",
-            ),
+            .with_help(if in_markup {
+                "add the font file as an asset of kind \"font\"; the markup can name it by that asset id or by the family the file itself declares, which keeps the document the same everywhere"
+            } else {
+                "add the font file as an asset of kind \"font\" and name that asset id here, which keeps the document the same everywhere"
+            }),
         );
     }
 
@@ -2941,12 +2944,18 @@ fills the frame",
                 ));
             }
         }
-        self.check_font(expanded.style.font.as_deref(), &spath.key("font"), assets);
+        self.check_font(
+            expanded.style.font.as_deref(),
+            &spath.key("font"),
+            assets,
+            false,
+        );
         if let Some(h) = &expanded.highlight {
             self.check_font(
                 h.font.as_deref(),
                 &spath.key("highlight").key("font"),
                 assets,
+                false,
             );
         }
         let text = &expanded;
@@ -3621,6 +3630,12 @@ be; write the distance in pixels, or give the source a size",
                             .with_help("the path is relative to the markup, as it is in a browser"),
                         );
                     }
+                }
+                // Families the markup's CSS names, checked the same way as
+                // a text source's `font`. The path is the source rather
+                // than a field of it, since the family is in the markup.
+                for family in geneva_html::font_families(&p) {
+                    self.check_font(Some(&family), spath, assets, true);
                 }
                 // Animations on elements inside: each is the renderer's
                 // to play, composited as a group of its own.
