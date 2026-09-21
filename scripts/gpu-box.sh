@@ -55,14 +55,18 @@ nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>
 
 if ! once apt-vulkan; then
   say "installing vulkan tools"
-  # libx11-6 and libxext6 are not optional. On NVIDIA the Vulkan ICD is
-  # libGLX_nvidia.so.0, the GLX library, which pulls in the X11 client
-  # libraries when it loads. A container built for compute has none of
-  # them, the loader's dlopen fails, and it reports that as not being
-  # able to get vkCreateInstance, which reads like a driver problem and
-  # is not one.
+  # None of these are optional on NVIDIA, and a container built for
+  # compute has none of them. The Vulkan ICD there is libGLX_nvidia.so.0,
+  # the GLX vendor library: it needs the X11 client libraries to load at
+  # all, and the GLVND dispatch libraries to initialize. Without the
+  # first the loader's dlopen fails; without the second the driver
+  # returns VK_ERROR_INITIALIZATION_FAILED from its negotiate call. Both
+  # surface as the loader saying it could not get vkCreateInstance, which
+  # reads like a driver or a capability problem and is neither, and the
+  # renderer then quietly falls back to a software device.
   apt-get update -qq && apt-get install -y -qq vulkan-tools libvulkan1 \
-    libx11-6 libxext6 curl ca-certificates >/dev/null 2>&1
+    libx11-6 libxext6 libglvnd0 libegl1 libgl1 libgles2 \
+    curl ca-certificates >/dev/null 2>&1
   did apt-vulkan
 fi
 
