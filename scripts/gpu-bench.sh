@@ -55,26 +55,39 @@ echo "source: $(du -h "$dir/long.mp4" | cut -f1), $copies copies of shibuya.mp4"
 
 # Subtitles across the whole thing rather than the first ten seconds,
 # so the text is work on most frames and not a tenth of them.
-python3 - "$dir" "$seconds" <<'PY'
+python3 - "$dir" "$seconds" <<'PYEOF'
 import json, sys
+
 out, secs = sys.argv[1], int(sys.argv[2])
-words = json.load(open("words.json"))
-items = words["words"] if isinstance(words, dict) and "words" in words else words
-span = max(float(w.get("end", w.get("start", 0))) for w in items) or 10.0
-grown = []
-t = 0.0
-while t < secs:
-    for w in items:
-        s, e = float(w.get("start", 0)) + t, float(w.get("end", 0)) + t
-        if e > secs:
+doc = json.load(open("words.json"))
+segments = doc["segments"]
+span = max(float(s["end"]) for s in segments)
+
+def shift(seg, by):
+    s = dict(seg)
+    s["start"] = round(float(seg["start"]) + by, 3)
+    s["end"] = round(float(seg["end"]) + by, 3)
+    s["words"] = [
+        dict(w, start=round(float(w["start"]) + by, 3), end=round(float(w["end"]) + by, 3))
+        for w in seg.get("words", [])
+    ]
+    return s
+
+grown, by, next_id = [], 0.0, 0
+while by < secs:
+    for seg in segments:
+        if float(seg["end"]) + by > secs:
             break
-        n = dict(w); n["start"] = round(s, 3); n["end"] = round(e, 3)
-        grown.append(n)
-    t += span
-json.dump({"words": grown} if isinstance(words, dict) and "words" in words else grown,
-          open(f"{out}/words-long.json", "w"))
-print(f"subtitles: {len(grown)} words across {secs}s")
-PY
+        s = shift(seg, by)
+        s["id"] = next_id
+        next_id += 1
+        grown.append(s)
+    by += span
+doc["segments"] = grown
+json.dump(doc, open(f"{out}/words-long.json", "w"))
+words = sum(len(s.get("words", [])) for s in grown)
+print(f"subtitles: {len(grown)} cues, {words} words across {secs}s")
+PYEOF
 
 # A persistent overlay, and a brief one. Both are real shapes of job:
 # a badge that stays up, and a lower third that appears once.
