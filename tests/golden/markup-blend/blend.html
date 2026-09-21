@@ -1,0 +1,42 @@
+<!-- mix-blend-mode over a backdrop the markup draws itself. -->
+<style>
+  @keyframes drift { from { translate: 0 } to { translate: 40px } }
+
+  body { margin: 0 }
+
+  .sheet {
+    position: absolute; left: 0; top: 0; width: 320px; height: 180px;
+    background: linear-gradient(90deg, #12324a, #f0b429);
+  }
+
+  .patch {
+    position: absolute; top: 20px; width: 60px; height: 60px;
+    font: 500 11px Liberation Sans; color: #ffffff;
+  }
+
+  .multiply   { left: 10px;  background: #ff5a5f; mix-blend-mode: multiply }
+  .screen     { left: 80px;  background: #2b6cb0; mix-blend-mode: screen }
+  .difference { left: 150px; background: #8ad6a0; mix-blend-mode: difference }
+  .lighten    { left: 220px; background: #5a3fa0; mix-blend-mode: lighten }
+
+  /* Moving, so the box has an animation inside and the GPU renderer
+     takes its layers path, where a blend falls back to the CPU. */
+  .moving {
+    position: absolute; left: 20px; top: 100px; width: 120px; height: 50px;
+    background: #ffffff; mix-blend-mode: overlay;
+    animation: drift 2s linear infinite alternate;
+  }
+
+  /* Blending under an opacity: the group carries both. */
+  .soft {
+    position: absolute; left: 180px; top: 100px; width: 110px; height: 50px;
+    background: #ff8800; mix-blend-mode: soft-light; opacity: 0.8;
+  }
+</style>
+<div class="sheet"></div>
+<div class="patch multiply">multiply</div>
+<div class="patch screen">screen</div>
+<div class="patch difference">difference</div>
+<div class="patch lighten">lighten</div>
+<div class="moving"></div>
+<div class="soft"></div>

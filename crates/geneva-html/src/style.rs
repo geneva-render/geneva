@@ -185,6 +185,9 @@ pub struct Paint {
     /// the border box, outside which the box and its children draw
     /// nothing.
     pub clip_path: Option<Vec<(Extent, Extent)>>,
+    /// `mix-blend-mode`: how the box and its children are mixed with
+    /// what is behind them.
+    pub blend: Blend,
 }
 
 impl Default for Paint {
@@ -200,6 +203,52 @@ impl Default for Paint {
             opacity: 1.0,
             blur: 0.0,
             clip_path: None,
+            blend: Blend::default(),
+        }
+    }
+}
+
+/// How a group's picture is mixed with what is already behind it:
+/// `mix-blend-mode`.
+///
+/// These are the separable modes of the CSS compositing specification
+/// that geneva's compositor already implements at the clip level, and
+/// they mean the same thing here. The modes it does not have,
+/// `color-dodge`, `color-burn`, `hard-light` and `exclusion`, and the
+/// four non-separable ones, are refused by name rather than approximated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Blend {
+    /// Laid over what is behind it, which is what a box does by default.
+    #[default]
+    Normal,
+    /// The product of the two colours.
+    Multiply,
+    /// The inverse product of the inverted colours.
+    Screen,
+    /// Multiplies dark backdrops and screens light ones.
+    Overlay,
+    /// The darker of the two, per channel.
+    Darken,
+    /// The lighter of the two, per channel.
+    Lighten,
+    /// The absolute difference of the two.
+    Difference,
+    /// A gentler overlay.
+    SoftLight,
+}
+
+impl Blend {
+    /// The CSS keyword, for a diagnostic that names it back.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Multiply => "multiply",
+            Self::Screen => "screen",
+            Self::Overlay => "overlay",
+            Self::Darken => "darken",
+            Self::Lighten => "lighten",
+            Self::Difference => "difference",
+            Self::SoftLight => "soft-light",
         }
     }
 }
@@ -790,6 +839,25 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
             };
         }
         "opacity" => c.paint.opacity = number(v)?.clamp(0.0, 1.0),
+        "mix-blend-mode" => {
+            c.paint.blend = match l {
+                "normal" => Blend::Normal,
+                "multiply" => Blend::Multiply,
+                "screen" => Blend::Screen,
+                "overlay" => Blend::Overlay,
+                "darken" => Blend::Darken,
+                "lighten" => Blend::Lighten,
+                "difference" => Blend::Difference,
+                "soft-light" => Blend::SoftLight,
+                _ => {
+                    return unsupported(
+                        property,
+                        v,
+                        "normal, multiply, screen, overlay, darken, lighten, difference or soft-light",
+                    );
+                }
+            };
+        }
         "box-shadow" => c.paint.shadow = shadow(v, em, "box-shadow")?,
 
         "color" | "-webkit-text-fill-color" => c.text.color = color(v)?,
@@ -1638,6 +1706,54 @@ mod tests {
         let b = doc.children(doc.children(doc.root)[0])[0];
         assert_eq!(styles[b].text.size, 30.0);
         assert!((styles[b].text.line_height - 2.0).abs() < 1e-9);
+    }
+
+    /// Every mode the compositor implements is taken by its CSS name,
+    /// and one it does not is refused by name rather than approximated
+    /// with something that looks similar.
+    #[test]
+    fn mix_blend_mode_takes_the_modes_the_compositor_has() {
+        for (keyword, expected) in [
+            ("multiply", Blend::Multiply),
+            ("screen", Blend::Screen),
+            ("overlay", Blend::Overlay),
+            ("darken", Blend::Darken),
+            ("lighten", Blend::Lighten),
+            ("difference", Blend::Difference),
+            ("soft-light", Blend::SoftLight),
+            ("normal", Blend::Normal),
+        ] {
+            let (doc, styles, problems) = styled(&format!(
+                "<style>.a {{ mix-blend-mode: {keyword} }}</style><div class=a></div>"
+            ));
+            assert!(problems.is_empty(), "{keyword}: {problems:?}");
+            let a = doc.children(doc.root)[0];
+            assert_eq!(styles[a].paint.blend, expected, "{keyword}");
+            assert_eq!(expected.keyword(), keyword);
+        }
+    }
+
+    /// The modes geneva does not have. A browser would draw these; this
+    /// says so rather than drawing something else and staying quiet.
+    #[test]
+    fn a_mode_geneva_does_not_have_is_refused_by_name() {
+        for keyword in [
+            "color-dodge",
+            "color-burn",
+            "hard-light",
+            "exclusion",
+            "luminosity",
+        ] {
+            let (doc, styles, problems) = styled(&format!(
+                "<style>.a {{ mix-blend-mode: {keyword} }}</style><div class=a></div>"
+            ));
+            assert!(
+                problems.iter().any(|p| p.contains(keyword)),
+                "{keyword} was not named: {problems:?}"
+            );
+            let a = doc.children(doc.root)[0];
+            assert_eq!(styles[a].paint.blend, Blend::Normal, "{keyword}");
+        }
     }
 
     #[test]

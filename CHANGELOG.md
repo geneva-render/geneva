@@ -120,6 +120,19 @@ the format version it was written for.
   opening any asset file, since the fonts are on the machine either way;
   a markup family needs the markup read, so that one wants `--probe`.
 
+- **`mix-blend-mode` in markup.** A box with one is composited into a
+  buffer of its own, as `opacity` and `filter: blur()` already did, and
+  mixed with what is behind it rather than laid over it. The modes are
+  the separable ones the compositor already has: `multiply`, `screen`,
+  `overlay`, `darken`, `lighten`, `difference` and `soft-light`. The
+  rest of the CSS list is W450 rather than approximated. Mixing happens
+  in the sRGB-encoded space the painter works in, which is the space a
+  browser blends in, so `multiply` of `#8080ff` over `#ff8800` gives
+  `#804400` in both. The GPU renderer composites a box that blends on
+  the CPU: a group pass draws into the surface without reading it, so
+  there is no backdrop to mix with there. The picture is the same on
+  both, which a new golden case holds them to.
+
 ### Fixed
 
 - **An animated box at the top level of a document no longer moves the

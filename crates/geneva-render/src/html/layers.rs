@@ -100,6 +100,9 @@ pub struct MarkupGroup<'a> {
     /// `clip-path: polygon()` on the surface, applied to the buffer's
     /// pixels after the blur and before the transform.
     pub clip_path: Option<Vec<(f64, f64)>>,
+    /// `mix-blend-mode`: how the composited picture is mixed with what
+    /// is behind it on the surface.
+    pub blend: geneva_html::Blend,
     /// The transform the buffer is laid through, about the centre of
     /// `rect`; straight, pixel for pixel, when there is none.
     pub transform: Option<Transform>,
@@ -407,12 +410,30 @@ fn close<'a>(
         blur: group.blur,
         clip: group.clip,
         clip_path: group.clip_path.clone(),
+        blend: group.blend,
         transform: transforms[g],
         landing: placed[g],
     }));
 }
 
 impl MarkupLayers<'_> {
+    /// Whether any group in the box mixes with what is behind it.
+    ///
+    /// A renderer that composites these itself needs to know: blending
+    /// reads the backdrop, which the group passes do not have, so the
+    /// GPU renderer composites such a box on the CPU instead. Without
+    /// this the mode would simply be dropped there, and the two
+    /// renderers would draw different pictures.
+    pub fn blends(&self) -> bool {
+        fn any(items: &[MarkupItem<'_>]) -> bool {
+            items.iter().any(|item| match item {
+                MarkupItem::Run(_) => false,
+                MarkupItem::Group(g) => g.blend != geneva_html::Blend::Normal || any(&g.items),
+            })
+        }
+        any(&self.items)
+    }
+
     /// The layers composited on the CPU, through the painter's own
     /// composite, and turned into linear light: the picture
     /// [`super::render`] paints, to rounding. What the GPU's composite
@@ -461,6 +482,7 @@ fn flatten_into(items: &[MarkupItem<'_>], dst: &mut Image, dst_origin: (i64, i64
                     blur: 0.0,
                     clip: None,
                     clip_path: None,
+                    blend: geneva_html::Blend::Normal,
                 };
                 composite(dst, dst_origin, layer, &straight, None, None);
             }
@@ -486,6 +508,7 @@ fn flatten_into(items: &[MarkupItem<'_>], dst: &mut Image, dst_origin: (i64, i64
                     blur: group.blur,
                     clip: group.clip,
                     clip_path: group.clip_path.clone(),
+                    blend: group.blend,
                 };
                 composite(
                     dst,

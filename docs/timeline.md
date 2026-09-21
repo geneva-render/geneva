@@ -640,7 +640,7 @@ author overrides freely: `h1`, `h2`, `h3`, `b`, `strong`, `i`, `em`,
 | Spacing | `margin`, `padding` and their per-side forms and one-to-four-value shorthands |
 | Flex | `flex-direction`, `flex-wrap`, `justify-content`, `align-items`, `align-self`, `align-content`, `gap`, `row-gap`, `column-gap`, `flex-grow`, `flex-shrink`, `flex-basis`, `flex` |
 | Border | `border`, `border-top`, `border-right`, `border-bottom`, `border-left`, `border-width`, `border-color`, `border-style` (`solid`, `none`), `border-radius` |
-| Paint | `background`, `background-color` (a colour or a gradient), `background-size`, `background-position`, `background-clip` (`text` or `border-box`, with or without `-webkit-`), `opacity`, `filter` (`blur()` only), `clip-path` (`polygon()` only, or `none`), `box-shadow` (a list; `inset` is not drawn) |
+| Paint | `background`, `background-color` (a colour or a gradient), `background-size`, `background-position`, `background-clip` (`text` or `border-box`, with or without `-webkit-`), `opacity`, `mix-blend-mode` (`normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `difference`, `soft-light`), `filter` (`blur()` only), `clip-path` (`polygon()` only, or `none`), `box-shadow` (a list; `inset` is not drawn) |
 | Text | `color`, `-webkit-text-fill-color` (read as `color`), `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space`, `text-shadow` (a list) |
 | Motion | `animation` and its longhands `animation-name`, `-duration`, `-delay`, `-timing-function`, `-iteration-count`, `-direction`, `-fill-mode` |
 
@@ -803,8 +803,23 @@ inside it costs a paint per frame and one layout.
   box and its children after the blur and before any transform. A group
   is painted whole where CSS puts a stacking context, so a child inside
   one cannot rise above a box outside it with `z-index`.
+- **`mix-blend-mode`** makes the same buffer, and mixes it with what is
+  already behind it instead of laying it over. The modes are the
+  separable ones the compositor has: `multiply`, `screen`, `overlay`,
+  `darken`, `lighten`, `difference` and `soft-light`. The four CSS
+  separable modes geneva has no compositor for, `color-dodge`,
+  `color-burn`, `hard-light` and `exclusion`, and the non-separable
+  `hue`, `saturation`, `color` and `luminosity`, are W450 rather than
+  something approximate. Blending mixes in the same sRGB-encoded space a
+  browser uses, so `multiply` of `#8080ff` over `#ff8800` is `#804400`
+  here as there. `isolation` is not read: a blend sees everything
+  already painted under it on the markup surface, not the frame beneath
+  the clip. The GPU renderer composites a box that blends on the CPU,
+  since a group pass draws into the surface without reading it; the
+  picture is the same, and only that box gives up the device.
 - There is no `float`, no grid, no transition and no media
-  query. The clip's own `transform` and `animation` move the whole box.
+  query. A `transition` needs a state to change and a render has none;
+  `@keyframes` is how a document moves. The clip's own `transform` and `animation` move the whole box.
 - **Nothing is fetched over the network.** A path is a file; a URL is
   E452. Elements with a renderer of their own (`<iframe>`, `<svg>`,
   `<canvas>`, `<video>`, `<object>`, `<embed>`) are W450. A rule in the

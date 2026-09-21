@@ -13,7 +13,7 @@ use geneva_html::layout::Rectangle;
 use geneva_html::style::{Extent, TextFill};
 use geneva_html::{Content, Group, Laid, Measure, Painted, Prepared, Text};
 use geneva_timeline::motion::{NodeMotion, Transform};
-use geneva_timeline::schema::{Shadow, Shadows, TextAlign, TextSource, TextStyle};
+use geneva_timeline::schema::{BlendMode, Shadow, Shadows, TextAlign, TextSource, TextStyle};
 use geneva_timeline::{Animated, FillTrack, ResolvedHtml, ResolvedText};
 use rayon::prelude::*;
 
@@ -933,6 +933,15 @@ fn composite(
         mask_polygon(&mut layer.image, layer.origin, points);
     }
     let opacity = group.opacity.clamp(0.0, 1.0);
+    // Chosen once for the group: a group that does not blend takes the
+    // same path it always did, down to the instruction.
+    let blend = blend_mode(group.blend);
+    let lay: fn(&mut [LinearRgba], usize, LinearRgba, f32, BlendMode) =
+        if blend == BlendMode::Normal {
+            |row, x, texel, a, _| over(row, x, texel, a)
+        } else {
+            mix
+        };
     // Where the clip covers a pixel whole, which is everywhere but a
     // half-pixel band at its edge and its rounded corners. Inside this
     // rectangle the coverage is exactly one, so the square root and the
@@ -984,7 +993,7 @@ fn composite(
                     continue;
                 }
                 let px = (dx + dst_origin.0) as f64 + 0.5;
-                over(row, dx as usize, texel, opacity * clip(px, py));
+                lay(row, dx as usize, texel, opacity * clip(px, py), blend);
             }
         });
         return;
@@ -1036,7 +1045,7 @@ fn composite(
                     let texel = src.sample(u, v);
                     if texel.a > 0.0 {
                         let px = (dx + dst_origin.0) as f64 + 0.5;
-                        over(row, dx as usize, texel, opacity * clip(px, py));
+                        lay(row, dx as usize, texel, opacity * clip(px, py), blend);
                     }
                 }
                 u += ax;
@@ -1076,7 +1085,13 @@ fn composite(
             let dx = x0 + k as i64;
             let texel = sum.scaled(norm);
             let px = (dx + dst_origin.0) as f64 + 0.5;
-            over(row, dx as usize, texel, opacity * clip(px, py_row + 0.5));
+            lay(
+                row,
+                dx as usize,
+                texel,
+                opacity * clip(px, py_row + 0.5),
+                blend,
+            );
         }
     });
 }
@@ -1250,6 +1265,40 @@ fn over(row: &mut [LinearRgba], x: usize, texel: LinearRgba, a: f32) {
         b: texel.b * a + d.b * inv,
         a: texel.a * a + d.a * inv,
     };
+}
+
+/// The same, mixed with what is behind it by a blend mode.
+///
+/// The group's buffer and the surface are both in the painter's working
+/// space, which is sRGB-encoded, and that is the space CSS blends in, so
+/// the compositor's own function applies here unchanged.
+#[inline]
+fn mix(row: &mut [LinearRgba], x: usize, texel: LinearRgba, a: f32, mode: BlendMode) {
+    if a <= 0.0 {
+        return;
+    }
+    let src = LinearRgba {
+        r: texel.r * a,
+        g: texel.g * a,
+        b: texel.b * a,
+        a: texel.a * a,
+    };
+    row[x] = crate::cpu::composite(src, row[x], mode);
+}
+
+/// A markup blend mode as the compositor's, which implements the same
+/// separable modes of the CSS specification under its own names.
+fn blend_mode(blend: geneva_html::Blend) -> BlendMode {
+    match blend {
+        geneva_html::Blend::Normal => BlendMode::Normal,
+        geneva_html::Blend::Multiply => BlendMode::Multiply,
+        geneva_html::Blend::Screen => BlendMode::Screen,
+        geneva_html::Blend::Overlay => BlendMode::Overlay,
+        geneva_html::Blend::Darken => BlendMode::Darken,
+        geneva_html::Blend::Lighten => BlendMode::Lighten,
+        geneva_html::Blend::Difference => BlendMode::Difference,
+        geneva_html::Blend::SoftLight => BlendMode::SoftLight,
+    }
 }
 
 fn distance(px: f64, py: f64, rect: Rectangle, radius: [f64; 4]) -> f64 {

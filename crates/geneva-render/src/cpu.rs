@@ -690,7 +690,7 @@ fn draw_span(
 /// `Cs·αs·(1−αb) + Cb·αb·(1−αs) + αs·αb·B(Cb, Cs)` where `B` is the mode's
 /// blend function on straight (un-premultiplied) colors, and the result
 /// alpha is the ordinary "over" alpha.
-fn composite(src: LinearRgba, dst: LinearRgba, mode: BlendMode) -> LinearRgba {
+pub(crate) fn composite(src: LinearRgba, dst: LinearRgba, mode: BlendMode) -> LinearRgba {
     let blend: fn(f32, f32) -> f32 = match mode {
         BlendMode::Normal => return src.over(dst),
         BlendMode::Add => {

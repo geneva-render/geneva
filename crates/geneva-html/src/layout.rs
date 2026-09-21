@@ -89,6 +89,9 @@ pub struct Group {
     /// `clip-path: polygon()` in the surface's pixels, applied to the
     /// group's picture before its transform.
     pub clip_path: Option<Vec<(f64, f64)>>,
+    /// `mix-blend-mode`: how the composited picture is mixed with what
+    /// is already behind it.
+    pub blend: crate::style::Blend,
 }
 
 /// The laid-out document.
@@ -231,6 +234,7 @@ impl Walk<'_> {
             && (style.paint.opacity < 1.0
                 || style.paint.blur > 0.0
                 || style.paint.clip_path.is_some()
+                || style.paint.blend != crate::style::Blend::Normal
                 || (style.animation.is_some() && self.played_by_clip != Some(dom)))
     }
 
@@ -274,6 +278,7 @@ impl Walk<'_> {
             blur: style.paint.blur,
             clip: None,
             clip_path,
+            blend: style.paint.blend,
         });
         Ok(Some(self.groups.len() - 1))
     }

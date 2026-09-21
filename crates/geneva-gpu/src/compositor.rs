@@ -1281,7 +1281,13 @@ impl Compositor {
                         // are painted on the CPU and its groups
                         // composited here; the finished box is decoded
                         // to linear light and drawn as a picture.
-                        if let Some(layers) = painter.markup_layers(comp, clip, local)? {
+                        // A box that blends is left to the CPU painter
+                        // below: a group pass draws into the surface
+                        // without reading it, so a mode that mixes with
+                        // the backdrop has nothing to mix with here.
+                        if let Some(layers) = painter.markup_layers(comp, clip, local)?
+                            && !layers.blends()
+                        {
                             let (w, h, content) = (layers.width, layers.height, layers.content);
                             image = self.plan_markup(gpu, &layers);
                             uniform.kind = KIND_IMAGE;

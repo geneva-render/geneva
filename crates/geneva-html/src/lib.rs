@@ -28,8 +28,8 @@ pub use css::{CssError, KeyframesRule, Stylesheet};
 pub use dom::{Document, Element, HtmlError, Node, NodeId, NodeKind};
 pub use layout::{Content, Group, Laid, Measure, Painted};
 pub use style::{
-    AnimationSpec, Background, Computed, Direction, Extent, Overrides, Paint, Shadow, Stop, Text,
-    TextAlign, TextFill, declared_box, extent_of, overridden,
+    AnimationSpec, Background, Blend, Computed, Direction, Extent, Overrides, Paint, Shadow, Stop,
+    Text, TextAlign, TextFill, declared_box, extent_of, overridden,
 };
 
 /// Why a document did not parse, and where.
