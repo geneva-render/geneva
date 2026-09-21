@@ -53,6 +53,13 @@ the quarantine flag, leaving the binary and `check.sh` in `geneva-build/`.
 Downloading works for anyone; `--rerun` dispatches the workflow, which needs
 write access to the repository.
 
+`scripts/check-markup.sh` then checks that machine's markup rendering
+against the committed references without a toolchain: it renders the frames
+of the two markup golden cases with the binary and compares them with
+`tests/golden/*/expected/`, byte for byte. Font matching and coverage
+arithmetic have differed between machines before, and this is what catches
+that.
+
 Before pushing:
 
 ```sh
