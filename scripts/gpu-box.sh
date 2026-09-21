@@ -4,7 +4,9 @@
 # everything from a clone, and leaves nothing worth keeping behind.
 #
 # Usage: gpu-box.sh [--ref REF] [--quick]
-#   --ref REF   the branch or tag to test; main by default
+#   --ref REF   the branch or tag to test; main by default. Ignored when
+#               GENEVA_ARCHIVE names a tarball of the tree, which is how a
+#               machine with no credentials for the repository gets it
 #   --quick     skip the media libraries, the suite and check.sh, and report
 #               only what the machine is and whether Vulkan works
 #
@@ -26,7 +28,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --ref) ref=$2; shift 2 ;;
     --quick) quick=1; shift ;;
-    -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,22p' "$0"; exit 0 ;;
     *) echo "gpu-box.sh: unknown argument $1" >&2; exit 2 ;;
   esac
 done
@@ -91,14 +93,21 @@ fi
 export PATH="$HOME/.cargo/bin:$PATH"
 rustc --version
 
-if ! once clone; then
-  say "cloning $ref"
-  rm -rf "$repo"
-  git clone --depth 1 --branch "$ref" https://github.com/geneva-render/geneva.git "$repo" 2>&1 | tail -2
-  did clone
+if ! once source; then
+  if [ -n "${GENEVA_ARCHIVE:-}" ] && [ -f "$GENEVA_ARCHIVE" ]; then
+    say "unpacking $GENEVA_ARCHIVE"
+    rm -rf "$repo"; mkdir -p "$repo"
+    tar xzf "$GENEVA_ARCHIVE" -C "$repo" || exit 1
+    did source
+  else
+    say "cloning $ref"
+    rm -rf "$repo"
+    git clone --depth 1 --branch "$ref" https://github.com/geneva-render/geneva.git "$repo" 2>&1 | tail -2
+    did source
+  fi
 fi
 cd "$repo" || exit 1
-git log --oneline -1
+if [ -d .git ]; then git log --oneline -1; else echo "source from an archive, no history"; fi
 
 if ! once media-libs; then
   say "building the media libraries"
