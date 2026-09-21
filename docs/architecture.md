@@ -110,11 +110,11 @@ that the same placement code composites. Inside that image the painter
 blends on sRGB-encoded premultiplied values, as a browser does, and
 converts the finished box to linear light once. A box with nothing
 animated inside it is painted once per clip whatever its length. An
-element with an animation, a transform, opacity, a filter or a clip is
-painted as a group into its own buffer and composited with those
-applied; the buffer covers only what its parent can show, taken back
-through the transform and padded for the blur, and a group that lands
-off the frame is skipped. A group whose animation moves a size lays the
+element with an animation, a transform, opacity, a filter, a blend mode
+or a clip is painted as a group into its own buffer and composited with
+those applied; the buffer covers only what its parent can show, taken
+back through the transform and padded for the blur, and a group that
+lands off the frame is skipped. A group whose animation moves a size lays the
 box out again each frame. The painter's loops (boxes, shadows,
 pictures, polygon clips, laying a group onto its parent, the conversion
 to linear light) share their rows across the thread pool like the
@@ -174,9 +174,13 @@ buffer is its run, or its own items composited into a pooled texture
 first; a blurred buffer goes through the same box blurs on a layer; a
 polygon clip goes up as coverage over the buffer; and the buffer is
 laid through the transform's inverse with the same taps, under the
-opacity and the rounded clip's coverage, by premultiplied "over". One
-pass then decodes the finished box to linear light, and it is placed
-as a picture. The pictures of groups that do not change from frame to
+opacity and the rounded clip's coverage, by premultiplied "over". A
+group with a `mix-blend-mode` mixes with what is behind it instead,
+which means reading the surface it is drawing into: the pass stops
+there, the surface so far is copied, and the group is drawn from a
+second pipeline that samples the copy as its backdrop. One pass then
+decodes the finished box to linear light, and it is placed as a
+picture. The pictures of groups that do not change from frame to
 frame are kept on the device as the painter keeps them on the CPU. The
 same walk composited on the CPU through the painter's own code is the
 box the painter paints, which a test holds it to; the device's

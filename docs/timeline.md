@@ -814,9 +814,11 @@ inside it costs a paint per frame and one layout.
   browser uses, so `multiply` of `#8080ff` over `#ff8800` is `#804400`
   here as there. `isolation` is not read: a blend sees everything
   already painted under it on the markup surface, not the frame beneath
-  the clip. The GPU renderer composites a box that blends on the CPU,
-  since a group pass draws into the surface without reading it; the
-  picture is the same, and only that box gives up the device.
+  the clip. The GPU renderer blends on the device: it copies the markup
+  surface before it draws a blending group and reads the copy as the
+  backdrop. It mixes in 16-bit floats rather than the painter's 8-bit
+  pixels, so the two renderers agree to the golden tolerance rather than
+  byte for byte.
 - There is no `float`, no grid, no transition and no media
   query. A `transition` needs a state to change and a render has none;
   `@keyframes` is how a document moves. The clip's own `transform` and `animation` move the whole box.

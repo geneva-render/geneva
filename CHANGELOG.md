@@ -128,10 +128,11 @@ the format version it was written for.
   rest of the CSS list is W450 rather than approximated. Mixing happens
   in the sRGB-encoded space the painter works in, which is the space a
   browser blends in, so `multiply` of `#8080ff` over `#ff8800` gives
-  `#804400` in both. The GPU renderer composites a box that blends on
-  the CPU: a group pass draws into the surface without reading it, so
-  there is no backdrop to mix with there. The picture is the same on
-  both, which a new golden case holds them to.
+  `#804400` in both. Both renderers blend: the GPU copies the markup
+  surface before it draws a blending group and reads the copy as the
+  backdrop, so such a box stays on the device. The device mixes in
+  16-bit floats, so the two agree to the golden tolerance rather than
+  byte for byte, which a new golden case holds them to.
 
 ### Fixed
 

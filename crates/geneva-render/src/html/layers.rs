@@ -417,23 +417,6 @@ fn close<'a>(
 }
 
 impl MarkupLayers<'_> {
-    /// Whether any group in the box mixes with what is behind it.
-    ///
-    /// A renderer that composites these itself needs to know: blending
-    /// reads the backdrop, which the group passes do not have, so the
-    /// GPU renderer composites such a box on the CPU instead. Without
-    /// this the mode would simply be dropped there, and the two
-    /// renderers would draw different pictures.
-    pub fn blends(&self) -> bool {
-        fn any(items: &[MarkupItem<'_>]) -> bool {
-            items.iter().any(|item| match item {
-                MarkupItem::Run(_) => false,
-                MarkupItem::Group(g) => g.blend != geneva_html::Blend::Normal || any(&g.items),
-            })
-        }
-        any(&self.items)
-    }
-
     /// The layers composited on the CPU, through the painter's own
     /// composite, and turned into linear light: the picture
     /// [`super::render`] paints, to rounding. What the GPU's composite

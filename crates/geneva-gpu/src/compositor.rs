@@ -230,7 +230,9 @@ struct GroupUniform {
     opacity: f32,
     has_clip: u32,
     has_mask: u32,
-    _pad: u32,
+    /// The separable blend mode, numbered as `composite.wgsl` numbers
+    /// them: zero lays the group over what is behind it.
+    blend: u32,
 }
 
 /// One run or group of a markup box laid into a target, in order.
@@ -362,6 +364,8 @@ pub(crate) struct Compositor {
     group_layer: wgpu::RenderPipeline,
     decode: wgpu::RenderPipeline,
     group_layout: wgpu::BindGroupLayout,
+    /// The pipeline for a group that mixes with a copy of its target.
+    group_blend: wgpu::RenderPipeline,
     /// One slot per group draw.
     group_uniforms: wgpu::Buffer,
     group_slot: u64,
@@ -675,6 +679,7 @@ impl Compositor {
                 },
                 texture_entry(1, float),
                 texture_entry(2, float),
+                texture_entry(3, float),
             ],
         });
         let group_pipeline_layout =
@@ -722,6 +727,16 @@ impl Compositor {
             "fs_group",
             WORKING_FORMAT,
             Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+        );
+        // A group mixed with a copy of what is behind it: the shader
+        // returns the whole result, so the pixel is replaced rather
+        // than blended by fixed function.
+        let group_blend = markup(
+            "geneva group blend",
+            "vs_main",
+            "fs_group_blend",
+            WORKING_FORMAT,
+            None,
         );
         // A buffer onto a transparent blur layer, written as it is.
         let group_layer = markup(
@@ -785,6 +800,7 @@ impl Compositor {
             pack_slot,
             pack_capacity,
             group,
+            group_blend,
             group_layer,
             decode,
             group_layout,
@@ -1281,13 +1297,7 @@ impl Compositor {
                         // are painted on the CPU and its groups
                         // composited here; the finished box is decoded
                         // to linear light and drawn as a picture.
-                        // A box that blends is left to the CPU painter
-                        // below: a group pass draws into the surface
-                        // without reading it, so a mode that mixes with
-                        // the backdrop has nothing to mix with here.
-                        if let Some(layers) = painter.markup_layers(comp, clip, local)?
-                            && !layers.blends()
-                        {
+                        if let Some(layers) = painter.markup_layers(comp, clip, local)? {
                             let (w, h, content) = (layers.width, layers.height, layers.content);
                             image = self.plan_markup(gpu, &layers);
                             uniform.kind = KIND_IMAGE;
@@ -1716,7 +1726,11 @@ impl Compositor {
                         origin,
                         size,
                     );
-                    if let Some(uniform) = uniform {
+                    if let Some(mut uniform) = uniform {
+                        // The mode is numbered as a clip's is, through
+                        // the painter's own mapping, so the markup
+                        // shader and the compositor cannot drift apart.
+                        uniform.blend = blending(geneva_render::blend_mode(group.blend)).1;
                         draws.push(GroupDraw {
                             uniform,
                             image,
@@ -1955,6 +1969,7 @@ impl Compositor {
         device: &wgpu::Device,
         image: &Tex,
         mask: Option<usize>,
+        backdrop: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("geneva group"),
@@ -1977,6 +1992,10 @@ impl Compositor {
                     resource: wgpu::BindingResource::TextureView(
                         mask.map_or(&self.blank, |i| &self.masks[i].view),
                     ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(backdrop),
                 },
             ],
         })
@@ -2092,6 +2111,18 @@ impl Compositor {
                     .iter()
                     .any(|d| matches!(d.blending, Blending::Separable))
                     .then(|| self.acquire(gpu, *width, *height)),
+                // A markup pass whose groups blend reads what the
+                // earlier draws left, the same way, so it needs a copy
+                // of its target too. Only a pooled target ever does:
+                // the layer targets belong to the blur, and a draw onto
+                // one never blends.
+                Pass::Markup {
+                    target: Tex::Pooled(i),
+                    draws,
+                } => draws.iter().any(|d| d.uniform.blend != 0).then(|| {
+                    let (w, h) = (self.pool[*i].width, self.pool[*i].height);
+                    self.acquire(gpu, w, h)
+                }),
                 _ => None,
             })
             .collect();
@@ -2175,25 +2206,57 @@ impl Compositor {
                     rpass.draw(0..6, 0..1);
                 }
                 Pass::Markup { target, draws } => {
+                    let backdrop_view = backdrop.map_or(&self.blank, |i| &self.pool[i].view);
                     let bind_groups: Vec<wgpu::BindGroup> = draws
                         .iter()
-                        .map(|d| self.group_bind_group(device, &d.image, d.mask))
+                        .map(|d| self.group_bind_group(device, &d.image, d.mask, backdrop_view))
                         .collect();
                     let pipeline = match target {
                         Tex::Layer(_) => &self.group_layer,
                         _ => &self.group,
                     };
-                    let mut rpass = begin(encoder, self.view(target), transparent);
+                    let view = self.view(target);
+                    let mut rpass = begin(encoder, view, transparent);
                     rpass.set_pipeline(pipeline);
-                    for bind_group in &bind_groups {
+                    for (d, bind_group) in draws.iter().zip(&bind_groups) {
                         let offset = (next_group * self.group_slot) as wgpu::DynamicOffset;
                         next_group += 1;
+                        if d.uniform.blend != 0 {
+                            // The shader reads what the earlier draws
+                            // left, so the pass ends and the target is
+                            // copied first, as a separable clip does.
+                            drop(rpass);
+                            let copy = &self.pool[backdrop.expect("acquired for the pass")];
+                            let Tex::Pooled(i) = target else {
+                                unreachable!("only a pooled target blends")
+                            };
+                            let texture = &self.pool[*i].texture;
+                            encoder.copy_texture_to_texture(
+                                texture.as_image_copy(),
+                                copy.texture.as_image_copy(),
+                                wgpu::Extent3d {
+                                    width: copy.width,
+                                    height: copy.height,
+                                    depth_or_array_layers: 1,
+                                },
+                            );
+                            rpass = begin(encoder, view, wgpu::LoadOp::Load);
+                            rpass.set_pipeline(&self.group_blend);
+                            rpass.set_bind_group(0, bind_group, &[offset]);
+                            rpass.draw(0..6, 0..1);
+                            // Back to laying groups over one another.
+                            drop(rpass);
+                            rpass = begin(encoder, view, wgpu::LoadOp::Load);
+                            rpass.set_pipeline(pipeline);
+                            continue;
+                        }
                         rpass.set_bind_group(0, bind_group, &[offset]);
                         rpass.draw(0..6, 0..1);
                     }
                 }
                 Pass::Decode { from, to } => {
-                    let bind_group = self.group_bind_group(device, &Tex::Pooled(*from), None);
+                    let bind_group =
+                        self.group_bind_group(device, &Tex::Pooled(*from), None, &self.blank);
                     let mut rpass = begin(encoder, &self.pool[*to].view, transparent);
                     rpass.set_pipeline(&self.decode);
                     rpass.set_bind_group(0, &bind_group, &[0]);
@@ -2371,7 +2434,7 @@ fn group_uniform(
         opacity,
         has_clip: u32::from(clip.is_some()),
         has_mask: u32::from(has_mask),
-        _pad: 0,
+        blend: 0,
     })
 }
 

@@ -18,7 +18,7 @@
 //! into a [`Frame`]. Text is painted on the CPU by the shared
 //! [`geneva_render::Painter`] and uploaded; a markup box's boxes are
 //! painted by the same painter and its groups (opacity, blur, clips,
-//! transforms) composited on the device, in the painter's encoded
+//! transforms, blend modes) composited on the device, in the painter's encoded
 //! space, then decoded to linear light there; an 8-bit 4:2:0 video
 //! frame is uploaded as its planes and converted on the device; a
 //! blurred clip is drawn onto a layer and blurred by the same three box

@@ -30,7 +30,7 @@ pub use assets::{AssetSource, FileAssets, Image, NoAssets, VideoPlanes};
 pub use blur::{box_radii, gaussian_blur};
 pub use cpu::CpuRenderer;
 pub use frame::Frame;
-pub use html::{MarkupGroup, MarkupItem, MarkupLayers, MarkupRun};
+pub use html::{MarkupGroup, MarkupItem, MarkupLayers, MarkupRun, blend_mode};
 pub use painter::{Paint, Painted, Painter};
 pub use placement::{Placement, SUBSAMPLES, crop_window};
 pub use text::TextEngine;

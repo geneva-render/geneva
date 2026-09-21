@@ -1288,7 +1288,7 @@ fn mix(row: &mut [LinearRgba], x: usize, texel: LinearRgba, a: f32, mode: BlendM
 
 /// A markup blend mode as the compositor's, which implements the same
 /// separable modes of the CSS specification under its own names.
-fn blend_mode(blend: geneva_html::Blend) -> BlendMode {
+pub fn blend_mode(blend: geneva_html::Blend) -> BlendMode {
     match blend {
         geneva_html::Blend::Normal => BlendMode::Normal,
         geneva_html::Blend::Multiply => BlendMode::Multiply,
