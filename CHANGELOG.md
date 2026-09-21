@@ -7,6 +7,8 @@ the format version it was written for.
 
 ## Unreleased
 
+## 0.7.0 (2026-09-21)
+
 ### Added
 
 - **W404 names a clip whose placement is probably not what was meant.**
