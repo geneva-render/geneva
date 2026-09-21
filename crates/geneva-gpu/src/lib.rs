@@ -38,7 +38,7 @@ use geneva_media::{PlaneRenderer, PlaneTarget};
 use geneva_render::{AssetSource, Frame, Painter, RenderError, Renderer};
 use geneva_timeline::{Composition, Ratio};
 
-pub use device::{Gpu, GpuError, Preference, Report};
+pub use device::{Gpu, GpuError, Preference, Report, hint};
 
 /// Renders frames on a device.
 ///

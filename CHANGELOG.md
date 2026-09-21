@@ -69,6 +69,18 @@ the format version it was written for.
   differential test against the old arithmetic agrees on 400,000 random
   spans, and a unit test pins the case.
 
+- **A GPU that Vulkan cannot see is explained, not just reported
+  missing.** A container built for CUDA, which is what a rented GPU
+  usually comes with, carries the NVIDIA driver's compute half and not
+  its graphics half, so `nvidia-smi` works and Vulkan finds nothing. The
+  driver there is a GLVND vendor library that needs the X11 client
+  libraries to load and the GLVND dispatch libraries to start, and
+  missing either produces the same unhelpful loader message. The probe
+  now says which of them is absent and names the packages, and a render
+  that lands on a software device when one was not asked for says so
+  instead of being quietly slower than the CPU renderer. NVENC is
+  unaffected, since it goes through the compute half.
+
 ### Fixed
 
 - **An animated box at the top level of a document no longer moves the

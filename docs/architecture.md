@@ -125,7 +125,31 @@ compositor's; text is shaped and rasterized on one thread.
 `geneva-gpu` is a second `Renderer` on `wgpu` (Vulkan, Metal, DirectX
 12; WGSL), pure Rust, the device found at run time. `render --renderer
 auto` takes a hardware device where there is one and the CPU otherwise;
-`gpu` takes a software device too. What it shares with the CPU renderer
+`gpu` takes a software device too.
+
+### Vulkan in a container
+
+A container built for CUDA, which is what a rented GPU usually comes
+with, has the driver's compute half and not its graphics half, and
+Vulkan then finds no device. `nvidia-smi` working says nothing about
+this either way. On NVIDIA the Vulkan driver is `libGLX_nvidia.so.0`, a
+GLVND vendor library, and it needs two sets of libraries a compute
+image does not carry: the X11 client libraries to load, and the GLVND
+dispatch libraries to start. Missing either one looks the same from
+outside, a loader message about `vkCreateInstance`, and the renderer
+then uses a software device or the CPU.
+
+```sh
+apt-get install -y libx11-6 libxext6 libglvnd0 libegl1 libgl1 libgles2
+# and start the container with NVIDIA_DRIVER_CAPABILITIES=all
+```
+
+The probe reports what it can see of this rather than leaving it to be
+found by hand: when a GPU is present and no usable device came up, or
+when a software device was taken and one was not asked for, the note
+names what is missing and the packages that carry it. Hardware encoding
+is a separate matter and is not affected: NVENC goes through the
+compute half, so it keeps working where the compositor cannot. What it shares with the CPU renderer
 it shares as code rather than as a copy: the placement of a clip
 (`Placement`), what transitions do to opacity and the fade's veil, and
 the painter above the composite (image assets, text shaped and drawn,

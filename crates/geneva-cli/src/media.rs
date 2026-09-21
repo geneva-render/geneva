@@ -237,15 +237,26 @@ pub fn choose_renderer(
         } else {
             Preference::Hardware
         };
-        match Gpu::probe(Preference::from_env(wanted)) {
+        let preference = Preference::from_env(wanted);
+        match Gpu::probe(preference) {
             Ok(gpu) => {
-                let line = gpu.report().line();
-                (
-                    Box::new(GpuRenderer::new(gpu, assets())),
-                    vec![format!(
-                        "GPU {line}: the frames were composited on the device"
-                    )],
-                )
+                let (line, software) = (gpu.report().line(), gpu.report().software);
+                let mut notes = vec![format!(
+                    "GPU {line}: the frames were composited on the device"
+                )];
+                // Taking a software device when one was not asked for is
+                // the quiet failure: it draws the right pixels and is
+                // slower than the CPU renderer, on a machine that has a
+                // GPU in it. Say so, and say what is missing where that
+                // can be told.
+                if software && preference != Preference::Software {
+                    if let Some(why) = geneva_gpu::hint() {
+                        notes.push(format!(
+                            "this is a software device, not the machine's own GPU: {why}"
+                        ));
+                    }
+                }
+                (Box::new(GpuRenderer::new(gpu, assets())), notes)
             }
             Err(e) if choice == RendererChoice::Gpu => cpu(vec![format!(
                 "no usable GPU ({e}); the frames were composited on the CPU"

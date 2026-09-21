@@ -63,10 +63,13 @@ impl Report {
 #[derive(Debug, Error)]
 pub enum GpuError {
     /// No adapter matched the preference.
-    #[error("no {wanted} GPU adapter was found")]
+    #[error("no {wanted} GPU adapter was found{hint}")]
     NoAdapter {
         /// What was asked for, in words.
         wanted: &'static str,
+        /// What is missing, where that can be told, ready to append to
+        /// the sentence above. Empty when there is nothing to add.
+        hint: String,
     },
     /// The adapter cannot render the working format.
     #[error("{name} cannot {what} Rgba16Float textures, which the compositor draws into")]
@@ -136,7 +139,10 @@ impl Gpu {
                     Preference::Software => kind == wgpu::DeviceType::Cpu,
                 }
             })
-            .ok_or(GpuError::NoAdapter { wanted })?;
+            .ok_or_else(|| GpuError::NoAdapter {
+                wanted,
+                hint: hint().map_or_else(String::new, |h| format!(": {h}")),
+            })?;
         let info = adapter.get_info();
         let features = adapter.get_texture_format_features(WORKING_FORMAT);
         let usages = wgpu::TextureUsages::RENDER_ATTACHMENT
@@ -225,5 +231,160 @@ fn rank(kind: wgpu::DeviceType) -> u8 {
         wgpu::DeviceType::VirtualGpu => 2,
         wgpu::DeviceType::Cpu => 3,
         wgpu::DeviceType::Other => 4,
+    }
+}
+
+/// The directories a shared library could be in, for [`hint`].
+#[cfg(target_os = "linux")]
+const LIB_DIRS: &[&str] = &[
+    "/lib/x86_64-linux-gnu",
+    "/usr/lib/x86_64-linux-gnu",
+    "/lib/aarch64-linux-gnu",
+    "/usr/lib/aarch64-linux-gnu",
+    "/lib64",
+    "/usr/lib64",
+    "/usr/lib",
+];
+
+/// The libraries NVIDIA's Vulkan driver needs before it will start, and
+/// the packages that carry them on Debian and Ubuntu.
+#[cfg(target_os = "linux")]
+const NEEDED: &[(&str, &str)] = &[
+    ("libX11.so.6", "libx11-6"),
+    ("libXext.so.6", "libxext6"),
+    ("libGLdispatch.so.0", "libglvnd0"),
+    ("libEGL.so.1", "libegl1"),
+    ("libGL.so.1", "libgl1"),
+];
+
+/// Why a machine that has a GPU may still offer no usable device, where
+/// the filesystem says enough to tell.
+///
+/// The case this exists for is a container built for CUDA, which is what
+/// a rented GPU usually is. `nvidia-smi` works, the compute libraries
+/// are all present, and the graphics ones are not. Vulkan then reports
+/// no device, or only a software one, and the renderer falls back to the
+/// CPU on a machine someone is paying for by the hour. Nothing along
+/// that path says why, so this does.
+///
+/// It only reports what it can check: that an NVIDIA GPU is present,
+/// that the driver's Vulkan manifest is or is not installed, and which
+/// libraries the driver needs are missing. It never claims to know that
+/// installing them will be enough.
+pub fn hint() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        let nvidia = std::path::Path::new("/dev/nvidiactl").exists()
+            || std::fs::read_dir("/proc/driver/nvidia/gpus").is_ok_and(|mut d| d.next().is_some());
+        let icd = ["/usr/share/vulkan/icd.d", "/etc/vulkan/icd.d"]
+            .iter()
+            .filter_map(|d| std::fs::read_dir(d).ok())
+            .flatten()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().contains("nvidia"));
+        let missing: Vec<&str> = NEEDED
+            .iter()
+            .filter(|(lib, _)| {
+                !LIB_DIRS
+                    .iter()
+                    .any(|d| std::path::Path::new(d).join(lib).exists())
+            })
+            .map(|(lib, _)| *lib)
+            .collect();
+        hint_from(nvidia, icd, &missing)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+/// The wording for [`hint`], kept apart from the filesystem so it can be
+/// checked on a machine in any state.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn hint_from(nvidia: bool, icd: bool, missing: &[&str]) -> Option<String> {
+    if !nvidia {
+        return None;
+    }
+    if !icd {
+        return Some(
+            "an NVIDIA GPU is here but the driver's Vulkan manifest is not, so this container              was given the driver's compute half and not its graphics half. Start it with              NVIDIA_DRIVER_CAPABILITIES=all"
+                .to_owned(),
+        );
+    }
+    if missing.is_empty() {
+        return Some(
+            "an NVIDIA GPU is here and its Vulkan driver looks complete, so the reason is              something this cannot see. `vulkaninfo --summary` prints the loader's own account"
+                .to_owned(),
+        );
+    }
+    #[cfg(target_os = "linux")]
+    let packages: Vec<&str> = NEEDED
+        .iter()
+        .filter(|(lib, _)| missing.contains(lib))
+        .map(|(_, pkg)| *pkg)
+        .collect();
+    #[cfg(not(target_os = "linux"))]
+    let packages: Vec<&str> = Vec::new();
+    Some(format!(
+        "an NVIDIA GPU is here and its Vulkan driver is installed, but {} {} missing. The driver          is a GLVND vendor library and will not start without {}. On Debian or Ubuntu: apt-get          install {}",
+        missing.join(", "),
+        if missing.len() == 1 { "is" } else { "are" },
+        if missing.len() == 1 { "it" } else { "them" },
+        packages.join(" "),
+    ))
+}
+
+#[cfg(test)]
+mod hint_tests {
+    use super::hint_from;
+
+    /// A machine with no NVIDIA GPU gets no NVIDIA advice. There is
+    /// nothing useful to say: it may have no GPU at all, or an AMD one,
+    /// and this only knows about the one case.
+    #[test]
+    fn nothing_is_said_about_a_machine_with_no_nvidia_gpu() {
+        assert_eq!(hint_from(false, false, &["libEGL.so.1"]), None);
+    }
+
+    /// The container was given the driver's compute half only, which is
+    /// the default for the images a rented GPU comes with.
+    #[test]
+    fn a_missing_manifest_points_at_the_driver_capabilities() {
+        let h = hint_from(true, false, &[]).expect("a hint");
+        assert!(h.contains("NVIDIA_DRIVER_CAPABILITIES=all"), "{h}");
+    }
+
+    /// The driver is there and cannot start. This is the case that cost
+    /// a morning: the libraries it needs are named, and so are the
+    /// packages that carry them.
+    #[test]
+    fn missing_libraries_are_named_with_their_packages() {
+        let h = hint_from(true, true, &["libGLdispatch.so.0", "libEGL.so.1"]).expect("a hint");
+        assert!(
+            h.contains("libGLdispatch.so.0, libEGL.so.1 are missing"),
+            "{h}"
+        );
+        assert!(h.contains("libglvnd0 libegl1"), "{h}");
+        assert!(
+            !h.contains("libx11-6"),
+            "only the packages for what is missing: {h}"
+        );
+    }
+
+    /// One missing library reads as one, not as a list.
+    #[test]
+    fn one_missing_library_is_singular() {
+        let h = hint_from(true, true, &["libEGL.so.1"]).expect("a hint");
+        assert!(h.contains("libEGL.so.1 is missing"), "{h}");
+        assert!(h.contains("without it"), "{h}");
+    }
+
+    /// Everything checkable is in place, so this says so rather than
+    /// guessing, and points at the tool that does know.
+    #[test]
+    fn a_complete_install_admits_it_cannot_tell() {
+        let h = hint_from(true, true, &[]).expect("a hint");
+        assert!(h.contains("vulkaninfo"), "{h}");
     }
 }
