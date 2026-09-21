@@ -89,86 +89,96 @@ words = sum(len(s.get("words", [])) for s in grown)
 print(f"subtitles: {len(grown)} cues, {words} words across {secs}s")
 PYEOF
 
-# A persistent overlay, and a brief one. Both are real shapes of job:
-# a badge that stays up, and a lower third that appears once.
+# Everything is timed through `render`, because `--renderer` is only on
+# `render`: the verbs compile to a document and that is what is drawn.
+# `--show-timeline` gives their document, so the verb jobs below are the
+# same work the verb would have done.
+cp card.html "$dir/card.html"
+
 cat > "$dir/overlay.json" <<JSON
 { "geneva": "0.4",
-  "output": { "width": 1920, "height": 1080, "fps": 30 },
-  "assets": { "src": { "src": "$dir/long.mp4" }, "card": { "src": "card.html" } },
+  "output": { "width": 1920, "height": 1080, "fps": 30, "duration": "${seconds}s" },
+  "assets": { "src": { "src": "long.mp4" }, "card": { "src": "card.html" } },
   "layers": [
     { "id": "v", "clips": [ { "source": { "kind": "video", "asset": "src" } } ] },
-    { "id": "card", "clips": [ { "source": { "kind": "html", "asset": "card" } } ] } ] }
+    { "id": "card", "clips": [ { "source": { "kind": "html", "asset": "card" },
+        "duration": "${seconds}s" } ] } ] }
 JSON
 cat > "$dir/lower-third.json" <<JSON
 { "geneva": "0.4",
-  "output": { "width": 1920, "height": 1080, "fps": 30 },
-  "assets": { "src": { "src": "$dir/long.mp4" }, "card": { "src": "card.html" } },
+  "output": { "width": 1920, "height": 1080, "fps": 30, "duration": "${seconds}s" },
+  "assets": { "src": { "src": "long.mp4" }, "card": { "src": "card.html" } },
   "layers": [
     { "id": "v", "clips": [ { "source": { "kind": "video", "asset": "src" } } ] },
     { "id": "card", "clips": [ { "source": { "kind": "html", "asset": "card" },
         "start": "3s", "duration": "5s" } ] } ] }
 JSON
 
-# name|what to run, with RENDERER and OUT standing in
+# The two verbs, as the documents they compile to.
+"$geneva" subtitles --burn "$dir/words-long.json" --fit --show-timeline \
+  -o "$dir/x.mp4" "$dir/long.mp4" > "$dir/subtitles.json" 2> "$dir/subtitles.err" \
+  || { echo "subtitles --show-timeline failed:"; tail -3 "$dir/subtitles.err"; }
+"$geneva" convert --for tiktok --show-timeline \
+  -o "$dir/x.mp4" "$dir/long.mp4" > "$dir/tiktok.json" 2> "$dir/tiktok.err" \
+  || { echo "convert --show-timeline failed:"; tail -3 "$dir/tiktok.err"; }
+
+# name|document
 jobs=$(cat <<'LIST'
-subtitles burned in, 1080p|subtitles DIRLONG -o OUT --burn DIRWORDS --fit --renderer RENDERER
-markup overlay, whole run|render DIRDIR/overlay.json -o OUT --renderer RENDERER
-lower third, 5s of the run|render DIRDIR/lower-third.json -o OUT --renderer RENDERER
-vertical reframe, --for tiktok|convert DIRLONG -o OUT --for tiktok --renderer RENDERER
-the opening, markup heavy|render opening.json -o OUT --renderer RENDERER
+subtitles burned in|DIR/subtitles.json
+markup overlay, whole run|DIR/overlay.json
+lower third, 5s of the run|DIR/lower-third.json
+vertical reframe, --for tiktok|DIR/tiktok.json
+the opening, markup heavy|opening.json
 LIST
 )
 
-printf "%-32s %9s %10s %10s %9s\n" "job" "frames" "cpu" "gpu" "gpu/cpu"
-printf "%-32s %9s %10s %10s %9s\n" "---" "------" "---" "---" "-------"
+printf "%-32s %8s %10s %10s %9s\n" "job" "frames" "cpu" "gpu" "gpu/cpu"
+printf "%-32s %8s %10s %10s %9s\n" "---" "------" "---" "---" "-------"
 
-encoders=""
-echo "$jobs" | while IFS='|' read -r name cmd; do
+echo "$jobs" | while IFS='|' read -r name doc; do
   [ -z "$name" ] && continue
-  line=""
+  doc=${doc//DIR/$dir}
+  # A document built here reads its assets from here; one from the
+  # repository reads them from beside itself.
+  case "$doc" in "$dir"/*) assets=$dir ;; *) assets=$PWD ;; esac
   frames=""
+  cpums=""
+  gpums=""
+  failed=""
   for r in cpu gpu; do
     best=""
     for pass in 1 2; do
       out=$dir/$(echo "$name" | tr -cd 'a-z')-$r.mp4
-      run=${cmd//RENDERER/$r}
-      run=${run//OUT/$out}
-      run=${run//DIRLONG/$dir\/long.mp4}
-      run=${run//DIRWORDS/$dir\/words-long.json}
-      run=${run//DIRDIR/$dir}
       a=$(date +%s%N)
-      # shellcheck disable=SC2086
-      "$geneva" $run > "$dir/last.log" 2>&1
+      "$geneva" render "$doc" -o "$out" --assets "$assets" --renderer "$r" \
+        > "$dir/last.log" 2>&1
       code=$?
       b=$(date +%s%N)
-      [ "$code" = 0 ] || break
+      if [ "$code" != 0 ]; then
+        failed=1
+        { echo "== $name ($r):"; tail -8 "$dir/last.log"; } >> "$dir/failures.log"
+        break
+      fi
       ms=$(( (b - a) / 1000000 ))
       if [ -z "$best" ] || [ "$ms" -lt "$best" ]; then best=$ms; fi
     done
-    if [ "$code" != 0 ]; then
-      line="$line FAILED"
-      echo "$name ($r) failed:" >> "$dir/failures.log"
-      tail -4 "$dir/last.log" >> "$dir/failures.log"
-      break
-    fi
-    [ -n "$frames" ] || frames=$(grep -o '([0-9]* frames' "$dir/last.log" | head -1 | tr -cd '0-9')
-    grep -o 'encoded with [^,]*' "$dir/last.log" | head -1 >> "$dir/encoders.txt"
-    line="$line $best"
+    [ -n "$failed" ] && break
+    [ -n "$frames" ] || frames=$(grep -oE '\(([0-9]+) frames' "$dir/last.log" | head -1 | tr -cd '0-9')
+    grep -oE 'encoded with [^,]*' "$dir/last.log" | head -1 >> "$dir/encoders.txt"
+    if [ "$r" = cpu ]; then cpums=$best; else gpums=$best; fi
   done
-  set -- $line
-  if [ "${1:-}" = "FAILED" ] || [ -z "${2:-}" ]; then
-    printf "%-32s %9s %10s %10s %9s\n" "$name" "${frames:-?}" "see failures.log" "" ""
+  if [ -n "$failed" ]; then
+    printf "%-32s %8s %10s %10s %9s\n" "$name" "${frames:-?}" "failed" "" ""
   else
-    cpu=$1; gpu=$2
-    ratio=$(awk -v c="$cpu" -v g="$gpu" 'BEGIN{ if (c>0) printf "%.2fx", g/c; else print "?" }')
-    printf "%-32s %9s %9ss %9ss %9s\n" "$name" "${frames:-?}" \
-      "$(awk -v m=$cpu 'BEGIN{printf "%.1f", m/1000}')" \
-      "$(awk -v m=$gpu 'BEGIN{printf "%.1f", m/1000}')" "$ratio"
+    ratio=$(awk -v c="$cpums" -v g="$gpums" 'BEGIN{ if (c>0) printf "%.2fx", g/c; else print "?" }')
+    printf "%-32s %8s %9ss %9ss %9s\n" "$name" "${frames:-?}" \
+      "$(awk -v m=$cpums 'BEGIN{printf "%.1f", m/1000}')" \
+      "$(awk -v m=$gpums 'BEGIN{printf "%.1f", m/1000}')" "$ratio"
   fi
 done
 
 echo
 echo "lower is better in the last column: below 1.00x the GPU won."
 [ -s "$dir/encoders.txt" ] && echo "encoder: $(sort -u "$dir/encoders.txt" | head -2 | tr '\n' ';')"
-[ -s "$dir/failures.log" ] && { echo; echo "failures:"; cat "$dir/failures.log"; }
+[ -s "$dir/failures.log" ] && { echo; echo "failures:"; head -40 "$dir/failures.log"; }
 echo "outputs in $dir"
