@@ -55,17 +55,27 @@ nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>
 
 if ! once apt-vulkan; then
   say "installing vulkan tools"
-  apt-get update -qq && apt-get install -y -qq vulkan-tools libvulkan1 curl ca-certificates >/dev/null 2>&1
+  # libx11-6 and libxext6 are not optional. On NVIDIA the Vulkan ICD is
+  # libGLX_nvidia.so.0, the GLX library, which pulls in the X11 client
+  # libraries when it loads. A container built for compute has none of
+  # them, the loader's dlopen fails, and it reports that as not being
+  # able to get vkCreateInstance, which reads like a driver problem and
+  # is not one.
+  apt-get update -qq && apt-get install -y -qq vulkan-tools libvulkan1 \
+    libx11-6 libxext6 curl ca-certificates >/dev/null 2>&1
   did apt-vulkan
 fi
 
 say "vulkan"
 summary=$(vulkaninfo --summary 2>&1)
 echo "$summary" | sed -n '/Devices:/,/^$/p' | head -20
-if ! echo "$summary" | grep -q "deviceName"; then
-  echo "NO VULKAN DEVICE. This box cannot answer the question it was rented for."
+# A software device is not what this box was rented for: CI already has
+# one. Only a discrete or integrated GPU counts.
+hardware=$(echo "$summary" | grep -c "PHYSICAL_DEVICE_TYPE_DISCRETE_GPU\|PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU")
+if [ "$hardware" = 0 ]; then
+  echo "NO HARDWARE VULKAN DEVICE. This box cannot answer the question it was rented for."
   echo "--- loader error"
-  echo "$summary" | head -20
+  echo "$summary" | grep -iE "^ERROR|cannot open" | head -5
   echo "--- icds"
   ls -l /usr/share/vulkan/icd.d/ 2>&1
   echo "--- driver libraries"
