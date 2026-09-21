@@ -845,7 +845,7 @@ fn run_verb(
     let mut loaded = load_text(&text, &compiled.root, true, false);
     loaded.diagnostics.extend(extra);
     let overrides = media::RenderOverrides {
-        renderer: media::RendererChoice::Auto,
+        renderer: encode.renderer,
         crf: encode.crf,
         preset: encode.preset.clone(),
         no_audio: encode.no_audio,

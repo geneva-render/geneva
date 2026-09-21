@@ -161,6 +161,12 @@ pub struct EncodeArgs {
     /// Write no audio track.
     #[arg(long)]
     pub no_audio: bool,
+    /// Which renderer composites the frames: auto (the GPU where one
+    /// can be used, otherwise the CPU), cpu, or gpu (the CPU when no
+    /// device opens, with a note). Only the steps that composite are
+    /// affected; a stream that is copied is copied either way.
+    #[arg(long, value_enum, default_value = "auto")]
+    pub renderer: crate::media::RendererChoice,
     /// Denoise the audio as speech with the embedded model (sets
     /// output.audio.denoise). Speech only: it damages music and
     /// overlapping speakers. Runs at about 20x the speed of the audio.

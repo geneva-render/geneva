@@ -1596,3 +1596,40 @@ fn a_podcast_target_copies_the_picture_and_encodes_only_the_sound() {
         "frames reached an encoder: {out_text}"
     );
 }
+
+/// A verb can choose the renderer, not only `render`.
+///
+/// The flag was on `render` alone, so a job like `convert --for tiktok`,
+/// which builds a canvas and composites every frame, had no way to ask
+/// for the device. This checks the choice reaches the renderer rather
+/// than merely parsing: `gpu` always says something about a device,
+/// either that it composited on one or that none could be used, and
+/// `cpu` says neither. That holds on a machine with a GPU, on one with
+/// only a software Vulkan device, and on one with nothing at all.
+#[test]
+#[cfg(feature = "media")]
+fn a_verb_can_ask_for_the_gpu() {
+    let dir = tempfile::tempdir().unwrap();
+    let clip = media_dir().join("clip.mp4");
+    let about_a_device = |renderer: &str| -> bool {
+        let out = dir.path().join(format!("{renderer}.mp4"));
+        let result = geneva()
+            .args(["convert", "--for", "tiktok", "--renderer", renderer, "-o"])
+            .arg(&out)
+            .arg(&clip)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{renderer}: {result:?}");
+        assert!(out.exists(), "{renderer} wrote nothing");
+        let said = String::from_utf8_lossy(&result.stderr).to_lowercase();
+        said.contains("composited on the device") || said.contains("no usable gpu")
+    };
+    assert!(
+        about_a_device("gpu"),
+        "asking for the gpu said nothing about one"
+    );
+    assert!(
+        !about_a_device("cpu"),
+        "asking for the cpu mentioned a device"
+    );
+}

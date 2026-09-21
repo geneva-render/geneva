@@ -92,6 +92,19 @@ the format version it was written for.
   NVENC reports "no capable devices found" for any program, stock ffmpeg
   included, and geneva encoded with x264 without mentioning it.
 
+- **The everyday verbs take `--renderer` too.** It was on `render`
+  alone, so a `convert --for tiktok`, which builds a canvas and
+  composites every frame, had no way to ask for the GPU. Measured on an
+  RTX 4090, that job is about 1.6x faster on the device at 1080p. Only
+  the steps that composite are affected: a copied stream is copied
+  either way.
+
+- **The blur's difference between the renderers is stated plainly.**
+  The docs hedged that "a few pixels differ by up to three on some
+  devices". It is 71 pixels, 0.12% of the blur case, and it is the
+  blur's own rounding rather than any one device: an Apple M1 through
+  Metal and an RTX 4090 through Vulkan report the same 71 pixels.
+
 ### Fixed
 
 - **An animated box at the top level of a document no longer moves the

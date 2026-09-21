@@ -195,8 +195,10 @@ mapped, which overlaps the painting and uploading of one with the
 drawing of the other.
 
 Every golden case renders on both and agrees to within one 8-bit code,
-except the blur case on some devices: on an Apple M1, 0.13% of its
-pixels differ by up to three, since a blur is six passes over a
+except the blur, which differs by up to three on 71 of its pixels,
+0.12%. That is the blur itself and not any one device: an Apple M1
+through Metal and an RTX 4090 through Vulkan report the same 71 pixels,
+and Mesa's lavapipe reports none. A blur is six passes over a
 downscaled buffer and the two paths round differently along the way.
 `cargo test -p geneva-gpu -- --nocapture` prints the per-frame table.
 The CPU renderer stays the reference and the fallback: `frame`, the
