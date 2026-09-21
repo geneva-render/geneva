@@ -1191,14 +1191,12 @@ fn polygon_coverage(w: usize, h: usize, origin: (i64, i64), points: &[(f64, f64)
                                 coverage[head] += overlap as f32 * share;
                             }
                         }
-                        // The pixel b ends inside, when the span does not
-                        // end on a boundary and that pixel is not the
-                        // head already counted.
-                        if end > head && end < w {
-                            let overlap = b - end as f64;
-                            if overlap > 0.0 {
-                                coverage[end] += overlap as f32 * share;
-                            }
+                        // The pixel b ends inside, unless the head above
+                        // already counted that pixel. A span starting on a
+                        // boundary has no head, so `end` is its only
+                        // partial pixel and it is counted here.
+                        if end < w && end >= inner && b > end as f64 {
+                            coverage[end] += (b - end as f64) as f32 * share;
                         }
                     }
                 }
@@ -1604,4 +1602,53 @@ fn blit(image: &mut Image, b: &Painted, src: &Image, dx: f64, dy: f64, scale: f3
 #[allow(dead_code)]
 fn opaque(c: Color) -> Color {
     Color { a: 1.0, ..c }
+}
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::polygon_coverage;
+
+    /// A square laid on the pixel grid covers what it covers, and nothing
+    /// of it is lost at an edge that starts on a boundary.
+    ///
+    /// The second case is the one this exists for: a span from a pixel's
+    /// left edge that ends inside the same pixel has no partial pixel at
+    /// its start, only at its end, and an earlier version of this dropped
+    /// it. The frame's own edge is where it showed, since a polygon
+    /// reaching past the buffer is clamped to exactly 0.0 there.
+    #[test]
+    fn a_sliver_from_a_pixel_boundary_is_not_lost() {
+        let whole = polygon_coverage(
+            4,
+            1,
+            (0, 0),
+            &[(0.0, 0.0), (2.0, 0.0), (2.0, 1.0), (0.0, 1.0)],
+        );
+        assert_eq!(whole, vec![1.0, 1.0, 0.0, 0.0]);
+        // From the left edge to a quarter into the first pixel.
+        let sliver = polygon_coverage(
+            4,
+            1,
+            (0, 0),
+            &[(0.0, 0.0), (0.25, 0.0), (0.25, 1.0), (0.0, 1.0)],
+        );
+        assert_eq!(sliver, vec![0.25, 0.0, 0.0, 0.0]);
+        // The same sliver inside the buffer, which never regressed.
+        let inside = polygon_coverage(
+            4,
+            1,
+            (0, 0),
+            &[(2.0, 0.0), (2.25, 0.0), (2.25, 1.0), (2.0, 1.0)],
+        );
+        assert_eq!(inside, vec![0.0, 0.0, 0.25, 0.0]);
+        // A polygon reaching past the left edge is clamped to it, and the
+        // part inside the frame still counts.
+        let clamped = polygon_coverage(
+            4,
+            1,
+            (0, 0),
+            &[(-3.0, 0.0), (0.5, 0.0), (0.5, 1.0), (-3.0, 1.0)],
+        );
+        assert_eq!(clamped, vec![0.5, 0.0, 0.0, 0.0]);
+    }
 }

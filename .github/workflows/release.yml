@@ -6,8 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to release (created at the chosen ref if it does not exist)"
-        required: true
+        description: "Tag to release (created at the chosen ref if it does not exist). Leave empty to build the binaries and attach them to the run without tagging or releasing anything."
+        required: false
+        default: ""
 
 env:
   CARGO_TERM_COLOR: always
@@ -100,8 +101,13 @@ jobs:
         with:
           name: geneva-${{ matrix.target }}
           path: geneva-*.tar.gz
+  # Only when there is something to release: a tag was pushed, or a tag was
+  # named on dispatch. A dispatch with no tag stops after the build, and
+  # its binaries are the run's artifacts, which is how a machine that
+  # cannot build them locally gets one to test.
   publish:
     needs: build
+    if: inputs.tag != '' || startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       contents: write

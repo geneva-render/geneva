@@ -57,6 +57,18 @@ the format version it was written for.
   a call before, 0.85 ms after. It is 1% to 3% of a markup frame either
   way, so this is not why a markup frame costs what it does.
 
+- **A `clip-path` sliver starting on a pixel boundary is drawn again.**
+  The first version of the change above lost a span that began exactly on
+  a pixel's edge and ended inside that same pixel: it had no partial
+  pixel at its start, and the branch for the one at its end declined to
+  run. A polygon reaching past the frame is clamped to exactly 0.0
+  there, so the frame's own edge is where it showed, at two pixels of
+  one `markup-opening` frame. Inside the golden tolerance, which is why
+  the suite stayed green and a run on a second machine is what printed
+  it. The two ends of a span are now worked out independently, a
+  differential test against the old arithmetic agrees on 400,000 random
+  spans, and a unit test pins the case.
+
 ### Fixed
 
 - **An animated box at the top level of a document no longer moves the

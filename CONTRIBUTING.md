@@ -40,6 +40,19 @@ cargo build
 format, validator or renderer without media support at all, skip the
 script and use `--no-default-features`.
 
+On a machine that cannot build the media libraries, `scripts/fetch-build.sh`
+takes a build from GitHub Actions instead. It needs `gh`, logged in:
+
+```sh
+scripts/fetch-build.sh            # newest finished build of main
+scripts/fetch-build.sh --rerun    # build the current main first, then take it
+```
+
+It downloads the artifact for the machine it runs on, unpacks it and clears
+the quarantine flag, leaving the binary and `check.sh` in `geneva-build/`.
+Downloading works for anyone; `--rerun` dispatches the workflow, which needs
+write access to the repository.
+
 Before pushing:
 
 ```sh
