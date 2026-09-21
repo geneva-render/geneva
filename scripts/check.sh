@@ -10,12 +10,13 @@
 set -u
 
 geneva=""
+named=0
 input=""
 keep=0
 quick=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --geneva) geneva=$2; shift 2 ;;
+    --geneva) geneva=$2; named=1; shift 2 ;;
     --keep) keep=1; shift ;;
     --quick) quick=1; shift ;;
     -h | --help) sed -n '2,10p' "$0"; exit 0 ;;
@@ -33,6 +34,22 @@ if [ -z "$geneva" ]; then
   else geneva=$(command -v geneva || true); fi
 fi
 [ -x "$geneva" ] || { echo "check.sh: geneva binary not found; pass --geneva PATH" >&2; exit 1; }
+# A binary found on PATH can be an old install, and then every step that
+# needs anything newer fails at once, which reads as the engine being
+# broken rather than the binary being stale. Say which is which. A binary
+# named with --geneva is the caller's business and is not checked.
+if [ "$named" = 0 ]; then
+  root=$(cd "$(dirname "$0")/.." && pwd)
+  want=$(awk -F'"' '/^version = /{print $2; exit}' "$root/Cargo.toml" 2>/dev/null)
+  have=$("$geneva" --version 2>/dev/null | awk '{print $2}')
+  if [ -n "$want" ] && [ -n "$have" ] && [ "$want" != "$have" ]; then
+    echo "check.sh: this is geneva $have, from $geneva." >&2
+    echo "  The checkout beside this script is $want, so the binary is not the one it tests." >&2
+    echo "  Build it first: cargo build --release   (then this script finds target/release/geneva)" >&2
+    echo "  Or test another binary on purpose with --geneva PATH." >&2
+    exit 2
+  fi
+fi
 # A binary unpacked from a browser download carries the macOS quarantine
 # flag, and an unsigned one is then refused outright; clear it first.
 if command -v xattr >/dev/null 2>&1; then xattr -d com.apple.quarantine "$geneva" 2>/dev/null || true; fi
