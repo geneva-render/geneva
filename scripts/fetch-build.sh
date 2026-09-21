@@ -78,8 +78,12 @@ gh run download "$run" -n "geneva-$target" -D "$dir" || {
 tarball=$(find "$dir" -name 'geneva-*.tar.gz' | head -1)
 [ -n "$tarball" ] || { echo "fetch-build.sh: the artifact has no tarball" >&2; exit 1; }
 tar xzf "$tarball" -C "$dir"
-unpacked=$(find "$dir" -maxdepth 1 -type d -name 'geneva-*' | head -1)
+unpacked=$(find "$dir" -mindepth 1 -maxdepth 1 -type d -name 'geneva-*' | head -1)
 [ -n "$unpacked" ] || { echo "fetch-build.sh: the tarball has no directory" >&2; exit 1; }
+[ -x "$unpacked/geneva" ] || {
+  echo "fetch-build.sh: no binary in $unpacked" >&2
+  exit 1
+}
 # A binary from a download carries the quarantine flag, and an unsigned
 # one is then refused outright.
 if command -v xattr >/dev/null 2>&1; then
