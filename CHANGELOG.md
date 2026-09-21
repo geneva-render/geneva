@@ -136,6 +136,21 @@ the format version it was written for.
 
 ### Fixed
 
+- **Markup written as a whole HTML document draws what a browser
+  draws.** `html` and `body` name the clip's box rather than boxes of
+  their own, but they were still built as boxes, so an absolutely
+  positioned child of `<body>` resolved its `left`, `top` and `inset`
+  against a `<body>` of no size and landed at 0,0. A design wrapped in
+  a full-frame container, `position: absolute; inset: 0` with
+  `overflow: hidden`, lost that container's size and had its whole
+  subtree clipped away: the clip drew nothing at all, with no `W450`,
+  no `E451` and a report that said overlays were drawn onto every
+  frame. The same markup as a fragment, which is what every example in
+  `examples/` is, drew correctly, which is why nothing caught it.
+  `<html>` and `<body>` are now folded into the clip's box, carrying
+  their `id`, `class` and `style` onto it, and `<head>` draws nothing
+  as before.
+
 - **An animated box at the top level of a document no longer moves the
   whole picture with it.** The clip plays the animation of the markup's
   outermost element, which moves the finished picture rather than that

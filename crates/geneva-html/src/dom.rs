@@ -256,12 +256,85 @@ impl Parser<'_> {
         if let Some(id) = open.into_iter().rev().find(|id| *id != root) {
             return Err(self.error(format!("<{}> is never closed", self.tag_of(id))));
         }
+        self.fold_document(root);
         Ok(Document {
             nodes: self.nodes,
             root,
             style: self.style,
             links: self.links,
         })
+    }
+
+    /// Folds `<html>`, `<head>` and `<body>` into the root.
+    ///
+    /// The root is the clip's box, and `html` and `body` select it
+    /// rather than boxes of their own, so a whole document draws the
+    /// same as the fragment inside it. Left nested, an absolutely
+    /// positioned child of `<body>` resolved against a `<body>` of no
+    /// size and landed at 0,0, and a full-frame container with
+    /// `overflow: hidden` clipped the subtree away, drawing nothing at
+    /// all. Whatever `html` or `body` carried on itself is merged onto
+    /// the root, since a selector for either already matches it.
+    fn fold_document(&mut self, root: NodeId) {
+        self.hoist(root, "html");
+        // Metadata belongs in the head and draws nothing. Anything else
+        // put there is not drawn either, which is what a browser does
+        // with the head's own children.
+        let kept: Vec<NodeId> = self.nodes[root]
+            .children
+            .iter()
+            .copied()
+            .filter(|&c| self.nodes[c].element().is_none_or(|e| e.tag != "head"))
+            .collect();
+        self.nodes[root].children = kept;
+        self.hoist(root, "body");
+    }
+
+    /// Replaces every child of `root` with tag `tag` by that child's own
+    /// children, in place.
+    fn hoist(&mut self, root: NodeId, tag: &str) {
+        while let Some(pos) = self.nodes[root]
+            .children
+            .iter()
+            .position(|&c| self.nodes[c].element().is_some_and(|e| e.tag == tag))
+        {
+            let id = self.nodes[root].children[pos];
+            self.merge_onto_root(root, id);
+            let kids = std::mem::take(&mut self.nodes[id].children);
+            for &k in &kids {
+                self.nodes[k].parent = Some(root);
+            }
+            self.nodes[id].parent = None;
+            self.nodes[root].children.splice(pos..=pos, kids);
+        }
+    }
+
+    /// Moves an element's own id, classes and style attribute onto the
+    /// root, so `<body class="dark">` and `<body style="...">` still
+    /// reach the box they were written for.
+    fn merge_onto_root(&mut self, root: NodeId, id: NodeId) {
+        let Some(from) = self.nodes[id].element().cloned() else {
+            return;
+        };
+        let Some(NodeKind::Element(to)) = self.nodes.get_mut(root).map(|n| &mut n.kind) else {
+            return;
+        };
+        if to.id.is_none() {
+            to.id = from.id;
+        }
+        to.classes.extend(from.classes);
+        match (&mut to.style, from.style) {
+            (slot @ None, Some(style)) => *slot = Some(style),
+            // The inner one is written later, so it wins the tie.
+            (Some(have), Some(style)) => {
+                have.push(';');
+                have.push_str(&style);
+            }
+            _ => {}
+        }
+        for (name, value) in from.attrs {
+            to.attrs.entry(name).or_insert(value);
+        }
     }
 
     fn push(&mut self, kind: NodeKind, parent: Option<NodeId>) -> NodeId {
@@ -610,5 +683,54 @@ mod tests {
     fn blank_text_between_tags_is_dropped() {
         let d = doc("<div>\n   <p>x</p>\n</div>");
         assert_eq!(d.children(d.children(d.root)[0]).len(), 1);
+    }
+
+    /// A whole document and the fragment inside it are the same tree, so
+    /// they lay out and draw the same. Before this, `<body>` was a box of
+    /// its own: an absolutely positioned child resolved against it rather
+    /// than against the clip's box, landed at 0,0, and a full-frame
+    /// container with `overflow: hidden` clipped the whole subtree away
+    /// without a diagnostic.
+    #[test]
+    fn a_document_folds_into_the_fragment_inside_it() {
+        let whole = doc("<!doctype html><html><head><title>t</title></head>\
+             <body><div class=\"card\"><p>hi</p></div></body></html>");
+        let fragment = doc("<div class=\"card\"><p>hi</p></div>");
+
+        assert_eq!(whole.children(whole.root).len(), 1);
+        let card = whole.children(whole.root)[0];
+        let el = whole.nodes[card].element().unwrap();
+        assert_eq!(el.tag, "div");
+        assert_eq!(el.classes, ["card"]);
+        assert_eq!(whole.nodes[card].parent, Some(whole.root));
+        assert_eq!(
+            whole.children(whole.root).len(),
+            fragment.children(fragment.root).len()
+        );
+    }
+
+    #[test]
+    fn what_html_and_body_carry_reaches_the_root() {
+        let d = doc("<html id=\"page\" class=\"dark\"><body class=\"wide\" \
+             style=\"background: #000\"><p>hi</p></body></html>");
+        let root = d.nodes[d.root].element().unwrap();
+        assert_eq!(root.id.as_deref(), Some("page"));
+        assert_eq!(root.classes, ["dark", "wide"]);
+        assert_eq!(root.style.as_deref(), Some("background: #000"));
+    }
+
+    #[test]
+    fn the_head_draws_nothing() {
+        let d = doc("<html><head><div>not drawn</div></head><body><p>hi</p></body></html>");
+        assert_eq!(d.children(d.root).len(), 1);
+        let kept = d.nodes[d.children(d.root)[0]].element().unwrap();
+        assert_eq!(kept.tag, "p");
+    }
+
+    #[test]
+    fn a_document_with_no_body_still_folds() {
+        let d = doc("<html><p>hi</p></html>");
+        assert_eq!(d.children(d.root).len(), 1);
+        assert_eq!(d.nodes[d.children(d.root)[0]].element().unwrap().tag, "p");
     }
 }
