@@ -830,6 +830,7 @@ fn open_video_track(
     let mut last_error = None;
     let mut x264_tried = false;
     let mut x264_error = None;
+    let mut hw_skipped: Option<(String, String)> = None;
     for name in &candidates {
         // The system's x264, when installed, comes before the bundled
         // software encoder and after any hardware encoder the policy
@@ -882,10 +883,15 @@ fn open_video_track(
                 opened = Some((VideoBackend::Lavc(enc), (*name).to_owned(), notes));
                 break;
             }
-            Err(e) => last_error = Some(e),
+            Err(e) => {
+                if !name.starts_with("lib") && hw_skipped.is_none() {
+                    hw_skipped = Some(((*name).to_owned(), e.to_string()));
+                }
+                last_error = Some(e);
+            }
         }
     }
-    let (backend, name, notes) = match (opened, last_error) {
+    let (backend, name, mut notes) = match (opened, last_error) {
         (Some(v), _) => v,
         // A codec with hardware encoders only: say so, rather than the
         // last driver's complaint.
@@ -905,6 +911,17 @@ fn open_video_track(
             });
         }
     };
+    // A hardware encoder that is compiled in but has no usable device is
+    // skipped without a word. That is right on a machine that has no such
+    // device, and wrong on one that does: there the run is slower than the
+    // machine can go and nothing says why. So say it, but only where the
+    // device looks present, or every laptop without a GPU would hear about
+    // NVENC on every render.
+    if let Some((hw, reason)) = hw_skipped {
+        if hardware_device_present(&hw) && hw != name {
+            notes.push(skipped_note(&hw, &reason, &name));
+        }
+    }
     let mut stream = match &backend {
         VideoBackend::Lavc(encoder) => {
             let vcodec = encoder.codec().expect("opened encoder has a codec");
@@ -1822,5 +1839,68 @@ mod tests {
             audio_sample_rate_for(AudioCodec::Ac3, Some(Container::Mp4), 22050),
             48000
         );
+    }
+}
+
+/// Whether the device a hardware encoder needs looks present, so that a
+/// failure to open it is worth reporting.
+///
+/// This checks what can be checked without opening anything: every Mac
+/// has VideoToolbox, and an NVIDIA driver has a control device. It says
+/// nothing about whether the encoder would have worked.
+fn hardware_device_present(encoder: &str) -> bool {
+    if encoder.contains("videotoolbox") {
+        return cfg!(target_os = "macos");
+    }
+    if encoder.contains("nvenc") {
+        return cfg!(target_os = "linux") && std::path::Path::new("/dev/nvidiactl").exists();
+    }
+    false
+}
+
+/// What to say when the machine has the device and the encoder for it
+/// still would not open.
+fn skipped_note(hardware: &str, reason: &str, used: &str) -> String {
+    let reason = reason.trim_end_matches('.');
+    format!(
+        "{hardware} was not usable on this machine ({reason}), so the video was encoded with {used}"
+    )
+}
+
+#[cfg(test)]
+mod hardware_note_tests {
+    use super::{hardware_device_present, skipped_note};
+
+    /// Only the two hardware encoders geneva knows are claimed, and only
+    /// on the platform that could have them. An unknown name is never
+    /// claimed, so a new encoder cannot start reporting by accident.
+    #[test]
+    fn a_device_is_only_claimed_where_it_could_be() {
+        assert_eq!(
+            hardware_device_present("h264_videotoolbox"),
+            cfg!(target_os = "macos")
+        );
+        assert!(!hardware_device_present("libx264"));
+        assert!(!hardware_device_present("h264_something_else"));
+    }
+
+    /// NVENC is claimed only on Linux, and only when the driver's control
+    /// device is there. This machine is one or the other, and either way
+    /// the answer must agree with the file.
+    #[test]
+    fn nvenc_follows_the_driver_device() {
+        let has = cfg!(target_os = "linux") && std::path::Path::new("/dev/nvidiactl").exists();
+        assert_eq!(hardware_device_present("h264_nvenc"), has);
+    }
+
+    /// The note names the encoder that would not open, why, and what ran
+    /// instead, so the reader can tell a missing driver from a busy one.
+    #[test]
+    fn the_note_names_all_three_things() {
+        let n = skipped_note("h264_nvenc", "No capable devices found.", "libx264");
+        assert!(n.contains("h264_nvenc"), "{n}");
+        assert!(n.contains("No capable devices found"), "{n}");
+        assert!(n.contains("libx264"), "{n}");
+        assert!(!n.contains("found.)"), "the trailing stop is dropped: {n}");
     }
 }

@@ -765,7 +765,7 @@ fn subtitles_burn_compiles_cues_to_text_clips_and_checks_the_frame() {
     assert!(out.exists());
 
     // With --fit the same style is shrunk until it fits, and says so.
-    let doc = run_json(
+    let timeline = run_json(
         &[
             "subtitles",
             "--burn",
@@ -781,8 +781,11 @@ fn subtitles_burn_compiles_cues_to_text_clips_and_checks_the_frame() {
         &[&out, &clip],
     );
     // Size 24 wraps "Hello there" onto two lines on this 192×108 frame,
-    // too tall for a 40% safe area; half the size fits on one line.
-    let size = doc["layers"][1]["clips"][0]["source"]["size"]
+    // too tall for a 40% safe area, so the fit shrinks it. How far it
+    // has to go depends on how wide the machine's default font is, so
+    // the only bound here is the fit's own: it steps down by 5% and
+    // stops at half.
+    let size = timeline["layers"][1]["clips"][0]["source"]["size"]
         .as_f64()
         .unwrap();
     assert!((12.0..24.0).contains(&size), "{size}");
@@ -801,9 +804,35 @@ fn subtitles_burn_compiles_cues_to_text_clips_and_checks_the_frame() {
         .map(|d| d["code"].as_str().unwrap())
         .collect();
     assert!(
-        codes.contains(&"N405") && !codes.contains(&"W403") && !codes.contains(&"N404"),
+        codes.contains(&"N405") && !codes.contains(&"W403"),
         "{codes:?}"
     );
+    // A cue may only still be outside the safe area when the fit had
+    // nothing left to give: it stops at half the asked-for size, and a
+    // wide font reaches that floor on a frame this small. Anything
+    // flagged above the floor would be a cue the fit gave up on early.
+    // Checking it this way rather than forbidding the note outright is
+    // what keeps this test from depending on the machine's fonts: this
+    // one has Liberation and shrinks to 13.2 px, a bare container has
+    // only DejaVu, which is wider, reaches 12 px and is still outside.
+    for d in doc["diagnostics"].as_array().unwrap() {
+        if d["code"] != "N404" {
+            continue;
+        }
+        let path = d["path"].as_str().unwrap();
+        let at: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+        let (layer, clip_at) = (
+            at[1].parse::<usize>().unwrap(),
+            at[3].parse::<usize>().unwrap(),
+        );
+        let flagged = timeline["layers"][layer]["clips"][clip_at]["source"]["size"]
+            .as_f64()
+            .unwrap();
+        assert_eq!(
+            flagged, 12.0,
+            "{path} was flagged at {flagged} px, above the floor"
+        );
+    }
 
     // At the default size the cues fit; a tiny safe area makes them a note.
     let doc = run_json(

@@ -81,6 +81,17 @@ the format version it was written for.
   instead of being quietly slower than the CPU renderer. NVENC is
   unaffected, since it goes through the compute half.
 
+- **A hardware encoder that will not open says so, on a machine that
+  has the device.** Under the default `auto` policy geneva tries
+  VideoToolbox or NVENC and falls back to software without a word. That
+  is right on a machine with no such device and wrong on one that has
+  it: the run is slower than the machine can go and nothing says why.
+  The note now names the encoder, the driver's reason and what ran
+  instead, and only where the device looks present, so a machine without
+  a GPU stays quiet. Measured case: in a container built for CUDA,
+  NVENC reports "no capable devices found" for any program, stock ffmpeg
+  included, and geneva encoded with x264 without mentioning it.
+
 ### Fixed
 
 - **An animated box at the top level of a document no longer moves the
