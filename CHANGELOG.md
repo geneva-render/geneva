@@ -7,6 +7,8 @@ the format version it was written for.
 
 ## Unreleased
 
+## 0.7.1 (2026-09-22)
+
 ### Added
 
 - **The manual is in the binary.** `geneva guide` prints the guide for
