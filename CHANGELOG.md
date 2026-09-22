@@ -7,8 +7,6 @@ the format version it was written for.
 
 ## Unreleased
 
-## 0.7.0 (2026-09-21)
-
 ### Added
 
 - **The manual is in the binary.** `geneva guide` prints the guide for
@@ -31,6 +29,10 @@ the format version it was written for.
   A test walks every `src` directory in the workspace for codes the
   engine can emit and fails if one is missing from `docs/errors.md`, so
   the two cannot drift apart.
+
+## 0.7.0 (2026-09-21)
+
+### Added
 
 - **W404 names a clip whose placement is probably not what was meant.**
   A `fit` is only needed when the source and the frame are different
