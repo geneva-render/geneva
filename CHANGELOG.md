@@ -7,6 +7,16 @@ the format version it was written for.
 
 ## Unreleased
 
+### Fixed
+
+- **`scripts/check-markup.sh` renders every markup golden case.** The
+  loop named `markup-opening` and `markup-card`, so `markup-blend`,
+  added for `mix-blend-mode`, was not checked on a second machine. It
+  now takes every `markup-*` case under `tests/golden`, which is nine
+  frames rather than seven, and a case added later needs no edit here.
+  The script is not in the release tarball, so a checkout of `main` has
+  the fix without waiting for a release.
+
 ## 0.7.1 (2026-09-22)
 
 ### Added

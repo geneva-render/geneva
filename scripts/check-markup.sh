@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Renders the markup golden frames with a geneva binary and compares them
-# with the committed references, byte for byte.
+# with the committed references, byte for byte. Every case under
+# tests/golden named markup-* is rendered, so a new one is picked up
+# without editing this script.
 #
 # Usage: check-markup.sh [--geneva PATH]
 #   --geneva PATH   the binary to test; by default target/release/geneva,
@@ -45,7 +47,8 @@ echo "$("$geneva" --version) from $geneva"
 work=$(mktemp -d "${TMPDIR:-/tmp}/geneva-markup.XXXXXX")
 cd "$root/tests/golden" || exit 1
 bad=0
-for case in markup-opening markup-card; do
+for case in markup-*; do
+  [ -f "$case/golden.json" ] || continue
   # golden.json is one line: { "frames": ["1s", "2.4s"] }
   frames=$(tr -d '\n' < "$case/golden.json" | sed -n 's/.*\[\(.*\)\].*/\1/p' | tr -d '" ' | tr ',' ' ')
   for t in $frames; do
