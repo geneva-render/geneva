@@ -189,3 +189,80 @@ fn cue_times_are_relative_to_the_clip_start() {
         Ratio::new(12, 10)
     );
 }
+
+#[test]
+fn max_chars_sets_the_line_budget() {
+    // Grouping runs before `style` and has no font to measure with, so
+    // the budget is `max_lines` lines of `max_chars` characters and
+    // nothing else. A narrow line has to give more cues than a wide one
+    // over the same words.
+    let words = r#"{"words": [
+        {"word": "the", "start": 0.0, "end": 0.4},
+        {"word": "quick", "start": 0.4, "end": 0.8},
+        {"word": "brown", "start": 0.8, "end": 1.2},
+        {"word": "fox", "start": 1.2, "end": 1.6},
+        {"word": "jumps", "start": 1.6, "end": 2.0},
+        {"word": "over", "start": 2.0, "end": 2.4},
+        {"word": "the", "start": 2.4, "end": 2.8},
+        {"word": "lazy", "start": 2.8, "end": 3.2},
+        {"word": "dog", "start": 3.2, "end": 3.6}
+    ]}"#;
+    let count = |source: &str| {
+        let l = load("w.json", source, vec![("w.json", words)]);
+        assert!(l.is_ok(), "{:?}", l.diagnostics);
+        l.composition.unwrap().layers[0].clips.len()
+    };
+
+    let wide = count(r#"{"kind":"captions","asset":"c","max_chars":40}"#);
+    let narrow = count(r#"{"kind":"captions","asset":"c","max_chars":10}"#);
+    assert!(
+        narrow > wide,
+        "a 10-character line should cut more cues than a 40-character one: {narrow} vs {wide}"
+    );
+
+    // Left out, it is the broadcast convention of 42, which over these
+    // words agrees with asking for 40.
+    assert_eq!(count(r#"{"kind":"captions","asset":"c"}"#), wide);
+}
+
+#[test]
+fn a_line_too_short_to_hold_a_word_is_refused() {
+    let l = load(
+        "w.json",
+        r#"{"kind":"captions","asset":"c","max_chars":3}"#,
+        vec![("w.json", WHISPER)],
+    );
+    assert!(codes(&l).contains(&"E402"), "{:?}", codes(&l));
+}
+
+#[test]
+fn the_cue_count_says_what_budget_grouped_it() {
+    let l = load(
+        "w.json",
+        r#"{"kind":"captions","asset":"c","max_lines":1,"max_chars":20}"#,
+        vec![("w.json", WHISPER)],
+    );
+    let note = l
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "N453")
+        .expect("a cue count");
+    assert!(
+        note.message.contains("1 line of 20 characters"),
+        "{}",
+        note.message
+    );
+
+    // A cue file is not grouped, so there is no budget to report.
+    let cues = load(
+        "c.srt",
+        r#"{"kind":"captions","asset":"c"}"#,
+        vec![("c.srt", SRT)],
+    );
+    let note = cues
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "N453")
+        .expect("a cue count");
+    assert!(!note.message.contains("grouped at"), "{}", note.message);
+}

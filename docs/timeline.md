@@ -518,6 +518,7 @@ between cues can still be copied rather than composited.
 | `safe` | no | `5` | Title-safe inset as a percentage of the frame height, used as the default margin and checked against it (`N453`). `0` turns the check off. |
 | `follow_file` | no | `true` | Take `line`, `position`, `align` and `size` from a WebVTT cue that sets them. `false` places every cue the same way. |
 | `max_lines` | no | `2` | Lines per cue, when the cues are grouped from a word file. |
+| `max_chars` | no | `42` | Characters per line, when the cues are grouped from a word file. With `max_lines`, the whole of the grouping budget. Under 8 is `E402`. |
 | `min_duration` | no | `1.2s` | How long a cue stays up at least, when grouping. |
 | `merge_gap` | no | `0.1s` | Gaps up to this are closed rather than left blank, when grouping. |
 | `style` | no | | A `text` source's fields, minus `text` and `words`: `font`, `color`, `highlight`, `outline`, `shadow`, `background`, `max_width`, `align` and the rest. |
@@ -530,11 +531,22 @@ file does not need shifting.
 
 Grouping a word file into cues happens before any of `style` is applied,
 and measures in characters, not pixels: a cue is closed when it would
-take more than `max_lines` lines of 42 characters. `style.max_width` is
-how wide the text is drawn, and changes no cue boundary. The two can
-disagree, and a cue grouped for 42 characters can draw on three lines in
-a narrow `max_width` without a warning, since the box still fits the
-frame.
+take more than `max_lines` lines of `max_chars`. Nothing here is
+measured in a font, because the cues are settled before one is loaded,
+which is what keeps a document grouping the same way on every machine.
+
+So `style.max_width` is how wide the text is drawn and changes no cue
+boundary, and the two can disagree: a cue grouped for 42 characters can
+draw on three lines in a narrow `max_width` without a warning, since the
+box still fits the frame. Set `max_chars` to what the width holds.
+`max_width / (0.5 * font.size)` is a usable starting point and errs
+narrow: 700px of 32px Liberation Sans works out at 44 by that sum and
+holds 47 of a lowercase line or 48 of ordinary mixed-case caption text,
+so the estimate leaves a margin rather than overflowing. It is an
+average glyph width and nothing more, so a condensed face, a line of
+capitals or a font at a different weight will land somewhere else. Check
+a frame. `validate --probe` reports the cue count with the budget that
+produced it, which is the quickest way to see a change land.
 
 A word file gives every cue its `words`, so `style.highlight` picks out
 the word being said. SubRip and WebVTT time whole cues, so a `highlight`

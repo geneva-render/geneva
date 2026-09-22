@@ -83,7 +83,7 @@ result is not what was intended. Notes are informational.
 | Code | Meaning |
 | --- | --- |
 | E401 | Invalid easing: cubic-bezier x control points outside 0..=1, or non-positive spring parameters. |
-| E402 | A value is out of range: opacity outside 0..=1, non-positive sizes or durations, negative stroke widths or radii, font weight outside 100..=900. |
+| E402 | A value is out of range: opacity outside 0..=1, non-positive sizes or durations, negative stroke widths or radii, font weight outside 100..=900, a captions `max_chars` under 8. |
 | E405 | A text source has neither `text` nor `words`. |
 | E411 | Words are out of order, overlapping, or have an end not after their start. |
 | E420 | The output color tags describe HDR (`pq` or `hlg`) but `encode.video.codec` carries eight bits or is unset (the default, H.264); set it to `h265`, `av1`, `vp9` or `prores`. |

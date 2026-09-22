@@ -967,6 +967,13 @@ pub enum Source {
         /// Most lines a cue shows at once. Defaults to 2.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_lines: Option<u32>,
+        /// Most characters on one of those lines. Defaults to 42, the
+        /// broadcast convention. Grouping counts characters because it
+        /// runs before `style` and has no font to measure with, so this
+        /// and `max_lines` are together the whole of the budget; see the
+        /// timeline reference for setting it against a `style.max_width`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_chars: Option<u32>,
         /// Shortest a cue may be, so that a word lasting a fifth of a
         /// second is still readable. Defaults to 1.2s.
         #[serde(default, skip_serializing_if = "Option::is_none")]

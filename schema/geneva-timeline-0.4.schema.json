@@ -1762,6 +1762,15 @@
               "minimum": 0,
               "description": "Most lines a cue shows at once. Defaults to 2."
             },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0,
+              "description": "Most characters on one of those lines. Defaults to 42, the\nbroadcast convention. Grouping counts characters because it\nruns before `style` and has no font to measure with, so this\nand `max_lines` are together the whole of the budget; see the\ntimeline reference for setting it against a `style.max_width`."
+            },
             "min_duration": {
               "anyOf": [
                 {

@@ -7,6 +7,27 @@ the format version it was written for.
 
 ## Unreleased
 
+### Added
+
+- **`max_chars` on the `captions` source.** Cue grouping is a budget of
+  `max_lines` lines of `max_chars` characters, and the character count
+  was fixed at 42 with no way to reach it from a document, so `max_lines`
+  was the only lever: the same 724 words grouped into the same 55 cues
+  at `style.max_width` 700 and at 1900. It is a field now, defaulting to
+  the 42 it always was. Under 8 is `E402` rather than a quiet clamp,
+  since a line that short cannot hold a word.
+
+  Grouping still counts characters rather than measuring, because it runs
+  before a font is loaded, and settling cues without one is what keeps a
+  document grouping the same way on every machine. `style.max_width` is
+  therefore still yours to match: `max_width / (0.5 * font.size)` errs
+  narrow, and the reference gives the measured figures.
+
+- **The cue count says what grouped it.** `N453` read `55 cues read from
+  "captions.json"`, which does not say what would change it. It now adds
+  `grouped at up to 2 lines of 42 characters`, and says nothing extra for
+  a `.srt` or `.vtt`, which carries its own cues and is not grouped.
+
 ### Fixed
 
 - **A `captions` clip's `start` placed its cues.** It was discarded: every

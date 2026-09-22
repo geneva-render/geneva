@@ -930,6 +930,11 @@ fn thinned(steps: &[(f64, AnimValues)]) -> Vec<(f64, AnimValues)> {
 /// Deepest allowed nesting of compositions inside compositions.
 const MAX_COMPOSITION_DEPTH: usize = 8;
 
+/// Fewest characters a caption line can be asked to hold. Below this a
+/// line cannot fit an ordinary word, so the budget stops meaning what
+/// `max_chars` says it means.
+const MIN_CUE_CHARS: u32 = 8;
+
 /// The frame a layer is resolved against: the output, or a composition.
 #[derive(Clone, Copy)]
 struct FrameSize {
@@ -1722,6 +1727,7 @@ impl Resolver<'_> {
         spath: &Path,
         assets: &BTreeMap<String, ResolvedAsset>,
         max_lines: Option<u32>,
+        max_chars: Option<u32>,
         min_duration: Option<Time>,
         merge_gap: Option<Time>,
         style: &TextSource,
@@ -1769,6 +1775,10 @@ impl Resolver<'_> {
             return None;
         };
 
+        // Only a word file is grouped, and the budget that grouped it is
+        // worth reporting: the count on its own does not say what produced
+        // it, and the budget is the only thing that changes it.
+        let mut budget = None;
         let cues = match format {
             crate::captions::CaptionFormat::Words => {
                 let words = match crate::captions::parse_words(&text) {
@@ -1782,12 +1792,37 @@ impl Resolver<'_> {
                 if let Some(n) = max_lines {
                     rules.max_lines = n.max(1) as usize;
                 }
+                if let Some(n) = max_chars {
+                    // Under about eight characters a line cannot hold a
+                    // word, so every cue would be one word and the budget
+                    // would not be doing anything a reader would recognise
+                    // as a line. Clamping quietly is the silent surprise
+                    // this format tries not to have.
+                    if n < MIN_CUE_CHARS {
+                        self.push(
+                            Diagnostic::error(
+                                "E402",
+                                spath.key("max_chars"),
+                                format!(
+                                    "max_chars is {n}, under the {MIN_CUE_CHARS} a caption line \
+                                     needs to hold a word"
+                                ),
+                            )
+                            .with_value(n.to_string())
+                            .with_help(
+                                "raise it, or leave it out for the broadcast convention of 42",
+                            ),
+                        );
+                    }
+                    rules.max_chars = (n as usize).max(MIN_CUE_CHARS as usize);
+                }
                 if let Some(d) = min_duration {
                     rules.min_duration = self.time(d, &spath.key("min_duration"), "min_duration");
                 }
                 if let Some(d) = merge_gap {
                     rules.merge_gap = self.time(d, &spath.key("merge_gap"), "merge_gap");
                 }
+                budget = Some((rules.max_lines, rules.max_chars));
                 crate::captions::cues_from_words(&words, rules)
             }
             _ => {
@@ -1824,10 +1859,17 @@ impl Resolver<'_> {
             ));
             return None;
         }
+        let how = match budget {
+            Some((lines, chars)) => format!(
+                ", grouped at up to {lines} line{} of {chars} characters",
+                if lines == 1 { "" } else { "s" }
+            ),
+            None => String::new(),
+        };
         self.push(Diagnostic::note(
             "N453",
             spath.clone(),
-            format!("{} cues read from {src:?}", cues.len()),
+            format!("{} cues read from {src:?}{how}", cues.len()),
         ));
         Some(cues)
     }
@@ -1852,6 +1894,7 @@ impl Resolver<'_> {
                 safe,
                 follow_file,
                 max_lines,
+                max_chars,
                 min_duration,
                 merge_gap,
                 style,
@@ -1877,6 +1920,7 @@ impl Resolver<'_> {
                 &spath,
                 assets,
                 *max_lines,
+                *max_chars,
                 *min_duration,
                 *merge_gap,
                 &style,
