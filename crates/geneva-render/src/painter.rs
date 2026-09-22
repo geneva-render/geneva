@@ -22,6 +22,8 @@ use crate::text::TextEngine;
 
 /// A markup source ready to draw.
 struct Scene {
+    /// The clip this scene was made for, so a remark can name it.
+    path: String,
     prepared: geneva_html::Prepared,
     images: HashMap<String, Image>,
     /// The box as drawn, kept when no animation inside can change it.
@@ -42,6 +44,10 @@ pub struct Painter<A: AssetSource> {
     /// document and its pictures, and the drawn box when nothing in the
     /// markup moves, which is then the same picture at every time.
     html_cache: HashMap<u64, Scene>,
+    /// What the painter has to tell the reader about the render itself,
+    /// deduplicated: a group cut down to the buffer bound does it on
+    /// most of a clip's frames, and saying so once is the useful number.
+    warnings: std::collections::BTreeSet<String>,
 }
 
 /// A paint, and a key when the picture is one the painter keeps: two
@@ -63,6 +69,24 @@ impl<A: AssetSource> std::fmt::Debug for Painter<A> {
 }
 
 impl<A: AssetSource> Painter<A> {
+    /// What the painter has to say about the render so far, taken and
+    /// cleared. Swept from the scenes here rather than recorded as each
+    /// frame is drawn, because the painted layers borrow the group cache
+    /// until the renderer has composited them.
+    pub fn take_warnings(&mut self) -> Vec<String> {
+        for scene in self.html_cache.values_mut() {
+            if scene.groups.take_clipped() {
+                self.warnings.insert(format!(
+                    "a group in {:?} reaches further than a group buffer may, so the part past \
+                     the bound is not drawn. An element far wider than the frame, such as a news \
+                     crawl, belongs in a composition of its own, which has no such bound.",
+                    scene.path
+                ));
+            }
+        }
+        std::mem::take(&mut self.warnings).into_iter().collect()
+    }
+
     /// A painter reading from `assets`.
     pub fn new(assets: A) -> Self {
         Self {
@@ -70,36 +94,13 @@ impl<A: AssetSource> Painter<A> {
             text: TextEngine::new(),
             text_cache: HashMap::new(),
             html_cache: HashMap::new(),
+            warnings: std::collections::BTreeSet::new(),
         }
     }
 
     /// The asset source.
     pub fn assets_mut(&mut self) -> &mut A {
         &mut self.assets
-    }
-
-    /// Registers the font assets a text source refers to, once each.
-    fn load_fonts(
-        &mut self,
-        comp: &Composition,
-        text: &geneva_timeline::ResolvedText,
-    ) -> Result<(), RenderError> {
-        let fonts = [
-            text.spec.style.font.as_deref(),
-            text.spec.highlight.as_ref().and_then(|h| h.font.as_deref()),
-        ];
-        for id in fonts.into_iter().flatten() {
-            if comp.assets.contains_key(id) && !self.text.has_font(id) {
-                let data = self.assets.font(comp, id)?;
-                if self.text.add_font(id, data.as_ref().clone()).is_none() {
-                    return Err(RenderError::Asset {
-                        id: id.to_owned(),
-                        reason: "not a usable font file".to_owned(),
-                    });
-                }
-            }
-        }
-        Ok(())
     }
 
     /// Registers every font asset of the composition, once each, so that
@@ -165,6 +166,7 @@ impl<A: AssetSource> Painter<A> {
             self.html_cache.insert(
                 scene_key,
                 Scene {
+                    path: clip.path.clone(),
                     prepared,
                     images,
                     still: None,
@@ -307,7 +309,14 @@ impl<A: AssetSource> Painter<A> {
                 }
             }
             ResolvedSource::Text(text) => {
-                self.load_fonts(comp, text)?;
+                // Every font asset, not only the ones this source names by
+                // id: a text source may name a family instead, and the
+                // faces of a shipped family only displace the machine's
+                // once the file has been registered. Markup has always
+                // done this, and the two paths disagreeing made the same
+                // document draw in the document's font under an id and in
+                // the machine's under the family it declares.
+                self.load_font_assets(comp)?;
                 if text.words.is_empty() && text.is_static() {
                     // Static text: laid out once per clip. A colour or
                     // shadow with keyframes is drawn fresh each frame.

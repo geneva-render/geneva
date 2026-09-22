@@ -995,6 +995,9 @@ fn render_to(
             for note in &stats.notes {
                 diagnostics.push(Diagnostic::note("N600", "", note.clone()));
             }
+            for warning in &stats.warnings {
+                diagnostics.push(Diagnostic::warning("W455", "", warning.clone()));
+            }
             if let Some((target, max)) = size_limit {
                 let written = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
                 if written > *max {
@@ -1087,6 +1090,9 @@ fn render_outputs_to(
         Ok((outputs, stats)) => {
             for note in &stats.notes {
                 diagnostics.push(Diagnostic::note("N600", "", note.clone()));
+            }
+            for warning in &stats.warnings {
+                diagnostics.push(Diagnostic::warning("W455", "", warning.clone()));
             }
             if let Some((target, max)) = size_limit {
                 for o in outputs

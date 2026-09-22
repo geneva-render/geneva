@@ -82,6 +82,10 @@ impl<A: AssetSource> CpuRenderer<A> {
 }
 
 impl<A: AssetSource> Renderer for CpuRenderer<A> {
+    fn take_warnings(&mut self) -> Vec<String> {
+        self.painter.take_warnings()
+    }
+
     fn render_into(
         &mut self,
         comp: &Composition,

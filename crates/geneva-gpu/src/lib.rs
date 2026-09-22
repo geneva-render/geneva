@@ -194,6 +194,12 @@ impl<A: AssetSource> std::fmt::Debug for GpuRenderer<A> {
 }
 
 impl<A: AssetSource> Renderer for GpuRenderer<A> {
+    fn take_warnings(&mut self) -> Vec<String> {
+        // Markup groups are painted by the same CPU painter, so the same
+        // bound applies and the same remark is worth making.
+        self.painter.take_warnings()
+    }
+
     fn render_into(
         &mut self,
         comp: &Composition,

@@ -157,6 +157,14 @@ and shows the element's own style outside the run. Write
 `animation-fill-mode: both` there if you want it held. See
 [markup](#markup) for where the line falls.
 
+`transform.position` is one animated point, not a pair of animated
+numbers: the keyframes carry both axes together, as
+`{"keyframes": [["0s", [1072, 14]], ["4s", [-7700, 14]]]}`. An `x` or a
+`y` of its own takes a constant length and nothing else, so animating
+one axis means writing both and holding the other still. A `keyframes`
+object under `x` is `E103`, which reports the length it expected rather
+than the point it wanted.
+
 What a rule sets is laid over what the clip already has. A translation
 adds to `transform.position`, a scale multiplies `transform.scale`, a
 rotation adds to `transform.rotation`, and `opacity` replaces the clip's,
@@ -676,6 +684,15 @@ author overrides freely: `h1`, `h2`, `h3`, `b`, `strong`, `i`, `em`,
 | Text | `color`, `-webkit-text-fill-color` (read as `color`), `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space`, `text-shadow` (a list) |
 | Motion | `animation` and its longhands `animation-name`, `-duration`, `-delay`, `-timing-function`, `-iteration-count`, `-direction`, `-fill-mode` |
 
+A group's buffer is bounded. Its area may be nine times the frame's,
+which is what a rectangle three frames wide and three tall came to, and
+a group asking for more is cut back to that rectangle and `W455` says
+so. The shape is free within the area, so an element far wider than the
+frame and only a few hundred pixels tall, a news crawl being the usual
+one, is drawn whole and stays drawn however far its animation carries
+it. A composition has no such bound, so that is still where a very
+large moving picture belongs.
+
 There is no static `transform`. The table has no row for it because a
 transform only comes from an `animation`, which is where motion lives;
 `transform` written in a rule is W450 like any other property that is
@@ -698,7 +715,9 @@ and the property it came from, so the rest of the document still draws.
 A family a document ships replaces the machine's copy of it: once a
 `font` asset declares a family, the installed faces of that family are
 dropped, so the document draws in the version it carries rather than in
-whichever version the machine has. Families the document does not ship
+whichever version the machine has. This holds wherever the family is
+named, in markup and in a `text` source alike, and whether it is named
+by the asset id or by the family the file itself declares. Families the document does not ship
 are untouched and still serve as the fallback for characters its own
 fonts lack.
 

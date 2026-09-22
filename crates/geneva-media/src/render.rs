@@ -80,6 +80,12 @@ impl<R: Renderer> std::fmt::Debug for FramePacker<R> {
 }
 
 impl<R: Renderer> Renderer for FramePacker<R> {
+    fn take_warnings(&mut self) -> Vec<String> {
+        // A wrapper that swallowed these would make the renderer inside
+        // it silent, which is the failure this reports in the first place.
+        self.renderer.take_warnings()
+    }
+
     fn render_into(
         &mut self,
         comp: &Composition,

@@ -455,6 +455,44 @@ fn centre_of(rect: Rectangle) -> (f64, f64) {
     )
 }
 
+/// The integer rectangle a group's buffer covers, and whether bounding it
+/// cut anything off.
+///
+/// A group can reach past the surface and be moved back onto it, so the
+/// buffer is not clamped to the surface; it is bounded so that a runaway
+/// scale cannot ask for the world. The bound is an area rather than a
+/// rectangle: the old one was three surfaces wide by three tall, so its
+/// area is the budget here, and a group costs no more than it used to.
+/// Dropping the shape is what matters. A news crawl is a few hundred
+/// pixels tall and many thousands wide, well inside the area and far
+/// outside a rectangle two surfaces across, and it used to paint nothing
+/// at all once it passed that edge.
+pub(crate) fn bound_group(b: Bounds, surface: (u32, u32)) -> ([i64; 4], bool) {
+    let (w, h) = (f64::from(surface.0), f64::from(surface.1));
+    let natural = [b[0].floor(), b[1].floor(), b[2].ceil(), b[3].ceil()];
+    let area = (natural[2] - natural[0]).max(0.0) * (natural[3] - natural[1]).max(0.0);
+    if area <= 9.0 * w * h {
+        return (
+            [
+                natural[0] as i64,
+                natural[1] as i64,
+                natural[2] as i64,
+                natural[3] as i64,
+            ],
+            false,
+        );
+    }
+    // Over the budget: keep the rectangle around the surface that the
+    // bound has always kept, and say that the rest was dropped.
+    let kept = [
+        natural[0].clamp(-w, 2.0 * w) as i64,
+        natural[1].clamp(-h, 2.0 * h) as i64,
+        natural[2].clamp(-w, 2.0 * w) as i64,
+        natural[3].clamp(-h, 2.0 * h) as i64,
+    ];
+    (kept, true)
+}
+
 /// A group's buffer while its boxes are painted. `origin` is where its
 /// top-left pixel sits on the surface.
 struct Layer {
@@ -479,14 +517,7 @@ impl Layer {
                 origin: (0, 0),
             };
         };
-        // A group can reach past the surface and be moved back onto it,
-        // so its buffer is not clamped to the surface; it is bounded so a
-        // runaway scale cannot ask for the world.
-        let (w, h) = (f64::from(surface.0), f64::from(surface.1));
-        let x0 = b[0].floor().clamp(-w, 2.0 * w) as i64;
-        let y0 = b[1].floor().clamp(-h, 2.0 * h) as i64;
-        let x1 = b[2].ceil().clamp(-w, 2.0 * w) as i64;
-        let y1 = b[3].ceil().clamp(-h, 2.0 * h) as i64;
+        let ([x0, y0, x1, y1], _) = bound_group(b, surface);
         let width = (x1 - x0).max(0) as u32;
         let height = (y1 - y0).max(0) as u32;
         Self {
@@ -566,6 +597,11 @@ impl Cached {
 /// frame's window would be wrong by the next.
 #[derive(Default)]
 pub struct GroupCache {
+    /// Whether a group's picture was cut down to the bound at any frame
+    /// painted through this cache. Read once at the end of a clip: a
+    /// crawl that overruns does it on most of its frames, and the reader
+    /// wants to be told once.
+    clipped: bool,
     entries: HashMap<usize, Cached>,
     /// Misses in a row, per group, and past [`STRIKES`] the group is
     /// not painted into the cache again.
@@ -598,6 +634,19 @@ impl GroupCache {
         self.bytes = 0;
     }
 
+    /// Records that a group was cut down to the bound.
+    pub(crate) fn note_clipped(&mut self) {
+        self.clipped = true;
+    }
+
+    /// Whether any group painted through this cache was cut down to the
+    /// bound, clearing the flag so the next clip starts clean. What was
+    /// cut is not drawn, and the reader is told rather than left to find
+    /// a blank strip in the middle of a render.
+    pub fn take_clipped(&mut self) -> bool {
+        std::mem::take(&mut self.clipped)
+    }
+
     fn insert(&mut self, group: usize, mut entry: Cached) {
         if let Some(old) = self.entries.remove(&group) {
             self.bytes -= old.image.pixels.len() * size_of::<LinearRgba>();
@@ -611,14 +660,7 @@ impl GroupCache {
 
 /// The integer buffer a group needs, as [`Layer::over`] would bound it.
 fn buffer_rect(bounds: Option<Bounds>, surface: (u32, u32)) -> Option<[i64; 4]> {
-    let b = bounds?;
-    let (w, h) = (f64::from(surface.0), f64::from(surface.1));
-    let r = [
-        b[0].floor().clamp(-w, 2.0 * w) as i64,
-        b[1].floor().clamp(-h, 2.0 * h) as i64,
-        b[2].ceil().clamp(-w, 2.0 * w) as i64,
-        b[3].ceil().clamp(-h, 2.0 * h) as i64,
-    ];
+    let (r, _) = bound_group(bounds?, surface);
     (r[2] > r[0] && r[3] > r[1]).then_some(r)
 }
 
@@ -787,6 +829,14 @@ fn paint(
     let height = laid.size.1.ceil().max(1.0) as u32;
     let (own, placed, natural) =
         group_bounds(laid, transforms, (f64::from(width), f64::from(height)));
+    // Whether any group asks for more than the bound allows. Checked
+    // here rather than in `Layer::over`, which runs on worker threads and
+    // has nowhere to put the answer.
+    for b in own.iter().flatten() {
+        if bound_group(*b, (width, height)).1 {
+            cache.clipped = true;
+        }
+    }
     let content = content_of(laid, &placed, (width, height));
     let mut surface = Image {
         width,
@@ -1699,5 +1749,48 @@ mod coverage_tests {
             &[(-3.0, 0.0), (0.5, 0.0), (0.5, 1.0), (-3.0, 1.0)],
         );
         assert_eq!(clamped, vec![0.5, 0.0, 0.0, 0.0]);
+    }
+}
+
+#[cfg(test)]
+mod bound_tests {
+    use super::bound_group;
+
+    const SURFACE: (u32, u32) = (1280, 720);
+
+    /// A news crawl: a few hundred pixels tall, many thousands wide, and
+    /// sitting far to the left of the surface once its animation has run
+    /// a while. The old bound was a rectangle two surfaces across, which
+    /// this leaves long before the end, and it went blank rather than
+    /// saying anything. It is well inside the area the bound allows.
+    #[test]
+    fn a_crawl_far_past_the_surface_is_kept_whole() {
+        let slice = [11_000.0, 0.0, 12_280.0, 40.0];
+        let (r, clipped) = bound_group(slice, SURFACE);
+        assert!(!clipped, "a 1280x40 slice is not near the budget");
+        assert_eq!(r, [11_000, 0, 12_280, 40], "kept where it really is");
+    }
+
+    /// The bound still exists: the budget is the area of the rectangle it
+    /// used to be, three surfaces by three, so nothing costs more memory
+    /// than it used to.
+    #[test]
+    fn a_group_over_the_budget_is_cut_and_says_so() {
+        let w = f64::from(SURFACE.0);
+        let h = f64::from(SURFACE.1);
+        let huge = [0.0, 0.0, 40.0 * w, 40.0 * h];
+        let (r, clipped) = bound_group(huge, SURFACE);
+        assert!(clipped, "1600 surfaces of area is over the budget");
+        assert_eq!(r, [0, 0, 2 * 1280, 2 * 720], "cut back to the old bound");
+    }
+
+    /// Exactly the old rectangle is exactly the budget, so what used to
+    /// fit still fits.
+    #[test]
+    fn the_old_rectangle_still_fits() {
+        let w = f64::from(SURFACE.0);
+        let h = f64::from(SURFACE.1);
+        let (_, clipped) = bound_group([-w, -h, 2.0 * w, 2.0 * h], SURFACE);
+        assert!(!clipped, "three surfaces by three is the budget itself");
     }
 }

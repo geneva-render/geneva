@@ -7,6 +7,52 @@ the format version it was written for.
 
 ## Unreleased
 
+### Fixed
+
+- **A `text` source drew in the machine's font, not the one the document
+  ships.** Font assets were registered only when a source named one by
+  its asset id. Name the family the file declares, which the reference
+  offers as an equal spelling, and nothing was registered, so the code
+  that drops the machine's faces of a shipped family never ran and the
+  machine's copy drew instead. Shipping only a Bold file and asking for
+  that family at weight 400 gave the machine's Regular. Markup never had
+  this: it registered every font asset already. A document that carries
+  its fonts is now the same picture on every machine whichever spelling
+  it uses, which is the whole point of carrying them.
+
+  Nothing reported it, and nothing could: `W405` fires when the family is
+  missing, and the family was there, just not the copy the document
+  brought. Worth re-rendering anything that names a shipped family rather
+  than an asset id, since its output may have been the machine's font all
+  along.
+
+- **A markup group far from the frame stopped being drawn.** A group's
+  buffer was bounded to a rectangle two frames wide and two tall, in the
+  element's own coordinates. An element translated past that edge, which
+  is any news crawl a few seconds in, had its buffer collapse to nothing:
+  no error, no warning, a blank strip in the middle of a render. The
+  bound is now the area that rectangle had, nine frames' worth, with the
+  shape left free, so an element far wider than the frame is drawn whole
+  and stays drawn however far it travels. Measured on a crawl in a
+  1280x120 frame: at 20s its group sits at x 6000 to 7280, well past the
+  old edge, and its buffer is 30,720 pixels against a budget of
+  1,382,400.
+
+- **`W455` when a group really is too big for its buffer.** The bound
+  still exists, and something cut off by it is no longer cut off in
+  silence. This needed a way for the renderer to say anything at all:
+  render-time remarks came from the planner, never from the painter, and
+  a wrapper in the middle would have swallowed them.
+
+### Documentation
+
+- A shipped family is the one drawn wherever it is named, by asset id or
+  by the family in the file, in markup and in a `text` source alike.
+- `transform.position` is one animated point, so its keyframes carry both
+  axes together; a `keyframes` object under `x` is `E103`, which reports
+  the length it expected rather than the point it wanted.
+- The group buffer bound, what it allows, and that a composition has none.
+
 ### Added
 
 - **`max_chars` on the `captions` source.** Cue grouping is a budget of

@@ -214,6 +214,14 @@ pub fn render_layers<'c>(
     let height = laid.size.1.ceil().max(1.0) as u32;
     let (own, placed, natural) =
         group_bounds(&laid, &transforms, (f64::from(width), f64::from(height)));
+    // The same check `paint` makes. Markup with an animation inside comes
+    // through here and not through there, which is exactly the markup a
+    // group too big for its buffer belongs to.
+    for b in own.iter().flatten() {
+        if super::bound_group(*b, (width, height)).1 {
+            cache.note_clipped();
+        }
+    }
     let content = content_of(&laid, &placed, (width, height));
     let served = fill_cache(cache, &laid, &own, &natural, (width, height), text, images);
     // Painted, and read from here on.

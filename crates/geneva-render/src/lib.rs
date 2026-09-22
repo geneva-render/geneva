@@ -98,6 +98,13 @@ pub trait Renderer {
         frame: &mut Frame,
     ) -> Result<(), RenderError>;
 
+    /// What the renderer has to tell the reader about the render itself,
+    /// taken and cleared: things noticed while drawing that no amount of
+    /// reading the document would show. Nothing by default.
+    fn take_warnings(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Renders the frame shown at time `t`.
     fn render_frame(&mut self, comp: &Composition, t: Ratio) -> Result<Frame, RenderError> {
         let mut frame = Frame::new(0, 0, Color::BLACK);

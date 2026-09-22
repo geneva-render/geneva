@@ -317,6 +317,11 @@ pub struct RenderStats {
     pub mode: RenderMode,
     /// Remarks for the user, such as cuts moved to keyframes.
     pub notes: Vec<String>,
+    /// What the renderer noticed while drawing that reading the document
+    /// would not show, such as a group too big for its buffer. Reported
+    /// as warnings rather than notes: something asked for is not in the
+    /// output.
+    pub warnings: Vec<String>,
     pub seconds: f64,
 }
 
@@ -1540,6 +1545,7 @@ mod imp {
                 duration: comp.duration,
                 mode: RenderMode::Render,
                 notes,
+                warnings: Vec::new(),
                 seconds: started.elapsed().as_secs_f64(),
             },
         ))
@@ -1814,6 +1820,7 @@ mod imp {
                 RenderMode::Render
             },
             notes,
+            warnings: Vec::new(),
             seconds: started.elapsed().as_secs_f64(),
         })
     }
@@ -2357,6 +2364,7 @@ mod imp {
                         RenderMode::Copy
                     },
                     notes,
+                    warnings: Vec::new(),
                     seconds: started.elapsed().as_secs_f64(),
                 });
             }
@@ -2753,6 +2761,10 @@ mod imp {
                 RenderMode::Render
             },
             notes,
+            warnings: renderer
+                .as_mut()
+                .map(|r| r.take_warnings())
+                .unwrap_or_default(),
             seconds: started.elapsed().as_secs_f64(),
         })
     }

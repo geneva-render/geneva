@@ -212,3 +212,45 @@ fn letter_spacing_is_pixels_not_ems() {
         "five gaps of 6px should add about 30px, got {grew}"
     );
 }
+
+/// A family a document ships is the one it draws in, whether the source
+/// names the asset or the family the file declares.
+///
+/// Only the bold file is an asset here, so a shipped family has one face
+/// and every weight snaps to it. Asking for weight 400 by family has to
+/// give the same picture as asking for the asset id: the machine's own
+/// Liberation Sans, where there is one, must not get in. It used to,
+/// because the font assets were registered only when a source named one
+/// by id, so naming the family left the document's faces unloaded and
+/// the machine's in place. Nothing said so: the family was available,
+/// just not the copy the document carried.
+#[test]
+fn a_text_source_draws_in_a_shipped_family_named_by_family() {
+    let body = |font: &str| {
+        format!(r##"{{"kind":"text","text":"HANDGLOVES","font":"{font}","color":"#fff"}}"##)
+    };
+    let text = |body: String| {
+        format!(
+            r##"{{"geneva":"0.1","output":{{"width":640,"height":120,"fps":30,"duration":"2s","background":"transparent"}},
+                "assets":{{"only_bold":{{"src":"fonts/LiberationSans-Bold.ttf","kind":"font"}}}},
+                "layers":[{{"clips":[{{"source":{body},"transform":{{"position":{{"x":"50%","y":"50%"}}}}}}]}}]}}"##
+        )
+    };
+    let width_of = |font: &str| {
+        let loaded = load(&text(body(font)));
+        assert!(loaded.is_ok(), "{:#?}", loaded.diagnostics);
+        let frame = CpuRenderer::with_asset_root(golden_root())
+            .render_frame(&loaded.composition.unwrap(), Ratio::ZERO)
+            .unwrap();
+        let (x0, _, x1, _) = bounds(&frame).expect("some text");
+        x1 - x0
+    };
+
+    let by_id = width_of("400 32px only_bold");
+    let by_family = width_of("400 32px Liberation Sans");
+    assert_eq!(
+        by_id, by_family,
+        "the shipped bold face draws either way; a different width means \
+         the machine's regular was used for the family"
+    );
+}
