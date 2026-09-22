@@ -860,8 +860,8 @@ pub fn stream_copy(
 /// the audio encoded from `blocks`, which yield the treated mix in
 /// interleaved stereo at the settings' rate.
 ///
-/// This is what an output whose sound is brought to a loudness, cleaned
-/// or denoised takes when its picture needs nothing: the treatment is a
+/// This is what an output whose sound is brought to a loudness or
+/// cleaned takes when its picture needs nothing: the treatment is a
 /// change no copied audio track can carry, but the picture is untouched
 /// either way, so only the sound is encoded. `plan.audio` is ignored.
 ///

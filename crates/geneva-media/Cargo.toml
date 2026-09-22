@@ -13,14 +13,9 @@ default = ["media"]
 # and linked statically. Without it the crate only offers the
 # hardware-independent conversions and types.
 media = ["dep:ffmpeg-next", "ffmpeg-next/static", "dep:libloading"]
-# Speech denoising with the DeepFilterNet model embedded, under --denoise.
-denoise = ["media", "dep:deep_filter", "dep:ndarray", "dep:anyhow"]
 
 [dependencies]
 geneva-audio = { workspace = true }
-deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", tag = "v0.5.6", default-features = false, features = ["tract", "default-model"], optional = true }
-ndarray = { version = "0.15", optional = true }
-anyhow = { workspace = true, optional = true }
 geneva-anim = { workspace = true }
 geneva-color = { workspace = true }
 geneva-render = { workspace = true }

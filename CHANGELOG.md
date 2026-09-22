@@ -7,6 +7,30 @@ the format version it was written for.
 
 ## Unreleased
 
+### Removed
+
+- **Speech denoising is gone**: `--denoise`, `output.audio.denoise`,
+  `E424`, the `denoise` cargo feature and the DeepFilterNet dependency,
+  along with the two files that existed only to serve it. Loudness and
+  hygiene are untouched.
+
+  It was in no released binary and could not be, because the licence of
+  the model weights was never settled, so the only feature the manual
+  documented in full was the only one nobody could run: `--denoise`
+  returned `E424` telling the reader to build their own binary. It was
+  also the one git dependency in the workspace and about three minutes
+  of first-build time for everyone working on the engine.
+
+  `output.audio.denoise` was in the published `0.4` schema, so a
+  document that still sets it is now `E101`, an unknown field, rather
+  than being accepted and ignored. No document in the wild can have
+  relied on it working, since no released binary ever did it. A test
+  pins the refusal.
+
+  If it returns it will be a fresh decision, and the way to have it
+  without the licence question is to leave the weights out of the binary
+  and fetch them on first use, which upstream supports.
+
 ### Fixed
 
 - **A `text` source drew in the machine's font, not the one the document

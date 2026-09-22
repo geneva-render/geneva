@@ -14,7 +14,6 @@ use geneva_timeline::{Composition, Ratio, ResolvedLayer, ResolvedSource};
 
 use crate::MediaError;
 use crate::codecs::{AudioReader, AudioSettings, AudioStream};
-use crate::spool::Spool;
 
 /// Gain is sampled once per block of this many frames.
 const GAIN_BLOCK: usize = 64;
@@ -225,8 +224,8 @@ pub struct LoudnessReport {
     pub target_lufs: f64,
     /// The true-peak ceiling, in dBTP.
     pub ceiling_dbtp: f64,
-    /// The mix as its sources add up (after hygiene and denoising, where
-    /// they are on), or `None` for silence (nothing above the meter's
+    /// The mix as its sources add up (after hygiene, where it is on),
+    /// or `None` for silence (nothing above the meter's
     /// absolute gate), which is left as it is.
     pub measured_lufs: Option<f64>,
     /// The gain applied, in dB, before the limiter.
@@ -246,20 +245,13 @@ pub struct TreatmentReport {
     /// The hum found and notched, where hygiene was on and there was
     /// any.
     pub hum: Option<Hum>,
-    /// Whether the speech denoiser ran.
-    pub denoised: bool,
 }
 
 /// The treatment of the mix: measured in one or two passes over it,
 /// then applied block by block on the way out.
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "two switches from the document and two states of the passes"
-)]
 struct Treatment {
     loudness: Option<Loudness>,
     hygiene: bool,
-    denoise: bool,
     /// Channels the encoder writes; a mono output is measured as the
     /// downmix the encoder makes.
     channels: usize,
@@ -270,11 +262,6 @@ struct Treatment {
     pending: Vec<f32>,
     exhausted: bool,
     report: TreatmentReport,
-    /// The denoised mix from the first pass, read back instead of
-    /// being made again.
-    spool: Option<Spool>,
-    /// Frames taken from the spool so far.
-    spooled: usize,
 }
 
 /// A plain mixer over `template`, for a pass that runs while the
@@ -346,20 +333,19 @@ impl Mixer {
     }
 
     /// The mix for an output as its audio settings describe it: at its
-    /// rate, denoised, cleaned and brought to its loudness target where
-    /// they ask for that. A treatment reads the whole mix once to
+    /// rate, cleaned and brought to its loudness target where they ask
+    /// for that. A treatment reads the whole mix once to
     /// measure it before the first block goes out (twice when hum is
     /// found under a loudness target), which decodes every audio
     /// source again each time.
     pub fn for_output(comp: &Composition, root: &Path, audio: &AudioSettings) -> Self {
         let mut mixer = Self::new(comp, root, audio.sample_rate);
-        if audio.loudness.is_some() || audio.hygiene || audio.denoise {
+        if audio.loudness.is_some() || audio.hygiene {
             let channels = usize::from(audio.channels.clamp(1, 2));
             mixer.template = mixer.voices.iter().map(|l| l.voice.clone()).collect();
             mixer.treatment = Some(Treatment {
                 loudness: audio.loudness.clone(),
                 hygiene: audio.hygiene,
-                denoise: audio.denoise,
                 channels,
                 prepared: false,
                 filters: None,
@@ -371,10 +357,7 @@ impl Mixer {
                     loudness: None,
                     high_pass: audio.hygiene,
                     hum: None,
-                    denoised: audio.denoise,
                 },
-                spool: None,
-                spooled: 0,
             });
         }
         mixer
@@ -415,91 +398,47 @@ impl Mixer {
         }
     }
 
-    /// The measuring passes: the mix, denoised where asked, through the
-    /// hum detector, the high-pass and the meter; then, when hum was
-    /// found under a loudness target, the notched mix through the meter
-    /// again, since the notches take level with them. From those, the
-    /// filters, the gain and the limiter the writing pass applies. A
-    /// denoised mix is spooled to a temporary file on the first pass,
-    /// since the model is the expensive part, and read back after.
+    /// The measuring passes: the mix through the hum detector, the
+    /// high-pass and the meter; then, when hum was found under a
+    /// loudness target, the notched mix through the meter again, since
+    /// the notches take level with them. From those, the filters, the
+    /// gain and the limiter the writing pass applies.
     fn prepare(&mut self) -> Result<(), MediaError> {
         let rate = self.rate;
         let mut raw = self.raw_copy();
         let Some(t) = self.treatment.as_mut() else {
             return Ok(());
         };
-        #[cfg(not(feature = "denoise"))]
-        if t.denoise {
-            return Err(MediaError::Codec {
-                context: "audio".to_owned(),
-                reason: "denoising is not built into this binary".to_owned(),
-            });
-        }
-        #[cfg(feature = "denoise")]
-        let mut denoiser = if t.denoise {
-            t.spool = Some(Spool::new()?);
-            Some(crate::denoise::Denoiser::new(rate)?)
-        } else {
-            None
-        };
         let mut high_pass = t.hygiene.then(|| Hygiene::new(rate, 2, None));
         let mut detector = t.hygiene.then(|| HumDetector::new(rate, 2));
         let mut meter = t.loudness.as_ref().map(|_| Meter::new(rate, t.channels));
         let channels = t.channels;
-        let mut feed =
-            |block: &mut Vec<f32>, spool: &mut Option<Spool>| -> Result<(), MediaError> {
-                if let Some(s) = spool.as_mut() {
-                    s.write(block)?;
-                }
-                // Hum is looked for before the high-pass, which would take
-                // 9 dB off a 60 Hz fundamental first.
-                if let Some(d) = detector.as_mut() {
-                    d.push(block);
-                }
-                if let Some(hp) = high_pass.as_mut() {
-                    hp.process(block);
-                }
-                if let Some(m) = meter.as_mut() {
-                    meter_push(m, block, channels);
-                }
-                Ok(())
-            };
-        while let Some(mut block) = raw.raw_block(rate as usize)? {
-            #[cfg(feature = "denoise")]
-            if let Some(d) = denoiser.as_mut() {
-                block = d.push(&block)?;
+        let mut feed = |block: &mut Vec<f32>| {
+            // Hum is looked for before the high-pass, which would take
+            // 9 dB off a 60 Hz fundamental first.
+            if let Some(d) = detector.as_mut() {
+                d.push(block);
             }
-            feed(&mut block, &mut t.spool)?;
-        }
-        #[cfg(feature = "denoise")]
-        if let Some(d) = denoiser.as_mut() {
-            let mut tail = d.finish()?;
-            feed(&mut tail, &mut t.spool)?;
+            if let Some(hp) = high_pass.as_mut() {
+                hp.process(block);
+            }
+            if let Some(m) = meter.as_mut() {
+                meter_push(m, block, channels);
+            }
+        };
+        while let Some(mut block) = raw.raw_block(rate as usize)? {
+            feed(&mut block);
         }
         let hum = detector.and_then(|d| d.hum());
         if hum.is_some() && meter.is_some() {
             let mut raw = self_raw_copy(&self.root, rate, self.total_frames, &self.template);
-            if let Some(s) = t.spool.as_mut() {
-                s.rewind()?;
-            }
             let mut chain = Hygiene::new(rate, 2, hum.as_ref());
             let mut again = Meter::new(rate, t.channels);
-            loop {
-                let block = match t.spool.as_mut() {
-                    Some(s) => s.read(rate as usize)?,
-                    None => raw.raw_block(rate as usize)?.unwrap_or_default(),
-                };
-                if block.is_empty() {
-                    break;
-                }
-                let mut block = block;
+            while let Some(mut block) = raw.raw_block(rate as usize)? {
                 chain.process(&mut block);
                 meter_push(&mut again, &block, t.channels);
             }
             meter = Some(again);
-        }
-        if let Some(s) = t.spool.as_mut() {
-            s.rewind()?;
         }
         t.filters = t.hygiene.then(|| Hygiene::new(rate, 2, hum.as_ref()));
         if let (Some(spec), Some(meter)) = (&t.loudness, meter) {
@@ -542,31 +481,10 @@ impl Mixer {
             if enough || exhausted {
                 break;
             }
-            let total = self.total_frames;
-            let mut spool = self.treatment.as_mut().and_then(|t| t.spool.take());
-            let spooled = self.treatment.as_ref().map_or(0, |t| t.spooled);
-            let raw = match spool.as_mut() {
-                // Exactly the mix's length, whatever rounding the model's
-                // rate change left the spool with.
-                Some(s) => {
-                    let need = total.saturating_sub(spooled).min(frames);
-                    if need == 0 {
-                        None
-                    } else {
-                        let mut v = s.read(need)?;
-                        v.resize(need * 2, 0.0);
-                        Some(v)
-                    }
-                }
-                None => self.raw_block(frames)?,
-            };
+            let raw = self.raw_block(frames)?;
             let Some(t) = self.treatment.as_mut() else {
                 break;
             };
-            t.spool = spool;
-            if let Some(block) = &raw {
-                t.spooled += block.len() / 2;
-            }
             let out = match raw {
                 Some(mut block) => {
                     if let Some(f) = t.filters.as_mut() {

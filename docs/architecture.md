@@ -388,14 +388,10 @@ format. Encoding goes the other way: linear to the output transfer, to
 Y'CbCr, 2×2 chroma averaging, 8-bit 4:2:0, then the encoder. Color tags
 travel with the stream in both directions. Audio is decoded and resampled
 to stereo `f32` at the output rate, shaped by gain tracks and fades, and
-summed. An output that asks for it is then treated on the way out: the
-speech denoiser first (the `denoise` cargo feature, which links the
-DeepFilterNet runtime from its git repository at a released tag and
-embeds its model; off unless built in), then the hygiene high-pass and
-notches, then the gain to a loudness target and the true-peak limiter.
-Anything measured first is measured on a pass over the mix before the
-blocks go out, and a denoised mix is spooled to a temporary file between
-the passes so the model runs once.
+summed. An output that asks for it is then treated on the way out: the hygiene
+high-pass and notches, then the gain to a loudness target and the
+true-peak limiter. Anything measured first is measured on a pass over
+the mix before the blocks go out.
 
 ## Golden tests
 

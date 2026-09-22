@@ -225,7 +225,6 @@ otherwise. The printed timeline (`--show-timeline`) shows the choice.
 | `--chunks N\|auto` | Encode the output in `N` stretches at once, on separate cores, joined afterwards; `auto` (the default) decides from the encoder and the machine, `1` turns it off. See `encode.video.chunks` in [timeline.md](timeline.md). |
 | `--no-audio` | Write no audio track. |
 | `--renderer auto\|cpu\|gpu` | Which renderer composites the frames, as for `render`. Only the steps that composite are affected: a stream that is copied is copied either way, and the overlays drawn onto a copied picture are always drawn on the CPU. A verb that builds a canvas, such as a `--for` target that changes the shape, composites every frame and does take it. |
-| `--denoise` | Denoise the audio as speech with the embedded model, before hygiene and loudness; sets `output.audio.denoise` in the compiled timeline. Speech only: it damages music and overlapping speakers. It runs on one core at about 20x the speed of the audio, 2.9 s a minute for 48 kHz stereo on a 2026 laptop. Never part of a `--for` target. A binary built without the `denoise` feature refuses the document with E424 before rendering anything. |
 | `--exact` | Cut on the exact frame; a [smart cut](#smart-cut) when the source allows. |
 | `--show-timeline` | Print the timeline the verb built instead of rendering it. Asset paths in it are relative to the directory printed on stderr. |
 
@@ -427,7 +426,7 @@ The rules, in order:
    measures within one loudness unit of that with its peaks under the
    ceiling, and never for `podcast`, whose hygiene a copy cannot
    carry; otherwise it is re-encoded. The targets without a number
-   leave the level alone. `--denoise` is never part of a target.
+   leave the level alone.
 
 The report carries one note (`N410`) with every choice and its reason:
 

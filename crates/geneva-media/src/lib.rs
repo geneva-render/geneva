@@ -16,16 +16,12 @@ pub mod chunks;
 #[cfg(feature = "media")]
 mod codecs;
 pub mod convert;
-#[cfg(feature = "denoise")]
-pub mod denoise;
 mod info;
 #[cfg(feature = "media")]
 mod levels;
 #[cfg(feature = "media")]
 pub mod mix;
 mod render;
-#[cfg(feature = "media")]
-mod spool;
 pub mod subtitles;
 
 use std::path::PathBuf;

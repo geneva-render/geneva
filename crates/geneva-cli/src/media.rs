@@ -934,7 +934,6 @@ mod imp {
                                 .clamp(1, 2),
                             loudness: o.audio.as_ref().and_then(|a| a.loudness.clone()),
                             hygiene: o.audio.as_ref().and_then(|a| a.hygiene).unwrap_or(false),
-                            denoise: o.audio.as_ref().and_then(|a| a.denoise).unwrap_or(false),
                         }),
                         subtitles: Vec::new(),
                         fast_start: true,
@@ -997,7 +996,6 @@ mod imp {
                                 .clamp(1, 2),
                             loudness: o.audio.as_ref().and_then(|a| a.loudness.clone()),
                             hygiene: o.audio.as_ref().and_then(|a| a.hygiene).unwrap_or(false),
-                            denoise: o.audio.as_ref().and_then(|a| a.denoise).unwrap_or(false),
                         })
                     };
                     // A treated mix is a change no copied audio track can
@@ -1551,20 +1549,15 @@ mod imp {
         ))
     }
 
-    /// Whether an output's audio is brought to a loudness, cleaned or
-    /// denoised, which only the mix can do, so no copy of it will do.
+    /// Whether an output's audio is brought to a loudness or cleaned,
+    /// which only the mix can do, so no copy of it will do.
     fn audio_treated(audio: Option<&geneva_timeline::schema::AudioOutput>) -> bool {
-        audio.is_some_and(|a| {
-            a.loudness.is_some() || a.hygiene == Some(true) || a.denoise == Some(true)
-        })
+        audio.is_some_and(|a| a.loudness.is_some() || a.hygiene == Some(true))
     }
 
     /// What the treatment of the mix measured and did, a line each.
     fn treatment_notes(r: &TreatmentReport) -> Vec<String> {
         let mut notes = Vec::new();
-        if r.denoised {
-            notes.push("denoise: the mix went through the speech model at 48 kHz".to_owned());
-        }
         if r.high_pass {
             let hum = match &r.hum {
                 Some(hum) => format!(
@@ -2206,11 +2199,6 @@ mod imp {
                     .audio_output
                     .as_ref()
                     .and_then(|a| a.hygiene)
-                    .unwrap_or(false),
-                denoise: comp
-                    .audio_output
-                    .as_ref()
-                    .and_then(|a| a.denoise)
                     .unwrap_or(false),
             })
         };

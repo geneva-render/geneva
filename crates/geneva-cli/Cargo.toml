@@ -20,9 +20,6 @@ media = ["geneva-media/media"]
 # --renderer`. Pure Rust; the device is found at run time, so a build with
 # it runs on a machine without one.
 gpu = ["dep:geneva-gpu"]
-# Speech denoising with the DeepFilterNet model embedded in the binary,
-# under --denoise and output.audio.denoise.
-denoise = ["media", "geneva-media/denoise"]
 
 [dependencies]
 anyhow = { workspace = true }

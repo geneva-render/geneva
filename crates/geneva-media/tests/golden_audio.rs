@@ -24,7 +24,6 @@ fn mix(comp: &Composition, root: &Path) -> Result<Samples, String> {
         channels,
         loudness: audio.and_then(|a| a.loudness.clone()),
         hygiene: audio.and_then(|a| a.hygiene).unwrap_or(false),
-        denoise: audio.and_then(|a| a.denoise).unwrap_or(false),
     };
     let mut mixer = Mixer::for_output(comp, root, &settings);
     let mut data = Vec::new();

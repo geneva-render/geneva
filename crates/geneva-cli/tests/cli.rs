@@ -1542,30 +1542,29 @@ fn a_render_reports_progress_in_the_format_it_was_asked_for() {
     );
 }
 
-/// A document asking for what this binary was not built with is refused
-/// at the field, before anything is rendered. With the feature on, the
-/// same document is accepted.
+/// `output.audio.denoise` was removed with the speech denoiser, so a
+/// document that still sets it is refused as an unknown field rather
+/// than accepted and quietly ignored. The message lists what the object
+/// does take, which is how someone finds out where it went.
 #[test]
-fn denoise_is_refused_at_the_field_when_it_is_not_built_in() {
+fn the_removed_denoise_field_is_refused_as_unknown() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("denoise.json");
     std::fs::write(
         &path,
-        r##"{"geneva":"0.3","output":{"width":320,"height":240,"fps":25,
+        r##"{"geneva":"0.4","output":{"width":320,"height":240,"fps":25,
             "audio":{"denoise":true}},
             "layers":[{"clips":[{"start":"0s","duration":"1s",
             "source":{"kind":"solid","color":"#000000"}}]}]}"##,
     )
     .unwrap();
-    let assert = geneva().args(["validate"]).arg(&path).assert();
-    if cfg!(feature = "denoise") {
-        assert.success();
-    } else {
-        assert
-            .code(1)
-            .stderr(predicate::str::contains("E424"))
-            .stderr(predicate::str::contains("/output/audio/denoise"));
-    }
+    geneva()
+        .args(["validate"])
+        .arg(&path)
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("E101"))
+        .stderr(predicate::str::contains("denoise"));
 }
 
 /// A target that only has the sound to change keeps the picture: the

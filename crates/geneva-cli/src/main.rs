@@ -822,21 +822,6 @@ fn run_verb(
     }
     let output = output.as_path();
     let mut picture_as_is = false;
-    if encode.denoise {
-        // Into the document, where a render reads it from; never part of
-        // a target.
-        let audio = timeline
-            .output
-            .audio
-            .get_or_insert(geneva_timeline::schema::AudioOutput {
-                sample_rate: None,
-                channels: None,
-                loudness: None,
-                hygiene: None,
-                denoise: None,
-            });
-        audio.denoise = Some(true);
-    }
     if let Some(name) = &encode.for_ {
         // A first resolution gives the facts the target needs (the size
         // and length the verb arrived at); the target then rewrites the
@@ -1201,7 +1186,6 @@ fn fits_target_as_is(
         || encode.budget.is_some()
         || encode.exact
         || encode.keep_hdr
-        || encode.denoise
         || encode.fill.is_some();
     if asks_encode {
         return Ok(TargetVerdict::default());
@@ -1293,7 +1277,6 @@ fn load_text(text: &str, root: &Path, probe: bool, measure: bool) -> Loaded {
     } else {
         geneva_timeline::load_with(text, &media::ProbedAssets::fonts_only())
     };
-    loaded.diagnostics.extend(unbuilt_features(&loaded));
     loaded.diagnostics.sort_by(|a, b| {
         b.severity
             .cmp(&a.severity)
@@ -1303,47 +1286,6 @@ fn load_text(text: &str, root: &Path, probe: bool, measure: bool) -> Loaded {
         loaded.composition = None;
     }
     loaded
-}
-
-/// Errors for what the document asks for and this binary was not built
-/// with, reported before anything is rendered rather than when the mix
-/// reaches the missing part.
-fn unbuilt_features(loaded: &Loaded) -> Vec<Diagnostic> {
-    #[cfg(feature = "denoise")]
-    {
-        let _ = loaded;
-        Vec::new()
-    }
-    #[cfg(not(feature = "denoise"))]
-    {
-        const MESSAGE: &str = "speech denoising is not built into this binary; build one with `--features geneva-cli/denoise`";
-        let Some(comp) = &loaded.composition else {
-            return Vec::new();
-        };
-        let asks = |a: Option<&geneva_timeline::schema::AudioOutput>| {
-            a.and_then(|a| a.denoise) == Some(true)
-        };
-        // A single-output document leaves `outputs` empty and carries
-        // its audio on the composition.
-        if comp.outputs.is_empty() {
-            return if asks(comp.audio_output.as_ref()) {
-                vec![Diagnostic::error("E424", "/output/audio/denoise", MESSAGE)]
-            } else {
-                Vec::new()
-            };
-        }
-        comp.outputs
-            .iter()
-            .filter(|o| asks(o.audio.as_ref()))
-            .map(|o| {
-                Diagnostic::error(
-                    "E424",
-                    format!("/outputs/{}/audio/denoise", o.name),
-                    MESSAGE,
-                )
-            })
-            .collect()
-    }
 }
 
 /// Prints a page of the manual, or names the pages.

@@ -22,8 +22,8 @@ pub const FORMAT_VERSION: &str = "0.4";
 /// The format versions this crate reads. Each one is the one before it
 /// with more optional fields, so all of them are accepted as they are:
 /// 0.2 added crop, effects, mask and speed on a clip, 0.3 the outputs
-/// map, 0.4 the keyframes map, the captions source and loudness,
-/// hygiene and denoise on output audio.
+/// map, 0.4 the keyframes map, the captions source, and loudness and
+/// hygiene on output audio.
 pub const ACCEPTED_VERSIONS: &[&str] = &["0.1", "0.2", "0.3", "0.4"];
 
 /// A complete composition: output settings, assets and layers.
@@ -136,12 +136,6 @@ pub struct AudioOutput {
     /// to false.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hygiene: Option<bool>,
-    /// Speech denoising with an embedded model (DeepFilterNet), before
-    /// hygiene and loudness. Speech only: it damages music and
-    /// overlapping speakers. Costs about as long as the audio takes to
-    /// play on one core. Defaults to false.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub denoise: Option<bool>,
 }
 
 /// A loudness target for the mix, measured as ITU-R BS.1770-4 (EBU R128)

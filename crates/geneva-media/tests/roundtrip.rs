@@ -106,7 +106,6 @@ fn mono_output_is_written_as_mono() {
             channels: 1,
             loudness: None,
             hygiene: false,
-            denoise: false,
         }),
     };
     let mut enc = Encoder::new(&out, settings).unwrap();
@@ -168,7 +167,6 @@ fn encoded_solid_color_survives_the_round_trip() {
             channels: 2,
             loudness: None,
             hygiene: false,
-            denoise: false,
         }),
     };
     let mut enc = Encoder::new(&out, settings).unwrap();
@@ -372,7 +370,6 @@ fn audio_lands_at_its_timeline_position_in_the_output_file() {
             channels: 2,
             loudness: None,
             hygiene: false,
-            denoise: false,
         }),
     };
     let mut enc = Encoder::new(&out, settings).unwrap();
@@ -687,7 +684,6 @@ fn audio_only_outputs_round_trip_through_wav() {
             channels: 2,
             loudness: None,
             hygiene: false,
-            denoise: false,
         }),
     };
     let mut enc = Encoder::new(&out, settings).unwrap();
@@ -1028,7 +1024,6 @@ fn every_audio_codec_round_trips_a_tone() {
                 channels: 2,
                 loudness: None,
                 hygiene: false,
-                denoise: false,
             }),
         };
         let mut enc = Encoder::new(&out, settings).unwrap();

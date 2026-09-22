@@ -625,7 +625,6 @@ pub fn apply(tl: &mut Timeline, facts: &Facts, opts: &Options<'_>) -> Vec<Diagno
                 channels: None,
                 loudness: None,
                 hygiene: None,
-                denoise: None,
             });
             if let Some((lufs, peak)) = t.loudness {
                 out.loudness = Some(Loudness {

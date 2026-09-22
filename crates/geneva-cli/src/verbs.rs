@@ -96,7 +96,6 @@ fn shared_audio(inputs: &[&Input]) -> Option<geneva_timeline::schema::AudioOutpu
         channels: Some(u8::try_from(channels.min(2)).expect("at most 2")),
         loudness: None,
         hygiene: None,
-        denoise: None,
     })
 }
 
@@ -167,11 +166,6 @@ pub struct EncodeArgs {
     /// affected; a stream that is copied is copied either way.
     #[arg(long, value_enum, default_value = "auto")]
     pub renderer: crate::media::RendererChoice,
-    /// Denoise the audio as speech with the embedded model (sets
-    /// output.audio.denoise). Speech only: it damages music and
-    /// overlapping speakers. Runs at about 20x the speed of the audio.
-    #[arg(long)]
-    pub denoise: bool,
     /// Always decode and re-encode, for frame-accurate cuts.
     #[arg(long)]
     pub exact: bool,
@@ -1101,7 +1095,6 @@ pub fn audio(input: &Path, op: &AudioOp, speech: bool, args: &EncodeArgs) -> Res
                     channels: Some(1),
                     loudness: None,
                     hygiene: None,
-                    denoise: None,
                 });
             }
         }
