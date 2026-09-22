@@ -17,14 +17,24 @@ use crate::length::{Length, Point, Scale};
 use crate::time::{Fps, Time};
 
 /// The timeline format version this crate writes.
-pub const FORMAT_VERSION: &str = "0.4";
+pub const FORMAT_VERSION: &str = "0.5";
 
-/// The format versions this crate reads. Each one is the one before it
-/// with more optional fields, so all of them are accepted as they are:
-/// 0.2 added crop, effects, mask and speed on a clip, 0.3 the outputs
-/// map, 0.4 the keyframes map, the captions source, and loudness and
-/// hygiene on output audio.
-pub const ACCEPTED_VERSIONS: &[&str] = &["0.1", "0.2", "0.3", "0.4"];
+/// The format versions this crate reads: 0.2 added crop, effects, mask
+/// and speed on a clip, 0.3 the outputs map, 0.4 the keyframes map, the
+/// captions source and loudness and hygiene on output audio, 0.5
+/// `max_chars` on the captions source.
+///
+/// Up to 0.4 each version was the one before it with more optional
+/// fields, so an older document needed nothing doing to it. 0.5 is the
+/// first that also takes something away: `output.audio.denoise` went
+/// with the speech denoiser, and a document that sets it is an unknown
+/// field whatever version it declares. Every other 0.1 to 0.4 document
+/// is still read as it is.
+///
+/// A published schema file is never rewritten. Change the format and
+/// this constant moves, which publishes a new file beside the old ones
+/// rather than editing what an older binary was built against.
+pub const ACCEPTED_VERSIONS: &[&str] = &["0.1", "0.2", "0.3", "0.4", "0.5"];
 
 /// A complete composition: output settings, assets and layers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

@@ -76,7 +76,7 @@ as-is. The JSON ties the footage, card and captions together:
 
 ```json
 {
-  "geneva": "0.4",
+  "geneva": "0.5",
   "output": { "width": 1280, "height": 720, "fps": 30 },
 
   "assets": {

@@ -7,6 +7,25 @@ the format version it was written for.
 
 ## Unreleased
 
+### Changed
+
+- **Timeline format 0.5.** `FORMAT_VERSION` moves with the two format
+  changes below it, which is what publishes a schema file of its own
+  rather than editing one an older binary was built against.
+  `schema/geneva-timeline-0.4.schema.json` is back to the byte-for-byte
+  file 0.7.1 published, and `geneva-timeline-0.5.schema.json` is new
+  beside it.
+
+  It matters because the types refuse unknown fields in 24 places: a
+  document using `max_chars` while declaring `"0.4"` is rejected by a
+  0.7.1 binary, which is the version it is claiming to be. Documents
+  from 0.1 to 0.4 are still read as they are.
+
+  0.5 is also the first version to take a field away rather than only
+  add one, so the rule that each version is the one before it with more
+  optional fields no longer holds. `output.audio.denoise` is the field;
+  see Removed.
+
 ### Removed
 
 - **Speech denoising is gone**: `--denoise`, `output.audio.denoise`,

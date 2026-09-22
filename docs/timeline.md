@@ -15,7 +15,7 @@ silently ignored.
 
 ```json
 {
-  "geneva": "0.4",
+  "geneva": "0.5",
   "output": { "width": 1280, "height": 720, "fps": 30, "duration": "3s" },
   "layers": [
     { "clips": [ { "source": { "kind": "solid", "color": "#1d2230" } } ] }
@@ -211,7 +211,7 @@ prints the document as it was written.
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `geneva` | yes | Format version, `"0.4"`. A `"0.1"`, `"0.2"` or `"0.3"` document is read as it is: 0.2 added optional clip fields (`crop`, `effects`, `mask`, `speed`), 0.3 added the optional `outputs` map, 0.4 adds the optional top-level `keyframes` map, the `captions` source kind and the `loudness` and `hygiene` fields on output audio. |
+| `geneva` | yes | Format version, `"0.5"`. A `"0.1"` to `"0.4"` document is read as it is: 0.2 added optional clip fields (`crop`, `effects`, `mask`, `speed`), 0.3 the optional `outputs` map, 0.4 the optional top-level `keyframes` map, the `captions` source kind and the `loudness` and `hygiene` fields on output audio, and 0.5 adds `max_chars` on the `captions` source. 0.5 is also the first version to take something away: `output.audio.denoise` went with the speech denoiser, so a document setting it is an unknown field (`E101`) whatever version it declares. |
 | `output` | yes | Frame size, rate, duration, background, color, audio and encoding settings. |
 | `outputs` | no | Map of name to [output entry](#outputs): the files one render writes from the composition, when there is more than one. |
 | `assets` | no | Map of asset id to asset. |

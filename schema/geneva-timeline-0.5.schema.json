@@ -9,7 +9,8 @@
         "0.1",
         "0.2",
         "0.3",
-        "0.4"
+        "0.4",
+        "0.5"
       ]
     },
     "output": {
@@ -74,7 +75,7 @@
     "output"
   ],
   "title": "Geneva timeline",
-  "description": "Geneva timeline format 0.4: a declarative video composition.",
+  "description": "Geneva timeline format 0.5: a declarative video composition.",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
     "Output": {
@@ -378,13 +379,6 @@
             "null"
           ],
           "description": "Audio hygiene for speech: a high-pass at 80 Hz that takes rumble,\nhandling noise and DC offset, and notches on mains hum (50 or 60\nHz and its harmonics) where the mix has some. Fixed curves. On\nmusic the high-pass takes the bass under 80 Hz with it. Defaults\nto false."
-        },
-        "denoise": {
-          "type": [
-            "boolean",
-            "null"
-          ],
-          "description": "Speech denoising with an embedded model (DeepFilterNet), before\nhygiene and loudness. Speech only: it damages music and\noverlapping speakers. Costs about as long as the audio takes to\nplay on one core. Defaults to false."
         }
       },
       "description": "Audio output format."
@@ -1761,6 +1755,15 @@
               "format": "uint32",
               "minimum": 0,
               "description": "Most lines a cue shows at once. Defaults to 2."
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0,
+              "description": "Most characters on one of those lines. Defaults to 42, the\nbroadcast convention. Grouping counts characters because it\nruns before `style` and has no font to measure with, so this\nand `max_lines` are together the whole of the budget; see the\ntimeline reference for setting it against a `style.max_width`."
             },
             "min_duration": {
               "anyOf": [
@@ -3304,5 +3307,5 @@
       "description": "A subtitle track: one subtitle file written to the output as a text\nstream, for players to show or hide."
     }
   },
-  "$id": "https://geneva-render.github.io/schema/geneva-timeline-0.4.schema.json"
+  "$id": "https://geneva-render.github.io/schema/geneva-timeline-0.5.schema.json"
 }
