@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+mod guide;
 mod media;
 mod targets;
 mod verbs;
@@ -20,7 +21,14 @@ const EXIT_INVALID: u8 = 1;
 const EXIT_RENDER: u8 = 3;
 
 #[derive(Parser)]
-#[command(name = "geneva", version, about = "Composition and rendering engine for video", long_about = None)]
+#[command(
+    name = "geneva",
+    version,
+    about = "Composition and rendering engine for video",
+    long_about = None,
+    after_help = "Writing a timeline from a program or an agent: `geneva guide`.\n\
+                  What a diagnostic means: `geneva explain E302`."
+)]
 struct Cli {
     /// Output format for diagnostics and results.
     #[arg(long, global = true, value_enum, default_value_t = Format::Human)]
@@ -76,6 +84,32 @@ enum Command {
     Subtitles(SubtitlesArgs),
     /// List the destinations `--for` knows and what each one implies.
     Targets,
+    /// Print the manual: how to drive geneva from a program, or one of
+    /// the other pages.
+    Guide(GuideArgs),
+    /// Say what a diagnostic code means, such as E302.
+    Explain(ExplainArgs),
+}
+
+#[derive(Args)]
+struct GuideArgs {
+    /// Which page to print. Defaults to the guide for programs and
+    /// agents; `--list` names the rest.
+    #[arg(value_name = "TOPIC")]
+    topic: Option<String>,
+    /// Name the pages instead of printing one.
+    #[arg(long)]
+    list: bool,
+}
+
+#[derive(Args)]
+struct ExplainArgs {
+    /// The code, such as E302. Case does not matter.
+    #[arg(value_name = "CODE", required_unless_present = "list")]
+    code: Option<String>,
+    /// Print every documented code instead of one.
+    #[arg(long)]
+    list: bool,
 }
 
 #[derive(Args)]
@@ -679,6 +713,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
             } else {
                 targets::print_table();
             }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Guide(args) => {
+            print_guide(&args, cli.format)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Explain(args) => {
+            print_explanation(&args, cli.format)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Subtitles(args) => {
@@ -1296,6 +1338,95 @@ fn unbuilt_features(loaded: &Loaded) -> Vec<Diagnostic> {
             })
             .collect()
     }
+}
+
+/// Prints a page of the manual, or names the pages.
+///
+/// Under `--format json` the page comes back as one document, as every
+/// other command's result does, so a caller reading stdout as JSON is
+/// not surprised by Markdown.
+fn print_guide(args: &GuideArgs, format: Format) -> Result<()> {
+    if args.list {
+        let topics: Vec<serde_json::Value> = guide::TOPICS
+            .iter()
+            .map(|t| serde_json::json!({ "topic": t.name, "about": t.about }))
+            .collect();
+        match format {
+            Format::Json => println!("{}", serde_json::to_string_pretty(&topics)?),
+            Format::Human => {
+                let width = guide::TOPICS
+                    .iter()
+                    .map(|t| t.name.len())
+                    .max()
+                    .unwrap_or(0);
+                for t in guide::TOPICS {
+                    println!("{:width$}  {}", t.name, t.about);
+                }
+                println!("\nPrint one with `geneva guide <topic>`.");
+            }
+        }
+        return Ok(());
+    }
+    let name = args.topic.as_deref().unwrap_or(guide::TOPICS[0].name);
+    let topic = guide::topic(name)?;
+    match format {
+        Format::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "topic": topic.name,
+                "about": topic.about,
+                "text": topic.text,
+            }))?
+        ),
+        Format::Human => print!("{}", topic.text),
+    }
+    Ok(())
+}
+
+/// Says what one diagnostic code means, or lists them all.
+fn print_explanation(args: &ExplainArgs, format: Format) -> Result<()> {
+    let entries = match &args.code {
+        Some(code) => {
+            let found = guide::explain(code);
+            if found.is_empty() {
+                anyhow::bail!(
+                    "no diagnostic {}; `geneva explain --list` names every code",
+                    code.trim().to_ascii_uppercase()
+                );
+            }
+            found
+        }
+        None => guide::entries(),
+    };
+    match format {
+        Format::Json => {
+            let rows: Vec<serde_json::Value> = entries
+                .iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "code": e.code,
+                        "severity": e.severity,
+                        "section": e.section,
+                        "meaning": e.meaning,
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&rows)?);
+        }
+        Format::Human if args.list => {
+            for e in &entries {
+                println!("{}  {}", e.code, e.meaning);
+            }
+        }
+        Format::Human => {
+            for e in &entries {
+                println!("{}[{}]: {}", e.severity, e.code, e.meaning);
+                println!("  in {}", e.section);
+            }
+            println!("\nThe whole page: `geneva guide errors`.");
+        }
+    }
+    Ok(())
 }
 
 fn timeline_dir(path: &Path) -> PathBuf {

@@ -172,6 +172,34 @@ clockwise).
 
 Prints the JSON Schema of the current timeline format version.
 
+### `geneva guide [TOPIC] [--list]`
+
+Prints a page of this manual, which is carried in the binary. With no
+topic it prints the guide for programs and agents, the page that
+describes the calling contract, the report shape and the loop to write
+a document in. `--list` names the pages: `agents`, `timeline`, `cli`,
+`errors` and `color`. Under `--format json` the page comes back as
+`{"topic", "about", "text"}` rather than Markdown on stdout.
+
+This is here because a machine that installed the release tarball has
+the binary and not `docs/`, and because a page printed by the binary is
+the page for that binary's version.
+
+### `geneva explain <CODE> [--list]`
+
+Says what a diagnostic code means, the section it belongs to and its
+severity, reading the same table `geneva guide errors` prints. Case
+does not matter, so a code taken straight out of a JSON report works.
+A code can have more than one meaning (`W304` has two), and every one
+is printed. `--list` prints every documented code with its one-line
+meaning. An unknown code exits 2.
+
+```text
+$ geneva explain e302
+error[E302]: Clips in the same layer or audio track overlap without a transition.
+  in Timing (E300-E399)
+```
+
 ## Everyday verbs
 
 All verbs take `-o FILE` for the output and these encoding options:

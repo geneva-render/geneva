@@ -11,6 +11,27 @@ the format version it was written for.
 
 ### Added
 
+- **The manual is in the binary.** `geneva guide` prints the guide for
+  programs and agents, `geneva guide <topic>` one of `timeline`, `cli`,
+  `errors` and `color`, and `geneva guide --list` names them. The pages
+  are the `docs/` files, embedded at compile time, so the manual and
+  the binary are one artifact and cannot describe another version. A
+  machine that installed the release tarball has the binary and not
+  `docs/`, and nothing in `--help` used to say where the format was
+  written down.
+
+  `geneva explain E302` answers the other half: every diagnostic
+  carries a stable code, so a caller that hit one has a command to run
+  rather than a search to make. It reads the tables in `docs/errors.md`,
+  takes a code in any case, prints every meaning where a code has more
+  than one (`W304` has two), and exits 2 for a code that does not
+  exist. `--list` prints them all. Under `--format json` both commands
+  return one document, as every other command does.
+
+  A test walks every `src` directory in the workspace for codes the
+  engine can emit and fails if one is missing from `docs/errors.md`, so
+  the two cannot drift apart.
+
 - **W404 names a clip whose placement is probably not what was meant.**
   A `fit` is only needed when the source and the frame are different
   shapes, and the defaults suit what each source is usually for: a video

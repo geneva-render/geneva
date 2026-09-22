@@ -208,6 +208,11 @@ to get a working document.
 | [docs/architecture.md](docs/architecture.md) | Renderer, copy planner and encoders |
 | [CHANGELOG.md](CHANGELOG.md) | Version changes and unresolved format decisions |
 
+The first five of those pages are carried in the binary too, so a
+machine that has `geneva` and no checkout can read them: `geneva guide`
+prints the agent page, `geneva guide --list` names the rest, and
+`geneva explain E302` says what one diagnostic code means.
+
 ## How this was built
 
 This was built almost entirely with Fable/Opus, which wrote the code,

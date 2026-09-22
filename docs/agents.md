@@ -17,6 +17,11 @@ Contents: [the contract](#the-contract), [report shape](#report-shape),
 
 - **One binary, no services.** `geneva` reads files, writes files and
   prints one report. It never needs a network.
+- **The manual is in the binary.** `geneva guide` prints this page,
+  `geneva guide --list` names the others (`timeline`, `cli`, `errors`,
+  `color`), and `geneva explain E302` says what one code means. So a
+  machine with `geneva` on its path has the reference for the version
+  it is running, without a checkout and without fetching anything.
 - **`--format json` everywhere.** Put it before the subcommand. Stdout
   is then exactly one JSON document.
 - **Progress on stderr, in both modes.** Under `--format json` each
@@ -99,16 +104,19 @@ it as a manifest.
 
 ## A working loop
 
-1. **Write the timeline** as JSON. Start from `geneva schema` or from
-   the examples in `examples/`; every field has a description in the
-   schema.
+1. **Write the timeline** as JSON. Start from `geneva guide timeline`
+   for the fields in prose, `geneva schema` for the machine-readable
+   form, or the examples in `examples/`; every field has a description
+   in the schema.
 2. **Validate with probing** before rendering anything expensive:
 
    ```sh
    geneva --format json validate timeline.json --probe
    ```
 
-   Fix every error using its `path` and `help`. Probing also tells the
+   Fix every error using its `path` and `help`. Where that is not
+   enough, `geneva explain <code>` gives the full description of the
+   code, and exits 2 if the code does not exist. Probing also tells the
    resolver how long open-ended video clips are.
 3. **Check one frame** at the moment that matters:
 

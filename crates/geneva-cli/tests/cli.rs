@@ -1633,3 +1633,143 @@ fn a_verb_can_ask_for_the_gpu() {
         "asking for the cpu mentioned a device"
     );
 }
+
+/// Every `.rs` file under a crate's `src`, so a test can read what the
+/// engine itself can emit rather than what a list says it emits.
+fn crate_sources() -> Vec<PathBuf> {
+    fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(&crates).unwrap().flatten() {
+        walk(&entry.path().join("src"), &mut out);
+    }
+    out.sort();
+    assert!(out.len() > 20, "found {} source files", out.len());
+    out
+}
+
+#[test]
+fn every_code_the_engine_emits_is_documented() {
+    // The codes as they are written in the source: a letter, three
+    // digits, in quotes. Tests are left out, since one of them names a
+    // retired code to assert it is not emitted.
+    let mut codes: Vec<String> = Vec::new();
+    for path in crate_sources() {
+        let text = std::fs::read_to_string(&path).unwrap();
+        for (i, _) in text.match_indices('"') {
+            let rest = &text.as_bytes()[i + 1..];
+            if rest.len() < 5 || rest[4] != b'"' {
+                continue;
+            }
+            let (letter, digits) = (rest[0], &rest[1..4]);
+            if matches!(letter, b'E' | b'W' | b'N') && digits.iter().all(u8::is_ascii_digit) {
+                codes.push(String::from_utf8(rest[..4].to_vec()).unwrap());
+            }
+        }
+    }
+    codes.sort();
+    codes.dedup();
+    assert!(codes.len() > 50, "found {} codes: {codes:?}", codes.len());
+
+    let documented = geneva()
+        .args(["--format", "json", "explain", "--list"])
+        .assert()
+        .success();
+    let rows: serde_json::Value = serde_json::from_slice(&documented.get_output().stdout).unwrap();
+    let rows = rows.as_array().unwrap();
+    let missing: Vec<&String> = codes
+        .iter()
+        .filter(|c| !rows.iter().any(|r| r["code"] == ***c))
+        .collect();
+    assert!(missing.is_empty(), "not in docs/errors.md: {missing:?}");
+}
+
+#[test]
+fn the_guide_prints_the_agent_page_by_default() {
+    geneva()
+        .args(["guide"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("# Geneva for programs and agents"));
+}
+
+#[test]
+fn every_guide_topic_prints_something() {
+    let listed = geneva()
+        .args(["--format", "json", "guide", "--list"])
+        .assert()
+        .success();
+    let topics: serde_json::Value = serde_json::from_slice(&listed.get_output().stdout).unwrap();
+    let topics = topics.as_array().unwrap();
+    assert!(topics.len() >= 5, "{topics:?}");
+    for t in topics {
+        let name = t["topic"].as_str().unwrap();
+        let page = geneva().args(["guide", name]).assert().success();
+        let text = String::from_utf8(page.get_output().stdout.clone()).unwrap();
+        assert!(
+            text.starts_with("# "),
+            "{name} does not start with a heading"
+        );
+        assert!(text.len() > 2000, "{name} is {} bytes", text.len());
+    }
+}
+
+#[test]
+fn an_unknown_topic_or_code_is_a_usage_error() {
+    geneva().args(["guide", "nonsense"]).assert().code(2);
+    geneva().args(["explain", "E999"]).assert().code(2);
+}
+
+#[test]
+fn explain_answers_a_code_in_either_case_and_in_json() {
+    geneva()
+        .args(["explain", "e302"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("error[E302]"));
+    let out = geneva()
+        .args(["--format", "json", "explain", "W405"])
+        .assert()
+        .success();
+    let rows: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(rows[0]["code"], "W405");
+    assert_eq!(rows[0]["severity"], "warning");
+}
+
+#[test]
+fn a_diagnostic_from_a_real_run_can_be_explained() {
+    // The loop the guide describes: run, take a code from the JSON
+    // report, ask what it means.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("bad.json");
+    std::fs::write(
+        &path,
+        r#"{"geneva":"0.1","output":{"width":640,"height":360,"fps":30,"duration":"2s"},
+            "layers":[{"clips":[{"source":{"kind":"image","asset":"missing"}}]}]}"#,
+    )
+    .unwrap();
+    let run = geneva()
+        .args(["--format", "json", "validate"])
+        .arg(&path)
+        .assert()
+        .code(1);
+    let doc: serde_json::Value = serde_json::from_slice(&run.get_output().stdout).unwrap();
+    let code = doc["diagnostics"][0]["code"].as_str().unwrap();
+    geneva()
+        .args(["explain", code])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(code));
+}
