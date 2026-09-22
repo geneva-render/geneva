@@ -28,9 +28,11 @@ pub struct Topic {
 
 /// The pages, the first being what `geneva guide` prints on its own.
 ///
-/// These are the pages a caller of the tool needs. `architecture.md`
-/// describes how the engine is built rather than how to drive it, and
-/// is left in the repository.
+/// Every `docs/` page that another page links to has to be here, or the
+/// link is dead for anyone who has the binary and not the repository.
+/// That is why `architecture.md` is carried: it describes how the engine
+/// is built rather than how to drive it, and `timeline.md` and `cli.md`
+/// both point at it. A test checks the closure.
 pub const TOPICS: &[Topic] = &[
     Topic {
         name: "agents",
@@ -56,6 +58,11 @@ pub const TOPICS: &[Topic] = &[
         name: "color",
         about: "Colour handling: tags, the working space, what is inferred",
         text: include_str!("../../../docs/color.md"),
+    },
+    Topic {
+        name: "architecture",
+        about: "How the engine is put together: the crates, the passes, the renderers",
+        text: include_str!("../../../docs/architecture.md"),
     },
 ];
 
@@ -160,6 +167,37 @@ mod tests {
     fn the_default_topic_is_the_agent_guide() {
         assert_eq!(TOPICS[0].name, "agents");
         assert!(TOPICS.iter().all(|t| !t.text.is_empty()));
+    }
+
+    /// A page that points at another `docs/` page is only useful if that
+    /// page is here too. Someone holding the binary has no `docs/`
+    /// directory to fall back on, so a link to a page that is not carried
+    /// is a dead end with no way out.
+    #[test]
+    fn every_page_a_carried_page_links_to_is_carried() {
+        let mut carried: Vec<String> = TOPICS.iter().map(|t| format!("{}.md", t.name)).collect();
+        // Not a manual page: it is the licence roll-up, which the release
+        // tarball puts beside the binary. It has no place under `guide`.
+        carried.push("THIRD-PARTY-NOTICES.md".to_owned());
+        let mut dead = Vec::new();
+        for topic in TOPICS {
+            for (i, _) in topic.text.match_indices(".md") {
+                // Walk back over the file name to whatever precedes it.
+                let start = topic.text[..i]
+                    .rfind(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
+                    .map_or(0, |b| b + 1);
+                let name = format!("{}.md", &topic.text[start..i]);
+                if name != ".md" && !carried.contains(&name) {
+                    dead.push(format!("{} links to {name}", topic.name));
+                }
+            }
+        }
+        dead.sort();
+        dead.dedup();
+        assert!(
+            dead.is_empty(),
+            "carry these pages or drop the links: {dead:?}"
+        );
     }
 
     #[test]

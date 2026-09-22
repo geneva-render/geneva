@@ -9,6 +9,53 @@ the format version it was written for.
 
 ### Fixed
 
+- **A `captions` clip's `start` placed its cues.** It was discarded: every
+  cue landed at the time written in the caption file, whatever the clip
+  said, so captions over a video that starts anywhere but zero came up
+  early by exactly the clip's start. The documented rule (timing rule 6,
+  every time is relative to the clip) now holds for cues as it does for
+  keyframes and word times, and a test pins it. Anyone who compensated by
+  shifting the times in the file should take that shift back out.
+
+- **Markup style diagnostics name the property.** `W450` gave the value
+  that was refused and the element, but not which declaration it came
+  from: `<div>: "50%" is not a length` for a `border-radius: 50%`, with
+  nothing to say it was the radius. It now reads `<div>: border-radius
+  "50%" is not a length`. The property is added once where the message
+  reaches the reader, so every one of them carries it.
+
+- **`geneva guide` carries `architecture.md`.** `timeline.md` and
+  `cli.md` both link to it and it was not embedded, so from the binary
+  those were dead ends. It is the sixth page, and a test now fails if a
+  carried page links to one that is not carried.
+
+### Documentation
+
+Found by pointing an agent at the 0.7.1 binary with `geneva guide` as its
+only source and watching where it went wrong.
+
+- `animation-fill-mode` was described once, in the clip section, in terms
+  that read as though they covered markup too. A clip's animation holds
+  its first and last value and has no `fill-mode` field; an animation on
+  an element inside markup is ordinary CSS, defaults to `none`, and takes
+  `animation-fill-mode` like a browser. The two are now told apart where
+  the claim is made. This was the costliest gap: staged entrances were
+  all visible at frame 0 and elements snapped back when their animation
+  ended.
+- Cue grouping measures in characters, not pixels: `max_lines` lines of 42
+  characters, decided before any of `style` applies, so `style.max_width`
+  changes no cue boundary. A cue grouped for 42 characters can draw on
+  three lines in a narrow `max_width` with no warning.
+- The markup subset has no static `transform`. A transform comes only from
+  an `animation`; the table had no row for it, which read as an omission
+  rather than a rule.
+- Percentages are taken on widths, heights, margins, padding, gaps and
+  insets, and nowhere else, so `border-radius: 50%` is `W450`. The list
+  was there but not marked as exhaustive.
+- The `assets` `kind` list was missing `captions` and `html`.
+- `N453` needs `validate --probe`, since counting cues means reading the
+  file.
+
 - **`scripts/check-markup.sh` renders every markup golden case.** The
   loop named `markup-opening` and `markup-card`, so `markup-blend`,
   added for `mix-blend-mode`, was not checked on a second machine. It

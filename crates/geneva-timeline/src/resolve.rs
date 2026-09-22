@@ -1862,6 +1862,15 @@ impl Resolver<'_> {
             };
             let cpath = path.key("clips").index(i);
             let spath = cpath.key("source");
+            // Cue times are clip-relative, like every other time in a
+            // document (timing rule 6). The file's times are whatever the
+            // recogniser or the subtitle wrote, measured from the start of
+            // the media it was made from, so the clip's own start is what
+            // puts them on the timeline.
+            let offset = match clip.start {
+                Some(t) => self.time(t, &cpath.key("start"), "start"),
+                None => Ratio::ZERO,
+            };
             let style = style.as_deref().cloned().unwrap_or_default();
             let Some(cues) = self.read_cues(
                 asset,
@@ -1974,7 +1983,7 @@ inset of {safe_px}px"
                     Clip {
                         id: clip.id.clone(),
                         source: Source::Text(Box::new(spec)),
-                        start: Some(Time::Seconds(cue.start)),
+                        start: Some(Time::Seconds(offset + cue.start)),
                         duration: Some(Time::Seconds((cue.end - cue.start).max(Ratio::ZERO))),
                         transform: Some(Transform {
                             position: Some(Animated::Constant(Point { x, y })),

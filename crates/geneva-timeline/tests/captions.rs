@@ -156,3 +156,36 @@ fn a_file_that_is_not_there_or_will_not_read_says_so() {
     );
     assert!(codes(&empty).contains(&"E453"), "{:?}", codes(&empty));
 }
+
+#[test]
+fn cue_times_are_relative_to_the_clip_start() {
+    // A word file is timed from the start of the media it was made from,
+    // so a clip that plays that media later in the output has to carry
+    // its cues with it. Timing rule 6: every time in a document is
+    // relative to the clip it is written on.
+    let text = r#"{"geneva":"0.4","output":{"width":1280,"height":720,"fps":30,"duration":"20s"},
+        "assets":{"c":{"src":"w.json"}},
+        "layers":[{"id":"captions","clips":[
+            {"source":{"kind":"captions","asset":"c"},"start":"4.4s"}]}]}"#;
+    let timeline = geneva_timeline::parse(text).unwrap();
+    let (composition, diagnostics) = resolve_with(&timeline, &Files(vec![("w.json", WHISPER)]));
+    assert!(
+        !diagnostics
+            .iter()
+            .any(geneva_timeline::Diagnostic::is_error),
+        "{diagnostics:?}"
+    );
+    let layer = &composition.unwrap().layers[0];
+    assert_eq!(layer.clips.len(), 2, "one clip per cue");
+
+    // The cues sit at 1s and 4s in the file, so at 5.4s and 8.4s here.
+    assert_eq!(layer.clips[0].start, Ratio::new(54, 10));
+    assert_eq!(layer.clips[1].start, Ratio::new(84, 10));
+
+    // The offset moves a cue, it does not stretch it: this one spans
+    // 0.8s in the file and is held to the 1.2s `min_duration` either way.
+    assert_eq!(
+        layer.clips[0].end - layer.clips[0].start,
+        Ratio::new(12, 10)
+    );
+}

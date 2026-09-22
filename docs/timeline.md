@@ -149,7 +149,13 @@ a percentage there is E442.
 
 A property interpolates between the offsets that set it, and holds its
 first and last value outside them, which is CSS's `animation-fill-mode:
-both`; there is no `fill-mode` field yet.
+both`. That is true of the `animation` a **clip** carries, which is what
+this section describes, and there is no `fill-mode` field to change it.
+It is not true of an `animation` on an element inside a markup document:
+that one is ordinary CSS, so it defaults to `animation-fill-mode: none`
+and shows the element's own style outside the run. Write
+`animation-fill-mode: both` there if you want it held. See
+[markup](#markup) for where the line falls.
 
 What a rule sets is laid over what the clip already has. A translation
 adds to `transform.position`, a scale multiplies `transform.scale`, a
@@ -288,7 +294,7 @@ clips never contain paths.
 | Field | Required | Description |
 | --- | --- | --- |
 | `src` | yes | Path relative to the asset root (the timeline's directory, or `--assets`). Absolute paths and `..` are rejected (E202). |
-| `kind` | no | `video`, `image`, `audio`, `font`, `subtitle`. Inferred from the extension; set it when inference fails (E203). |
+| `kind` | no | `video`, `image`, `audio`, `font`, `subtitle`, `captions` (a word file or a cue file read for a `captions` source) or `html` (markup). Inferred from the extension; set it when inference fails (E203). |
 | `color` | no | Color tag overrides for files that are untagged or mistagged. |
 
 ### `compositions`
@@ -516,6 +522,20 @@ between cues can still be copied rather than composited.
 | `merge_gap` | no | `0.1s` | Gaps up to this are closed rather than left blank, when grouping. |
 | `style` | no | | A `text` source's fields, minus `text` and `words`: `font`, `color`, `highlight`, `outline`, `shadow`, `background`, `max_width`, `align` and the rest. |
 
+Cue times are read from the file and placed relative to the clip's
+`start`, like every other time in a document (timing rule 6). A word
+file is timed from the start of the media it was made from, so a clip
+playing that media from `"4.4s"` carries its cues there with it; the
+file does not need shifting.
+
+Grouping a word file into cues happens before any of `style` is applied,
+and measures in characters, not pixels: a cue is closed when it would
+take more than `max_lines` lines of 42 characters. `style.max_width` is
+how wide the text is drawn, and changes no cue boundary. The two can
+disagree, and a cue grouped for 42 characters can draw on three lines in
+a narrow `max_width` without a warning, since the box still fits the
+frame.
+
 A word file gives every cue its `words`, so `style.highlight` picks out
 the word being said. SubRip and WebVTT time whole cues, so a `highlight`
 on one is a `W453` rather than a silent difference.
@@ -644,15 +664,24 @@ author overrides freely: `h1`, `h2`, `h3`, `b`, `strong`, `i`, `em`,
 | Text | `color`, `-webkit-text-fill-color` (read as `color`), `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space`, `text-shadow` (a list) |
 | Motion | `animation` and its longhands `animation-name`, `-duration`, `-delay`, `-timing-function`, `-iteration-count`, `-direction`, `-fill-mode` |
 
+There is no static `transform`. The table has no row for it because a
+transform only comes from an `animation`, which is where motion lives;
+`transform` written in a rule is W450 like any other property that is
+not drawn. An element that should sit rotated or scaled and stay there
+needs a one-keyframe animation that holds it.
+
 Lengths are `px`, `em`, `rem` and `%`; `em` is the element's own font
 size, settled before anything else uses it, and a percentage `font-size`
 or `line-height` is of the inherited one. Percentage widths, heights,
 margins, padding, gaps and insets resolve against the containing block,
-as in CSS. `box-sizing` is `content-box` by default, as in CSS, so
-padding and border are added to a width rather than taken out of it.
-Colours are the ones the rest of the format takes. Anything else is W450:
-the declaration is skipped and the message names it, so the rest of the
-document still draws.
+as in CSS. Those are the properties a percentage is taken on, and the
+list is exhaustive: elsewhere a length has to be absolute, so
+`border-radius: 50%` is W450 and a circle is drawn with a radius half
+the box's own size in `px`. `box-sizing` is `content-box` by default, as
+in CSS, so padding and border are added to a width rather than taken out
+of it. Colours are the ones the rest of the format takes. Anything else
+is W450: the declaration is skipped, and the message names the element
+and the property it came from, so the rest of the document still draws.
 
 A family a document ships replaces the machine's copy of it: once a
 `font` asset declares a family, the installed faces of that family are

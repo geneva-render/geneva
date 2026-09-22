@@ -523,7 +523,11 @@ pub fn cascade(doc: &Document, sheet: &Stylesheet) -> (Vec<Computed>, Vec<String
                         || format!("<{}>", el.tag),
                         |i| format!("<{} id=\"{i}\">", el.tag),
                     );
-                    problems.push(format!("{where_}: {e}"));
+                    // The property is named here rather than in each
+                    // message, so every one of them carries it. Without it
+                    // a reader gets the value that was refused and no way
+                    // to tell which declaration it came from.
+                    problems.push(format!("{where_}: {} {e}", d.property));
                 }
             }
             computed.text.size = em;
@@ -664,14 +668,14 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
                 "flex" => Display::Flex,
                 "block" => Display::Block,
                 "none" => Display::None,
-                _ => return unsupported(property, v, "flex, block or none"),
+                _ => return unsupported(v, "flex, block or none"),
             };
         }
         "position" => {
             c.layout.position = match l {
                 "relative" | "static" => Position::Relative,
                 "absolute" => Position::Absolute,
-                _ => return unsupported(property, v, "static, relative or absolute"),
+                _ => return unsupported(v, "static, relative or absolute"),
             };
             c.positioned = l != "static";
         }
@@ -688,7 +692,7 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
             c.layout.box_sizing = match l {
                 "border-box" => BoxSizing::BorderBox,
                 "content-box" => BoxSizing::ContentBox,
-                _ => return unsupported(property, v, "border-box or content-box"),
+                _ => return unsupported(v, "border-box or content-box"),
             };
         }
         "overflow" => {
@@ -736,7 +740,7 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
         }
         "border-style" => {
             if l != "solid" && l != "none" {
-                return unsupported(property, v, "solid or none");
+                return unsupported(v, "solid or none");
             }
         }
         "border-radius" => {
@@ -752,7 +756,7 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
                 "row-reverse" => FlexDirection::RowReverse,
                 "column" => FlexDirection::Column,
                 "column-reverse" => FlexDirection::ColumnReverse,
-                _ => return unsupported(property, v, "row, row-reverse, column or column-reverse"),
+                _ => return unsupported(v, "row, row-reverse, column or column-reverse"),
             };
         }
         "flex-wrap" => {
@@ -760,13 +764,13 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
                 "nowrap" => FlexWrap::NoWrap,
                 "wrap" => FlexWrap::Wrap,
                 "wrap-reverse" => FlexWrap::WrapReverse,
-                _ => return unsupported(property, v, "nowrap, wrap or wrap-reverse"),
+                _ => return unsupported(v, "nowrap, wrap or wrap-reverse"),
             };
         }
-        "justify-content" => c.layout.justify_content = Some(justify(l, property, v)?),
-        "align-items" => c.layout.align_items = Some(align(l, property, v)?),
-        "align-self" => c.layout.align_self = Some(align(l, property, v)?),
-        "align-content" => c.layout.align_content = Some(justify(l, property, v)?),
+        "justify-content" => c.layout.justify_content = Some(justify(l, v)?),
+        "align-items" => c.layout.align_items = Some(align(l, v)?),
+        "align-self" => c.layout.align_self = Some(align(l, v)?),
+        "align-content" => c.layout.align_content = Some(justify(l, v)?),
         "gap" => {
             let s: Rect<LengthPercentage> = sides(v, em, length_percentage)?;
             c.layout.gap = Size {
@@ -816,7 +820,7 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
                 }
                 Some(points)
             } else {
-                return unsupported(property, v, "none or polygon(x y, ...)");
+                return unsupported(v, "none or polygon(x y, ...)");
             };
         }
         "filter" => {
@@ -825,7 +829,7 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
             } else if let Some(arg) = function(l, v, "blur") {
                 pixels(arg, em)?.max(0.0)
             } else {
-                return unsupported(property, v, "none or blur(<length>)");
+                return unsupported(v, "none or blur(<length>)");
             };
         }
         "background" | "background-color" => c.paint.background = Some(background(v)?),
@@ -835,7 +839,7 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
             c.paint.clip_text = match l {
                 "text" => true,
                 "border-box" => false,
-                _ => return unsupported(property, v, "text or border-box"),
+                _ => return unsupported(v, "text or border-box"),
             };
         }
         "opacity" => c.paint.opacity = number(v)?.clamp(0.0, 1.0),
@@ -851,17 +855,16 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
                 "soft-light" => Blend::SoftLight,
                 _ => {
                     return unsupported(
-                        property,
                         v,
                         "normal, multiply, screen, overlay, darken, lighten, difference or soft-light",
                     );
                 }
             };
         }
-        "box-shadow" => c.paint.shadow = shadow(v, em, "box-shadow")?,
+        "box-shadow" => c.paint.shadow = shadow(v, em)?,
 
         "color" | "-webkit-text-fill-color" => c.text.color = color(v)?,
-        "text-shadow" => c.text.shadow = shadow(v, em, "text-shadow")?,
+        "text-shadow" => c.text.shadow = shadow(v, em)?,
         "font-family" => c.text.family = Some(family(v)),
         "font-size" => c.text.size = size_or_percent(v, em)?,
         "font-weight" => {
@@ -893,21 +896,22 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
                 "left" | "start" => TextAlign::Left,
                 "center" => TextAlign::Center,
                 "right" | "end" => TextAlign::Right,
-                _ => return unsupported(property, v, "left, center or right"),
+                _ => return unsupported(v, "left, center or right"),
             };
         }
         "white-space" => c.text.pre = matches!(l, "pre" | "pre-wrap" | "break-spaces"),
         _ => {
-            return Err(format!(
-                "{property:?} is not a property geneva draws; see the timeline reference for the list"
-            ));
+            return Err(
+                "is not a property geneva draws; see the timeline reference for the list"
+                    .to_owned(),
+            );
         }
     }
     Ok(())
 }
 
-fn unsupported<T>(property: &str, value: &str, expected: &str) -> Result<T, String> {
-    Err(format!("{property}: {value:?} is not one of {expected}"))
+fn unsupported<T>(value: &str, expected: &str) -> Result<T, String> {
+    Err(format!("{value:?} is not one of {expected}"))
 }
 
 fn overflow(l: &str) -> Result<Overflow, String> {
@@ -915,11 +919,11 @@ fn overflow(l: &str) -> Result<Overflow, String> {
         "visible" => Ok(Overflow::Visible),
         "hidden" | "clip" => Ok(Overflow::Hidden),
         "scroll" | "auto" => Ok(Overflow::Scroll),
-        _ => unsupported("overflow", l, "visible, hidden or scroll"),
+        _ => unsupported(l, "visible, hidden or scroll"),
     }
 }
 
-fn justify(l: &str, property: &str, v: &str) -> Result<JustifyContent, String> {
+fn justify(l: &str, v: &str) -> Result<JustifyContent, String> {
     Ok(match l {
         "flex-start" | "start" => JustifyContent::FlexStart,
         "flex-end" | "end" => JustifyContent::FlexEnd,
@@ -930,7 +934,6 @@ fn justify(l: &str, property: &str, v: &str) -> Result<JustifyContent, String> {
         "stretch" => JustifyContent::Stretch,
         _ => {
             return unsupported(
-                property,
                 v,
                 "flex-start, flex-end, center, space-between, space-around, space-evenly or stretch",
             );
@@ -938,7 +941,7 @@ fn justify(l: &str, property: &str, v: &str) -> Result<JustifyContent, String> {
     })
 }
 
-fn align(l: &str, property: &str, v: &str) -> Result<AlignItems, String> {
+fn align(l: &str, v: &str) -> Result<AlignItems, String> {
     Ok(match l {
         "flex-start" | "start" => AlignSelf::FlexStart,
         "flex-end" | "end" => AlignSelf::FlexEnd,
@@ -946,11 +949,7 @@ fn align(l: &str, property: &str, v: &str) -> Result<AlignItems, String> {
         "baseline" => AlignSelf::Baseline,
         "stretch" => AlignSelf::Stretch,
         _ => {
-            return unsupported(
-                property,
-                v,
-                "flex-start, flex-end, center, baseline or stretch",
-            );
+            return unsupported(v, "flex-start, flex-end, center, baseline or stretch");
         }
     })
 }
@@ -1589,12 +1588,12 @@ fn stops(parts: &[&str]) -> Result<Vec<Stop>, String> {
     Ok(out)
 }
 
-fn shadow(value: &str, em: f64, property: &str) -> Result<Vec<Shadow>, String> {
+fn shadow(value: &str, em: f64) -> Result<Vec<Shadow>, String> {
     if value.trim().eq_ignore_ascii_case("none") {
         return Ok(Vec::new());
     }
     if value.to_ascii_lowercase().contains("inset") {
-        return Err(format!("an inset {property} is not drawn"));
+        return Err("is not drawn when it is inset".to_owned());
     }
     // A comma outside brackets separates shadows; inside, it is part
     // of a colour such as rgba(0, 0, 0, 0.5).
@@ -1803,8 +1802,22 @@ mod tests {
     fn an_unsupported_property_is_named() {
         let (_, _, problems) = styled("<style>.a { float: left }</style><div class=a></div>");
         assert_eq!(problems.len(), 1);
-        assert!(problems[0].contains("\"float\""), "{problems:?}");
+        assert!(problems[0].contains("float"), "{problems:?}");
         assert!(problems[0].contains("<div>"), "{problems:?}");
+    }
+
+    /// Naming the property is what turns a refused declaration into one
+    /// someone can find. It holds for a value the property cannot take,
+    /// not only for a property that is not drawn at all: without it a
+    /// reader gets the value back and no way to tell which of an
+    /// element's declarations produced it.
+    #[test]
+    fn a_refused_value_names_the_property_it_came_from() {
+        let (_, _, problems) =
+            styled("<style>.a { border-radius: 50% }</style><div class=a></div>");
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].contains("border-radius"), "{problems:?}");
+        assert!(problems[0].contains("50%"), "{problems:?}");
     }
 
     #[test]

@@ -110,7 +110,7 @@ result is not what was intended. Notes are informational.
 | W450 | The markup names something geneva does not draw: a property it has no support for, or an element with its own renderer (`<iframe>`, `<svg>`, `<canvas>`, `<video>`, `<object>`, `<embed>`). It is skipped and the rest is drawn; the message names it. |
 | E453 | A caption file could not be read: it is not there, it is not a format geneva reads (`.srt`, `.vtt`, or the `.json` a speech recogniser writes), it did not parse, no words could be found in it, or its word times are plainly milliseconds rather than seconds. |
 | W453 | A `highlight` was asked for on a file that times whole cues rather than words, so nothing is picked out as it is said; or a caption file parsed but holds no cues. |
-| N453 | (note) How many cues were read from a caption file, and where they came from; also when a `margin` puts captions inside the title-safe inset. |
+| N453 | (note, `validate --probe`) How many cues were read from a caption file, and where they came from; also when a `margin` puts captions inside the title-safe inset. Reading the file is what counts them, so a plain `validate`, which does not open assets, does not report it. |
 | W401 | Output width or height is odd; most codecs need even dimensions. |
 | W402 | `subtitles --burn` found no cues in the file; the picture is written unchanged. |
 | W403 | A burned-in subtitle cue extends off-screen. The message gives the box size and by how much it leaves the frame; the path names the clip. |
