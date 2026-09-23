@@ -212,6 +212,24 @@ machine that has `geneva` and no checkout can read them: `geneva guide`
 prints the agent page, `geneva guide --list` names the rest, and
 `geneva explain E302` says what one diagnostic code means.
 
+## Where this is going
+
+geneva is pre-1.0. The timeline format still moves between minor
+versions, and the engine is the whole of it: there is no hosted service
+and no editor.
+
+Two directions are being weighed. One is running renders for people who
+would rather not run the infrastructure. The other is describing an edit
+and getting it, which is nearer than it sounds: given `geneva guide` and
+no checkout, an agent built a lower third over a talk, with the
+headlines written from the talk's own transcript and word-timed captions
+under them, from a description in English.
+
+Which of those gets built depends on what people are making. If that
+includes you, [tell me what](https://genevarender.com/building), or open
+a [discussion](https://github.com/geneva-render/geneva/discussions) if
+you would rather not leave an address.
+
 ## How this was built
 
 This was built almost entirely with Fable/Opus, which wrote the code,
