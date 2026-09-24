@@ -157,6 +157,35 @@ https://github.com/user-attachments/assets/6d8566dd-7270-49bc-ac66-dab1585817a3
 The video is the whole 62 s clip with its sound, re-encoded to fit
 GitHub's 10 MB upload limit.
 
+The same results can be had other ways: an LLM can write ffmpeg for
+them, or a Remotion project. What differs is what it has to get right
+and what runs it.
+
+- **ffmpeg** has no layout. Text is `drawtext` at pixel positions and
+  motion is an expression per filter option, so cards like these are a
+  long filter graph written from memory, or graphics made in another
+  tool and overlaid. Its mistakes tend to be silent. In a test of 20
+  editing tasks, run twice, an LLM's ffmpeg commands got 15 of 20 right
+  each time, and 8 of the 10 failures were a wrong file with exit status
+  0; geneva got 20 of 20 both times. The tasks were picked knowing
+  ffmpeg's pitfalls, and a geneva bug the test found was fixed before
+  the runs counted, so read it as where the traps are rather than as a
+  general rate.
+- **Remotion** draws with a browser, so it can show anything a web page
+  can. It needs Node and headless Chrome, takes a screenshot per frame
+  and encodes them with ffmpeg. Its documentation says not to drive
+  animation with `@keyframes` or `transition`, since frames render out
+  of order, so markup like `opening.html` has to be rewritten as
+  per-frame `interpolate()` calls. For-profit companies of more than
+  three people need a paid licence.
+- **geneva** is one binary. `@keyframes` play as written, and the same
+  file opens in a browser. A document is checked before anything
+  renders, and an error names its code and the field at fault. Stretches
+  with nothing drawn over them are copied from the source rather than
+  re-encoded where the source allows. What it draws is a subset of HTML
+  and CSS: flexbox, no inline layout, no JavaScript (see
+  [what it does not do](docs/timeline.md#what-it-does-not-do)).
+
 ## Installing
 
 ```sh
@@ -200,6 +229,8 @@ geneva concat a.mp4 b.mp4 -o ab.mp4 --crossfade 0.5s    # dissolve, picture and 
 geneva concat a.mp4 b.mp4 -o ab.mp4 --fade 0.6s         # dip through black
 geneva overlay talk.mp4 logo.png -o branded.mp4 --at bottom-right --scale 0.5
 geneva convert talk.mp4 -o web.mp4 --for web            # copied if a browser can already play it
+geneva convert talk.mov -o talk.mp4 --crf 20 --preset slow --fps 30 --height 1080
+geneva convert talk.mov -o talk.mkv --max-bitrate 6M --audio-codec opus --audio-bitrate 128k --sample-rate 48k
 geneva convert talk.mp4 -o talk.mov --codec prores --profile hq
 geneva convert talk.mp4 -o frames/%04d.png              # image sequence
 geneva audio talk.mp4 -o talk.wav --extract --speech    # 16 kHz mono, for whisper etc.
