@@ -127,23 +127,68 @@ jobs:
           path: |
             geneva-*.tar.gz
             geneva-*.zip
-  # The Windows build runs on Windows before anything is published: every
-  # everyday command once, on a clip it renders itself.
-  smoke-windows:
-    name: Smoke test on Windows
+  # The Windows build, on Windows, before anything is published: signed
+  # when the Certum secrets are set (the binary and install.ps1, so a
+  # RemoteSigned policy runs the installer from the zip), then installed
+  # from the zip the way a user would and run once through every everyday
+  # command. The signed zip replaces the unsigned one.
+  windows:
+    name: Sign and smoke test on Windows
     needs: build
     runs-on: windows-latest
+    env:
+      CERTUM_USERNAME: ${{ secrets.CERTUM_USERNAME }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: geneva-x86_64-pc-windows-gnu
+      - name: Unpack
+        shell: pwsh
+        run: |
+          # Windows' own tar, which reads and writes zips; Git's GNU tar
+          # may come first on the PATH and does neither.
+          $tar = "$env:SystemRoot\System32\tar.exe"
+          "TAR=$tar" >> $env:GITHUB_ENV
+          $zip = Get-Item geneva-*.zip
+          & $tar -xf $zip.FullName
+          "ZIP=$($zip.Name)" >> $env:GITHUB_ENV
+          "DIR=$($zip.BaseName)" >> $env:GITHUB_ENV
+      # SimplySign Desktop, logged in with the account's TOTP seed. Pinned
+      # to the commit that was read, since it handles that seed.
+      - name: Log in to SimplySign
+        id: certum
+        if: env.CERTUM_USERNAME != ''
+        uses: jay0lee/certum-cloud-code-sign@c426e3f9dcac447a666692df3281522dbc03140b
+        with:
+          username: ${{ secrets.CERTUM_USERNAME }}
+          totp_secret: ${{ secrets.CERTUM_TOTP_SECRET }}
+          cert_sha1: ${{ secrets.CERTUM_CERT_SHA1 }}
+      - name: Sign
+        if: env.CERTUM_USERNAME != ''
+        shell: pwsh
+        run: |
+          $files = "$env:DIR\geneva.exe", "$env:DIR\install.ps1"
+          & "${{ steps.certum.outputs.signtool-path }}" sign /sha1 ${{ steps.certum.outputs.cert-thumbprint }} `
+            /fd SHA256 /tr http://time.certum.pl /td SHA256 /v @files
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "${{ steps.certum.outputs.signtool-path }}" verify /pa /v @files
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item $env:ZIP
+          & $env:TAR -a -cf $env:ZIP $env:DIR
+      - name: Replace the unsigned zip
+        if: env.CERTUM_USERNAME != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: geneva-x86_64-pc-windows-gnu
+          path: ${{ env.ZIP }}
+          overwrite: true
       # Installed the way a user would, with the zip's own installer under
       # the Windows PowerShell every machine has, then run from there.
       - name: Install from the zip
         shell: powershell
         run: |
-          Expand-Archive (Get-Item geneva-*.zip).FullName -DestinationPath unpacked
+          Expand-Archive $env:ZIP -DestinationPath unpacked
           $env:GENEVA_PREFIX = "$env:RUNNER_TEMP\geneva"
           & (Get-Item unpacked\geneva-*\install.ps1).FullName
           Add-Content $env:GITHUB_PATH $env:GENEVA_PREFIX
@@ -155,7 +200,7 @@ jobs:
   # its binaries are the run's artifacts, which is how a machine that
   # cannot build them locally gets one to test.
   publish:
-    needs: [build, smoke-windows]
+    needs: [build, windows]
     if: inputs.tag != '' || startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
