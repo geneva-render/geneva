@@ -172,6 +172,12 @@ jobs:
           }
           if (-not $q['secret']) { throw 'CERTUM_OTP_URI has no secret parameter' }
           Write-Host "::add-mask::$($q['secret'])"
+          # The label names the account ("Issuer:email"); the logs will be
+          # public, so it is masked in every form a tool might print it.
+          $label = [Uri]::UnescapeDataString(([Uri]$env:OTP_URI).AbsolutePath.TrimStart('/'))
+          foreach ($part in @($label) + ($label -split ':')) {
+            if ($part.Length -ge 4) { Write-Host "::add-mask::$part" }
+          }
           "TOTP_SECRET=$($q['secret'])" >> $env:GITHUB_ENV
           # Certum's codes are SHA-256, six digits, 30 seconds, unless the
           # URI says otherwise.
