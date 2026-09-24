@@ -553,6 +553,14 @@ fn audio_extracts_mutes_and_replaces() {
     assert_eq!(doc["mode"], "copy");
     assert_eq!(run_json(&["probe"], &[&m4a])["audio"]["codec"], "aac");
 
+    // Speech is 16 kHz mono whatever the container, so it is encoded even
+    // into one that could hold the source's AAC as it is.
+    let speech = dir.path().join("speech.m4a");
+    run_json(&["audio", "--extract", "--speech", "-o"], &[&speech, &clip]);
+    let info = run_json(&["probe"], &[&speech]);
+    assert_eq!(info["audio"]["sample_rate"], 16000);
+    assert_eq!(info["audio"]["channels"], 1);
+
     let muted = dir.path().join("muted.mp4");
     let doc = run_json(&["audio", "--mute", "-o"], &[&muted, &clip]);
     assert_eq!(doc["mode"], "copy");
@@ -581,6 +589,126 @@ fn audio_extracts_mutes_and_replaces() {
         .assert()
         .code(2)
         .stderr(predicate::str::contains("--extract"));
+}
+
+#[test]
+#[cfg(feature = "media")]
+fn convert_flags_set_a_bitrate_ceiling_and_the_audio_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let clip = media_dir().join("clip.mp4");
+    let out = |name: &str| dir.path().join(name);
+    let size = |p: &std::path::Path| std::fs::metadata(p).unwrap().len();
+
+    // Asking for what the source already is (AAC, 48 kHz, mono) changes
+    // nothing: both streams are still copied.
+    let same = out("same.mp4");
+    let doc = run_json(
+        &[
+            "convert",
+            "--audio-codec",
+            "aac",
+            "--sample-rate",
+            "48k",
+            "--channels",
+            "1",
+            "-o",
+        ],
+        &[&same, &clip],
+    );
+    assert_eq!(doc["mode"], "copy");
+
+    // Another rate and channel count: the picture is copied and the sound
+    // encoded beside it.
+    let resampled = out("resampled.mp4");
+    let doc = run_json(
+        &["convert", "--sample-rate", "44100", "--channels", "2", "-o"],
+        &[&resampled, &clip],
+    );
+    assert_eq!(doc["mode"], "copy-picture");
+    let audio = run_json(&["probe"], &[&resampled])["audio"].clone();
+    assert_eq!(audio["sample_rate"], 44100);
+    assert_eq!(audio["channels"], 2);
+
+    // A bitrate or another codec does the same.
+    let low = out("low.mp4");
+    let doc = run_json(&["convert", "--audio-bitrate", "32k", "-o"], &[&low, &clip]);
+    assert_eq!(doc["mode"], "copy-picture");
+    let opus = out("opus.mkv");
+    let doc = run_json(&["convert", "--audio-codec", "opus", "-o"], &[&opus, &clip]);
+    assert_eq!(doc["mode"], "copy-picture");
+    // The probe names the decoder.
+    assert_eq!(run_json(&["probe"], &[&opus])["audio"]["codec"], "libopus");
+
+    // A ceiling re-encodes the picture and holds it: at a quality that
+    // would spend far more, the capped file is a fraction of the size.
+    let open = out("open.mp4");
+    let capped = out("capped.mp4");
+    let quality = [
+        "convert",
+        "--no-audio",
+        "--crf",
+        "4",
+        "--preset",
+        "ultrafast",
+    ];
+    run_json(&[&quality[..], &["-o"]].concat(), &[&open, &clip]);
+    let doc = run_json(
+        &[&quality[..], &["--max-bitrate", "100k", "-o"]].concat(),
+        &[&capped, &clip],
+    );
+    assert_ne!(doc["mode"], "copy");
+    // 100 kb/s over 2 s is 25 kB, and the buffer the ceiling is held
+    // over is two seconds of it, which a clip this short can spend on
+    // top: 50 kB at most.
+    assert!(size(&capped) < 50_000, "{} bytes", size(&capped));
+    assert!(
+        size(&capped) * 3 < size(&open),
+        "{} against {}",
+        size(&capped),
+        size(&open)
+    );
+
+    // So does a keyframe interval, which a copy would keep as it was.
+    let keyed = out("keyed.mp4");
+    let doc = run_json(
+        &["convert", "--keyframe-interval", "1", "-o"],
+        &[&keyed, &clip],
+    );
+    assert_ne!(doc["mode"], "copy");
+
+    // VP9 takes the ceiling as its constrained-quality rate; libvpx
+    // refused the encoder's usual maxrate outright.
+    let vp9 = out("capped.webm");
+    run_json(
+        &["convert", "--codec", "vp9", "--max-bitrate", "100k", "-o"],
+        &[&vp9, &clip],
+    );
+
+    // A document that sets only a ceiling is rendered, not copied with
+    // the ceiling ignored.
+    let doc_path = out("ceiling.json");
+    std::fs::copy(&clip, out("clip.mp4")).unwrap();
+    std::fs::write(
+        &doc_path,
+        r#"{ "geneva": "0.5",
+  "output": { "width": 192, "height": 108, "fps": 25,
+              "encode": { "video": { "max_bitrate_kbps": 100 } } },
+  "assets": { "clip": { "src": "clip.mp4" } },
+  "layers": [ { "clips": [ { "source": { "kind": "video", "asset": "clip" } } ] } ] }"#,
+    )
+    .unwrap();
+    let doc = run_json(&["render", "-o"], &[&out("ceiling.mp4"), &doc_path]);
+    assert_ne!(doc["mode"], "copy");
+
+    // ffmpeg reads a bare number as bits per second; here it is kb/s, and
+    // a number that size says which way it was meant.
+    geneva()
+        .args(["convert", "--max-bitrate", "6000000", "-o"])
+        .arg(out("x.mp4"))
+        .arg(&clip)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("kb/s"));
 }
 
 #[test]

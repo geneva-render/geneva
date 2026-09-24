@@ -969,6 +969,9 @@ mod imp {
                                     || v.preset.is_some()
                                     || v.tune.is_some()
                                     || v.fixed_keyframes == Some(true)
+                                    || v.keyframe_interval.is_some()
+                                    || v.max_bitrate_kbps.is_some()
+                                    || v.bitrate_kbps.is_some()
                             }));
                     let canvas_size = (o.width, o.height) == (comp.width, comp.height);
                     let (default_video, default_audio) = geneva_media::default_codecs(container);
@@ -1001,9 +1004,6 @@ mod imp {
                     // A treated mix is a change no copied audio track can
                     // carry, but it says nothing about the picture: the
                     // copy still stands, with the sound encoded beside it.
-                    let mix_audio = audio_treated(o.audio.as_ref())
-                        .then(|| audio_settings.clone())
-                        .flatten();
                     if canvas_size && !wants_encode && !overrides.exact {
                         let plan = geneva_media::plan_stream_copy_explained(
                             comp,
@@ -1012,6 +1012,27 @@ mod imp {
                             video.and_then(|v| v.codec),
                         )
                         .map_err(|e| err_at(&path, e))?;
+                        let mix_audio = plan
+                            .as_ref()
+                            .ok()
+                            .filter(|p| {
+                                audio_changed(
+                                    o.audio.as_ref(),
+                                    audio,
+                                    p.audio.first().map(|a| a.path.as_path()),
+                                )
+                            })
+                            .and_then(|_| audio_settings.clone());
+                        // Sound encoded beside copied video needs video to
+                        // copy; an audio-only output that changes its
+                        // sound is encoded whole.
+                        let plan = plan.and_then(|p| {
+                            if mix_audio.is_some() && p.segments.is_empty() {
+                                Err(geneva_media::CopyRefusal(None))
+                            } else {
+                                Ok(p)
+                            }
+                        });
                         match plan {
                             Ok(mut plan) => {
                                 if overrides.no_audio {
@@ -1553,6 +1574,59 @@ mod imp {
     /// which only the mix can do, so no copy of it will do.
     fn audio_treated(audio: Option<&geneva_timeline::schema::AudioOutput>) -> bool {
         audio.is_some_and(|a| a.loudness.is_some() || a.hygiene == Some(true))
+    }
+
+    /// Whether the sound has to be encoded rather than copied from
+    /// `source`, the file a copy would take it from: a treated mix, a
+    /// bitrate asked for, or a codec, sample rate or channel count other
+    /// than the source's. Verbs write the source's own rate and channels
+    /// into every document, so a field being set is not by itself a
+    /// change. At most two channels are written, so a source with more
+    /// is still copied unless something else changes. With no audio
+    /// being copied only a treated mix counts, since there is nothing to
+    /// re-encode. Either way the picture can be copied beside the sound.
+    fn audio_changed(
+        audio: Option<&geneva_timeline::schema::AudioOutput>,
+        encode: Option<&geneva_timeline::schema::AudioEncode>,
+        source: Option<&Path>,
+    ) -> bool {
+        use geneva_timeline::schema::AudioCodec;
+        let Some(source) = source else {
+            return audio_treated(audio);
+        };
+        if audio_treated(audio) || encode.is_some_and(|e| e.bitrate_kbps.is_some()) {
+            return true;
+        }
+        let codec = encode.and_then(|e| e.codec);
+        let rate = audio.and_then(|a| a.sample_rate);
+        let channels = audio.and_then(|a| a.channels);
+        if codec.is_none() && rate.is_none() && channels.is_none() {
+            return false;
+        }
+        // Nothing to compare with reads as a change: encoding is the
+        // answer that cannot be wrong.
+        let Some(have) = geneva_media::probe(source).ok().and_then(|i| i.audio) else {
+            return true;
+        };
+        // The probe names the decoder, so the family is the stem:
+        // `libopus`, `mp3float`, `aac_fixed`.
+        let name = have.codec.strip_prefix("lib").unwrap_or(&have.codec);
+        let codec_differs = codec.is_some_and(|c| {
+            !name.starts_with(match c {
+                AudioCodec::Aac => "aac",
+                AudioCodec::Opus => "opus",
+                AudioCodec::Mp3 => "mp3",
+                AudioCodec::Vorbis => "vorbis",
+                AudioCodec::Ac3 => "ac3",
+                AudioCodec::Flac => "flac",
+                AudioCodec::Alac => "alac",
+                AudioCodec::Pcm => "pcm_s16",
+                AudioCodec::Pcm24 => "pcm_s24",
+            })
+        });
+        codec_differs
+            || rate.is_some_and(|r| r != have.sample_rate)
+            || channels.is_some_and(|n| u16::from(n) != have.channels.min(2))
     }
 
     /// What the treatment of the mix measured and did, a line each.
@@ -2287,6 +2361,9 @@ mod imp {
                         || v.preset.is_some()
                         || v.tune.is_some()
                         || v.fixed_keyframes == Some(true)
+                        || v.keyframe_interval.is_some()
+                        || v.max_bitrate_kbps.is_some()
+                        || v.bitrate_kbps.is_some()
                 }));
         let copyable = !overrides.exact && !wants_encode;
         // Why the streams were not copied although nothing in the
@@ -2308,13 +2385,27 @@ mod imp {
                     None
                 }
             };
+            // Sound encoded beside copied video needs video to copy; an
+            // audio-only output that changes its sound is encoded whole.
+            let plan = plan.filter(|p| {
+                !(p.segments.is_empty()
+                    && settings.audio.is_some()
+                    && audio_changed(
+                        comp.audio_output.as_ref(),
+                        comp.encode.as_ref().and_then(|e| e.audio.as_ref()),
+                        p.audio.first().map(|a| a.path.as_path()),
+                    ))
+            });
             if let Some(plan) = plan {
                 // A treated mix is encoded beside the copied picture;
                 // anything else copies both tracks as they are.
-                let mix_audio = settings
-                    .audio
-                    .clone()
-                    .filter(|_| audio_treated(comp.audio_output.as_ref()));
+                let mix_audio = settings.audio.clone().filter(|_| {
+                    audio_changed(
+                        comp.audio_output.as_ref(),
+                        comp.encode.as_ref().and_then(|e| e.audio.as_ref()),
+                        plan.audio.first().map(|a| a.path.as_path()),
+                    )
+                });
                 let mut notes = Vec::new();
                 let report = match &mix_audio {
                     Some(a) => {
@@ -2387,11 +2478,20 @@ mod imp {
             });
         }
         // The clips' own audio goes with the video: copied as coded,
-        // unless the output treats its audio, which only the mix does.
+        // unless the output treats its audio or asks for another codec,
+        // bitrate, rate or channel count, which only the mix does.
         // Dropped from the plan as well as from the settings, so that
         // the plan's own note does not claim a copy that did not happen.
         let mut smart = smart;
-        if audio_treated(comp.audio_output.as_ref()) {
+        let smart_source = smart
+            .as_ref()
+            .and_then(|p| p.audio.as_ref())
+            .map(|a| a.template.clone());
+        if audio_changed(
+            comp.audio_output.as_ref(),
+            comp.encode.as_ref().and_then(|e| e.audio.as_ref()),
+            smart_source.as_deref(),
+        ) {
             if let Some(plan) = smart.as_mut() {
                 plan.audio = None;
             }

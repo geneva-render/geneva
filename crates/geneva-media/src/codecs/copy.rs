@@ -132,11 +132,11 @@ pub fn plan_stream_copy_explained(
     if comp.audio.len() > 1 {
         return Ok(Err(CopyRefusal(None)));
     }
-    // A loudness target, hygiene or denoising change the sound, which
-    // only the mix can do. That says nothing about the picture: the plan
-    // still describes what can be copied, and a caller that treats the
-    // audio drops `audio` and encodes its own with
-    // `stream_copy_mixing_audio`.
+    // A loudness target, hygiene, or another audio codec, bitrate, rate
+    // or channel count change the sound, which only the mix can do. That
+    // says nothing about the picture: the plan still describes what can
+    // be copied, and a caller that changes the audio drops `audio` and
+    // encodes its own with `stream_copy_mixing_audio`.
     let Some(untouched) = untouched_video_clips(comp, root)? else {
         return Ok(Err(CopyRefusal(None)));
     };

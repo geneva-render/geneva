@@ -105,6 +105,8 @@ the format version it was written for.
   its report and frame counts in the README are the ones it prints now.
   `scripts/demo-gif.sh` writes the WebP figures the pages use rather
   than GIFs nothing did.
+- The reference no longer mentions denoising in three places it
+  outlived the feature.
 
 ### Added
 
@@ -144,7 +146,39 @@ the format version it was written for.
   whole number of pixels. Nothing that parsed before parses differently,
   and a printed timeline still writes the number.
 
+- **Rate and audio flags on every verb**: `--max-bitrate`,
+  `--audio-codec`, `--audio-bitrate`, `--sample-rate` and `--channels`,
+  for the fields the format already had and the command line did not
+  reach. `geneva convert talk.mov -o talk.mkv --max-bitrate 6M
+  --audio-codec opus --audio-bitrate 128k` is now one command rather
+  than `--show-timeline`, an edit and a `render`. Rates take `6M`,
+  `800k` or a bare number of kb/s; a number over 1 Gb/s is refused with
+  the reason, since ffmpeg reads a bare number as bits per second. A
+  flag wins over what a `--for` target writes.
+
+  The sound is copied when what is asked matches the source (codec,
+  rate, channels) and encoded otherwise, with the picture still copied
+  beside it. There is still no fixed average bitrate, constant bitrate
+  or two-pass encode: the video is constant quality under an optional
+  ceiling, and the CLI reference now has a section saying so, with the
+  ceiling's two-second buffer and what each encoder does with it.
+
 ### Fixed
+
+- **A ceiling on VP9 did not encode.** libvpx refuses `maxrate` without
+  a bitrate, so any document setting `max_bitrate_kbps` for VP9 failed
+  to open the encoder. The ceiling is now the bitrate of libvpx's
+  constrained quality mode: 853 kb/s for a cap of 800 on a clip that
+  runs at 1788 uncapped.
+- **Settings a copy cannot carry were dropped by copying.** A document
+  or verb setting only `max_bitrate_kbps`, `bitrate_kbps` or
+  `keyframe_interval` was copied as it stood (a 500 kb/s ceiling came
+  out at 1496), and `audio --extract --speech` into `.m4a` copied the
+  48 kHz stereo AAC instead of writing 16 kHz mono. Each now re-encodes
+  what it changes. The CLI reference already said `--keyframe-interval`
+  forced a re-encode.
+- **NVENC's ignored ceiling is reported**, as VideoToolbox's already
+  was: at a constant quantizer it does not apply one.
 
 - **A `captions` clip's `start` placed its cues.** It was discarded: every
   cue landed at the time written in the caption file, whatever the clip

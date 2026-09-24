@@ -521,7 +521,11 @@ fn open_video_encoder(
         }
         "libvpx-vp9" => {
             opts.set("crf", &settings.crf.unwrap_or(31).to_string());
-            opts.set("b", "0");
+            // libvpx takes a ceiling as the bitrate of its constrained
+            // quality mode, and refuses maxrate without one; 0 is constant
+            // quality with no cap.
+            let cap = settings.max_bitrate_kbps.map_or(0, |k| u64::from(k) * 1000);
+            opts.set("b", &cap.to_string());
             opts.set("row-mt", "1");
             if format.bits() > 8 {
                 // Profile 2 carries 10-bit 4:2:0.
@@ -633,7 +637,8 @@ fn open_video_encoder(
     // A ceiling on top of constant quality is a software encoder's trick:
     // VideoToolbox given a data rate limit in quality mode writes files
     // twice the size, so it takes the ceiling only in bitrate mode.
-    let ceiling_applies = !name.ends_with("_videotoolbox") || settings.bitrate_kbps.is_some();
+    let ceiling_applies = name != "libvpx-vp9"
+        && (!name.ends_with("_videotoolbox") || settings.bitrate_kbps.is_some());
     if let (Some(kbps), true) = (settings.max_bitrate_kbps, ceiling_applies) {
         let bps = u64::from(kbps) * 1000;
         opts.set("maxrate", &bps.to_string());
@@ -1690,6 +1695,14 @@ impl Encoder {
             {
                 Some(format!(
                     "VideoToolbox encodes at constant quality; the {} kb/s ceiling is not applied by hardware encoders (a --budget switches them to bitrate mode)",
+                    track.settings.max_bitrate_kbps.unwrap_or(0)
+                ))
+            }
+            VideoBackend::Lavc(_)
+                if track.name.ends_with("_nvenc") && track.settings.max_bitrate_kbps.is_some() =>
+            {
+                Some(format!(
+                    "NVENC encodes at a constant quantizer; the {} kb/s ceiling is not applied by it",
                     track.settings.max_bitrate_kbps.unwrap_or(0)
                 ))
             }

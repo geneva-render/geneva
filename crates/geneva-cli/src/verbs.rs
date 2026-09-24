@@ -12,9 +12,9 @@ use clap::{Args, ValueEnum};
 use geneva_color::{ColorTags, ResolvedTags};
 pub use geneva_timeline::schema::TransitionKind;
 use geneva_timeline::schema::{
-    Asset, AudioClip, AudioTrack, AutoChunks, Chunks, Clip, Crop, Encode, Fit, Layer, Output,
-    OutputKind, OutputSpec, Source, SubtitleTrack, TextSource, Timeline, Transform, Transition,
-    VideoCodec, VideoEncode, VideoProfile, VideoTune,
+    Asset, AudioClip, AudioCodec, AudioEncode, AudioTrack, AutoChunks, Chunks, Clip, Crop, Encode,
+    Fit, Layer, Output, OutputKind, OutputSpec, Source, SubtitleTrack, TextSource, Timeline,
+    Transform, Transition, VideoCodec, VideoEncode, VideoProfile, VideoTune,
 };
 use geneva_timeline::{Animated, Diagnostic, Fps, Length, Point, Ratio, Scale, Time};
 
@@ -147,6 +147,24 @@ pub struct EncodeArgs {
     /// Keyframes at the interval only, never at scene changes.
     #[arg(long, requires = "keyframe_interval")]
     pub fixed_keyframes: bool,
+    /// Bitrate ceiling for the video, such as 6M or 800k (a bare number
+    /// is kb/s). The quality stays constant (--crf) until the ceiling
+    /// bites; there is no fixed average bitrate.
+    #[arg(long, value_name = "RATE", value_parser = parse_rate)]
+    pub max_bitrate: Option<u32>,
+    /// Audio codec for the output. Defaults to the container's usual one.
+    #[arg(long, value_enum)]
+    pub audio_codec: Option<AudioCodecArg>,
+    /// Audio bitrate, such as 128k (a bare number is kb/s). Lossless and
+    /// PCM codecs have none.
+    #[arg(long, value_name = "RATE", value_parser = parse_rate)]
+    pub audio_bitrate: Option<u32>,
+    /// Audio sample rate in Hz, such as 48000 or 44.1k.
+    #[arg(long, value_name = "HZ", value_parser = parse_sample_rate)]
+    pub sample_rate: Option<u32>,
+    /// Audio channels: 1 (mono) or 2 (stereo).
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=2))]
+    pub channels: Option<u8>,
     /// Keep HDR sources HDR: the output takes their tags (PQ or HLG,
     /// BT.2020) and a ten-bit codec, h265 unless --codec says otherwise.
     /// Without it, HDR sources are tone-mapped to SDR.
@@ -253,6 +271,82 @@ pub fn add_blur_fill(tl: &mut Timeline, src_w: u32, src_h: u32) -> bool {
         },
     );
     true
+}
+
+/// An audio codec as `--audio-codec` names it.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum AudioCodecArg {
+    Aac,
+    Opus,
+    Mp3,
+    Vorbis,
+    Ac3,
+    Flac,
+    Alac,
+    Pcm,
+    Pcm24,
+}
+
+impl From<AudioCodecArg> for AudioCodec {
+    fn from(c: AudioCodecArg) -> Self {
+        match c {
+            AudioCodecArg::Aac => Self::Aac,
+            AudioCodecArg::Opus => Self::Opus,
+            AudioCodecArg::Mp3 => Self::Mp3,
+            AudioCodecArg::Vorbis => Self::Vorbis,
+            AudioCodecArg::Ac3 => Self::Ac3,
+            AudioCodecArg::Flac => Self::Flac,
+            AudioCodecArg::Alac => Self::Alac,
+            AudioCodecArg::Pcm => Self::Pcm,
+            AudioCodecArg::Pcm24 => Self::Pcm24,
+        }
+    }
+}
+
+/// A bitrate in kb/s: `6M`, `800k`, `128kbps`, or a bare number of kb/s.
+fn parse_rate(text: &str) -> Result<u32, String> {
+    let t = text.trim().to_ascii_lowercase();
+    let t = t
+        .strip_suffix("bps")
+        .or_else(|| t.strip_suffix("b/s"))
+        .unwrap_or(&t);
+    let (number, factor) = match t.strip_suffix('m') {
+        Some(n) => (n, 1000.0),
+        None => (t.strip_suffix('k').unwrap_or(t), 1.0),
+    };
+    let kbps = number
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .map(|v| (v * factor).round())
+        .ok_or_else(|| format!("{text:?} is not a bitrate such as 6M or 128k"))?;
+    // ffmpeg reads a bare number as bits per second; here it is kb/s, so
+    // a number that size is almost certainly written the other way.
+    if kbps > 1_000_000.0 {
+        return Err(format!(
+            "{text:?} is over 1 Gb/s; a bare number is kb/s here, so write 6M or 6000 rather than 6000000"
+        ));
+    }
+    Ok(kbps as u32)
+}
+
+/// A sample rate in Hz: `48000`, `48k` or `44.1k`.
+fn parse_sample_rate(text: &str) -> Result<u32, String> {
+    let t = text.trim().to_ascii_lowercase();
+    let t = t.strip_suffix("hz").unwrap_or(&t);
+    let (number, factor) = match t.strip_suffix('k') {
+        Some(n) => (n, 1000.0),
+        None => (t, 1.0),
+    };
+    number
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .map(|v| (v * factor).round())
+        .filter(|v| (8000.0..=192_000.0).contains(v))
+        .map(|v| v as u32)
+        .ok_or_else(|| format!("{text:?} is not a sample rate from 8000 to 192000 Hz"))
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -488,6 +582,66 @@ fn encode_block(args: &EncodeArgs) -> Option<Encode> {
         audio: None,
         fast_start: None,
     })
+}
+
+/// Puts the rate and audio flags into a compiled timeline, over what the
+/// verb or a `--for` target wrote there: a flag given on the command
+/// line has the last word.
+pub fn apply_rate_flags(tl: &mut Timeline, args: &EncodeArgs) {
+    let empty = || Encode {
+        container: None,
+        video: None,
+        audio: None,
+        fast_start: None,
+    };
+    if let Some(kbps) = args.max_bitrate {
+        let encode = tl.output.encode.get_or_insert_with(empty);
+        let video = encode.video.get_or_insert(VideoEncode {
+            codec: None,
+            crf: None,
+            preset: None,
+            hardware: None,
+            profile: None,
+            keyframe_interval: None,
+            max_bitrate_kbps: None,
+            bitrate_kbps: None,
+            level: None,
+            tune: None,
+            fixed_keyframes: None,
+            chunks: None,
+        });
+        video.max_bitrate_kbps = Some(kbps);
+    }
+    if args.audio_codec.is_some() || args.audio_bitrate.is_some() {
+        let encode = tl.output.encode.get_or_insert_with(empty);
+        let audio = encode.audio.get_or_insert(AudioEncode {
+            codec: None,
+            bitrate_kbps: None,
+        });
+        if let Some(codec) = args.audio_codec {
+            audio.codec = Some(codec.into());
+        }
+        if let Some(kbps) = args.audio_bitrate {
+            audio.bitrate_kbps = Some(kbps);
+        }
+    }
+    if args.sample_rate.is_some() || args.channels.is_some() {
+        let audio = tl
+            .output
+            .audio
+            .get_or_insert(geneva_timeline::schema::AudioOutput {
+                sample_rate: None,
+                channels: None,
+                loudness: None,
+                hygiene: None,
+            });
+        if let Some(hz) = args.sample_rate {
+            audio.sample_rate = Some(hz);
+        }
+        if let Some(n) = args.channels {
+            audio.channels = Some(n);
+        }
+    }
 }
 
 fn seconds(r: Ratio) -> Time {
@@ -1836,4 +1990,43 @@ pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Re
         root,
         diagnostics,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rates_read_in_kilobits_with_or_without_a_unit() {
+        for (text, kbps) in [
+            ("6M", 6000),
+            ("6m", 6000),
+            ("2.5M", 2500),
+            ("800k", 800),
+            ("128kbps", 128),
+            ("128 kb/s", 128),
+            ("6000", 6000),
+        ] {
+            assert_eq!(parse_rate(text), Ok(kbps), "{text}");
+        }
+        for text in ["", "fast", "-5k", "0", "6000000"] {
+            assert!(parse_rate(text).is_err(), "{text}");
+        }
+        assert!(parse_rate("6000000").unwrap_err().contains("kb/s"));
+    }
+
+    #[test]
+    fn sample_rates_read_in_hertz_or_kilohertz() {
+        for (text, hz) in [
+            ("48000", 48000),
+            ("48k", 48000),
+            ("44.1k", 44100),
+            ("16kHz", 16000),
+        ] {
+            assert_eq!(parse_sample_rate(text), Ok(hz), "{text}");
+        }
+        for text in ["5k", "384k", "fast"] {
+            assert!(parse_sample_rate(text).is_err(), "{text}");
+        }
+    }
 }

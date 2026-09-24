@@ -858,6 +858,7 @@ fn run_verb(
             size_limit = limit;
         }
     }
+    verbs::apply_rate_flags(&mut timeline, encode);
     let text = serde_json::to_string_pretty(&timeline)?;
     if encode.show_timeline {
         println!("{text}");
@@ -1182,6 +1183,11 @@ fn fits_target_as_is(
         || encode.profile.is_some()
         || encode.tune.is_some()
         || encode.keyframe_interval.is_some()
+        || encode.max_bitrate.is_some()
+        || encode.audio_codec.is_some()
+        || encode.audio_bitrate.is_some()
+        || encode.sample_rate.is_some()
+        || encode.channels.is_some()
         || encode.quality.is_some()
         || encode.budget.is_some()
         || encode.exact

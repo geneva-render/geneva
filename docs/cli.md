@@ -113,8 +113,9 @@ sample rate and channel count when every input agrees (mono stays mono,
 
 ### A copied picture with encoded sound
 
-Bringing a mix to a loudness, cleaning it or denoising it is a change no
-copied audio track can carry, but it says nothing about the picture. When
+Bringing a mix to a loudness, cleaning it, or asking for another audio
+codec, bitrate, sample rate or channel count is a change no copied audio
+track can carry, but it says nothing about the picture. When
 nothing else asks for a re-encode, the video packets are copied and only
 the sound is mixed, treated and encoded beside them; the report calls
 this mode `copy-picture` and gives `frames: 0`, since no frame reaches an
@@ -223,10 +224,42 @@ otherwise. The printed timeline (`--show-timeline`) shows the choice.
 | `--fixed-keyframes` | Keyframes at the interval only, never at scene changes, for streaming platforms and segmenters. Needs `--keyframe-interval` or `--for`. Forces a re-encode. |
 | `--keep-hdr` | Keep HDR sources HDR: the output takes their tags (PQ or HLG, BT.2020) and a ten-bit codec, `h265` unless `--codec` says otherwise (`h265` needs a hardware encoder; `av1` and `vp9` are software). Without it, HDR sources are tone-mapped to SDR. |
 | `--chunks N\|auto` | Encode the output in `N` stretches at once, on separate cores, joined afterwards; `auto` (the default) decides from the encoder and the machine, `1` turns it off. See `encode.video.chunks` in [timeline.md](timeline.md). |
+| `--max-bitrate RATE` | A ceiling on the video bitrate, such as `6M` or `800k`; a bare number is kb/s, not ffmpeg's bits per second. The quality stays constant until the ceiling bites; see [rate control](#rate-control). Forces a re-encode, and wins over a `--for` target's own cap. |
+| `--audio-codec NAME` | Audio codec: `aac`, `opus`, `mp3`, `vorbis`, `ac3`, `flac`, `alac`, `pcm` or `pcm24`. Defaults to the container's usual one. |
+| `--audio-bitrate RATE` | Audio bitrate, such as `128k`; 160 kb/s by default. Lossless and PCM codecs have none. |
+| `--sample-rate HZ` | Audio sample rate, such as `48000` or `44.1k`. Defaults to the source's when every input shares one, otherwise 48 kHz. |
+| `--channels 1\|2` | Mono or stereo. Defaults to the source's, at most two. |
 | `--no-audio` | Write no audio track. |
 | `--renderer auto\|cpu\|gpu` | Which renderer composites the frames, as for `render`. Only the steps that composite are affected: a stream that is copied is copied either way, and the overlays drawn onto a copied picture are always drawn on the CPU. A verb that builds a canvas, such as a `--for` target that changes the shape, composites every frame and does take it. |
 | `--exact` | Cut on the exact frame; a [smart cut](#smart-cut) when the source allows. |
 | `--show-timeline` | Print the timeline the verb built instead of rendering it. Asset paths in it are relative to the directory printed on stderr. |
+
+### Rate control
+
+The video is encoded at a constant quality, `--crf`, with an optional
+ceiling, `--max-bitrate`. In ffmpeg's terms that is `-crf 23 -maxrate 6M
+-bufsize 12M`, and it is the only mode:
+
+- There is no fixed average bitrate or constant bitrate (ffmpeg's
+  `-b:v 6M` on its own) and no two-pass encode. For a file of a given
+  size, `--for TARGET --budget SIZE` lowers the ceiling until the file
+  should fit, and warns when it does not.
+- The ceiling is held over a buffer of two seconds at that rate, so any
+  two seconds stay under it, but a short file can end up above its rate
+  by as much as the buffer: capped at 100k, a 2 s clip measured 190 kb/s
+  and a 20 s one 110 kb/s.
+- VP9 takes the ceiling as the bitrate of libvpx's constrained quality
+  mode, which holds the average rather than every two seconds.
+- VideoToolbox and NVENC encode at a constant quality and do not apply
+  the ceiling; the report says so. `--budget` switches VideoToolbox to
+  its bitrate mode.
+
+The sound is copied when the output asks for what the source already
+has, and encoded when the codec, sample rate or channel count differs or
+a bitrate is asked for. The picture is still copied beside it when
+nothing else changes. A source with more than two channels is copied as
+it is unless something else re-encodes the sound, since geneva writes at
+most two.
 
 ### `geneva convert <input> -o FILE [--crop RECT] [--width W] [--height H] [--fit contain|cover|fill] [--fps FPS]`
 
@@ -436,7 +469,7 @@ note[N410]: target phone: 3840×2160 scaled to 1920×1080 (ceiling 1920×1080);
   keyframes every 2 s; fast start; AAC 128 kb/s 48 kHz stereo
 ```
 
-A loudness target, hygiene or denoising add what the mix measured and
+A loudness target or hygiene add what the mix measured and
 what was done to it to the render's notes:
 
 ```

@@ -288,6 +288,10 @@ accepted alongside the long form, so a document can mix them.
 - **`deny_unknown_fields`.** A misspelled key is an error, not ignored,
   so typos surface at validation rather than as a silently wrong
   render.
+- **A bitrate is a ceiling.** `--max-bitrate 6M` caps a constant-quality
+  encode (`--crf`); there is no fixed average bitrate, constant bitrate
+  or two-pass mode. A bare number is kb/s, not ffmpeg's bits per second.
+  For a file of a given size use `--for TARGET --budget 25MB`.
 - **Sizes should be even** for the common codecs (W401 warns). The
   verbs round for you, timelines do not.
 - **Rotated clips come out upright.** Phones store portrait video as a
