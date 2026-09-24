@@ -136,7 +136,7 @@ transitions as [HTML+CSS markup](examples/opening.html). geneva can
 render them natively over the footage using a simple
 [JSON file](examples/opening.json), in a single pass.
 
-<img src="docs/opening.webp" alt="A title sequence typing the word geneva, then two more lines, before a diagonal wipe reveals a street crossing that fades to black" width="640" height="360">
+https://github.com/user-attachments/assets/6e6456f3-2bb4-4b00-917f-8e793622815d
 
 This lower third was an agent's first attempt from the prompt below. The
 agent had the `geneva` binary and `whisper-cli`, and no checkout:
