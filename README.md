@@ -138,6 +138,21 @@ render them natively over the footage using a simple
 
 <img src="docs/opening.webp" alt="A title sequence typing the word geneva, then two more lines, before a diagonal wipe reveals a street crossing that fades to black" width="640" height="360">
 
+This lower third was an agent's first attempt from the prompt below. The
+agent had the `geneva` binary and `whisper-cli`, and no checkout:
+
+> Using only the built-in geneva guide and whisper-cli, take a 1m clip
+> from public-domain popeye and overlay a realistic CNN style animated
+> lower third for the whole clip (change the CNN logo to GNN, keep the
+> style), with headlines derived from the clip itself. The source is 4:3,
+> so output 16:9 1080p with the empty sides filled by a blurred copy of
+> the video.
+
+<img src="docs/popeye-lower-third.webp" alt="A black and white Popeye cartoon in a 16:9 frame with blurred sides, under a news-style lower third with a GNN logo, a LIVE tag, a two-line headline and a scrolling ticker" width="640" height="360">
+
+The picture is the whole 62 s clip, reduced to 640 wide at 12 fps with
+the sound removed.
+
 ## Installing
 
 ```sh
@@ -212,6 +227,12 @@ machine that has `geneva` and no checkout can read them: `geneva guide`
 prints the agent page, `geneva guide --list` names the rest, and
 `geneva explain E302` says what one diagnostic code means.
 
+## How this was built
+
+This was built almost entirely with Fable/Opus, which wrote the code,
+tests and docs under my guidance. I am being upfront about that so you
+can decide how much you trust the code.
+
 ## Where this is going
 
 geneva is pre-1.0. The timeline format still moves between minor
@@ -229,12 +250,6 @@ Which of those gets built depends on what people are making. If that
 includes you, [tell me what](https://genevarender.com/building), or open
 a [discussion](https://github.com/geneva-render/geneva/discussions) if
 you would rather not leave an address.
-
-## How this was built
-
-This was built almost entirely with Fable/Opus, which wrote the code,
-tests and docs under my guidance. I am being upfront about that so you
-can decide how much you trust the code.
 
 ## Building from source
 
