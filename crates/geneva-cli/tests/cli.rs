@@ -657,16 +657,24 @@ fn convert_flags_set_a_bitrate_ceiling_and_the_audio_format() {
         &[&capped, &clip],
     );
     assert_ne!(doc["mode"], "copy");
-    // 100 kb/s over 2 s is 25 kB, and the buffer the ceiling is held
-    // over is two seconds of it, which a clip this short can spend on
-    // top: 50 kB at most.
-    assert!(size(&capped) < 50_000, "{} bytes", size(&capped));
-    assert!(
-        size(&capped) * 3 < size(&open),
-        "{} against {}",
-        size(&capped),
-        size(&open)
-    );
+    // Without x264 the bundled OpenH264 runs at a pinned quantizer, which
+    // cannot hold a ceiling; it has to say so, and there is nothing to
+    // measure.
+    let notes = doc["diagnostics"].to_string();
+    if notes.contains("OpenH264") {
+        assert!(notes.contains("ceiling is not applied"), "{notes}");
+    } else {
+        // 100 kb/s over 2 s is 25 kB, and the buffer the ceiling is held
+        // over is two seconds of it, which a clip this short can spend on
+        // top: 50 kB at most.
+        assert!(size(&capped) < 50_000, "{} bytes", size(&capped));
+        assert!(
+            size(&capped) * 3 < size(&open),
+            "{} against {}",
+            size(&capped),
+            size(&open)
+        );
+    }
 
     // So does a keyframe interval, which a copy would keep as it was.
     let keyed = out("keyed.mp4");

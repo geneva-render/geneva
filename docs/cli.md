@@ -178,7 +178,7 @@ encoding when every video input shares one; `render` defaults to BT.709.
 | `--fill bars\|blur` | Around a picture that does not cover the frame. `--for` portrait canvases default to `blur`, a `--width`/`--height` change to `bars`. |
 | `--renderer auto\|cpu\|gpu` | As for `render`; affects only composited frames. |
 | `--exact` | Frame-accurate cuts; a [smart cut](#smart-cut) when possible. |
-| `--show-timeline` | Print the document instead of rendering; the asset root is printed on stderr. |
+| `--show-timeline` | Print the document instead of rendering; the asset root is printed on stderr. Inputs on two Windows drives share no root, so their paths are written whole; `geneva render` refuses such a document, since a written one keeps its paths under its root. |
 
 ### Rate control
 
@@ -191,8 +191,9 @@ ffmpeg's `-crf 23 -maxrate 6M -bufsize 12M`. The only mode.
   it by up to the buffer: capped at 100k, 190 kb/s over 2 s, 110 kb/s
   over 20 s.
 - VP9: the ceiling is libvpx's constrained quality bitrate, an average.
-- VideoToolbox and NVENC at constant quality ignore the ceiling, and the
-  report says so. `--budget` puts VideoToolbox in bitrate mode.
+- VideoToolbox and NVENC at constant quality, and the bundled OpenH264
+  always, ignore the ceiling, and the report says so. `--budget` puts
+  VideoToolbox in bitrate mode.
 - Sound is copied when it already matches what is asked, else encoded;
   the picture is still copied if nothing else changes it. More than two
   source channels are copied as they are unless the sound is encoded.

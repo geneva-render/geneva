@@ -351,8 +351,8 @@ pub(super) fn write_header(
 /// Hardware encoder implementations, most capable first.
 fn hardware_encoder_names(codec: VideoCodec) -> &'static [&'static str] {
     match codec {
-        VideoCodec::H264 => &["h264_videotoolbox", "h264_nvenc"],
-        VideoCodec::H265 => &["hevc_videotoolbox", "hevc_nvenc"],
+        VideoCodec::H264 => &["h264_videotoolbox", "h264_nvenc", "h264_mf"],
+        VideoCodec::H265 => &["hevc_videotoolbox", "hevc_nvenc", "hevc_mf"],
         _ => &[],
     }
 }
@@ -595,6 +595,39 @@ fn open_video_encoder(
             }
             if fixed {
                 opts.set("no-scenecut", "1");
+            }
+        }
+        n if n.ends_with("_mf") => {
+            // Media Foundation, on Windows. Hardware only: without a GPU
+            // encoder it would pick Microsoft's software one, ahead of x264
+            // in the order tried. It takes 8-bit 4:2:0 alone, so ten bits
+            // fail to open here and go to the next candidate.
+            opts.set("hw_encoding", "1");
+            if let Some(kbps) = settings.bitrate_kbps {
+                let peak = settings.max_bitrate_kbps.is_some();
+                opts.set("rate_control", if peak { "pc_vbr" } else { "u_vbr" });
+                venc.set_bit_rate(kbps as usize * 1000);
+            } else {
+                // Quality 0..=100 with 100 best, as for VideoToolbox. A
+                // device that ignores the mode (the setting is not checked)
+                // falls back to its default mode, which then gets a rate
+                // near what the quality would have produced rather than
+                // none: about 0.1 bit a pixel at 23, doubling every 6.
+                opts.set("rate_control", "quality");
+                let q = 1.0 - f64::from(quality) / 51.0;
+                opts.set(
+                    "quality",
+                    &((q * 100.0).round() as i64).clamp(1, 100).to_string(),
+                );
+                let pixels =
+                    f64::from(settings.width) * f64::from(settings.height) * settings.fps.to_f64();
+                let bpp = 0.1 * 2f64.powf(f64::from(23 - quality) / 6.0);
+                venc.set_bit_rate((pixels * bpp) as usize);
+            }
+            match tune {
+                Some(VideoTune::ZeroLatency) => opts.set("scenario", "live_streaming"),
+                Some(_) => no_tune(&mut notes),
+                None => {}
             }
         }
         n if n.ends_with("_videotoolbox") => {
@@ -902,7 +935,7 @@ fn open_video_track(
             return Err(MediaError::Codec {
                 context: "encoder setup".to_owned(),
                 reason: format!(
-                    "{:?} needs a hardware encoder (VideoToolbox or NVENC) and none could be opened here ({e}); for ten bits without one, use av1 or vp9",
+                    "{:?} needs a hardware encoder (VideoToolbox, NVENC or Media Foundation) and none could be opened here ({e}); for ten bits without one, use av1 or vp9",
                     settings.codec
                 ),
             });
@@ -1706,12 +1739,21 @@ impl Encoder {
                     track.settings.max_bitrate_kbps.unwrap_or(0)
                 ))
             }
-            VideoBackend::Lavc(_) if track.name == "libopenh264" => Some(match &track.x264_error {
-                Some(e) => format!(
-                    "H.264 encoded with the bundled OpenH264; the system's x264 was found but not used: {e}"
-                ),
-                None => "H.264 encoded with the bundled OpenH264; the system's x264 is used instead when its library is installed (see the README)".to_owned(),
-            }),
+            VideoBackend::Lavc(_) if track.name == "libopenh264" => {
+                let mut note = match &track.x264_error {
+                    Some(e) => format!(
+                        "H.264 encoded with the bundled OpenH264; the system's x264 was found but not used: {e}"
+                    ),
+                    None => "H.264 encoded with the bundled OpenH264; the system's x264 is used instead when its library is installed (see the README)".to_owned(),
+                };
+                // It runs at a pinned quantizer, which a ceiling cannot move.
+                if let Some(kbps) = track.settings.max_bitrate_kbps {
+                    note = format!(
+                        "{note}; OpenH264 encodes at a constant quantizer, so the {kbps} kb/s ceiling is not applied"
+                    );
+                }
+                Some(note)
+            }
             VideoBackend::Lavc(_) => None,
         }
     }
@@ -1806,7 +1848,9 @@ impl Encoder {
         self.finished = true;
         if self.image_sequence {
             // Opening the output created an empty file named after the
-            // pattern itself; the frames went to the numbered files.
+            // pattern itself; the frames went to the numbered files. It is
+            // closed first, since Windows will not remove an open file.
+            ffi::close_output_file(&mut self.octx);
             if std::fs::metadata(&self.path).is_ok_and(|m| m.len() == 0) {
                 let _ = std::fs::remove_file(&self.path);
             }
@@ -1857,14 +1901,31 @@ mod tests {
 /// failure to open it is worth reporting.
 ///
 /// This checks what can be checked without opening anything: every Mac
-/// has VideoToolbox, and an NVIDIA driver has a control device. It says
-/// nothing about whether the encoder would have worked.
+/// has VideoToolbox, and an NVIDIA driver has a control device on Linux
+/// and its encoder DLL in the system folder on Windows. It says nothing
+/// about whether the encoder would have worked. Media Foundation is on
+/// every Windows machine whether or not a GPU encoder is behind it, so it
+/// is never claimed.
 fn hardware_device_present(encoder: &str) -> bool {
     if encoder.contains("videotoolbox") {
         return cfg!(target_os = "macos");
     }
     if encoder.contains("nvenc") {
-        return cfg!(target_os = "linux") && std::path::Path::new("/dev/nvidiactl").exists();
+        return nvidia_driver_present();
+    }
+    false
+}
+
+fn nvidia_driver_present() -> bool {
+    if cfg!(target_os = "linux") {
+        return std::path::Path::new("/dev/nvidiactl").exists();
+    }
+    if cfg!(windows) {
+        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+        return std::path::Path::new(&root)
+            .join("System32")
+            .join("nvEncodeAPI64.dll")
+            .exists();
     }
     false
 }
@@ -1895,13 +1956,23 @@ mod hardware_note_tests {
         assert!(!hardware_device_present("h264_something_else"));
     }
 
-    /// NVENC is claimed only on Linux, and only when the driver's control
-    /// device is there. This machine is one or the other, and either way
-    /// the answer must agree with the file.
+    /// NVENC is claimed only where the driver is: its control device on
+    /// Linux, its encoder DLL on Windows, never on a Mac. This machine has
+    /// one or not, and either way the answer must agree with the file.
     #[test]
-    fn nvenc_follows_the_driver_device() {
-        let has = cfg!(target_os = "linux") && std::path::Path::new("/dev/nvidiactl").exists();
+    fn nvenc_follows_the_driver() {
+        let has = if cfg!(target_os = "linux") {
+            std::path::Path::new("/dev/nvidiactl").exists()
+        } else if cfg!(windows) {
+            let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+            std::path::Path::new(&root)
+                .join("System32/nvEncodeAPI64.dll")
+                .exists()
+        } else {
+            false
+        };
         assert_eq!(hardware_device_present("h264_nvenc"), has);
+        assert!(!hardware_device_present("h264_mf"));
     }
 
     /// The note names the encoder that would not open, why, and what ran

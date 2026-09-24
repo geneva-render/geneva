@@ -1,0 +1,14 @@
+# Text is checked out with LF everywhere, Windows included: the schema
+# test and the golden cases compare files byte for byte.
+* text=auto eol=lf
+
+# Media and fonts are never touched.
+*.png binary
+*.webp binary
+*.mp4 binary
+*.mov binary
+*.mkv binary
+*.webm binary
+*.ts binary
+*.wav binary
+*.ttf binary

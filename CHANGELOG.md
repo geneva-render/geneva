@@ -7,6 +7,27 @@ the format version it was written for.
 
 ## Unreleased
 
+### Added
+
+- **Windows.** A `x86_64-pc-windows-gnu` build, cross-compiled on Linux
+  with MinGW-w64: `MEDIA_HOST=x86_64-w64-mingw32
+  scripts/build-media-libs.sh` builds the media libraries for it (zlib
+  included, which Windows lacks), and the release ships it as a zip with
+  `install.ps1`, which installs for the current user and puts geneva on
+  the PATH. Before anything is published the release workflow installs
+  that zip on a Windows runner and runs `scripts/smoke.sh`, every
+  everyday command once. `geneva.exe` needs nothing but Windows' own
+  DLLs.
+- **Media Foundation** for H.264 and H.265 on Windows, when a GPU
+  encoder is behind it, and NVENC there as on Linux. Media Foundation is
+  8-bit only; ten bits go to the next encoder. Without a GPU encoder
+  H.265 fails as it does elsewhere, with the reason. Untested on real
+  hardware so far: the Windows runner has no GPU.
+- The system's x264 on Windows: `libx264-<build>.dll` next to
+  `geneva.exe`, or the file `GENEVA_X264` names. A bare name is looked
+  for next to the executable and in the system folder only, never in the
+  current directory or along `PATH`.
+
 ### Changed
 
 - **Timeline format 0.5.** `FORMAT_VERSION` moves with the format
@@ -52,6 +73,28 @@ the format version it was written for.
 
 ### Fixed
 
+- **Text on a machine with no fonts panicked** ("no default font
+  found"), in a bare container as much as in a fresh Wine prefix. Such a
+  machine now draws in Liberation Sans, built in for that case only
+  (SIL OFL 1.1, `licenses/OFL-1.1-Liberation.txt`).
+- Windows: verbs refused inputs on two drives ("inputs must be on the
+  same drive"), a video on `D:` with a logo on `C:`, say. A verb now
+  writes such paths whole and the resolver takes them from it, and from
+  nothing else: a document someone wrote still keeps its paths under its
+  asset root.
+- Windows: verbs with inputs in different folders joined `/`-separated
+  paths onto a `\\?\C:\` root from `canonicalize`, in which `/` is not a
+  separator; the root is now written in the ordinary form. An image
+  sequence left a zero-byte file named after its pattern, since the
+  file was still open when it was removed. A Windows checkout no longer
+  turns the schema files' line endings to CRLF (`.gitattributes`), which
+  failed the schema test.
+- `missing_libraries_are_named_with_their_packages` failed on macOS and
+  Windows, and CI's schema check compared against the 0.4 file.
+- The bundled OpenH264 ignores `--max-bitrate` (it runs at a pinned
+  quantizer) and now says so in its note, as VideoToolbox and NVENC do.
+  It is what encodes H.264 wherever x264 is not installed, Windows
+  included.
 - **A `text` source drew in the machine's font, not the one the document
   ships.** Font assets were registered only when a source named one by
   its asset id. Name the family the file declares, which the reference

@@ -171,14 +171,23 @@ The whole 62 s clip, re-encoded to fit GitHub's 10 MB upload limit.
 
 ## Installing
 
+On Linux and macOS:
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/geneva-render/geneva/main/scripts/install.sh | sh
+```
+
+On Windows, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/geneva-render/geneva/main/scripts/install.ps1 | iex
 ```
 
 The archives are on the [releases
 page](https://github.com/geneva-render/geneva/releases) if you would
 rather pick one yourself. Linux needs glibc 2.35+, macOS 12+ on Apple
-silicon. Codecs, containers and font shaping are built in.
+silicon, Windows 10 or 11 on x64. Codecs, containers and font shaping
+are built in.
 
 One thing to know about H.264: geneva bundles OpenH264, which produces
 larger files than x264 at the same quality. It does not bundle x264
@@ -189,6 +198,10 @@ always reports which encoder it used.
 sudo apt install libx264-164     # Debian 12, Ubuntu 24.04 (libx264-163 on 22.04)
 brew install x264                # macOS
 ```
+
+On Windows it looks for `libx264-<build>.dll` next to `geneva.exe` (the
+one in MSYS2's `mingw-w64-ucrt-x86_64-libx264` package works on its own),
+or takes the file that `GENEVA_X264` names.
 
 ## What else it does
 

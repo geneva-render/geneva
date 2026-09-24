@@ -35,6 +35,12 @@ pub fn link_media_libraries() {
         "no media libraries under {prefix}; run scripts/build-media-libs.sh first"
     );
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    assert!(
+        target_os != "windows" || target_env == "gnu",
+        "on Windows the media libraries link into the x86_64-pc-windows-gnu target only; \
+         build them with MEDIA_HOST=x86_64-w64-mingw32 scripts/build-media-libs.sh"
+    );
 
     println!("cargo:rustc-link-search=native={prefix}/lib");
     for dir in pkg_config(&prefix, "--libs-only-L") {
@@ -64,8 +70,13 @@ pub fn link_media_libraries() {
             match target_os.as_str() {
                 // Apple's C++ runtime goes by another name.
                 "macos" | "ios" => "-lc++".to_owned(),
+                // MinGW: the static archive, so no libstdc++ DLL ships.
+                "windows" => "-l:libstdc++.a".to_owned(),
                 _ => cxx_runtime.clone().unwrap_or(flag),
             }
+        } else if name == "pthread" && target_os == "windows" {
+            // MinGW's pthread is a DLL unless named by its archive.
+            "-l:libwinpthread.a".to_owned()
         } else if name == "z" && target_os == "linux" {
             // zlib comes from the system; its static archive keeps the
             // binary free of shared-library dependencies where it exists.
@@ -78,14 +89,30 @@ pub fn link_media_libraries() {
         }
     }
 
-    // Static archives must be resolvable in any order; GNU ld needs a group
-    // for that, Apple's linker does not.
-    let grouped = target_os == "linux";
+    // Static archives must be resolvable in any order; GNU ld (on Linux and
+    // in MinGW) needs a group for that, Apple's linker does not.
+    let grouped = target_os == "linux" || target_os == "windows";
     if grouped {
         println!("cargo:rustc-link-arg=-Wl,--start-group");
     }
     for l in &libs {
         println!("cargo:rustc-link-arg={l}");
+    }
+    if target_os == "windows" {
+        // Rust's own system libraries come before these archives on the
+        // command line; the ones they need are named again inside the
+        // group so GNU ld resolves them.
+        for l in [
+            "-lmingw32",
+            "-lmingwex",
+            "-lmsvcrt",
+            "-lkernel32",
+            "-lssp",
+            "-lgcc",
+            "-lgcc_eh",
+        ] {
+            println!("cargo:rustc-link-arg={l}");
+        }
     }
     if grouped {
         println!("cargo:rustc-link-arg=-Wl,--end-group");

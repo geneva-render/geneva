@@ -2,8 +2,9 @@
 //!
 //! Nothing of x264 is built into geneva. When the distribution's x264
 //! package is installed (`libx264.so.NNN` on Linux, Homebrew's dylib on
-//! macOS) the library is loaded at run time and used through its C API,
-//! ahead of the bundled OpenH264; without it nothing changes. The
+//! macOS, `libx264-NNN.dll` next to `geneva.exe` or in the system folder
+//! on Windows) the library is loaded at run time and used through its C
+//! API, ahead of the bundled OpenH264; without it nothing changes. The
 //! `GENEVA_X264` environment variable names the library file to load, or
 //! turns the lookup off when set to `off`.
 //!
@@ -181,6 +182,13 @@ fn candidates() -> Vec<String> {
             names.push(format!("{dir}/libx264.dylib"));
         }
         names.push("libx264.dylib".to_owned());
+    } else if cfg!(windows) {
+        // MSYS2 and most other builds name the DLL after the API build.
+        for build in (OLDEST_BUILD..=NEWEST_BUILD).rev() {
+            names.push(format!("libx264-{build}.dll"));
+        }
+        names.push("libx264.dll".to_owned());
+        names.push("x264.dll".to_owned());
     } else {
         names.push("libx264.so".to_owned());
         for build in (OLDEST_BUILD..=NEWEST_BUILD).rev() {
@@ -197,7 +205,7 @@ fn load() -> Result<X264Lib, Option<String>> {
     for name in candidates() {
         // SAFETY: loading a shared library runs its initializers; x264's
         // do nothing beyond setting up its own tables.
-        let Ok(library) = (unsafe { libloading::Library::new(&name) }) else {
+        let Ok(library) = (unsafe { open(&name) }) else {
             continue;
         };
         match bind(library, name.clone()) {
@@ -206,6 +214,32 @@ fn load() -> Result<X264Lib, Option<String>> {
         }
     }
     Err(problem)
+}
+
+/// Opens a library by name or path. On Windows a bare name is looked for
+/// next to the executable and in the system folder only, not in the
+/// current directory or along `PATH`, where anyone could leave a DLL of
+/// that name.
+unsafe fn open(name: &str) -> Result<libloading::Library, libloading::Error> {
+    #[cfg(windows)]
+    {
+        use libloading::os::windows::{
+            LOAD_LIBRARY_SEARCH_APPLICATION_DIR, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, Library,
+        };
+        // SAFETY: as for `load`; the flags only narrow the search.
+        unsafe {
+            Library::load_with_flags(
+                name,
+                LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+            )
+        }
+        .map(Into::into)
+    }
+    #[cfg(not(windows))]
+    {
+        // SAFETY: as for `load`.
+        unsafe { libloading::Library::new(name) }
+    }
 }
 
 fn bind(library: libloading::Library, path: String) -> Result<X264Lib, String> {

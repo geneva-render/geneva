@@ -38,18 +38,26 @@ jobs:
             target: aarch64-unknown-linux-gnu
           - os: macos-latest
             target: aarch64-apple-darwin
+          # Windows is cross-built with MinGW-w64 on Linux and smoke-tested
+          # on a Windows runner below. The newer runner has the MinGW
+          # headers FFmpeg's Media Foundation encoders need.
+          - os: ubuntu-24.04
+            target: x86_64-pc-windows-gnu
+            media_host: x86_64-w64-mingw32
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
           # ffmpeg-sys-next bundles the static media archives into its rlib
           # when it is built, so a target cache is only valid for the media
           # libraries it was built against.
-          key: media-${{ hashFiles('scripts/build-media-libs.sh') }}
+          key: media-${{ matrix.target }}-${{ hashFiles('scripts/build-media-libs.sh') }}
       - name: Install build tools (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake meson ninja-build nasm pkg-config clang zlib1g-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake meson ninja-build nasm pkg-config clang zlib1g-dev ${{ matrix.media_host && 'mingw-w64' || '' }}
       - name: Install build tools (macOS)
         if: runner.os == 'macOS'
         run: brew install cmake meson ninja nasm pkg-config
@@ -58,15 +66,23 @@ jobs:
         uses: actions/cache@v4
         with:
           path: target/media-libs
-          key: media-libs-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-media-libs.sh') }}
+          key: media-libs-${{ matrix.target }}-${{ hashFiles('scripts/build-media-libs.sh') }}
       - name: Build media libraries
         if: steps.media-libs.outputs.cache-hit != 'true'
+        env:
+          MEDIA_HOST: ${{ matrix.media_host }}
         run: scripts/build-media-libs.sh
       - name: Rebuild the media bindings against fresh libraries
         if: steps.media-libs.outputs.cache-hit != 'true'
-        run: cargo clean -p ffmpeg-sys-next --release && cargo clean -p ffmpeg-sys-next
+        run: cargo clean -p ffmpeg-sys-next --release --target ${{ matrix.target }}
+      # Built for the named target, so the binary is under target/<target>.
       - name: Build
-        run: cargo build --release --locked
+        env:
+          PKG_CONFIG_ALLOW_CROSS: "1"
+        run: |
+          cargo build --release --locked --target ${{ matrix.target }}
+          exe=geneva; case "${{ matrix.target }}" in *windows*) exe=geneva.exe ;; esac
+          mkdir -p dist && cp "target/${{ matrix.target }}/release/$exe" dist/
       - name: Sign (macOS)
         if: runner.os == 'macOS' && env.APPLE_CERTIFICATE_P12 != ''
         run: |
@@ -81,32 +97,65 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain"
           security list-keychain -d user -s "$keychain"
           codesign --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp \
-            --force target/release/geneva
-          codesign --verify --strict --verbose=2 target/release/geneva
+            --force dist/geneva
+          codesign --verify --strict --verbose=2 dist/geneva
       - name: Notarize (macOS)
         if: runner.os == 'macOS' && env.APPLE_CERTIFICATE_P12 != ''
         run: |
-          ditto -c -k target/release/geneva "$RUNNER_TEMP/geneva.zip"
+          ditto -c -k dist/geneva "$RUNNER_TEMP/geneva.zip"
           xcrun notarytool submit "$RUNNER_TEMP/geneva.zip" --wait \
             --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
+      # A zip for Windows, with the PowerShell installer in place of the
+      # shell scripts; a tarball everywhere else.
       - name: Package
         run: |
           name=geneva-${RELEASE_TAG}-${{ matrix.target }}
           mkdir -p "$name/licenses"
-          cp target/release/geneva README.md LICENSE THIRD-PARTY-NOTICES.md "$name/"
-          cp scripts/install.sh scripts/check.sh "$name/"
+          cp dist/* README.md LICENSE THIRD-PARTY-NOTICES.md "$name/"
           cp licenses/* target/media-libs/share/licenses/* "$name/licenses/"
-          tar czf "$name.tar.gz" "$name"
+          case "${{ matrix.target }}" in
+            *windows*)
+              cp scripts/install.ps1 "$name/"
+              zip -qr "$name.zip" "$name" ;;
+            *)
+              cp scripts/install.sh scripts/check.sh "$name/"
+              tar czf "$name.tar.gz" "$name" ;;
+          esac
       - uses: actions/upload-artifact@v4
         with:
           name: geneva-${{ matrix.target }}
-          path: geneva-*.tar.gz
+          path: |
+            geneva-*.tar.gz
+            geneva-*.zip
+  # The Windows build runs on Windows before anything is published: every
+  # everyday command once, on a clip it renders itself.
+  smoke-windows:
+    name: Smoke test on Windows
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: geneva-x86_64-pc-windows-gnu
+      # Installed the way a user would, with the zip's own installer under
+      # the Windows PowerShell every machine has, then run from there.
+      - name: Install from the zip
+        shell: powershell
+        run: |
+          Expand-Archive (Get-Item geneva-*.zip).FullName -DestinationPath unpacked
+          $env:GENEVA_PREFIX = "$env:RUNNER_TEMP\geneva"
+          & (Get-Item unpacked\geneva-*\install.ps1).FullName
+          Add-Content $env:GITHUB_PATH $env:GENEVA_PREFIX
+      - name: Smoke test
+        shell: bash
+        run: scripts/smoke.sh
   # Only when there is something to release: a tag was pushed, or a tag was
   # named on dispatch. A dispatch with no tag stops after the build, and
   # its binaries are the run's artifacts, which is how a machine that
   # cannot build them locally gets one to test.
   publish:
-    needs: build
+    needs: [build, smoke-windows]
     if: inputs.tag != '' || startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -128,4 +177,6 @@ jobs:
           tag_name: ${{ env.RELEASE_TAG }}
           target_commitish: ${{ github.sha }}
           body_path: notes.md
-          files: geneva-*.tar.gz
+          files: |
+            geneva-*.tar.gz
+            geneva-*.zip

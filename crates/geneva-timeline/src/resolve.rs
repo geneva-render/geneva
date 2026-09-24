@@ -646,6 +646,14 @@ pub trait AssetInfo {
         None
     }
 
+    /// Whether an asset's `src` may be an absolute path. Never for a
+    /// document someone wrote, whose paths stay under the asset root; only
+    /// for one a verb compiled from paths named on its command line that
+    /// share no root, as files on two Windows drives do.
+    fn allows_absolute_paths(&self) -> bool {
+        false
+    }
+
     /// The natural size of a picture or a video asset, for the check on
     /// a clip that names no `fit`. `None` where the caller cannot tell,
     /// so validation without files stays quiet.
@@ -1610,7 +1618,9 @@ impl Resolver<'_> {
 
     fn check_asset_path(&mut self, asset: &Asset, path: &Path) {
         let src = asset.src.as_str();
-        let escapes = Self::escapes_root(src);
+        let absolute_ok =
+            self.info.allows_absolute_paths() && std::path::Path::new(src).is_absolute();
+        let escapes = Self::escapes_root(src) && !absolute_ok;
         if src.trim().is_empty() {
             self.push(Diagnostic::error(
                 "E202",

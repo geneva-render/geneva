@@ -15,8 +15,9 @@ binary distribution.
 | Opus | Opus encoding and decoding | BSD-3-Clause |
 | libvorbis, libogg | Vorbis encoding | BSD-3-Clause |
 | LAME | MP3 encoding | GNU LGPL 2.0 or later (`lame.txt` in the binary distribution) |
-| zlib | PNG compression | zlib license (system library) |
-| nv-codec-headers | interface to NVIDIA hardware encoders (Linux) | MIT |
+| zlib | PNG compression | zlib license (the system's on Linux and macOS, built in on Windows) |
+| nv-codec-headers | interface to NVIDIA hardware encoders (Linux, Windows) | MIT |
+| Liberation Sans Regular | text on a machine with no fonts installed at all | SIL Open Font License 1.1 (`licenses/OFL-1.1-Liberation.txt`) |
 
 The LGPL-licensed libraries are statically linked. Their complete source,
 the exact versions and the configuration used are given by the build

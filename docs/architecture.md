@@ -217,8 +217,9 @@ the source rather than treating a set field as a change.
 - H.264 in software: the system's x264 when installed, loaded at run
   time (`codecs/x264.rs`, through the stable part of its interface; no
   x264 code in the binary), otherwise the bundled OpenH264. Hardware
-  encoders (NVENC on Linux, VideoToolbox on macOS) first when the
-  settings allow. No software H.265.
+  encoders (VideoToolbox on macOS, NVENC on Linux and Windows, Media
+  Foundation on Windows, 8-bit only and only with a GPU behind it) first
+  when the settings allow. No software H.265.
 - Rate control is constant quality with an optional VBV ceiling
   (bufsize twice the rate); VP9 takes the ceiling as its constrained
   quality bitrate. VideoToolbox takes a ceiling only in bitrate mode,

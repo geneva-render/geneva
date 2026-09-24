@@ -422,6 +422,9 @@ pub struct ProbedAssets {
     /// The asset root, so that a path written inside markup can be read
     /// and checked the way a browser would resolve it.
     root: std::path::PathBuf,
+    /// Whether asset paths may be absolute, for a verb's inputs on two
+    /// drives; see [`AssetInfo::allows_absolute_paths`].
+    absolute_paths: bool,
     durations: std::collections::HashMap<String, Ratio>,
     /// Natural sizes, for the check on a clip that names no `fit`.
     sizes: std::collections::HashMap<String, (u32, u32)>,
@@ -440,6 +443,13 @@ pub struct ProbedAssets {
 }
 
 impl ProbedAssets {
+    /// Accepts absolute asset paths, for a timeline a verb compiled from
+    /// inputs that share no folder.
+    pub fn with_absolute_paths(mut self, allowed: bool) -> Self {
+        self.absolute_paths = allowed;
+        self
+    }
+
     /// Diagnostics about assets that could not be opened.
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
         self.problems.clone()
@@ -453,6 +463,7 @@ impl ProbedAssets {
     pub fn fonts_only() -> Self {
         Self {
             root: std::path::PathBuf::new(),
+            absolute_paths: false,
             durations: std::collections::HashMap::new(),
             sizes: std::collections::HashMap::new(),
             texts: std::collections::HashMap::new(),
@@ -466,6 +477,10 @@ impl ProbedAssets {
 impl AssetInfo for ProbedAssets {
     fn duration(&self, asset_id: &str, _: &str) -> Option<Ratio> {
         self.durations.get(asset_id).copied()
+    }
+
+    fn allows_absolute_paths(&self) -> bool {
+        self.absolute_paths
     }
 
     fn has_font_family(&self, family: &str) -> Option<bool> {

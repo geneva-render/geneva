@@ -829,7 +829,7 @@ fn run_verb(
         // already fits the target, used as it is, is copied instead: the
         // target would only force a re-encode to the same thing.
         let text = serde_json::to_string_pretty(&timeline)?;
-        let first = load_text(&text, &compiled.root, true, false);
+        let first = load_compiled(&text, &compiled.root);
         let verdict = fits_target_as_is(&first, &compiled.root, name, encode, output)?;
         if let Some(note) = verdict.as_is {
             extra.push(Diagnostic::note("N600", "", note));
@@ -866,11 +866,17 @@ fn run_verb(
             for d in &extra {
                 eprint!("{d}");
             }
-            eprintln!("asset paths are relative to {}", compiled.root.display());
+            if compiled.root.as_os_str().is_empty() {
+                eprintln!(
+                    "asset paths are absolute: the inputs share no folder, being on different drives"
+                );
+            } else {
+                eprintln!("asset paths are relative to {}", compiled.root.display());
+            }
         }
         return Ok(ExitCode::SUCCESS);
     }
-    let mut loaded = load_text(&text, &compiled.root, true, false);
+    let mut loaded = load_compiled(&text, &compiled.root);
     loaded.diagnostics.extend(extra);
     let overrides = media::RenderOverrides {
         renderer: encode.renderer,
@@ -1272,11 +1278,28 @@ fn load_timeline(args: &TimelineArgs, probe: bool, measure: bool) -> Result<Load
     Ok(load_text(&text, &args.root(), probe, measure))
 }
 
+/// Resolves the timeline a verb compiled. An empty root means its inputs
+/// share no folder (files on two Windows drives), and the paths in it are
+/// the absolute ones given on the command line.
+fn load_compiled(text: &str, root: &Path) -> Loaded {
+    load_text_with(text, root, true, false, root.as_os_str().is_empty())
+}
+
 /// Resolves timeline text whose asset paths are relative to `root`.
 /// `measure` also decodes the audio of every asset for its report.
 fn load_text(text: &str, root: &Path, probe: bool, measure: bool) -> Loaded {
+    load_text_with(text, root, probe, measure, false)
+}
+
+fn load_text_with(
+    text: &str,
+    root: &Path,
+    probe: bool,
+    measure: bool,
+    absolute_paths: bool,
+) -> Loaded {
     let mut loaded = if probe {
-        let info = media::probe_assets(text, root, measure);
+        let info = media::probe_assets(text, root, measure).with_absolute_paths(absolute_paths);
         let mut loaded = geneva_timeline::load_with(text, &info);
         loaded.diagnostics.extend(info.diagnostics());
         loaded

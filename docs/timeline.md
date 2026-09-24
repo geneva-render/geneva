@@ -250,10 +250,10 @@ is composited exactly as a hand-written one is.
 | `encode.video.preset` | no | per codec | Encoder speed preset name (`ultrafast` to `veryslow`); ignored by encoders without presets. |
 | `encode.video.hardware` | no | `auto` | `auto`, `never`, `require`. |
 | `encode.video.keyframe_interval` | no | the encoder's own | Seconds between keyframes; 2 is usual for anything played over a network. Setting it re-encodes the picture. |
-| `encode.video.max_bitrate_kbps` | no | none | Bitrate ceiling in kb/s, held over a buffer of two seconds at that rate; quality stays constant until it bites. x264 and AV1 hold it so; VP9 takes it as the bitrate of libvpx's constrained quality mode, which holds the average; VideoToolbox takes it only together with `bitrate_kbps`, and NVENC not at all. Setting it re-encodes the picture. See [rate control](cli.md#rate-control). |
+| `encode.video.max_bitrate_kbps` | no | none | Bitrate ceiling in kb/s, held over a buffer of two seconds at that rate; quality stays constant until it bites. x264 and AV1 hold it so; VP9 takes it as the bitrate of libvpx's constrained quality mode, which holds the average; VideoToolbox takes it only together with `bitrate_kbps`, and NVENC and OpenH264 not at all, which the report says. Setting it re-encodes the picture. See [rate control](cli.md#rate-control). |
 | `encode.video.bitrate_kbps` | no | none | Average bitrate in kb/s to aim for: bitrate mode for hardware encoders, which cannot hold constant quality under a ceiling; x264 ignores it and keeps constant quality under the ceiling. `--budget` sets it. Setting it re-encodes the picture. |
 | `encode.video.level` | no | the encoder's own | H.264 or H.265 level such as `"4.1"`, for the decoders that check it. |
-| `encode.video.tune` | no | none | What the picture is like, in x264's names: `film`, `animation`, `grain`, `stillimage`, `fastdecode`, `zerolatency`. x264 applies all of them; VP9 takes `film`, AV1 `fastdecode`, NVENC and VideoToolbox `zerolatency`. An encoder with no equivalent ignores it and the report says so. |
+| `encode.video.tune` | no | none | What the picture is like, in x264's names: `film`, `animation`, `grain`, `stillimage`, `fastdecode`, `zerolatency`. x264 applies all of them; VP9 takes `film`, AV1 `fastdecode`, NVENC, VideoToolbox and Media Foundation `zerolatency`. An encoder with no equivalent ignores it and the report says so. |
 | `encode.video.fixed_keyframes` | no | `false` | Keyframes at `keyframe_interval` only, never at scene changes, as streaming platforms and segmenters want; needs the interval (E422). x264, VP9, AV1, NVENC and VideoToolbox place them so; OpenH264 cannot and the report says so. |
 | `encode.video.chunks` | no | `auto` | How many stretches the output is encoded in at once, each on its own share of the cores, joined afterwards without re-encoding. `auto` chunks only where it has been measured to help, VP9 and OpenH264, into the machine's cores divided by two; it never chunks a hardware encoder, which is its own bottleneck; a number forces it for any encoder; `1` turns it off. Boundaries fall on clip starts or the keyframe grid when one is near, so each stretch starts at a keyframe that was due anyway. Not with `max_bitrate_kbps` or `bitrate_kbps`, a smart cut, or an image sequence. The report says how many ran. |
 | `encode.fast_start` | no | `true` | Whether MP4, MOV and M4A files carry their index at the front so playback can start before the download ends. |
@@ -1031,14 +1031,17 @@ the GPU one, chosen with `--renderer`. Markup is painted on the CPU in
 both and composited by the renderer. They agree to the golden tests'
 tolerance, not byte for byte.
 
-`encode.video.hardware` picks the encoder: `auto` uses VideoToolbox or
-NVENC where one is present and works, `never` always uses software,
+`encode.video.hardware` picks the encoder: `auto` uses VideoToolbox,
+NVENC or Media Foundation (Windows, 8-bit, a GPU encoder only) where one
+is present and works, `never` always uses software,
 `require` fails without one. The notes of a render name the encoder
 used.
 
 Text uses fonts from `font` assets first and falls back to fonts installed
 on the system. Output that depends on system fonts can differ between
-machines; ship the fonts as assets when the result must be identical.
+machines; ship the fonts as assets when the result must be identical. A
+machine with no fonts installed at all (a bare container, say) draws in
+Liberation Sans, which is built in for that case only.
 Markup is the same: `font-family` may name a `font` asset by its id or
 by the family the file carries, and every font asset of the document is
 registered before a markup box is drawn, so a family that is both an

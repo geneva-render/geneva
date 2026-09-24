@@ -33,6 +33,18 @@ pub fn clear_codec_tag(params: &mut Parameters) {
     }
 }
 
+/// Closes an output's file once its trailer is written, ahead of the
+/// output itself being dropped (which then has nothing left to close).
+#[allow(unsafe_code)]
+pub fn close_output_file(octx: &mut ffmpeg_next::format::context::Output) {
+    // SAFETY: `octx` wraps a valid `AVFormatContext` opened for writing by
+    // the binding; `avio_closep` closes `pb` if set and leaves it null, and
+    // the binding's own close on drop accepts null.
+    unsafe {
+        ffmpeg_next::ffi::avio_closep(&raw mut (*octx.as_mut_ptr()).pb);
+    }
+}
+
 /// A codec context describing a subtitle stream of the given codec, for
 /// adding a text stream to an output without an encoder.
 #[allow(unsafe_code)]

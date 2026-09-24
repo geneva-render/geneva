@@ -5,7 +5,7 @@
 //! engine. `--show-timeline` prints the document instead of rendering it.
 
 use std::collections::BTreeMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
@@ -502,6 +502,29 @@ pub fn output_size(src_w: u32, src_h: u32, width: Option<u32>, height: Option<u3
     }
 }
 
+/// A path in its ordinary form. On Windows `canonicalize` returns the
+/// verbatim form (`\\?\C:\...`), in which `/` is not a separator, so the
+/// relative paths joined onto the root later would not open; the form is
+/// also what every message would print. Elsewhere this changes nothing.
+fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
+    let mut components = path.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return path;
+    };
+    let root = match prefix.kind() {
+        Prefix::VerbatimDisk(drive) => format!("{}:\\", char::from(drive)),
+        Prefix::VerbatimUNC(server, share) => format!(
+            "\\\\{}\\{}\\",
+            server.to_string_lossy(),
+            share.to_string_lossy()
+        ),
+        _ => return path,
+    };
+    let mut plain = PathBuf::from(root);
+    plain.extend(components.filter(|c| !matches!(c, Component::RootDir)));
+    plain
+}
+
 /// The deepest directory containing every input, and each input's path
 /// relative to it, so a timeline can reference them without `..`.
 fn common_root(paths: &[PathBuf]) -> Result<(PathBuf, Vec<String>)> {
@@ -509,6 +532,7 @@ fn common_root(paths: &[PathBuf]) -> Result<(PathBuf, Vec<String>)> {
         .iter()
         .map(|p| {
             p.canonicalize()
+                .map(without_verbatim_prefix)
                 .with_context(|| format!("resolving {}", p.display()))
         })
         .collect::<Result<_>>()?;
@@ -528,7 +552,14 @@ fn common_root(paths: &[PathBuf]) -> Result<(PathBuf, Vec<String>)> {
     }
     let root: PathBuf = root.iter().collect();
     if root.as_os_str().is_empty() {
-        bail!("inputs must be on the same drive");
+        // Nothing shared, which only happens across Windows drives: the
+        // paths go in whole and the root stays empty, which is what lets
+        // the resolver take them (see `load_compiled`).
+        let whole = absolute
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        return Ok((root, whole));
     }
     let relative = absolute
         .iter()
@@ -2027,6 +2058,45 @@ mod tests {
         }
         for text in ["5k", "384k", "fast"] {
             assert!(parse_sample_rate(text).is_err(), "{text}");
+        }
+    }
+
+    /// Windows' `canonicalize` form is written back as an ordinary path, on
+    /// a drive and on a share.
+    #[cfg(windows)]
+    #[test]
+    fn verbatim_paths_become_ordinary() {
+        assert_eq!(
+            without_verbatim_prefix(PathBuf::from(r"\\?\C:\clips\a.mp4")),
+            PathBuf::from(r"C:\clips\a.mp4")
+        );
+        assert_eq!(
+            without_verbatim_prefix(PathBuf::from(r"\\?\UNC\server\share\a.mp4")),
+            PathBuf::from(r"\\server\share\a.mp4")
+        );
+        assert_eq!(
+            without_verbatim_prefix(PathBuf::from(r"C:\clips")),
+            PathBuf::from(r"C:\clips")
+        );
+    }
+
+    /// Inputs in two folders are found from their common root, which on
+    /// Windows went through `canonicalize` and its verbatim form.
+    #[test]
+    fn inputs_in_two_folders_share_a_root() {
+        let dir = tempfile::tempdir().unwrap();
+        for sub in ["a", "b"] {
+            std::fs::create_dir(dir.path().join(sub)).unwrap();
+            std::fs::write(dir.path().join(sub).join("x.mp4"), b"").unwrap();
+        }
+        let (root, rel) = common_root(&[
+            dir.path().join("a").join("x.mp4"),
+            dir.path().join("b").join("x.mp4"),
+        ])
+        .unwrap();
+        assert_eq!(rel, ["a/x.mp4", "b/x.mp4"]);
+        for r in &rel {
+            assert!(root.join(r).is_file(), "{} + {r}", root.display());
         }
     }
 }

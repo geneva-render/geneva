@@ -58,11 +58,26 @@ pub fn inset_for(text: &ResolvedText) -> f64 {
     outline + text.shadow.iter().fold(0.0f64, |m, s| m.max(s.reach))
 }
 
+/// Drawn with when the machine has no fonts at all (a bare container, a
+/// fresh Wine prefix), rather than no text: the shaper cannot run without a
+/// single face. SIL OFL 1.1, like the golden cases that use it.
+const LAST_RESORT_FONT: &[u8] =
+    include_bytes!("../../../tests/golden/fonts/LiberationSans-Regular.ttf");
+
 impl TextEngine {
     /// Creates an engine with the system fonts available for fallback.
     pub fn new() -> Self {
+        Self::with_fonts(FontSystem::new())
+    }
+
+    fn with_fonts(mut fonts: FontSystem) -> Self {
+        if fonts.db().faces().next().is_none() {
+            let db = fonts.db_mut();
+            db.load_font_data(LAST_RESORT_FONT.to_vec());
+            db.set_sans_serif_family("Liberation Sans");
+        }
         Self {
-            fonts: FontSystem::new(),
+            fonts,
             cache: SwashCache::new(),
             scale: ScaleContext::new(),
             asset_faces: HashMap::new(),
@@ -769,6 +784,24 @@ mod face_tests {
         assert_eq!(at(500), 400);
         // Below 400 looks down first, and there is nothing below.
         assert_eq!(at(300), 400);
+    }
+
+    /// A machine with no fonts at all still has one to shape with, and it
+    /// is the one a document naming no family gets.
+    #[test]
+    fn a_machine_with_no_fonts_gets_the_last_resort() {
+        let empty = FontSystem::new_with_locale_and_db(
+            "en-US".to_owned(),
+            cosmic_text::fontdb::Database::new(),
+        );
+        let engine = TextEngine::with_fonts(empty);
+        assert!(engine.family_is_available("Liberation Sans"));
+        let db = engine.fonts.db();
+        let sans = db.query(&cosmic_text::fontdb::Query {
+            families: &[cosmic_text::fontdb::Family::SansSerif],
+            ..Default::default()
+        });
+        assert!(sans.is_some(), "sans-serif resolves to it");
     }
 
     /// A family with no italic face is drawn upright rather than in some
