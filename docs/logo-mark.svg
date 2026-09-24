@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="geneva">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="48%" r="70%">
+      <stop offset="0%" stop-color="#0B1A15"/>
+      <stop offset="100%" stop-color="#07100C"/>
+    </radialGradient>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="28.0" result="wide"/>
+      <feFlood flood-color="#00EEE1" flood-opacity="0.45"/>
+      <feComposite in2="wide" operator="in" result="teal"/>
+      <feGaussianBlur in="SourceAlpha" stdDeviation="8.0" result="near"/>
+      <feFlood flood-color="#FFFFFF" flood-opacity="0.42"/>
+      <feComposite in2="near" operator="in" result="halo"/>
+      <feMerge><feMergeNode in="teal"/><feMergeNode in="halo"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <g filter="url(#glow)">
+    <path fill="#FFFFFF" transform="matrix(30.3087,0,0,30.3087,147.80,-65.57)" d="M3.29 12.70L3.29 12.70L2.83 12.70Q1.75 12.70 1.20 12.11Q0.64 11.52 0.64 10.42L0.64 10.42L0.64 8.16Q0.64 7.06 1.25 6.47Q1.85 5.88 2.95 5.88L2.95 5.88L6.19 5.88Q6.50 5.88 6.50 6.17L6.50 6.17L6.50 13.08Q6.50 14.17 5.89 14.76Q5.28 15.34 4.19 15.34L4.19 15.34L1.50 15.34Q1.33 15.34 1.27 15.28Q1.20 15.22 1.20 15.06L1.20 15.06L1.20 14.10Q1.20 13.80 1.50 13.80L1.50 13.80L3.89 13.80Q4.34 13.80 4.53 13.62Q4.72 13.43 4.72 12.99L4.72 12.99L4.72 11.93L4.66 11.93Q4.51 12.31 4.12 12.50Q3.72 12.70 3.29 12.70Z M4.72 10.09L4.72 10.09L4.72 7.57Q4.72 7.42 4.55 7.42L4.55 7.42L3.23 7.42Q2.79 7.42 2.60 7.61Q2.42 7.80 2.42 8.25L2.42 8.25L2.42 10.33Q2.42 10.78 2.60 10.96Q2.79 11.14 3.23 11.14L3.23 11.14L3.75 11.14Q4.72 11.14 4.72 10.09Z"/>
+  </g>
+</svg>
