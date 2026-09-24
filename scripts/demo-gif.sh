@@ -1,25 +1,20 @@
 #!/usr/bin/env bash
-# Renders the README's demo GIFs: the lower third and the captions.
+# Renders the README's demo pictures: the lower third and the captions.
 #
-#   scripts/demo-gif.sh            both
+#   scripts/demo-gif.sh            all of them
 #   scripts/demo-gif.sh captions   one of them
 #
-# The encoding settings are not arbitrary. A GIF has 256 colours for the
-# whole clip, and palettegen spends them on whatever covers the most
-# pixels — here a blue-white video. The card's 5px accent bar, and the
-# one highlighted word in a caption, are rounding errors by that measure,
-# so with too few colours, or at a width that shrinks them below about
-# two pixels, they quantize to grey and the demo shows a feature the
-# document does not have.
-#
-#   width 640     keeps the 5px bar at 2.5px after the downscale
-#   192 colours   leaves room for a colour nothing else in the frame needs
-#   stats_mode=diff  weights the palette towards what changes, not the sky
-#   sierra2_4a    error diffusion; ordered dither smears thin features
+# The two animations are animated WebP: the whole clip, 640 wide at
+# 20 fps, full colour. Every frame is a keyframe (kmax=1). With the
+# encoder's default of patching each frame from the one before, the
+# bright hull of the capsule kept stale blocks for several frames at any
+# quality that stayed near 5 MB; whole frames at quality 75 cost the
+# same and have none. The GIFs these replaced needed a 192-colour
+# palette tuned so the card's accent bar stayed red.
 #
 # Check the result before committing it: the accent bar should be near
 # #c4362f, and the word being said should be brighter than the rest of
-# the caption rather than grey with it.
+# the caption.
 set -euo pipefail
 
 work=$(mktemp -d)
@@ -28,19 +23,24 @@ trap 'rm -rf "$work"' EXIT
 cargo build --release -p geneva-cli
 geneva=./target/release/geneva
 
-# $1 output, $2 start, $3 length, $4 input
-gif() {
-  ffmpeg -v error -y -ss "$2" -t "$3" -i "$4" \
-    -vf "fps=8,scale=640:-1:flags=lanczos,split[s0][s1];\
-[s0]palettegen=max_colors=192:stats_mode=diff[p];\
-[s1][p]paletteuse=dither=sierra2_4a" "$1"
+# $1 output, $2 input: the whole clip, 640 wide at 20 fps.
+webp() {
+  ffmpeg -v error -y -i "$2" -vf "fps=20,scale=640:-1:flags=lanczos" "$work/f%04d.png"
+  python3 - "$1" "$work" <<'PY'
+import glob, sys
+from PIL import Image
+out, work = sys.argv[1], sys.argv[2]
+frames = [Image.open(f).convert("RGB") for f in sorted(glob.glob(f"{work}/f*.png"))]
+frames[0].save(out, save_all=True, append_images=frames[1:], duration=50, loop=0,
+               quality=75, method=6, kmin=0, kmax=1)
+PY
+  rm -f "$work"/f*.png
   printf 'wrote %s (%s)\n' "$1" "$(du -h "$1" | cut -f1)"
 }
 
 lower_third() {
   $geneva render examples/lower-third.json -o "$work/demo.mp4"
-  # The window covers the card sliding in and two caption cues.
-  gif docs/demo.gif 1.9 2.6 "$work/demo.mp4"
+  webp docs/demo.webp "$work/demo.mp4"
 }
 
 captions() {
@@ -48,9 +48,7 @@ captions() {
     --highlight '#ffd233' \
     --style '{ "font": "700 44px Liberation Sans", "outline": "3px #000000cc", "max_width": "80%" }' \
     -o "$work/captioned.mp4"
-  # The window covers one cue ending and the next one starting, so the
-  # highlight moves across both.
-  gif docs/captions.gif 1.4 2.6 "$work/captioned.mp4"
+  webp docs/captions.webp "$work/captioned.mp4"
 }
 
 # The still beside the document form, which has a second caption layer

@@ -5,11 +5,12 @@ footage, so these run as they are.
 
 | File | What it shows | Run it |
 | --- | --- | --- |
-| `lower-third.json` | A name card written as HTML and CSS (`card.html`) sliding in on its own `@keyframes`, with captions from `words.json` under it. | `geneva render examples/lower-third.json -o dragon.mp4` |
+| `lower-third.json` | A name card written as HTML and CSS (`card.html`) sliding in on its own `@keyframes`, with captions from `commentary.json` under it. | `geneva render examples/lower-third.json -o dragon.mp4` |
 | `card.html` | The card alone. Open it in a browser; it looks and moves the same. | |
 | `opening.json` | A 13 s title sequence written in HTML (`opening.html`) over `shibuya.mp4`: typed-on text, a gradient sweep, blur, a diagonal wipe that reveals the footage, a fade to black. | `geneva render examples/opening.json -o opening.mp4` |
 | `opening.html` | The sequence alone: per-character animations, `background-clip: text`, `clip-path`, `steps()` and `linear()`. Opens in a browser at 960 by 540. | |
-| `words.json` | A whisper transcript, pasted in as it came out. | `geneva subtitles examples/iss.mp4 --burn examples/words.json --highlight "#ffd233" -o out.mp4` |
+| `words.json` | Captions in the JSON whisper writes, keys and all. `iss.mp4` has no sound, so the words were written for it. | `geneva subtitles examples/iss.mp4 --burn examples/words.json --highlight "#ffd233" -o out.mp4` |
+| `commentary.json` | The lower third's captions, three sentences in the same format, also written for the clip. | |
 | `captions.json` | The same transcript as a layer, plus a second layer from a SubRip file. | `geneva render examples/captions.json -o captioned.mp4` |
 | `social-reframe.json` | 16:9 fitted to 9:16 over a blurred copy of itself, captioned. | `geneva render examples/social-reframe.json -o reel.mp4` |
 | `renditions.json` | Three sizes, a thumbnail, a sprite sheet and speech audio in one pass. | `geneva render examples/renditions.json -o out/` |
@@ -25,8 +26,9 @@ pictures.
 ## Captions
 
 Speech recognisers write a word and the moment it was said.
-`examples/words.json` is `whisper --output_format json`, pasted in as it
-came:
+`examples/words.json` is in the format `whisper --output_format json`
+writes. `iss.mp4` has no sound, so the words were written for it rather
+than recognised:
 
 ```json
 { "id": 0, "seek": 0, "start": 1.0, "end": 2.6, "text": " Dragon is captured",

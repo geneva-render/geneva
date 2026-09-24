@@ -71,8 +71,9 @@ moves the same:
 </div>
 ```
 
-The captions come from `words.json`, a Whisper transcript pasted in
-as-is. The JSON ties the footage, card and captions together:
+The captions come from `commentary.json`, in the JSON format Whisper
+writes. The clip has no sound, so the words were written for it rather
+than recognised. The JSON ties the footage, card and captions together:
 
 ```json
 {
@@ -82,11 +83,12 @@ as-is. The JSON ties the footage, card and captions together:
   "assets": {
     "iss":   { "src": "iss.mp4" },
     "card":  { "src": "card.html" },
-    "words": { "src": "words.json" }
+    "words": { "src": "commentary.json" }
   },
 
   "layers": [
-    { "id": "footage", "clips": [ { "source": { "kind": "video", "asset": "iss" } } ] },
+    { "id": "footage", "clips": [ {
+        "source": { "kind": "video", "asset": "iss" }, "duration": "9s" } ] },
 
     { "id": "captions", "clips": [ {
         "source": {
@@ -115,10 +117,11 @@ geneva render examples/lower-third.json -o dragon.mp4
 <img src="docs/demo.webp" alt="A name card sliding in at the top left over footage of a Dragon capsule at the space station, with captions below" width="640" height="360">
 
 ```text
-note[N453]: 2 cues read from "words.json"
-note[N600]: smart cut: 135 of 300 frames copied from the source, 165 encoded in 1 run around the cuts and overlays
-note[N600]: H.264 runs encoded with the system's x264 (build 164) at CRF 18
-wrote dragon.mp4 (300 frames, 10s of video, 4.2s elapsed)
+note[N453]: 3 cues read from "commentary.json", grouped at up to 2 lines of 42 characters
+note[N600]: the video is used as it is, so frames are handed to the encoder as decoded, with the layers above drawn onto the frames that show them
+note[N600]: H.264 encoded with the system's x264 (build 164)
+note[N600]: overlays were drawn onto 222 of 270 frames; the others went from the decoder to the encoder untouched
+wrote dragon.mp4 (270 frames, 9s of video, 4.6s elapsed)
 ```
 
 The document controls when things appear. The HTML controls how they
@@ -126,8 +129,9 @@ look. geneva handles the CSS layout itself, without a browser.
 Percentages are relative to the frame, so the layout scales with the
 output.
 
-Because nothing is on screen for the first second or the last four, 135
-of the 300 frames are copied instead of re-encoded.
+Overlays are drawn onto 222 of the 270 frames. The other 48, where
+nothing is on screen, go from the decoder to the encoder without being
+composited.
 
 ## Good transitions and nice sprites, via cli
 

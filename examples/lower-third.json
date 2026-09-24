@@ -5,11 +5,12 @@
   "assets": {
     "iss":   { "src": "iss.mp4" },
     "card":  { "src": "card.html" },
-    "words": { "src": "words.json" }
+    "words": { "src": "commentary.json" }
   },
 
   "layers": [
-    { "id": "footage", "clips": [ { "source": { "kind": "video", "asset": "iss" } } ] },
+    { "id": "footage", "clips": [ {
+        "source": { "kind": "video", "asset": "iss" }, "duration": "9s" } ] },
 
     { "id": "captions", "clips": [ {
         "source": {

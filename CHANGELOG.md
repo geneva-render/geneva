@@ -95,6 +95,16 @@ the format version it was written for.
   axes together; a `keyframes` object under `x` is `E103`, which reports
   the length it expected rather than the point it wanted.
 - The group buffer bound, what it allows, and that a composition has none.
+- `examples/words.json` was described as whisper's output pasted in as
+  it came. `iss.mp4` has no sound, so it cannot be: the words were
+  written for the clip in whisper's format. The README and the examples
+  page now say so.
+- The README's lower third has captions of its own,
+  `examples/commentary.json`: three sentences where it had seven words
+  in two cues. The render ends 3 s after the card leaves, at 9 s, and
+  its report and frame counts in the README are the ones it prints now.
+  `scripts/demo-gif.sh` writes the WebP figures the pages use rather
+  than GIFs nothing did.
 
 ### Added
 
