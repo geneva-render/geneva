@@ -995,8 +995,9 @@ pub enum Source {
         /// Distance from the edge. Defaults to the title-safe inset.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         margin: Option<Length>,
-        /// Title-safe inset as a percentage of each side; a cue outside
-        /// it is a note. Defaults to 5; 0 turns the note off.
+        /// Title-safe inset as a percentage of the frame height: the
+        /// default margin, and a margin inside it is a note. Defaults to
+        /// 5; 0 turns the note off.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         safe: Option<f64>,
         /// Whether a WebVTT file's own placement wins over the fields

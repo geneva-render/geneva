@@ -82,10 +82,10 @@ keyword centers the axis it says nothing about, so `"left"` is
 
 ### Colors
 
-Colors are sRGB strings: `"#rgb"`, `"#rrggbb"`, `"#rrggbbaa"`,
+Colors are sRGB strings: `"#rgb"`, `"#rgba"`, `"#rrggbb"`, `"#rrggbbaa"`,
 `"rgb(255, 136, 0)"`, `"rgba(255, 136, 0, 0.5)"`, or one of `black`,
-`white`, `red`, `green`, `blue`, `yellow`, `cyan`, `magenta`, `gray`,
-`orange`, `transparent`. Animated colors are interpolated in linear light.
+`white`, `red`, `green`, `blue`, `yellow`, `cyan`, `magenta`, `gray`
+(or `grey`), `orange`, `transparent`. Animated colors are interpolated in linear light.
 
 ### Animated values
 
@@ -211,8 +211,7 @@ makes `to { transform: none }` mean "back where it started" rather than
 "and reset the scale and rotation too".
 
 Everything here resolves to ordinary keyframe tracks, so an animated clip
-is composited exactly as a hand-written one is, and `--show-timeline`
-prints the document as it was written.
+is composited exactly as a hand-written one is.
 
 ## Document structure
 
@@ -228,6 +227,7 @@ prints the document as it was written.
 | `keyframes` | no | Map of name to an [animation rule](#animation): offset to declaration block. |
 | `layers` | no | Visual layers, composited bottom to top. |
 | `audio` | no | Audio-only tracks. |
+| `subtitles` | no | [Subtitle tracks](#subtitles) muxed into the output as text streams. |
 
 ### `output`
 
@@ -349,6 +349,7 @@ contain other compositions up to 8 levels deep, and never themselves (E207).
 | `start` | no | end of the previous clip | Timeline time the clip appears. |
 | `duration` | no | see timing rules | How long it lasts. |
 | `transition` | no | | How this clip arrives from the one before it. See [Transitions](#transitions). |
+| `transition_out` | no | | How the last clip of a layer leaves. See [Transitions](#transitions). |
 | `crop` | no | the whole source | A rectangle of the source that becomes the clip's box; see below. |
 | `fit` | no | `contain` for video, `none` otherwise | `none`, `contain`, `cover`, `fill`: how the source box is sized to the frame before the transform. The defaults suit what each source is usually for: a video is shown whole, and a picture, a text box or a markup box is drawn at the size it has, which is what placing one means. W404 names the cases where that turns out badly, a picture larger than the frame or a video left in a corner of it. |
 | `effects` | no | `[]` | Effects on the placed picture, in order; see below. |
@@ -600,6 +601,97 @@ A string that does not parse is an `E103` with the form expected. It
 points at the field, except in a text source, where it points at the
 source: the style fields are read as one object with the rest of it.
 
+### Transitions
+
+A `transition` on a clip says how it arrives; a `transition_out` says how
+it leaves. Between two clips on a layer they overlap for `duration`, and a
+clip with no explicit `start` is moved that much earlier to make the
+overlap, so the previous clip must be long enough to cover it (E306).
+
+| Field | Required | Default | Description |
+| --- | --- | --- | --- |
+| `kind` | yes | | `crossfade` or `fade`. |
+| `duration` | yes | | The overlap between a pair of clips, or the ramp at the head or tail of a layer. |
+| `color` | no | `black` | The color a `fade` dips through. On a `crossfade` it is a W304, since nothing would show it. |
+| `ease` | no | `linear` | Shape of the ramp, taking the same values a keyframe's easing takes. `ease-in-out` is the usual choice for a slow dissolve. |
+
+`crossfade` brings the arriving clip up over the one leaving, which stays
+at full opacity underneath. Both are on screen at once, so the picture
+dissolves. The sound crosses at constant power (each gain is the square
+root of its linear ramp), which holds the level across the overlap; a
+linear pair would dip about 3 dB in the middle on material that is not
+correlated.
+
+`fade` dips through a color instead. The leaving clip fades out over the
+first half of the overlap, the arriving one fades in over the second, and
+the color covers the frame in between, strongest at the midpoint. Only
+one clip is ever visible. The sound follows the picture: it reaches
+silence at the midpoint and comes back.
+
+At the head or tail of a layer there is no second clip, so the ramp runs
+the whole `duration` rather than handing over in the middle. A `fade`
+opening a layer comes up out of its color and one closing a layer goes
+out to it, which is how a piece fades up from black and fades out again.
+A `crossfade` there has no colour to use, so it fades against whatever is
+behind: the layers below, or `output.background`.
+
+```json
+{ "source": { "kind": "video", "asset": "a" },
+  "transition":     { "kind": "fade", "duration": "1s" },
+  "transition_out": { "kind": "fade", "duration": "1s", "ease": "ease-in-out" } }
+```
+
+Where another clip follows, that clip's `transition` already covers the
+join, and setting `transition_out` as well is an E307. Keep one.
+
+Two things to know. The dip color covers the whole frame for the length
+of the transition, including layers below the one it is on, because it is
+the picture that dips and not one layer of it. And a fade on a layer
+above the first makes the whole composition take the compositing path
+rather than the overlay path, so none of its frames are copied.
+
+### `audio[]` and `audio[].clips[]`
+
+Tracks have `id`, `enabled` and `clips` like layers. Audio clips:
+
+| Field | Required | Default | Description |
+| --- | --- | --- | --- |
+| `asset` | yes | | Id of an `audio` or `video` asset. |
+| `in`, `out` | no | `0`, end of file | Source range. |
+| `start` | no | end of previous clip | Timeline start. |
+| `duration` | no | source range | Length. |
+| `gain_db` | no | `0` | Animatable gain in decibels. |
+| `fade_in`, `fade_out` | no | `0` | Fade lengths. |
+| `speed` | no | `1` | How fast the source plays; the clip lasts its range divided by it and the pitch follows. |
+
+### `subtitles[]`
+
+Subtitle tracks are written to the output as text streams that players
+can show or hide. That is the whole distinction the format draws between
+the two words: a *subtitle* travels alongside the picture as a stream, a
+*caption* is drawn into it. The same `.srt` or `.vtt` can do either: here
+as a track, or as a [`captions` source](#sources) on a clip. Each track is
+one subtitle asset, a SubRip `.srt` or WebVTT `.vtt` file.
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `id` | no | Name used in diagnostics. |
+| `enabled` | no | `false` leaves the track out. |
+| `asset` | yes | A `subtitle` asset. |
+| `language` | no | Language code, for example `"en"` or `"pt-BR"`; stored as the three-letter code containers use. |
+| `title` | no | Track title shown by players. |
+| `offset` | no | Shifts every cue on the output timeline; negative values move cues earlier and cues that end before zero are dropped. |
+
+MP4 and MOV store the text as 3GPP timed text (`mov_text`), Matroska as
+SubRip, WebM as WebVTT; simple tags such as `<i>` survive in Matroska and
+WebM and are stripped for MP4 and MOV. Other containers cannot hold
+subtitle streams.
+
+```json
+"assets": { "en": { "src": "captions.srt" } },
+"subtitles": [ { "asset": "en", "language": "en", "title": "English" } ]
+```
+
 ## Markup
 
 A clip with a source of kind `html` draws a box of HTML and CSS. It is not
@@ -708,6 +800,16 @@ transform only comes from an `animation`, which is where motion lives;
 `transform` written in a rule is W450 like any other property that is
 not drawn. An element that should sit rotated or scaled and stay there
 needs a one-keyframe animation that holds it.
+
+Painting follows CSS. `z-index` orders positioned boxes and flex items,
+negative numbers under everything in flow, and set anywhere else is
+W454. A box with `opacity` below one, a `filter`, a `clip-path`, a
+`mix-blend-mode` or an animation is painted as a group: a buffer of its
+own, with its children, laid onto the picture whole, so it opens a
+stacking context and overlapping children do not show through each
+other. `body` and `html` select the clip's own box; left unstyled it
+marks no pixels. A rule in the markup's `<style>` that matches no
+element is W452.
 
 Lengths are `px`, `em`, `rem` and `%`; `em` is the element's own font
 size, settled before anything else uses it, and a percentage `font-size`
@@ -854,165 +956,41 @@ those move the boxes around it. That is what a typing effect that grows
 a character's box costs; a card on screen for a minute with a fade
 inside it costs a paint per frame and one layout.
 
-### What it does not do
+## Known limitations
 
-- **A `text-shadow` does not move the text.** Each shadow in the list is drawn behind the
-  glyphs, the first on top, and spills outside the box, as on a page, but layout is done as
-  though it were not there. It is clipped at the edge of the clip's own
-  box, so a glow on text at the very edge of a card is cut off.
-- **No inline layout.** An element's text is one paragraph, and a child
-  element is a box of its own, so a `<span>` inside a sentence becomes a
-  block rather than flowing with the words around it.
-- **`opacity` groups**, as in CSS: a box with an opacity below one is
-  painted into a buffer of its own with its children at their own
-  opacity, and the buffer is laid onto the picture at the box's, so
-  overlapping children do not show through each other. The same buffer
-  carries `filter: blur()`, which is the only filter drawn, and
-  `clip-path: polygon()`, which is the only clip path: its points are
-  lengths or shares of the border box, may lie outside it, and cut the
-  box and its children after the blur and before any transform. A group
-  is painted whole where CSS puts a stacking context, so a child inside
-  one cannot rise above a box outside it with `z-index`.
-- **`mix-blend-mode`** makes the same buffer, and mixes it with what is
-  already behind it instead of laying it over. The modes are the
-  separable ones the compositor has: `multiply`, `screen`, `overlay`,
-  `darken`, `lighten`, `difference` and `soft-light`. The four CSS
-  separable modes geneva has no compositor for, `color-dodge`,
-  `color-burn`, `hard-light` and `exclusion`, and the non-separable
-  `hue`, `saturation`, `color` and `luminosity`, are W450 rather than
-  something approximate. Blending mixes in the same sRGB-encoded space a
-  browser uses, so `multiply` of `#8080ff` over `#ff8800` is `#804400`
-  here as there. `isolation` is not read: a blend sees everything
-  already painted under it on the markup surface, not the frame beneath
-  the clip. The GPU renderer blends on the device: it copies the markup
-  surface before it draws a blending group and reads the copy as the
-  backdrop. It mixes in 16-bit floats rather than the painter's 8-bit
-  pixels, so the two renderers agree to the golden tolerance rather than
-  byte for byte.
-- There is no `float`, no grid, no transition and no media
-  query. A `transition` needs a state to change and a render has none;
-  `@keyframes` is how a document moves. The clip's own `transform` and `animation` move the whole box.
-- **Nothing is fetched over the network.** A path is a file; a URL is
-  E452. Elements with a renderer of their own (`<iframe>`, `<svg>`,
-  `<canvas>`, `<video>`, `<object>`, `<embed>`) are W450. A rule in the
-  markup's own `<style>` that matches no element is W452, so a misspelt
-  class name is named rather than quietly doing nothing.
-- **`z-index` orders the painting**, on a positioned box or a flex item,
-  which is where CSS applies it. A box with one is painted whole, where
-  its number puts it; negative numbers go under everything in flow. A box
-  without one is painted in document order, and one deeper in can still
-  rise above an uncle, since a plain box opens no stacking context of its
-  own. A group (opacity, filter or an animation) does open one. Setting
-  `z-index` where it does not apply is W454 rather than a quiet
-  difference.
-- `body` and `html` both select the box the markup is drawn into, which
-  is the clip's own box. A `background` or `border` on it fills that box,
-  and `padding` goes inside it, the way it does against a page. Left
-  unstyled the box marks no pixels, so only the content counts towards
-  what is composited.
+The ones most likely to matter. Markup names the rest as it meets them
+(W450), and the render's notes say what an encoder could not do.
 
-Layout and painting depend on time only through an animation on an
-element inside the markup; see [Motion](#motion) for what each costs.
-
-### Transitions
-
-A `transition` on a clip says how it arrives; a `transition_out` says how
-it leaves. Between two clips on a layer they overlap for `duration`, and a
-clip with no explicit `start` is moved that much earlier to make the
-overlap, so the previous clip must be long enough to cover it (E306).
-
-| Field | Required | Default | Description |
-| --- | --- | --- | --- |
-| `kind` | yes | | `crossfade` or `fade`. |
-| `duration` | yes | | The overlap between a pair of clips, or the ramp at the head or tail of a layer. |
-| `color` | no | `black` | The color a `fade` dips through. On a `crossfade` it is a W304, since nothing would show it. |
-| `ease` | no | `linear` | Shape of the ramp, taking the same values a keyframe's easing takes. `ease-in-out` is the usual choice for a slow dissolve. |
-
-`crossfade` brings the arriving clip up over the one leaving, which stays
-at full opacity underneath. Both are on screen at once, so the picture
-dissolves. The sound crosses at constant power (each gain is the square
-root of its linear ramp), which holds the level across the overlap; a
-linear pair would dip about 3 dB in the middle on material that is not
-correlated.
-
-`fade` dips through a color instead. The leaving clip fades out over the
-first half of the overlap, the arriving one fades in over the second, and
-the color covers the frame in between, strongest at the midpoint. Only
-one clip is ever visible. The sound follows the picture: it reaches
-silence at the midpoint and comes back.
-
-At the head or tail of a layer there is no second clip, so the ramp runs
-the whole `duration` rather than handing over in the middle. A `fade`
-opening a layer comes up out of its color and one closing a layer goes
-out to it, which is how a piece fades up from black and fades out again.
-A `crossfade` there has no colour to use, so it fades against whatever is
-behind: the layers below, or `output.background`.
-
-```json
-{ "source": { "kind": "video", "asset": "a" },
-  "transition":     { "kind": "fade", "duration": "1s" },
-  "transition_out": { "kind": "fade", "duration": "1s", "ease": "ease-in-out" } }
-```
-
-Where another clip follows, that clip's `transition` already covers the
-join, and setting `transition_out` as well is an E307. Keep one.
-
-Two things to know. The dip color covers the whole frame for the length
-of the transition, including layers below the one it is on, because it is
-the picture that dips and not one layer of it. And a fade on a layer
-above the first makes the whole composition take the compositing path
-rather than the overlay path, so none of its frames are copied.
-
-### `audio[]` and `audio[].clips[]`
-
-Tracks have `id`, `enabled` and `clips` like layers. Audio clips:
-
-| Field | Required | Default | Description |
-| --- | --- | --- | --- |
-| `asset` | yes | | Id of an `audio` or `video` asset. |
-| `in`, `out` | no | `0`, end of file | Source range. |
-| `start` | no | end of previous clip | Timeline start. |
-| `duration` | no | source range | Length. |
-| `gain_db` | no | `0` | Animatable gain in decibels. |
-| `fade_in`, `fade_out` | no | `0` | Fade lengths. |
-| `speed` | no | `1` | How fast the source plays; the clip lasts its range divided by it and the pitch follows. |
-
-### `subtitles[]`
-
-Subtitle tracks are written to the output as text streams that players
-can show or hide. That is the whole distinction the format draws between
-the two words: a *subtitle* travels alongside the picture as a stream, a
-*caption* is drawn into it. The same `.srt` or `.vtt` can do either: here
-as a track, or as a [`captions` source](#sources) on a clip. Each track is
-one subtitle asset, a SubRip `.srt` or WebVTT `.vtt` file.
-
-| Field | Required | Meaning |
-| --- | --- | --- |
-| `id` | no | Name used in diagnostics. |
-| `enabled` | no | `false` leaves the track out. |
-| `asset` | yes | A `subtitle` asset. |
-| `language` | no | Language code, for example `"en"` or `"pt-BR"`; stored as the three-letter code containers use. |
-| `title` | no | Track title shown by players. |
-| `offset` | no | Shifts every cue on the output timeline; negative values move cues earlier and cues that end before zero are dropped. |
-
-MP4 and MOV store the text as 3GPP timed text (`mov_text`), Matroska as
-SubRip, WebM as WebVTT; simple tags such as `<i>` survive in Matroska and
-WebM and are stripped for MP4 and MOV. Other containers cannot hold
-subtitle streams.
-
-```json
-"assets": { "en": { "src": "captions.srt" } },
-"subtitles": [ { "asset": "en", "language": "en", "title": "English" } ]
-```
+- **Markup is not a browser.** No JavaScript, no inline layout (a
+  `<span>` inside a sentence becomes a block of its own), no grid, no
+  float, no transitions, no media queries. Selectors are type, class, id
+  and `*` with descendant and child combinators only.
+- **No static `transform` in markup.** A transform comes only from an
+  `animation`; a box that should stay rotated needs a one-keyframe one.
+  `filter` is `blur()` only and `clip-path` is `polygon()` only.
+- **`text-shadow` is outside layout**, and is clipped at the edge of the
+  clip's box.
+- **`mix-blend-mode`** lacks `color-dodge`, `color-burn`, `hard-light`,
+  `exclusion` and the non-separable modes.
+- **A markup group's buffer is bounded** at nine times the frame's area
+  (W455). A larger moving picture belongs in a composition.
+- **Nothing is fetched over the network**, and `<iframe>`, `<svg>`,
+  `<canvas>` and `<video>` inside markup are not drawn.
+- **No synthetic italic**: a family with no italic face is drawn upright.
+- **Audio is mono or stereo.** A source with more channels is downmixed
+  when its sound is encoded.
+- **No fixed average bitrate.** Video is constant quality under an
+  optional ceiling; see [rate control](cli.md#rate-control). H.265 needs a
+  hardware encoder.
 
 ## Timing rules
 
 1. A clip without `start` begins where the previous clip in the same layer
    ends; the first clip begins at 0.
 2. Video and audio clips last `duration` if given, otherwise `out - in`.
-   With neither, they play to the end of the file. Until
-   media probing is available the file length is unknown, so such a clip
-   is treated like an open-ended source (rule 3).
+   With neither, they play to the end of the file. `render` and
+   `validate --probe` read that length from the file; plain `validate`
+   opens no files, so there such a clip is open-ended (rule 3).
 3. Images, solids, shapes and text are open-ended: without `duration` they
    last until `output.duration`. If that is not set either, validation fails
    with E305.
@@ -1039,19 +1017,24 @@ with a code, a JSON pointer, the offending value and a suggested fix. See
 [errors.md](errors.md) for the codes. `--format json` prints the same
 information as one JSON document.
 
-## Renderer support
+## Renderers and encoders
 
 `geneva render` copies the source streams instead of rendering when the
-composition is a plain cut or join of video at natural size and no quality
-setting asks for a re-encode (see the architecture page); `--exact` forces
-frame-accurate rendering. With an `outputs` map, `-o` names a directory
-and every entry is written from one pass over the composition.
+composition is a plain cut or join of video at natural size and nothing
+asks for a re-encode (see [architecture.md](architecture.md#stream-copy));
+`--exact` forces frame-accurate rendering. With an `outputs` map, `-o`
+names a directory and every entry is written from one pass.
 
-The CPU reference renderer draws every source kind: `solid`, `shape`,
-`image`, `video`, `text` and `composition`, with every transform, opacity,
-blend mode and transition, in picture and in sound alike. `geneva render` mixes audio tracks and the audio
-of video clips. Hardware encoders are not used yet; `encode.video.hardware`
-is accepted and ignored.
+Two renderers draw every source kind, with every transform, opacity,
+blend mode, mask, effect and transition: the CPU reference renderer and
+the GPU one, chosen with `--renderer`. Markup is painted on the CPU in
+both and composited by the renderer. They agree to the golden tests'
+tolerance, not byte for byte.
+
+`encode.video.hardware` picks the encoder: `auto` uses VideoToolbox or
+NVENC where one is present and works, `never` always uses software,
+`require` fails without one. The notes of a render name the encoder
+used.
 
 Text uses fonts from `font` assets first and falls back to fonts installed
 on the system. Output that depends on system fonts can differ between

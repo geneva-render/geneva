@@ -2,9 +2,7 @@
 
 Geneva's binaries include the following libraries, built from unmodified
 pinned sources by `scripts/build-media-libs.sh` with only the components
-Geneva uses. The core media libraries come from the FFmpeg project and are
-built in a trimmed configuration for Geneva; the codecs are separate
-projects. Their license texts are in `licenses/` and ship with every
+Geneva uses. Their license texts are in `licenses/` and ship with every
 binary distribution.
 
 | Component | Purpose | License |

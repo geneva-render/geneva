@@ -107,6 +107,13 @@ the format version it was written for.
   than GIFs nothing did.
 - The reference no longer mentions denoising in three places it
   outlived the feature.
+- `cli.md` is a reference now: tables per command, the output modes in
+  one table. `architecture.md` is shorter and more technical.
+  `timeline.md` ends with a short list of known limitations in place of
+  "What it does not do", and corrects what it said about hardware
+  encoders (used, not ignored), un-probed clip lengths, the renderers,
+  colour spellings and two missing fields (`subtitles`,
+  `transition_out`).
 
 ### Added
 

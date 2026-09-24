@@ -1760,7 +1760,7 @@
                 "null"
               ],
               "format": "double",
-              "description": "Title-safe inset as a percentage of each side; a cue outside\nit is a note. Defaults to 5; 0 turns the note off."
+              "description": "Title-safe inset as a percentage of the frame height: the\ndefault margin, and a margin inside it is a note. Defaults to\n5; 0 turns the note off."
             },
             "follow_file": {
               "type": [

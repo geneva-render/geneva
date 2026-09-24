@@ -142,8 +142,10 @@ render them natively over the footage using a simple
 
 https://github.com/user-attachments/assets/6e6456f3-2bb4-4b00-917f-8e793622815d
 
-This lower third was an agent's first attempt from the prompt below. The
-agent had the `geneva` binary and `whisper-cli`, and no checkout:
+**An agent's first attempt**
+
+An agent with the `geneva` binary and `whisper-cli`, and no checkout,
+made this from the prompt below on its first try:
 
 > Using only the built-in geneva guide and whisper-cli, take a 1m clip
 > from public-domain popeye and overlay a realistic CNN style animated
@@ -154,37 +156,18 @@ agent had the `geneva` binary and `whisper-cli`, and no checkout:
 
 https://github.com/user-attachments/assets/6d8566dd-7270-49bc-ac66-dab1585817a3
 
-The video is the whole 62 s clip with its sound, re-encoded to fit
-GitHub's 10 MB upload limit.
+The whole 62 s clip, re-encoded to fit GitHub's 10 MB upload limit.
 
-The same results can be had other ways: an LLM can write ffmpeg for
-them, or a Remotion project. What differs is what it has to get right
-and what runs it.
+**Compared with ffmpeg and Remotion**
 
-- **ffmpeg** has no layout. Text is `drawtext` at pixel positions and
-  motion is an expression per filter option, so cards like these are a
-  long filter graph written from memory, or graphics made in another
-  tool and overlaid. Its mistakes tend to be silent. In a test of 20
-  editing tasks, run twice, an LLM's ffmpeg commands got 15 of 20 right
-  each time, and 8 of the 10 failures were a wrong file with exit status
-  0; geneva got 20 of 20 both times. The tasks were picked knowing
-  ffmpeg's pitfalls, and a geneva bug the test found was fixed before
-  the runs counted, so read it as where the traps are rather than as a
-  general rate.
-- **Remotion** draws with a browser, so it can show anything a web page
-  can. It needs Node and headless Chrome, takes a screenshot per frame
-  and encodes them with ffmpeg. Its documentation says not to drive
-  animation with `@keyframes` or `transition`, since frames render out
-  of order, so markup like `opening.html` has to be rewritten as
-  per-frame `interpolate()` calls. For-profit companies of more than
-  three people need a paid licence.
-- **geneva** is one binary. `@keyframes` play as written, and the same
-  file opens in a browser. A document is checked before anything
-  renders, and an error names its code and the field at fault. Stretches
-  with nothing drawn over them are copied from the source rather than
-  re-encoded where the source allows. What it draws is a subset of HTML
-  and CSS: flexbox, no inline layout, no JavaScript (see
-  [what it does not do](docs/timeline.md#what-it-does-not-do)).
+| | ffmpeg | Remotion | geneva |
+| --- | --- | --- | --- |
+| Layout | none: `drawtext` at pixel positions | a browser | HTML and CSS, a [subset](docs/timeline.md#known-limitations) |
+| Animation | an expression per filter option | `interpolate()` per frame; [not `@keyframes`](https://www.remotion.dev/docs/troubleshooting/css-animations) | `@keyframes` as written |
+| Runs on | one binary | Node, headless Chrome, then ffmpeg | one binary |
+| Mistakes | often a wrong file with exit status 0 | type errors when bundling; the rest in the output | checked before rendering, with a code and the field |
+| Unchanged frames | re-encoded once any filter runs | re-encoded | copied where the source allows |
+| Licence | LGPL or GPL | paid for companies of 4 or more | MIT |
 
 ## Installing
 

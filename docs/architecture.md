@@ -1,432 +1,266 @@
 # Architecture
 
-Geneva is a Rust workspace with one crate per concern. Data flows in one
-direction:
+A Rust workspace, one crate per concern, data flowing one way:
 
 ```text
-timeline JSON ──parse──▶ Timeline ──resolve──▶ Composition ──render──▶ Frame
-                (serde)     (document)   (validation)   (exact times,     (linear f32,
-                                                          tracks)           premultiplied)
+JSON ──parse──▶ Timeline ──resolve──▶ Composition ──plan──▶ copy | smart cut | direct | composite ──▶ encoder
+       serde,     document    validation,   exact Ratio      per output
+       JSON-path              tracks        times
 ```
 
 ## Crates
 
-| Crate | Role | Depends on |
-| --- | --- | --- |
-| `geneva-anim` | Easing curves and keyframe tracks. No I/O, no clocks. | serde |
-| `geneva-audio` | The loudness meter of ITU-R BS.1770-4, true peak by oversampling, a true-peak limiter, the rumble high-pass with hum detection and notches, and the analysis behind `validate --probe`, on interleaved `f32` frames. No I/O, no clocks. | none |
-| `geneva-color` | Tags, inference, transfer functions, matrices, the `LinearRgba` working format and CSS color parsing. | geneva-anim |
-| `geneva-html` | A strict HTML and CSS subset: parsing, the cascade, block and flexbox layout over taffy, and a display list of boxes, text runs and images. Not a browser; it has no inline layout, float, grid, transition or media query. | geneva-color, taffy |
-| `geneva-timeline` | The format: document types (also the JSON Schema source), exact `Ratio` time, parsing with path-precise errors, resolution into `Composition`, diagnostics. Markup and CSS inside a document are checked here, so their errors carry a path like every other. | geneva-anim, geneva-color, geneva-html |
-| `geneva-render` | The `Renderer` trait, `Frame`, asset loading, `CpuRenderer`, the text engine and the markup painter. | geneva-timeline, geneva-color, geneva-html |
-| `geneva-gpu` | The GPU renderer on `wgpu`: a device probe (Vulkan, Metal, DirectX 12; a software implementation such as Mesa's lavapipe counts when asked for) and a second `Renderer` built against the CPU one, which draws everything the CPU renderer draws, checked against it by the goldens. Behind the CLI's `gpu` feature, on by default; pure Rust, the device found at run time. | geneva-render, geneva-timeline, geneva-color, wgpu |
-| `geneva-golden` | Perceptual comparison (per-channel epsilon, PSNR, SSIM), diff images, audio comparison against a WAV reference on numbers rather than bytes, and the golden case runner. | geneva-render, geneva-timeline, geneva-audio |
-| `geneva-media-link` | The linker directives for the statically built media libraries, read from the prefix's pkg-config files. A build dependency of the two crates below, and nothing else. | none |
-| `geneva-media` | Probe, decode, encode and audio mixing over the bundled media libraries, behind the `media` feature; the only crate that knows about containers and codecs. The mixer brings a mix to a loudness target with the meter and limiter of `geneva-audio`. | geneva-render, geneva-timeline, geneva-color, geneva-anim, geneva-audio |
-| `geneva-cli` | The `geneva` binary. | everything above |
+| Crate | Role |
+| --- | --- |
+| `geneva-anim` | Easing and keyframe tracks. No I/O, no clock. |
+| `geneva-color` | Colour tags, inference, transfer functions, matrices, `LinearRgba`, CSS colour parsing. |
+| `geneva-audio` | BS.1770-4 loudness, true peak, limiter, high-pass and hum notches, on interleaved `f32`. No I/O. |
+| `geneva-html` | HTML and CSS subset: parser, cascade, block and flex layout (taffy), display list. |
+| `geneva-timeline` | Document types (the JSON Schema source), `Ratio` time, parsing, resolution into `Composition`, diagnostics. Markup is checked here, so its errors carry a path. |
+| `geneva-render` | `Renderer` trait, `Frame`, `AssetSource`, `CpuRenderer`, text engine, markup painter. |
+| `geneva-gpu` | `GpuRenderer` on wgpu (Vulkan, Metal, DirectX 12). Feature `gpu`, on by default. |
+| `geneva-media` | Probe, decode, encode, mux, stream copy, smart cut, chunking, audio mix, over the static media libraries. Feature `media`. The only crate that knows containers and codecs. |
+| `geneva-media-link` | Link directives for the static media libraries; a build dependency of the crates above. |
+| `geneva-golden` | Perceptual image and audio comparison, golden case runner. |
+| `geneva-cli` | The `geneva` binary: commands, verbs, `--for` targets, and the choice of output path. |
 
-Lower crates never depend on higher ones. `geneva-timeline` knows nothing
-about pixels; `geneva-render` knows nothing about JSON.
+No crate depends on one above it. `geneva-timeline` knows nothing of
+pixels; `geneva-render` nothing of JSON.
 
 ## Timeline
 
-`Timeline` is a plain serde model with `deny_unknown_fields` on every
-struct. Doc comments on its fields are the JSON Schema descriptions, so the
-schema, the parser and the reference documentation cannot drift.
+- Serde model with `deny_unknown_fields` on every struct. Field doc
+  comments are the schema descriptions.
+- `serde_path_to_error` gives structural errors a JSON pointer.
+  `Animated<T>` has its own deserializer so paths stay exact inside
+  keyframe lists; the object form of a style is flattened, so its errors
+  point at the enclosing source.
+- `resolve` is one pass: validation, absolute clip times as `Ratio`,
+  open-ended clips closed against the output duration, lengths to
+  pixels, every animated property to a sampleable `Track` (a clip's CSS
+  `animation`, or the one on its markup's outermost element, becomes
+  tracks too), `captions` expanded into one text clip per cue. It returns a `Composition` only
+  when there is no error.
 
-Parsing uses `serde_path_to_error` so a structural error carries the JSON
-pointer of the failing element. `Animated<T>` has a hand-written
-deserializer that keeps that path precise inside keyframe lists.
+## Frames and renderers
 
-`resolve` is a single pass that performs all semantic validation while
-building the `Composition`. Times become `Ratio` values (exact rationals),
-sequential clips get absolute starts, open-ended clips are closed against
-the output duration, lengths become pixels, and every animated property
-becomes a `Track` that can be sampled at any time. The composition is only
-returned when there are no errors, so a renderer never sees an inconsistent
-document.
+`Renderer::render_into(&Composition, Ratio, &mut Frame)` is the contract.
+A `Frame` is premultiplied linear-light `f32` RGBA; conversion to sRGB or
+Y'CbCr happens at the edges.
 
-## Rendering
+**CPU (`CpuRenderer`)**, the reference and the fallback:
 
-`Renderer::render_into(&Composition, Ratio, &mut Frame)` is the whole
-contract (`render_frame` is the allocating convenience). A `Frame` is
-premultiplied linear-light RGBA; conversion to 8-bit sRGB or to the
-encoder's Y'CbCr happens at the edge.
+- Per visible clip: sample tracks at clip time, build the affine
+  placement (fit, anchor, scale, rotation, position), map output pixels
+  back into the clip's box.
+- Coverage by 2×2 supersampling; one centre sample when the placement is
+  pixel-aligned, so images stay bit-exact. A moved and scaled image is
+  resampled per span: bilinear when magnified or at unit scale, 2×2 when
+  minified, the general path near edges.
+- Opacity and transition ramps, then the blend mode, in linear light.
+- Rows are independent and run on a thread pool, as do decode
+  conversion and packing. Output does not depend on scheduling.
+- Nested compositions render into a buffer kept between frames.
 
-`CpuRenderer` is the reference implementation, and `GpuRenderer` in
-`geneva-gpu` a second one with the same contract, checked against it
-by the golden harness (see [GPU renderer](#gpu-renderer)).
+**GPU (`GpuRenderer`)**: the same contract, transcribed function by
+function into WGSL (`composite`, `blur`, `markup`, `pack`); placement,
+transition logic and the painter are shared Rust.
 
-- For each clip visible at the requested time, it samples the clip's tracks
-  at clip-local time and builds an affine placement (fit → anchor → scale →
-  rotation → position).
-- Output pixels inside the placement's bounding box are mapped back into the
-  clip's box; coverage and color come from a 2×2 supersample, except when the
-  placement is pixel-aligned, in which case one center sample keeps images
-  bit-exact. An image that is only moved and scaled is resampled span by
-  span: well inside the picture, a magnified or unit-scale image takes one
-  bilinear sample at the pixel center (the usual resampling), a minified one
-  keeps the 2×2 supersample so that detail is filtered rather than dropped,
-  and the pixels near the picture's edges keep the general path for their
-  coverage. Nested compositions draw from their own frame's buffer, which
-  is kept for the next one instead of being allocated each frame.
-  `cargo run --release -p geneva-cli --example profile` times these paths.
-- The result is scaled by opacity (and by the crossfade ramp when a
-  transition is active) and composited with the clip's blend mode.
-- Rows are independent, so drawing, the decoder's 16-bit-to-linear
-  conversion and the packing to 4:2:0 run row-parallel on a thread pool.
-  Determinism is unaffected: every pixel depends only on its inputs, never
-  on the order rows finish.
+- Working format `Rgba16Float`; blur layers `Rgba32Float`.
+- Unchanging pictures (image assets, static text, still markup) cached
+  on the device under 96 MiB, least recently drawn out first.
+- Output packed on the device per plane into integer textures and read
+  through a ring of 3 staging buffers: a 1080p 4:2:0 frame reads back as
+  3 MB, and frame n+1 is submitted before frame n is mapped.
+- Blend modes read a copy of the target taken before the blending draw.
+- Held to the CPU by the golden cases: within one 8-bit code, except the
+  blur (up to three codes on 0.12% of pixels, the same on Metal and
+  Vulkan, none on lavapipe).
+- Not on the device: 16-bit and HDR sources (converted by the decoder
+  and uploaded as pictures), and markup painting (below).
 
-`geneva render` keeps the encoder on its own thread with a short queue of
-converted frames, so decoding, compositing and encoding overlap.
+`--renderer auto` takes a hardware device when there is one; `gpu` takes
+a software one too; both fall back to the CPU with a note. `frame` and
+the overlays on a direct-path picture always use the CPU.
 
-Frames leave the renderer in whichever sample layout the codec takes:
-8-bit 4:2:0 for the distribution codecs, 8-bit or 10-bit 4:2:2 and 10-bit
-4:4:4 for the intermediate codecs, RGBA for PNG. The packer quantizes from
-the float working space directly to the target depth, so a 10-bit output
-is not an 8-bit one widened.
+**Text**: shaping, bidi, line breaking and fallback by `cosmic-text`,
+rasterized by `swash` into coverage masks, composited in linear light
+with box, outline and shadow, placed like an image.
 
-Subtitle tracks never touch the picture. Their files are parsed into cues
-and written as text packets on their own streams, interleaved with the
-frames as the output reaches each cue's start time, in whichever text
-codec the container uses.
+**Markup**: parsed and styled once per clip by `geneva-html`, laid out
+and painted by the renderer into a picture placed like an image.
 
-Assets reach the renderer through the `AssetSource` trait: images, font
-bytes, and video frames by source time. The file implementation resolves
-`assets.<id>.src` under one root directory; the validator has already
-rejected absolute paths and `..`, so the root is a real boundary. The
-media crate's implementation adds video, keeping one decoder open per asset
-so sequential frames decode once.
+- Painted in sRGB-encoded premultiplied values, as a browser does; the
+  finished box is converted to linear light once.
+- A box with nothing animated inside is painted once per clip.
+- An element with an animation, opacity, filter, blend mode or clip is a
+  group: a buffer of its own, bounded to what its parent can show
+  (through the inverse transform, padded for blur, at most nine frames of
+  area), composited with those applied. Groups off the frame are
+  skipped. An animation that changes a size re-lays out each frame.
+- On the GPU, boxes, glyphs, shadows and polygon coverage are still
+  painted on the CPU and uploaded; groups are composited on the device.
 
-Text is laid out by `cosmic-text` (shaping, bidi, line breaking, fallback)
-and rasterized by `swash` into coverage masks. The engine composites the
-masks in linear light, draws the background box, outline and shadow, and
-hands the result to the same placement code as images.
+## Output paths
 
-Markup (`source.kind: "html"`) is parsed and styled once per clip by
-`geneva-html`, then laid out and painted by the renderer into an image
-that the same placement code composites. Inside that image the painter
-blends on sRGB-encoded premultiplied values, as a browser does, and
-converts the finished box to linear light once. A box with nothing
-animated inside it is painted once per clip whatever its length. An
-element with an animation, a transform, opacity, a filter, a blend mode
-or a clip is painted as a group into its own buffer and composited with
-those applied; the buffer covers only what its parent can show, taken
-back through the transform and padded for the blur, and a group that
-lands off the frame is skipped. A group whose animation moves a size lays the
-box out again each frame. The painter's loops (boxes, shadows,
-pictures, polygon clips, laying a group onto its parent, the conversion
-to linear light) share their rows across the thread pool like the
-compositor's; text is shaped and rasterized on one thread.
+The planner picks the cheapest path that reproduces the composition,
+per output. The report names the mode.
 
-## GPU renderer
+### Stream copy
 
-`geneva-gpu` is a second `Renderer` on `wgpu` (Vulkan, Metal, DirectX
-12; WGSL), pure Rust, the device found at run time. `render --renderer
-auto` takes a hardware device where there is one and the CPU otherwise;
-`gpu` takes a software device too.
+One layer of video clips shown as they are (natural size, centred, full
+opacity, no rotation, transitions or overlays), output size and rate
+equal to the sources', one codec with identical coded parameters, and
+audio absent, the sources' own, or one untouched track. No setting asks
+for a re-encode (quality, bitrate, keyframes, or audio that differs
+from the source in codec, rate or channels). Packets are copied; cuts
+move back to the keyframe at or before the requested time and the
+report gives the times used. An audio-only output copies its one track
+the same way.
 
-### Vulkan in a container
+When only the sound must change (a loudness target, hygiene, another
+audio format), the video is copied and the mix encoded beside it
+(`copy-picture`).
 
-A container built for CUDA, which is what a rented GPU usually comes
-with, has the driver's compute half and not its graphics half, and
-Vulkan then finds no device. `nvidia-smi` working says nothing about
-this either way. On NVIDIA the Vulkan driver is `libGLX_nvidia.so.0`, a
-GLVND vendor library, and it needs two sets of libraries a compute
-image does not carry: the X11 client libraries to load, and the GLVND
-dispatch libraries to start. Missing either one looks the same from
-outside, a loader message about `vkCreateInstance`, and the renderer
-then uses a software device or the CPU.
+### Smart cut
+
+H.264 source shown as it is, but something changes for part of the
+time: an exact cut inside a GOP, an overlay, a burned-in cue. Untouched
+stretches are copied as packets; the rest is encoded by the system's
+x264 into the same track.
+
+- A copied stretch starts on an IDR and ends where decode order is
+  clean (every earlier picture displays before every later one).
+- The encoded runs use a parameter set id the source does not use; both
+  sets are in the container header and each run starts with an IDR.
+- DTS is one sequence across copied and encoded pictures, running ahead
+  of display by the larger of the two reorder depths.
+- Only a window of each source is indexed: keyframe before the first
+  wanted picture to the IDR after the last.
+- Audio is copied on a packet grid (one packet per slot, the first one
+  straddling the cut, placed early through an edit), so joins are off by
+  at most half a packet and errors do not accumulate. Anything else
+  mixes and encodes.
+
+### Direct transcode
+
+Picture untouched but not copyable (another codec, a quality setting,
+`--exact`), and the source already carries the output's colour tags.
+
+- Frames in the encoder's layout at the output size go to it unchanged.
+- A size change, a crop (`cover`), bars on one opaque background, or a
+  layout change (8-bit 4:2:0 to 10-bit 4:2:2) is done by libswscale in
+  the coded Y'CbCr, bicubic, threaded. This is the one place geneva
+  resamples outside linear light; with nothing composited there is no
+  blend to get wrong.
+- Overlays on higher layers keep the path: they are rendered on a
+  transparent frame the size of their bounding box and laid over the
+  decoded planes, converting only covered pixels to linear light and
+  back. Untouched pixels stay byte-identical.
+- RGB outputs from 8-bit Y'CbCr sources go through the scaler with the
+  source matrix and range and a per-channel transfer table. Other
+  matrix or primaries conversions go through the compositor.
+
+### Composite
+
+Everything else: decode to 16-bit 4:4:4 (RGBA for R'G'B' sources),
+normalize range, apply the tagged matrix and transfer into the working
+format, render, then linear to the output transfer, to Y'CbCr, 2×2
+chroma average and quantize straight to the target depth (a 10-bit
+output is not a widened 8-bit one). The encoder runs on its own thread
+behind a short queue, so compositing and encoding overlap.
+
+### Chunked encoding
+
+An encode is split into stretches encoded at once, each with its own
+decoders, compositor and encoder on a share of the cores, then joined by
+the stream-copy join `concat` uses; the first stretch also encodes the
+whole audio. Boundaries are clip starts, or the keyframe grid within a
+quarter of a stretch, otherwise one extra keyframe. Stretches are at
+least 2 s, at most 16.
+
+`auto` splits into `cores / 2` stretches for VP9 and for OpenH264 (H.264
+without x264 or a hardware encoder), the two measured to gain (a fifth
+and a tenth on four cores), and never for the rest: AV1 gained nothing,
+x264 and DNxHD lost, and VideoToolbox sessions contend. Not used with a
+bitrate ceiling (the buffer cannot restart at a boundary), a smart cut,
+or an image sequence.
+
+### Multi-output render
+
+With an `outputs` map, one pass: each frame is composited once,
+converted once per distinct colour encoding and layout, scaled per
+rendition by `PlaneScaler` (threaded swscale) and sent over a bounded
+channel to that rendition's encoder thread, which returns the buffers.
+Audio entries mix on their own threads. A canvas-size video entry with
+no encode settings of its own is offered to the copy planner first. The
+poster is the composited frame at its time, or the first frame past the
+opening that is not dark and follows motion (a 16×9 luma gist per
+frame); sprite tiles are scaled from the composited frames. With no
+video entry only the frames the pictures need are composited.
+
+## Verbs
+
+`convert`, `resize`, `trim`, `concat`, `overlay`, `audio`, `subtitles`
+and `frame` on a video file probe their inputs, build a timeline
+(`crates/geneva-cli/src/verbs.rs`) and go through the same load,
+validate, plan and render sequence as a document. `--show-timeline`
+prints it. Every verb writes the source's own sample rate and channel
+count into the document, so the planner compares requested audio with
+the source rather than treating a set field as a change.
+
+## Media
+
+- The media libraries are built from pinned sources by
+  `scripts/build-media-libs.sh` with only the components geneva uses,
+  and linked statically. LGPL or BSD; see `THIRD-PARTY-NOTICES.md`.
+- H.264 in software: the system's x264 when installed, loaded at run
+  time (`codecs/x264.rs`, through the stable part of its interface; no
+  x264 code in the binary), otherwise the bundled OpenH264. Hardware
+  encoders (NVENC on Linux, VideoToolbox on macOS) first when the
+  settings allow. No software H.265.
+- Rate control is constant quality with an optional VBV ceiling
+  (bufsize twice the rate); VP9 takes the ceiling as its constrained
+  quality bitrate. VideoToolbox takes a ceiling only in bitrate mode,
+  NVENC at a constant QP not at all; both are reported.
+- Audio is decoded and resampled to stereo `f32` at the output rate,
+  shaped by gain tracks and fades, summed, then treated if asked
+  (high-pass and notches, gain to a loudness target, true-peak limiter),
+  a block at a time with one decoder and resampler per voice. What is
+  measured first is measured on a pass before the blocks go out.
+- Subtitle tracks never touch the picture: cues become text packets on
+  their own stream in the container's text codec, interleaved by time.
+- `AssetSource` resolves `assets.<id>.src` under one root; validation
+  has already rejected absolute paths and `..`. One decoder is kept open
+  per asset so sequential frames decode once.
+
+## Tests
+
+- **Golden frames**: `tests/golden/<case>/` holds `scene.json`,
+  `golden.json` (times, tolerance) and `expected/<time>.png`. Compared
+  by per-channel epsilon, mismatch fraction, PSNR and SSIM, on both
+  renderers; failures write `.actual.png` and `.diff.png` under
+  `target/golden-failures/`. `GENEVA_UPDATE_GOLDEN=1` rewrites.
+- **A/V sync corpus**: `tests/media/sync/`, twelve files from
+  `scripts/make-sync-corpus.sh`, each a flash at 1.0 and 2.0 s and a
+  1 kHz tone from the same times, each with one trap (edit lists,
+  negative composition offsets, VFR, streams starting at 10 s, audio
+  starting 0.5 s late, 29.97 and 23.976 fps, 44.1 kHz, Opus in WebM,
+  MPEG-TS). Every path must keep flash and tone to the frame and within
+  3 ms. Time zero is a file's first video frame, for picture and sound;
+  MPEG-TS AAC starts 21 ms late, as in ffmpeg, since TS carries no
+  priming.
+
+## Vulkan in a container
+
+A CUDA image has NVIDIA's compute libraries, not the graphics half, so
+Vulkan finds no device and the renderer falls back. The Vulkan driver
+(`libGLX_nvidia.so.0`) needs the X11 client and GLVND libraries:
 
 ```sh
 apt-get install -y libx11-6 libxext6 libglvnd0 libegl1 libgl1 libgles2
 # and start the container with NVIDIA_DRIVER_CAPABILITIES=all
 ```
 
-The probe reports what it can see of this rather than leaving it to be
-found by hand: when a GPU is present and no usable device came up, or
-when a software device was taken and one was not asked for, the note
-names what is missing and the packages that carry it. Hardware encoding
-is a separate matter and is not affected: NVENC goes through the
-compute half, so it keeps working where the compositor cannot. What it shares with the CPU renderer
-it shares as code rather than as a copy: the placement of a clip
-(`Placement`), what transitions do to opacity and the fade's veil, and
-the painter above the composite (image assets, text shaped and drawn,
-markup prepared once per clip, laid out and its boxes painted). What
-it transcribes it transcribes function by function into
-`composite.wgsl`, `blur.wgsl`, `markup.wgsl` and `pack.wgsl`: the
-sampling rules (one center sample when pixel-aligned, the 2x2
-subsamples otherwise, the span rule for magnified pictures), the shape
-and mask signed distances, bilinear reads with texel centers at half
-integers, the separable blend modes from a copy of the target, the
-4:2:0 conversion of a video frame from its planes, the three box
-blurs, the composite of a markup group and the decode of the finished
-box, and the pack into the encoder's planes with the same tables.
-
-A markup box with an animation inside is painted on the CPU as far as
-its boxes: the markup painter walks the same display list with the
-same caches and hands over runs of painted pixels and the groups they
-sit in, each with its opacity, blur, clips and transform still to
-apply. The device composites those in the painter's encoded space, as
-the CPU painter does: a run is uploaded and laid straight; a group's
-buffer is its run, or its own items composited into a pooled texture
-first; a blurred buffer goes through the same box blurs on a layer; a
-polygon clip goes up as coverage over the buffer; and the buffer is
-laid through the transform's inverse with the same taps, under the
-opacity and the rounded clip's coverage, by premultiplied "over". A
-group with a `mix-blend-mode` mixes with what is behind it instead,
-which means reading the surface it is drawing into: the pass stops
-there, the surface so far is copied, and the group is drawn from a
-second pipeline that samples the copy as its backdrop. One pass then
-decodes the finished box to linear light, and it is placed as a
-picture. The pictures of groups that do not change from frame to
-frame are kept on the device as the painter keeps them on the CPU. The
-same walk composited on the CPU through the painter's own code is the
-box the painter paints, which a test holds it to; the device's
-composite is held to the CPU's frame by the golden tolerance.
-
-The working format is `Rgba16Float`, premultiplied linear light; blur
-layers are `Rgba32Float`, since six passes at half precision would
-drift. Pictures that do not change (an image asset, static text, a
-still markup box) are kept on the device under a 96 MB budget, least
-recently drawn out first; a video frame or an animated picture goes up
-each frame. The frame leaves the device packed: one pass per plane into
-an integer texture, copied into one of three staging buffers, so a
-1080p 4:2:0 frame reads back as 3 MB rather than the 16 MB of an f32
-frame, and the next frame is submitted before the current one is
-mapped, which overlaps the painting and uploading of one with the
-drawing of the other.
-
-Every golden case renders on both and agrees to within one 8-bit code,
-except the blur, which differs by up to three on 71 of its pixels,
-0.12%. That is the blur itself and not any one device: an Apple M1
-through Metal and an RTX 4090 through Vulkan report the same 71 pixels,
-and Mesa's lavapipe reports none. A blur is six passes over a
-downscaled buffer and the two paths round differently along the way.
-`cargo test -p geneva-gpu -- --nocapture` prints the per-frame table.
-The CPU renderer stays the reference and the fallback: `frame`, the
-overlays over a copied picture, and any machine without a device use
-it. Not done: 16-bit and HDR video sources are converted by the decoder
-and uploaded as pictures rather than as planes; the markup painter's
-boxes, glyphs, shadows and polygon coverage are painted on the CPU and
-uploaded each frame unless kept; and the markup composite is at half
-precision, so the opening's busiest frame has about half its pixels one
-code off the CPU's where the other cases have a few percent, and none
-more than one. The renderer has since been measured on an Apple M1,
-where every case holds and the two renderers cost about the same per
-frame, the device's two seconds to open and build its pipelines apart.
-
-## Stream copy
-
-Before rendering, `geneva render` checks whether the composition is one
-layer of video clips shown as they are: natural size at the frame center,
-full opacity, no rotation, no transitions, nothing else on top, output
-size and rate equal to the sources', the same codec in every source with
-identical coded parameters, and audio that is either absent, the sources'
-own, or one untouched track spanning the output. When that holds and no
-quality setting asks for a re-encode, the coded packets are copied into
-the output instead. Cuts move back to the keyframe at or before the
-requested time and the command reports the times used; `--exact` forces
-decoding and encoding for frame-accurate cuts. An audio-only output copies
-its one track under the same rule.
-
-## Direct transcode
-
-When the same analysis finds the picture untouched but the streams cannot
-be copied (a different codec was asked for, a quality setting was given,
-or `--exact`), the decoded frames are handed to the encoder as they come
-out of the decoder, provided they carry the output's color tags. Frames
-already in the encoder's sample layout at the output size are copied as
-they are; frames that differ only in size (a resize that fills the whole
-frame, to within the two pixels that rounding to an even size can leave) or in layout (8-bit 4:2:0 into the 10-bit 4:2:2 that ProRes and
-DNxHR take) are scaled and repacked by libswscale in their coded YCbCr
-encoding, bicubic and on several threads, the way a plain transcode does
-it. A picture that does not cover the frame (a `contain` fit with bars,
-as a landscape video on a portrait canvas) is served the same way when
-the background is one opaque color: the frame is cleared to that color
-in the encoder's layout once, and each picture is scaled to its place,
-rounded to even pixels so that subsampled chroma lines up. A `cover` fit
-that crops is served too: the region of the decoded frame that the output
-shows (a view sharing the frame's buffers) is scaled to the whole frame.
-This is the one
-place Geneva resamples outside linear light: with a single picture and
-nothing composited over it there is no blending to get wrong, and the
-difference from the reference renderer is the difference between
-gamma-space and linear-light filtering at hard edges, which the tests
-bound. An RGB output (an image sequence) from an 8-bit YCbCr source is
-served the same way: the scaler applies the source's matrix and range and
-a per-channel table re-encodes its transfer curve as the output's, which
-is what the compositor computes for such a frame. RGB sources and
-conversions between YCbCr encodings still go through the compositor,
-which owns matrix and primaries conversions.
-
-Layers above such a video do not take the picture off this path either.
-When every clip above the first layer composites normally, the renderer
-draws only those clips, onto a transparent frame the size of their
-bounding box, and the result is laid over the decoded planes in the
-encoder's own layout: each covered pixel is converted to linear light,
-composited, and converted back; pixels the overlays do not touch stay
-byte-identical, so there is no seam between frames with and without a
-caption, and a burned-in subtitle costs only its own box. Text that does
-not change with time is laid out once per clip. Frame selection
-follows the same rule as the renderer (the last decoded frame at or
-before each output time), and the report names this mode `direct`.
-
-## Smart cut
-
-Between stream copy and the direct path sits a third: when the picture
-is an H.264 source shown as it is but something changes somewhere (an
-exact cut inside a group of pictures, an overlay or a burned-in
-subtitle for part of the time), the planner copies the source's packets
-for every stretch that stays untouched and encodes only the rest, into
-the same track. A copied stretch starts at an IDR picture and ends
-where the source's decode order is clean, that is, where every picture
-before the boundary is shown before every picture after it, so no
-picture is left without its references; the pictures in between that
-the cut wants are decoded and encoded from the previous keyframe
-instead. The encoded runs come from the system's x264 with its
-parameter sets under an id the source does not use, and both sets go
-into the container header side by side, so each picture names its own
-and the decoder switches at the IDR that starts every run and every
-stretch. Decode timestamps are assigned in one sequence across copied
-and encoded pictures, running a fixed number of pictures ahead of
-display (the larger of the source's reorder depth and the encoder's),
-which keeps every picture decodable in time without touching the
-pictures themselves. The report names the mode `smart` and counts the
-frames copied and encoded; the copied frames are the source's bytes.
-The planner indexes only a window of each source, from the keyframe
-before the first wanted picture to the IDR after the last, so a short
-cut of a long file reads a few groups of pictures, not the file.
-
-The clips' own audio rides along as coded when every clip has one of
-the same kind the container takes. The output's audio is one packet
-grid: every slot holds exactly one copied packet, so the track is
-gapless and never overlaps itself, and a player that runs packets back
-to back keeps time with the video whatever the joins. The first packet
-is the one that straddles the start, placed early by the part before
-the cut (a negative start the container turns into an edit, so the
-sound begins on the sample); each later segment starts with the packet
-nearest to its cut, so a join is off by at most half a packet and the
-error never accumulates. Anything else (a separate audio track, gain,
-fades, clips of different kinds) mixes and encodes the audio as usual,
-a second at a time: every voice is read forward on its own decoder and
-resampler as the blocks advance, so a long timeline never holds its mix
-whole, and the mix is the same whatever the block size.
-
-## Chunked encoding
-
-An encode that would leave cores idle is cut into stretches encoded at
-the same time (`geneva-media::chunks`): each stretch gets its own
-decoders, compositor and encoder on a share of the cores, writing a
-video-only file next to the output; the first stretch also mixes and
-encodes the audio for the whole timeline; then the stream-copy join used
-by `concat` puts the stretches in order into the output with the audio
-and subtitles. Boundaries are the composition's own cuts (clip starts) or
-the keyframe grid when one is within a quarter of a stretch, so a stretch
-starts where a keyframe was due; otherwise the boundary is one extra
-keyframe. The count is `encode.video.chunks`: `auto` divides the machine's
-cores by the encoder's measured scaling ceiling, a number forces it. Not
-with a bitrate ceiling (its buffer cannot restart at a boundary), a smart
-cut, or an image sequence. The same plan is what a fleet would hand to
-several machines.
-
-Measured on four cores with 1080p sources: VP9 gains a fifth from two
-stretches, OpenH264 a tenth, AV1 nothing, and DNxHD and x264 lose, since
-one pipeline already fills the machine. On an eight-core M1 with
-VideoToolbox, two stretches lose too (the hardware is the bottleneck and
-two sessions contend for it). So `auto` chunks VP9 and OpenH264 only;
-everything else needs an explicit count. `scripts/check.sh` runs one
-encode with chunks off and on `auto` and prints both times.
-
-## Multi-output render
-
-A document with an `outputs` map is rendered by one pass over the
-composition (`render_outputs` in `crates/geneva-cli/src/media.rs`). The
-compositor produces each frame once; the frame is converted to planes
-once per distinct colour encoding and sample layout the renditions
-want, then scaled per rendition (`geneva-media::PlaneScaler`, the same
-threaded swscale the direct path uses) and sent over a bounded channel
-to that rendition's encoder thread, which returns the plane buffers for
-reuse. Audio-only entries and the audio of video entries are mixed by
-their own threads from the same composition. A video entry at the
-canvas size with no encode settings of its own goes through the copy
-planner first and is stream-copied when the composition allows it. The
-poster is taken from the composited frame at its time, or from the first
-frame after the opening that is not dark and follows motion (a cheap
-16×9 luma gist per frame decides); sprite tiles are scaled from the
-composited frame at each interval into one sheet, and the WebVTT map is
-written beside it. With no video entry only the frames the pictures need
-are composited, so a poster costs one frame.
-
-## Verbs
-
-`trim`, `concat`, `convert`, `resize`, `overlay`, `audio`, `subtitles`
-and `frame` on a video file do not have code paths of their own. Each probes its inputs, builds a timeline
-document (`crates/geneva-cli/src/verbs.rs`), and hands it to the same
-load, validate, plan and render sequence a timeline file goes through, so
-stream copy, diagnostics and the JSON report behave identically.
-`--show-timeline` prints the document; asset paths in it are relative to
-the deepest directory containing every input.
-
-## Media
-
-The media libraries are built from pinned sources by
-`scripts/build-media-libs.sh` with only the demuxers, muxers, decoders and
-encoders Geneva supports, and linked statically. Every component is LGPL
-or BSD licensed; see `THIRD-PARTY-NOTICES.md`. Software H.264 encoding is
-OpenH264 at a constant quantizer, unless the system has an x264 library:
-that is loaded at run time (`codecs/x264.rs`, through the parts of its
-interface that have stayed the same across builds) and preferred, with
-nothing of x264 in the binary. Hardware encoders (NVIDIA on Linux,
-VideoToolbox on macOS) are tried first when the encode settings allow.
-
-Decoded frames are converted by the scaler to 16-bit 4:4:4 (or RGBA for
-R'G'B' sources) and then, in Rust, through range normalization, the
-tagged matrix and the tagged transfer function into the compositing
-format. Encoding goes the other way: linear to the output transfer, to
-Y'CbCr, 2×2 chroma averaging, 8-bit 4:2:0, then the encoder. Color tags
-travel with the stream in both directions. Audio is decoded and resampled
-to stereo `f32` at the output rate, shaped by gain tracks and fades, and
-summed. An output that asks for it is then treated on the way out: the hygiene
-high-pass and notches, then the gain to a loudness target and the
-true-peak limiter. Anything measured first is measured on a pass over
-the mix before the blocks go out.
-
-## Golden tests
-
-`tests/golden/<case>/` holds `scene.json`, `golden.json` (frame times and
-optional tolerance) and `expected/<time>.png`. The harness renders each
-frame, compares with per-channel epsilon, mismatch fraction, PSNR and SSIM,
-and writes `<time>.actual.png` and `<time>.diff.png` under
-`target/golden-failures/` when a frame fails. `GENEVA_UPDATE_GOLDEN=1`
-rewrites the references.
-
-Tolerances are perceptual on purpose: different GPUs round shader math
-differently, and the harness must accept those differences while catching
-real regressions.
-
-## A/V sync corpus
-
-`tests/media/sync/` holds twelve small files built by
-`scripts/make-sync-corpus.sh` from one scene: black with one white frame
-at 1.0 s and one at 2.0 s, silence with a 1 kHz tone from 1.0 to 1.5 s
-and from 2.0 to 2.5 s. Each file carries a trap real files carry:
-B-frames with an edit list or with negative composition offsets,
-variable frame rate, streams starting at 10 s, an audio track starting
-half a second after the video (MP4 and Matroska), 29.97 and 23.976 fps,
-44.1 kHz audio, Opus in WebM, MPEG-TS. `crates/geneva-cli/tests/sync.rs`
-runs each through the direct path, the compositor, stream copy, and a
-trim copied and exact, and checks that the flash frame and the tone
-onset come out where they went in, to the frame and within 3 ms; the
-media crate checks the readers alone the same way.
-
-The rule the corpus pins down: time zero of a file is its first video
-frame, for the picture and for the sound, so an audio track that starts
-later keeps its offset. A file without video starts at its first
-sample. What the corpus shows the same as ffmpeg and is left alone:
-MPEG-TS carries no priming information, so its AAC starts 21 ms late.
-
-## Not here yet
-
-- **Software H.265 encoding.** Only hardware encoders are available for it.
+The probe's note names what is missing. NVENC uses the compute half and
+is unaffected.
