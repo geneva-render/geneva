@@ -204,6 +204,8 @@ brew install x264                # macOS
 
 ## Commands
 
+Every command and flag is in [docs/cli.md](docs/cli.md).
+
 ```sh
 geneva resize talk.mp4 -o talk-720.mp4 --height 720
 geneva trim talk.mp4 -o clip.mp4 --from 12s --exact     # frame-accurate, smart cut
@@ -224,7 +226,7 @@ geneva probe talk.mp4                                   # streams, colour tags, 
 ```
 
 `geneva targets` prints the preset table. Add `--show-timeline` to any
-command to print its JSON instead of rendering it. It is the quickest way
+verb to print its JSON instead of rendering it. It is the quickest way
 to get a working document.
 
 ## Documentation
