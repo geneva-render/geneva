@@ -148,10 +148,10 @@ agent had the `geneva` binary and `whisper-cli`, and no checkout:
 > so output 16:9 1080p with the empty sides filled by a blurred copy of
 > the video.
 
-<img src="docs/popeye-lower-third.webp" alt="A black and white Popeye cartoon in a 16:9 frame with blurred sides, under a news-style lower third with a GNN logo, a LIVE tag, a two-line headline and a scrolling ticker" width="640" height="360">
+https://github.com/user-attachments/assets/6d8566dd-7270-49bc-ac66-dab1585817a3
 
-The picture is the whole 62 s clip, reduced to 640 wide at 12 fps with
-the sound removed.
+The video is the whole 62 s clip with its sound, re-encoded to fit
+GitHub's 10 MB upload limit.
 
 ## Installing
 
