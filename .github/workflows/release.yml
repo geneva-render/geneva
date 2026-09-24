@@ -136,6 +136,9 @@ jobs:
     name: Sign and smoke test on Windows
     needs: build
     runs-on: windows-latest
+    # The signing secrets live in this environment, as in FB's other
+    # projects: CERTUM_USERNAME, CERTUM_OTP_URI and CERTUM_CERT_SHA1.
+    environment: windows-signing
     env:
       CERTUM_USERNAME: ${{ secrets.CERTUM_USERNAME }}
     steps:
@@ -154,15 +157,40 @@ jobs:
           & $tar -xf $zip.FullName
           "ZIP=$($zip.Name)" >> $env:GITHUB_ENV
           "DIR=$($zip.BaseName)" >> $env:GITHUB_ENV
-      # SimplySign Desktop, logged in with the account's TOTP seed. Pinned
-      # to the commit that was read, since it handles that seed.
+      # The secret is the otpauth:// URI from Certum's QR code; the login
+      # takes its parts. The seed is masked before anything else sees it.
+      - name: Read the one-time password URI
+        if: env.CERTUM_USERNAME != ''
+        shell: pwsh
+        env:
+          OTP_URI: ${{ secrets.CERTUM_OTP_URI }}
+        run: |
+          $q = @{}
+          foreach ($pair in ([Uri]$env:OTP_URI).Query.TrimStart('?') -split '&') {
+            $k, $v = $pair -split '=', 2
+            $q[$k.ToLower()] = [Uri]::UnescapeDataString($v)
+          }
+          if (-not $q['secret']) { throw 'CERTUM_OTP_URI has no secret parameter' }
+          Write-Host "::add-mask::$($q['secret'])"
+          "TOTP_SECRET=$($q['secret'])" >> $env:GITHUB_ENV
+          # Certum's codes are SHA-256, six digits, 30 seconds, unless the
+          # URI says otherwise.
+          $alg = if ($q['algorithm']) { $q['algorithm'].ToUpper() -replace '^SHA(\d)', 'SHA-$1' } else { 'SHA-256' }
+          "TOTP_ALGORITHM=$alg" >> $env:GITHUB_ENV
+          "TOTP_DIGITS=$(if ($q['digits']) { $q['digits'] } else { '6' })" >> $env:GITHUB_ENV
+          "TOTP_PERIOD=$(if ($q['period']) { $q['period'] } else { '30' })" >> $env:GITHUB_ENV
+      # SimplySign Desktop, logged in with that seed. Pinned to the commit
+      # that was read, since it handles the seed.
       - name: Log in to SimplySign
         id: certum
         if: env.CERTUM_USERNAME != ''
         uses: jay0lee/certum-cloud-code-sign@c426e3f9dcac447a666692df3281522dbc03140b
         with:
           username: ${{ secrets.CERTUM_USERNAME }}
-          totp_secret: ${{ secrets.CERTUM_TOTP_SECRET }}
+          totp_secret: ${{ env.TOTP_SECRET }}
+          totp_algorithm: ${{ env.TOTP_ALGORITHM }}
+          totp_digits: ${{ env.TOTP_DIGITS }}
+          totp_period: ${{ env.TOTP_PERIOD }}
           cert_sha1: ${{ secrets.CERTUM_CERT_SHA1 }}
       - name: Sign
         if: env.CERTUM_USERNAME != ''
