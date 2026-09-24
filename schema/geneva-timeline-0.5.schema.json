@@ -4,7 +4,7 @@
   "properties": {
     "geneva": {
       "type": "string",
-      "description": "Format version: \"0.5\", or \"0.1\" to \"0.4\" for a document written\nbefore the fields each of those added existed. All of them are read\nas they are, except that 0.5 removed `output.audio.denoise`.",
+      "description": "Format version: \"0.5\". Documents written for \"0.1\" to \"0.4\" are\nstill read.",
       "enum": [
         "0.1",
         "0.2",

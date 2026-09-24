@@ -42,9 +42,8 @@ pub const ACCEPTED_VERSIONS: &[&str] = &["0.1", "0.2", "0.3", "0.4", "0.5"];
 #[serde(deny_unknown_fields)]
 #[schemars(title = "Geneva timeline")]
 pub struct Timeline {
-    /// Format version: "0.5", or "0.1" to "0.4" for a document written
-    /// before the fields each of those added existed. All of them are read
-    /// as they are, except that 0.5 removed `output.audio.denoise`.
+    /// Format version: "0.5". Documents written for "0.1" to "0.4" are
+    /// still read.
     pub geneva: String,
     /// Frame size, rate, duration and encoding settings of the output.
     pub output: Output,

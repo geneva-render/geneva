@@ -219,7 +219,7 @@ is composited exactly as a hand-written one is.
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `geneva` | yes | Format version, `"0.5"`. A `"0.1"` to `"0.4"` document is read as it is: 0.2 added optional clip fields (`crop`, `effects`, `mask`, `speed`), 0.3 the optional `outputs` map, 0.4 the optional top-level `keyframes` map, the `captions` source kind and the `loudness` and `hygiene` fields on output audio, and 0.5 adds `max_chars` on the `captions` source and lets every field measured in pixels take `"8px"` as well as `8` (see [Lengths](#lengths)). 0.5 is also the first version to take something away: `output.audio.denoise` went with the speech denoiser, so a document setting it is an unknown field (`E101`) whatever version it declares. |
+| `geneva` | yes | Format version, `"0.5"`. Documents written for `"0.1"` to `"0.4"` are still read; any other version is E110. |
 | `output` | yes | Frame size, rate, duration, background, color, audio and encoding settings. |
 | `outputs` | no | Map of name to [output entry](#outputs): the files one render writes from the composition, when there is more than one. |
 | `assets` | no | Map of asset id to asset. |
