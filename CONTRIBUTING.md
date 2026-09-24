@@ -5,19 +5,10 @@ most useful contributions right now are bug reports with reproducible
 timelines, sample files that render incorrectly, and review of the timeline
 format.
 
-## Certifying your contributions
+## License
 
-Geneva is MIT licensed and contributions are accepted under the same
-license. Instead of a contributor agreement, every commit carries a
-Developer Certificate of Origin sign-off stating that you have the right to
-submit it:
-
-```sh
-git commit -s
-```
-
-adds a `Signed-off-by: Your Name <you@example.com>` line; see
-<https://developercertificate.org> for the text you are certifying.
+Geneva is MIT licensed, and contributions are accepted under the same
+license.
 
 ## Development
 
