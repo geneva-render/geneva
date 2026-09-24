@@ -1,10 +1,10 @@
-# Timeline format 0.4
+# Timeline format 0.5
 
 A timeline is a JSON document that describes a video composition: the output
 frame, a table of assets, visual layers made of clips, and audio tracks.
 This page is the reference for humans and for programs that generate
 timelines. The machine-readable schema is in
-[`schema/geneva-timeline-0.4.schema.json`](../schema/geneva-timeline-0.4.schema.json)
+[`schema/geneva-timeline-0.5.schema.json`](../schema/geneva-timeline-0.5.schema.json)
 and is printed by `geneva schema`.
 
 Unknown fields are errors everywhere. That is deliberate: a misspelled
@@ -53,6 +53,15 @@ Positions and sizes are pixels in the output frame when written as numbers
 (`120`) or as strings with a unit (`"120px"`). Percentages (`"50%"`) refer to
 the output width for horizontal values and the output height for vertical
 values. In `transform.anchor`, percentages refer to the clip's own box.
+
+A field that is only ever pixels takes the same two spellings and no
+percentage: `8` and `"8px"` are the same value. That covers a text
+`size`, `letter_spacing`, `padding` and `radius`, an outline's `width`,
+a shadow's `x`, `y` and `blur`, a fill's `width`, `height`, `x` and `y`,
+a shape's `radius`, a mask's `radius` and `feather`, a blur effect's
+`radius`, and the frame and picture sizes, which must be whole
+(`1920` or `"1920px"`, not `"1920.5px"`). Keyframe values of these
+fields take either spelling too. A printed timeline writes the number.
 
 ### Points
 
@@ -211,7 +220,7 @@ prints the document as it was written.
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `geneva` | yes | Format version, `"0.5"`. A `"0.1"` to `"0.4"` document is read as it is: 0.2 added optional clip fields (`crop`, `effects`, `mask`, `speed`), 0.3 the optional `outputs` map, 0.4 the optional top-level `keyframes` map, the `captions` source kind and the `loudness` and `hygiene` fields on output audio, and 0.5 adds `max_chars` on the `captions` source. 0.5 is also the first version to take something away: `output.audio.denoise` went with the speech denoiser, so a document setting it is an unknown field (`E101`) whatever version it declares. |
+| `geneva` | yes | Format version, `"0.5"`. A `"0.1"` to `"0.4"` document is read as it is: 0.2 added optional clip fields (`crop`, `effects`, `mask`, `speed`), 0.3 the optional `outputs` map, 0.4 the optional top-level `keyframes` map, the `captions` source kind and the `loudness` and `hygiene` fields on output audio, and 0.5 adds `max_chars` on the `captions` source and lets every field measured in pixels take `"8px"` as well as `8` (see [Lengths](#lengths)). 0.5 is also the first version to take something away: `output.audio.denoise` went with the speech denoiser, so a document setting it is an unknown field (`E101`) whatever version it declares. |
 | `output` | yes | Frame size, rate, duration, background, color, audio and encoding settings. |
 | `outputs` | no | Map of name to [output entry](#outputs): the files one render writes from the composition, when there is more than one. |
 | `assets` | no | Map of asset id to asset. |
@@ -580,14 +589,16 @@ the values that map one to one:
 | `outline` (`-webkit-text-stroke`) | `outline` | `"2px black"` |
 | `font` | `font` | `"italic 600 40px/1.2 Inter"` |
 | `padding` | `padding` | `"8px"` (one value) |
+| `font-size`, `letter-spacing`, `border-radius` | `size`, `letter_spacing`, `radius` | `"34px"`, `"1.5px"`, `"3px"` |
 | `color`, `background-color` | `color`, `background` | `"#ffdd00"`, `"rgba(0, 0, 0, 0.5)"` |
 
 The object form stays canonical: a printed timeline (`--show-timeline`)
 writes `shadow` and `outline` as objects, and a `font` shorthand is
 expanded into its fields when the document is resolved. There is no
 cascade, box model or selector; each value belongs to one text source.
-A string that does not parse is an `E103` at the field, with the form
-expected.
+A string that does not parse is an `E103` with the form expected. It
+points at the field, except in a text source, where it points at the
+source: the style fields are read as one object with the rest of it.
 
 ## Markup
 

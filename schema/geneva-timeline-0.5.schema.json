@@ -4,7 +4,7 @@
   "properties": {
     "geneva": {
       "type": "string",
-      "description": "Format version: \"0.4\", or \"0.1\", \"0.2\" and \"0.3\" for a document\nwritten before the fields each of those added existed. All of them\nare read as they are.",
+      "description": "Format version: \"0.5\", or \"0.1\" to \"0.4\" for a document written\nbefore the fields each of those added existed. All of them are read\nas they are, except that 0.5 removed `output.audio.denoise`.",
       "enum": [
         "0.1",
         "0.2",
@@ -83,15 +83,11 @@
       "additionalProperties": false,
       "properties": {
         "width": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0,
+          "$ref": "#/$defs/WholePixels",
           "description": "Frame width in pixels."
         },
         "height": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0,
+          "$ref": "#/$defs/WholePixels",
           "description": "Frame height in pixels."
         },
         "fps": {
@@ -160,6 +156,20 @@
         "fps"
       ],
       "description": "Output frame and encoding settings."
+    },
+    "WholePixels": {
+      "title": "WholePixels",
+      "description": "A size in whole pixels, as a number (1920) or a string (\"1920px\").",
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "string",
+          "pattern": "^\\s*\\d+\\s*(px)?\\s*$"
+        }
+      ]
     },
     "Fps": {
       "title": "Fps",
@@ -910,21 +920,25 @@
           "description": "File name, relative to the output directory. Defaults to the\noutput's name with the kind's usual extension (`.mp4`, `.jpg`,\n`.wav`); a sprite sheet writes a `.vtt` map next to it."
         },
         "width": {
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WholePixels"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "uint32",
-          "minimum": 0,
           "description": "Picture width. For a video rendition or a poster, the canvas is\nscaled to it; giving one of width and height keeps the aspect."
         },
         "height": {
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WholePixels"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "uint32",
-          "minimum": 0,
           "description": "Picture height. For a sprite sheet, the height of one tile\n(default 90)."
         },
         "encode": {
@@ -1092,15 +1106,11 @@
       "additionalProperties": false,
       "properties": {
         "width": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0,
+          "$ref": "#/$defs/WholePixels",
           "description": "Frame width in pixels."
         },
         "height": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0,
+          "$ref": "#/$defs/WholePixels",
           "description": "Frame height in pixels."
         },
         "background": {
@@ -1438,11 +1448,14 @@
               "description": "Outline drawn inside the box edge."
             },
             "radius": {
-              "type": [
-                "number",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Pixels"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "format": "double",
               "description": "Corner radius for rectangles, in pixels."
             },
             "kind": {
@@ -1498,11 +1511,14 @@
               "description": "Font: the id of an asset of kind \"font\", a family name available\non the system, or the CSS `font` shorthand (\"600 40px/1.2 Inter\"),\nwhose parts fill in size, weight, italic and line_height unless\nthose are set."
             },
             "size": {
-              "type": [
-                "number",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Pixels"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "format": "double",
               "description": "Font size in pixels. Defaults to 48."
             },
             "weight": {
@@ -1545,11 +1561,14 @@
               "description": "A gradient that fills the glyphs in place of `color`: an object,\nor the gradient string alone."
             },
             "letter_spacing": {
-              "type": [
-                "number",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Pixels"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "format": "double",
               "description": "Extra spacing between letters in pixels."
             },
             "max_width": {
@@ -1606,11 +1625,14 @@
               "description": "Background box color. Defaults to none."
             },
             "radius": {
-              "type": [
-                "number",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Pixels"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "format": "double",
               "description": "Background box corner radius in pixels."
             },
             "outline": {
@@ -2099,8 +2121,7 @@
             },
             "width": {
               "description": "Outline width in pixels.",
-              "type": "number",
-              "format": "double"
+              "$ref": "#/$defs/Pixels"
             }
           },
           "additionalProperties": false,
@@ -2111,6 +2132,19 @@
         },
         {
           "type": "string"
+        }
+      ]
+    },
+    "Pixels": {
+      "title": "Pixels",
+      "description": "Pixels as a number (8) or a string (\"8px\").",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "string",
+          "pattern": "^\\s*-?\\d+(\\.\\d+)?\\s*(px)?\\s*$"
         }
       ]
     },
@@ -2156,11 +2190,14 @@
           "description": "Font: the id of an asset of kind \"font\", a family name available\non the system, or the CSS `font` shorthand (\"600 40px/1.2 Inter\"),\nwhose parts fill in size, weight, italic and line_height unless\nthose are set."
         },
         "size": {
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Pixels"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "double",
           "description": "Font size in pixels. Defaults to 48."
         },
         "weight": {
@@ -2203,11 +2240,14 @@
           "description": "A gradient that fills the glyphs in place of `color`: an object,\nor the gradient string alone."
         },
         "letter_spacing": {
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Pixels"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "double",
           "description": "Extra spacing between letters in pixels."
         }
       },
@@ -2227,28 +2267,34 @@
             },
             "width": {
               "description": "The tile's width in pixels. Defaults to the text's own width.",
-              "type": [
-                "number",
-                "null"
-              ],
-              "format": "double"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Pixels"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "height": {
               "description": "The tile's height in pixels. Defaults to the text's own height.",
-              "type": [
-                "number",
-                "null"
-              ],
-              "format": "double"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Pixels"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "x": {
               "description": "Where the tile starts, in pixels from the left of the text's box.\nTakes keyframes.",
-              "$ref": "#/$defs/Animated_double",
+              "$ref": "#/$defs/Animated_Pixels",
               "default": 0.0
             },
             "y": {
               "description": "Where the tile starts, in pixels from the top of the text's box.\nTakes keyframes.",
-              "$ref": "#/$defs/Animated_double",
+              "$ref": "#/$defs/Animated_Pixels",
               "default": 0.0
             }
           },
@@ -2262,12 +2308,11 @@
         }
       ]
     },
-    "Animated_double": {
+    "Animated_Pixels": {
       "description": "Either a constant value or {\"keyframes\": [...]} with values interpolated over time.",
       "anyOf": [
         {
-          "type": "number",
-          "format": "double"
+          "$ref": "#/$defs/Pixels"
         },
         {
           "type": "object",
@@ -2275,7 +2320,7 @@
             "keyframes": {
               "type": "array",
               "items": {
-                "$ref": "#/$defs/Keyframe_double"
+                "$ref": "#/$defs/Keyframe_Pixels"
               },
               "minItems": 1
             }
@@ -2287,7 +2332,7 @@
         }
       ]
     },
-    "Keyframe_double": {
+    "Keyframe_Pixels": {
       "description": "One keyframe: {\"t\": .., \"v\": .., \"ease\": ..} or the same three in order as [t, v] or [t, v, ease].",
       "anyOf": [
         {
@@ -2297,8 +2342,7 @@
               "$ref": "#/$defs/Time"
             },
             "v": {
-              "type": "number",
-              "format": "double"
+              "$ref": "#/$defs/Pixels"
             },
             "ease": {
               "$ref": "#/$defs/Easing"
@@ -2374,17 +2418,17 @@
             },
             "x": {
               "description": "Horizontal offset in pixels. Takes keyframes.",
-              "$ref": "#/$defs/Animated_double",
+              "$ref": "#/$defs/Animated_Pixels",
               "default": 0.0
             },
             "y": {
               "description": "Vertical offset in pixels. Takes keyframes.",
-              "$ref": "#/$defs/Animated_double",
+              "$ref": "#/$defs/Animated_Pixels",
               "default": 0.0
             },
             "blur": {
               "description": "Blur radius in pixels. Takes keyframes.",
-              "$ref": "#/$defs/Animated_double",
+              "$ref": "#/$defs/Animated_Pixels",
               "default": 0.0
             }
           },
@@ -2467,11 +2511,14 @@
           "description": "Font: the id of an asset of kind \"font\", a family name available\non the system, or the CSS `font` shorthand (\"600 40px/1.2 Inter\"),\nwhose parts fill in size, weight, italic and line_height unless\nthose are set."
         },
         "size": {
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Pixels"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "double",
           "description": "Font size in pixels. Defaults to 48."
         },
         "weight": {
@@ -2514,11 +2561,14 @@
           "description": "A gradient that fills the glyphs in place of `color`: an object,\nor the gradient string alone."
         },
         "letter_spacing": {
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Pixels"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "double",
           "description": "Extra spacing between letters in pixels."
         },
         "max_width": {
@@ -2575,11 +2625,14 @@
           "description": "Background box color. Defaults to none."
         },
         "radius": {
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Pixels"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "double",
           "description": "Background box corner radius in pixels."
         },
         "outline": {
@@ -2954,6 +3007,61 @@
         }
       ]
     },
+    "Animated_double": {
+      "description": "Either a constant value or {\"keyframes\": [...]} with values interpolated over time.",
+      "anyOf": [
+        {
+          "type": "number",
+          "format": "double"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "keyframes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Keyframe_double"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "keyframes"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Keyframe_double": {
+      "description": "One keyframe: {\"t\": .., \"v\": .., \"ease\": ..} or the same three in order as [t, v] or [t, v, ease].",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "t": {
+              "$ref": "#/$defs/Time"
+            },
+            "v": {
+              "type": "number",
+              "format": "double"
+            },
+            "ease": {
+              "$ref": "#/$defs/Easing"
+            }
+          },
+          "required": [
+            "t",
+            "v"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3
+        }
+      ]
+    },
     "BlendMode": {
       "oneOf": [
         {
@@ -3011,7 +3119,7 @@
           "additionalProperties": false,
           "properties": {
             "radius": {
-              "$ref": "#/$defs/Animated_double",
+              "$ref": "#/$defs/Animated_Pixels",
               "description": "The blur's standard deviation in output pixels (as CSS's\n`blur()`); 0 leaves the picture as it is. Animatable."
             },
             "kind": {
@@ -3088,19 +3196,25 @@
           "description": "Height of the shape's box. Defaults to the clip's box."
         },
         "radius": {
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Pixels"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "double",
           "description": "Corner radius of a rectangle, in pixels of the clip's box."
         },
         "feather": {
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Pixels"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "double",
           "description": "Width of the soft edge in pixels of the clip's box; 0 (the\ndefault) is a hard edge."
         },
         "asset": {

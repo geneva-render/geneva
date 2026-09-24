@@ -327,13 +327,16 @@ pub struct ShadowFields {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<Animated<ColorValue>>,
     /// Horizontal offset in pixels. Takes keyframes.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::pixels::de_animated_px")]
+    #[schemars(schema_with = "crate::pixels::animated_px_schema")]
     pub x: Animated<f64>,
     /// Vertical offset in pixels. Takes keyframes.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::pixels::de_animated_px")]
+    #[schemars(schema_with = "crate::pixels::animated_px_schema")]
     pub y: Animated<f64>,
     /// Blur radius in pixels. Takes keyframes.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::pixels::de_animated_px")]
+    #[schemars(schema_with = "crate::pixels::animated_px_schema")]
     pub blur: Animated<f64>,
 }
 
@@ -344,18 +347,30 @@ pub struct TextFillFields {
     /// The colour or gradient, in CSS.
     pub gradient: String,
     /// The tile's width in pixels. Defaults to the text's own width.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::pixels::de_opt_px"
+    )]
+    #[schemars(schema_with = "crate::pixels::opt_px_schema")]
     pub width: Option<f64>,
     /// The tile's height in pixels. Defaults to the text's own height.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::pixels::de_opt_px"
+    )]
+    #[schemars(schema_with = "crate::pixels::opt_px_schema")]
     pub height: Option<f64>,
     /// Where the tile starts, in pixels from the left of the text's box.
     /// Takes keyframes.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::pixels::de_animated_px")]
+    #[schemars(schema_with = "crate::pixels::animated_px_schema")]
     pub x: Animated<f64>,
     /// Where the tile starts, in pixels from the top of the text's box.
     /// Takes keyframes.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::pixels::de_animated_px")]
+    #[schemars(schema_with = "crate::pixels::animated_px_schema")]
     pub y: Animated<f64>,
 }
 
@@ -366,6 +381,8 @@ pub struct StrokeFields {
     /// Outline color.
     pub color: ColorValue,
     /// Outline width in pixels.
+    #[serde(deserialize_with = "crate::pixels::de_px")]
+    #[schemars(schema_with = "crate::pixels::px_schema")]
     pub width: f64,
 }
 

@@ -9,7 +9,7 @@ the format version it was written for.
 
 ### Changed
 
-- **Timeline format 0.5.** `FORMAT_VERSION` moves with the two format
+- **Timeline format 0.5.** `FORMAT_VERSION` moves with the format
   changes below it, which is what publishes a schema file of its own
   rather than editing one an older binary was built against.
   `schema/geneva-timeline-0.4.schema.json` is back to the byte-for-byte
@@ -116,6 +116,23 @@ the format version it was written for.
   "captions.json"`, which does not say what would change it. It now adds
   `grouped at up to 2 lines of 42 characters`, and says nothing extra for
   a `.srt` or `.vtt`, which carries its own cues and is not grouped.
+
+- **Every field measured in pixels takes `"8px"` as well as `8`.** Only
+  `padding` did, so a text style could say `"padding": "14px"` and then
+  be refused `"radius": "3px"` one line below with `E103`, which is the
+  first thing someone writing CSS-shaped values will try. The rest now
+  read either spelling: a text `size`, `letter_spacing` and `radius`, an
+  outline's `width`, a shadow's `x`, `y` and `blur`, a fill's `width`,
+  `height`, `x` and `y`, a shape's and a mask's `radius`, a mask's
+  `feather`, a blur effect's `radius`, and the frame and picture sizes
+  under `output`, `compositions` and `outputs`. Keyframe values of these
+  fields take either spelling too.
+
+  A percentage is refused, with the reason, since none of these fields
+  has anything for it to be a percentage of; the fields that do take
+  one are lengths and already did. A frame or picture size must be a
+  whole number of pixels. Nothing that parsed before parses differently,
+  and a printed timeline still writes the number.
 
 ### Fixed
 

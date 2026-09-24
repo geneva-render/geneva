@@ -97,7 +97,7 @@ as-is. The JSON ties the footage, card and captions together:
             "highlight": { "color": "#ffffff" },
             "background": "#0a0f14cc",
             "padding": "14px",
-            "radius": 3,
+            "radius": "3px",
             "max_width": "66%"
           } } } ] },
 

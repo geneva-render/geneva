@@ -22,7 +22,8 @@ pub const FORMAT_VERSION: &str = "0.5";
 /// The format versions this crate reads: 0.2 added crop, effects, mask
 /// and speed on a clip, 0.3 the outputs map, 0.4 the keyframes map, the
 /// captions source and loudness and hygiene on output audio, 0.5
-/// `max_chars` on the captions source.
+/// `max_chars` on the captions source and `"8px"` in every field
+/// measured in pixels.
 ///
 /// Up to 0.4 each version was the one before it with more optional
 /// fields, so an older document needed nothing doing to it. 0.5 is the
@@ -41,9 +42,9 @@ pub const ACCEPTED_VERSIONS: &[&str] = &["0.1", "0.2", "0.3", "0.4", "0.5"];
 #[serde(deny_unknown_fields)]
 #[schemars(title = "Geneva timeline")]
 pub struct Timeline {
-    /// Format version: "0.4", or "0.1", "0.2" and "0.3" for a document
-    /// written before the fields each of those added existed. All of them
-    /// are read as they are.
+    /// Format version: "0.5", or "0.1" to "0.4" for a document written
+    /// before the fields each of those added existed. All of them are read
+    /// as they are, except that 0.5 removed `output.audio.denoise`.
     pub geneva: String,
     /// Frame size, rate, duration and encoding settings of the output.
     pub output: Output,
@@ -86,8 +87,12 @@ pub struct Timeline {
 #[serde(deny_unknown_fields)]
 pub struct CompositionDef {
     /// Frame width in pixels.
+    #[serde(deserialize_with = "crate::pixels::de_whole_px")]
+    #[schemars(schema_with = "crate::pixels::whole_px_schema")]
     pub width: u32,
     /// Frame height in pixels.
+    #[serde(deserialize_with = "crate::pixels::de_whole_px")]
+    #[schemars(schema_with = "crate::pixels::whole_px_schema")]
     pub height: u32,
     /// Clear color. Defaults to transparent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -101,8 +106,12 @@ pub struct CompositionDef {
 #[serde(deny_unknown_fields)]
 pub struct Output {
     /// Frame width in pixels.
+    #[serde(deserialize_with = "crate::pixels::de_whole_px")]
+    #[schemars(schema_with = "crate::pixels::whole_px_schema")]
     pub width: u32,
     /// Frame height in pixels.
+    #[serde(deserialize_with = "crate::pixels::de_whole_px")]
+    #[schemars(schema_with = "crate::pixels::whole_px_schema")]
     pub height: u32,
     /// Frame rate.
     pub fps: Fps,
@@ -177,11 +186,21 @@ pub struct OutputSpec {
     pub path: Option<String>,
     /// Picture width. For a video rendition or a poster, the canvas is
     /// scaled to it; giving one of width and height keeps the aspect.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::pixels::de_opt_whole_px"
+    )]
+    #[schemars(schema_with = "crate::pixels::opt_whole_px_schema")]
     pub width: Option<u32>,
     /// Picture height. For a sprite sheet, the height of one tile
     /// (default 90).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::pixels::de_opt_whole_px"
+    )]
+    #[schemars(schema_with = "crate::pixels::opt_whole_px_schema")]
     pub height: Option<u32>,
     /// Encoder settings for a video or audio output; a video rendition
     /// falls back to `output.encode`.
@@ -709,11 +728,21 @@ pub struct Mask {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<Length>,
     /// Corner radius of a rectangle, in pixels of the clip's box.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::pixels::de_opt_px"
+    )]
+    #[schemars(schema_with = "crate::pixels::opt_px_schema")]
     pub radius: Option<f64>,
     /// Width of the soft edge in pixels of the clip's box; 0 (the
     /// default) is a hard edge.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::pixels::de_opt_px"
+    )]
+    #[schemars(schema_with = "crate::pixels::opt_px_schema")]
     pub feather: Option<f64>,
     /// Id of an image asset whose luma, times its alpha, is the
     /// coverage: white shows, black hides. Stretched over the clip's box.
@@ -734,6 +763,8 @@ pub enum Effect {
     Blur {
         /// The blur's standard deviation in output pixels (as CSS's
         /// `blur()`); 0 leaves the picture as it is. Animatable.
+        #[serde(deserialize_with = "crate::pixels::de_animated_px")]
+        #[schemars(schema_with = "crate::pixels::animated_px_schema")]
         radius: Animated<f64>,
     },
 }
@@ -909,7 +940,12 @@ pub enum Source {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stroke: Option<Stroke>,
         /// Corner radius for rectangles, in pixels.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "crate::pixels::de_opt_px"
+        )]
+        #[schemars(schema_with = "crate::pixels::opt_px_schema")]
         radius: Option<f64>,
     },
     /// Styled text, optionally with per-word timing.
@@ -1105,7 +1141,12 @@ pub struct TextSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<ColorValue>,
     /// Background box corner radius in pixels.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::pixels::de_opt_px"
+    )]
+    #[schemars(schema_with = "crate::pixels::opt_px_schema")]
     pub radius: Option<f64>,
     /// Text outline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1315,7 +1356,12 @@ pub struct TextStyle {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
     /// Font size in pixels. Defaults to 48.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::pixels::de_opt_px"
+    )]
+    #[schemars(schema_with = "crate::pixels::opt_px_schema")]
     pub size: Option<f64>,
     /// Weight from 100 to 900. Defaults to 400.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1331,7 +1377,12 @@ pub struct TextStyle {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<TextFill>,
     /// Extra spacing between letters in pixels.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::pixels::de_opt_px"
+    )]
+    #[schemars(schema_with = "crate::pixels::opt_px_schema")]
     pub letter_spacing: Option<f64>,
 }
 

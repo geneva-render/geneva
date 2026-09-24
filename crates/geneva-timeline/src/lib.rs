@@ -30,6 +30,7 @@ mod json_schema;
 mod length;
 pub mod motion;
 mod parse;
+mod pixels;
 mod ratio;
 mod resolve;
 pub mod schema;

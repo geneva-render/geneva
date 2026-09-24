@@ -263,7 +263,7 @@ The rest is in [timeline.md](timeline.md#outputs).
 
 ## Shorthands
 
-Three parts of a document have a shorter spelling. All are optional and
+Four parts of a document have a shorter spelling. All are optional and
 accepted alongside the long form, so a document can mix them.
 
 - A point (`transform.position`, `transform.anchor`) as a pair or a
@@ -274,6 +274,9 @@ accepted alongside the long form, so a document can mix them.
 - A timed word as its fields in order, `["word", start, end]`, or
   `["word", start]` where the next word's start ends it. The last word
   needs its own end (E102).
+- A number of pixels as a CSS length: `"8px"` wherever `8` is accepted,
+  keyframe values included (`"size": "34px"`, `"radius": "3px"`,
+  `"blur": "8px"`). Frame and picture sizes must be whole pixels.
 
 ## Things that trip programs up
 
