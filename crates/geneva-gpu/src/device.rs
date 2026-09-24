@@ -248,7 +248,7 @@ const LIB_DIRS: &[&str] = &[
 
 /// The libraries NVIDIA's Vulkan driver needs before it will start, and
 /// the packages that carry them on Debian and Ubuntu.
-#[cfg(target_os = "linux")]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const NEEDED: &[(&str, &str)] = &[
     ("libX11.so.6", "libx11-6"),
     ("libXext.so.6", "libxext6"),
@@ -318,14 +318,11 @@ fn hint_from(nvidia: bool, icd: bool, missing: &[&str]) -> Option<String> {
                 .to_owned(),
         );
     }
-    #[cfg(target_os = "linux")]
     let packages: Vec<&str> = NEEDED
         .iter()
         .filter(|(lib, _)| missing.contains(lib))
         .map(|(_, pkg)| *pkg)
         .collect();
-    #[cfg(not(target_os = "linux"))]
-    let packages: Vec<&str> = Vec::new();
     Some(format!(
         "an NVIDIA GPU is here and its Vulkan driver is installed, but {} {} missing. The driver          is a GLVND vendor library and will not start without {}. On Debian or Ubuntu: apt-get          install {}",
         missing.join(", "),

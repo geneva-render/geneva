@@ -65,8 +65,11 @@ jobs:
       - name: Test without media support (Windows)
         if: runner.os == 'Windows'
         run: cargo test --workspace --no-default-features
+      # Against the newest published file, so a format bump needs no edit
+      # here. Windows has no media libraries for the default build.
       - name: Schema is up to date
-        run: cargo run -q -p geneva-cli -- schema | diff - schema/geneva-timeline-0.4.schema.json
+        if: runner.os != 'Windows'
+        run: cargo run -q -p geneva-cli -- schema | diff - "$(ls schema/geneva-timeline-*.schema.json | sort -V | tail -1)"
       - name: Upload golden failures
         if: failure()
         uses: actions/upload-artifact@v4
