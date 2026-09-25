@@ -46,7 +46,7 @@ Let's be clear about what's under the hood: FFmpeg's libraries. Every decoder, e
   ```
 
   ffmpeg is happy to hand you a broken file and exit 0.
-- **It has an actual compositor.** Layers, keyframes, masks, blend modes and transitions, on exact frame timing, blended in linear light with colour metadata preserved (and HDR tone-mapped when needed). Titles and graphics can be plain HTML and CSS, flexbox and `@keyframes` included, which geneva lays out itself. GPU when you have one, CPU when you don't.
+- **It has an actual compositor.** Layers, keyframes, masks, blend modes and transitions, on exact frame timing, blended in linear light with colour metadata preserved (and HDR tone-mapped when needed). Titles and graphics can be plain HTML and CSS, flexbox and `@keyframes` included. Tools that turn HTML into video usually drive a headless Chrome and screenshot it frame by frame; geneva lays out the HTML itself and draws it straight onto your footage, so there's no browser to install and no separate pass. GPU when you have one, CPU when you don't.
 - **It tells you what it did.** Every run ends with a few notes: the encoder it picked, what it copied, what it had to guess about your source. Add `--format json` and all of it is machine-readable.
 
 ## One document, the whole edit
