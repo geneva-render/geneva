@@ -2,6 +2,8 @@
 
 A command-line video editor. One binary, no dependencies: cut, join, convert and caption video, and draw HTML and CSS overlays on it without a browser, either with everyday commands or by handing it a JSON document that describes the whole edit.
 
+It's built on ffmpeg's libraries but not its command line: it re-encodes only what your edit changes and copies the rest, and it checks the whole edit before rendering, so a mistake comes back as an error that points at it, not as a broken file and exit code 0.
+
 https://github.com/user-attachments/assets/6d8566dd-7270-49bc-ac66-dab1585817a3
 
 <sub>An AI agent made this on its first try, from one prompt, with nothing but geneva and whisper-cli. [The prompt is below.](#made-to-be-driven-by-agents)</sub>
@@ -49,7 +51,7 @@ Let me be clear about what's under the hood: FFmpeg's libraries. I didn't rewrit
 - **It has an actual compositor.** Layers, keyframes, masks, blend modes and transitions, on exact frame timing, blended in linear light with colour metadata preserved (and HDR tone-mapped when needed). Titles and graphics can be plain HTML and CSS, flexbox and `@keyframes` included, which geneva lays out itself. GPU when you have one, CPU when you don't.
 - **It tells you what it did.** Every run ends with a few notes: the encoder it picked, what it copied, what it had to guess about your source. Add `--format json` and all of it is machine-readable.
 
-**"Couldn't an agent just use Playwright and ffmpeg?"** It could, and people do: screenshot the HTML frame by frame in a headless browser, then have ffmpeg lay the shots over the footage. But everything apart from the overlay is still ffmpeg flags, with the pitfalls above. The browser's animations run on the wall clock, so its clock has to be faked for every frame. And it's a second full encode, with Chromium, Node and ffmpeg to install first. geneva does it in one pass with no browser. On the same 4-core machine with the same x264 settings, a 4-second name card over 9 seconds of 720p footage took 6 seconds against 14.7 for Playwright plus ffmpeg, and the Popeye video at the top took 113 seconds against 195. What the browser does better: any CSS and any JavaScript, where geneva handles [a subset of CSS](docs/timeline.md#markup) and no JavaScript.
+**"Couldn't an agent just use Playwright and ffmpeg, or Remotion?"** It could, and people do: screenshot the HTML frame by frame in a headless browser, then have ffmpeg lay the shots over the footage. But everything apart from the overlay is still ffmpeg flags, with the pitfalls above. The browser's animations run on the wall clock, so its clock has to be faked for every frame. And it's a second full encode, with Chromium, Node and ffmpeg to install first. geneva does it in one pass with no browser. On the same 4-core machine with the same x264 settings, a 4-second name card over 9 seconds of 720p footage took 6 seconds against 14.7 for Playwright plus ffmpeg, and the Popeye video at the top took 113 seconds against 195. Remotion packages the same approach and says in its own docs not to use CSS `@keyframes` or transitions, since frames render out of order; geneva plays them as written, and the card's HTML file looks the same opened in a browser. What the browser does better: any CSS and any JavaScript, where geneva handles [a subset of CSS](docs/timeline.md#markup) and no JavaScript.
 
 ## One document, the whole edit
 
