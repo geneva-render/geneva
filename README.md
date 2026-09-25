@@ -45,20 +45,11 @@ Let me be clear about what's under the hood: FFmpeg's libraries. I didn't rewrit
      = help: did you mean "card"? assets are declared under "assets"
   ```
 
-  ffmpeg is happy to hand you a broken file and exit 0.
+  ffmpeg is happy to hand you a broken file and exit 0, which matters most when the one running it is an agent that can't watch the result. In a small test I ran (20 editing tasks answered blind by one model, twice; I wrote the tasks, so it's a hint, not a benchmark), the ffmpeg answers produced 8 files that exited 0 and were quietly wrong: shifted colours, cuts tens of milliseconds off, sound drifting out of sync. The geneva answers got all 20 right in both runs, once I'd fixed the one bug the test turned up.
 - **It has an actual compositor.** Layers, keyframes, masks, blend modes and transitions, on exact frame timing, blended in linear light with colour metadata preserved (and HDR tone-mapped when needed). Titles and graphics can be plain HTML and CSS, flexbox and `@keyframes` included, which geneva lays out itself. GPU when you have one, CPU when you don't.
 - **It tells you what it did.** Every run ends with a few notes: the encoder it picked, what it copied, what it had to guess about your source. Add `--format json` and all of it is machine-readable.
 
-## "Couldn't an agent just use Playwright and ffmpeg?"
-
-It could, and people do: load the HTML in a headless browser, screenshot every frame, then have ffmpeg lay the screenshots over the footage. It works. Here's what it costs:
-
-- **The hard part is still ffmpeg.** The overlay is the easy bit. Cutting, timing captions to words, mixing the sound, keeping colours and sync right: that's all ffmpeg flags again, and that's exactly where agents slip. I ran a small test, 20 editing tasks answered blind by one model, twice (tasks I wrote myself, so it's a hint, not a benchmark). The ffmpeg answers produced 8 files that exited 0, looked plausible and were wrong: shifted colours, cuts tens of milliseconds off, a speed change that pulled the sound out of sync. The geneva answers got all 20 right in both runs, once I'd fixed the one bug the test turned up. An agent can't watch the result, so a wrong file that looks fine is the failure that matters.
-- **Browsers don't keep frame time.** CSS animations run on the wall clock, so capturing frame by frame means faking the page's clock and seeking it for every frame. Remotion's docs flat out tell you not to use CSS animations for this reason. geneva computes every animation from the frame's timestamp, so frame 1234 is the same picture every time.
-- **It's a second pass over the whole video.** The screenshots get layered onto the footage in a separate ffmpeg run, which decodes and re-encodes every frame, including the ones nothing is drawn on. geneva draws the HTML in the same pass that cuts and encodes, and stretches with nothing on them can be copied rather than re-encoded.
-- **Chromium, Node, Playwright and ffmpeg is a lot to install** on a server, in CI or in an agent's sandbox. geneva is one binary.
-
-To be fair to the browser: it runs any CSS and any JavaScript. geneva handles [a subset of CSS](docs/timeline.md#markup) (layout, gradients, shadows, clip paths, blend modes, keyframes) and no JavaScript at all. If your frames need the whole web platform, the browser route is the right one.
+**"Couldn't an agent just use Playwright and ffmpeg?"** It could, and people do: screenshot the HTML frame by frame in a headless browser, then have ffmpeg lay the shots over the footage. But everything apart from the overlay is still ffmpeg flags, with the pitfalls above. The browser's animations run on the wall clock, so its clock has to be faked for every frame. And it's a second full encode, with Chromium, Node and ffmpeg to install first. geneva does it in one pass with no browser: a 4-second name card over 9 seconds of 720p footage took 6 seconds, against 14.7 for Playwright plus ffmpeg on the same 4-core machine and the same x264 settings. What the browser does better: any CSS and any JavaScript, where geneva handles [a subset of CSS](docs/timeline.md#markup) and no JavaScript.
 
 ## One document, the whole edit
 
