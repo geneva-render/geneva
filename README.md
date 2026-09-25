@@ -1,6 +1,6 @@
 <img src="docs/wordmark-any.png" alt="Geneva" width="240" height="77">
 
-A command-line video editor. One binary, no dependencies: cut, join, convert, caption and composite video, either with everyday commands or by handing it a JSON document that describes the whole edit.
+A command-line video editor. One binary, no dependencies: cut, join, convert and caption video, and draw HTML and CSS overlays on it without a browser, either with everyday commands or by handing it a JSON document that describes the whole edit.
 
 https://github.com/user-attachments/assets/6d8566dd-7270-49bc-ac66-dab1585817a3
 
