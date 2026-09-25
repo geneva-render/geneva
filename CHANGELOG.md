@@ -31,6 +31,59 @@ The first public release.
   for next to the executable and in the system folder only, never in the
   current directory or along `PATH`.
 
+- **`max_chars` on the `captions` source.** Cue grouping is a budget of
+  `max_lines` lines of `max_chars` characters, and the character count
+  was fixed at 42 with no way to reach it from a document, so `max_lines`
+  was the only lever: the same 724 words grouped into the same 55 cues
+  at `style.max_width` 700 and at 1900. It is a field now, defaulting to
+  the 42 it always was. Under 8 is `E402` rather than a quiet clamp,
+  since a line that short cannot hold a word.
+
+  Grouping still counts characters rather than measuring, because it runs
+  before a font is loaded, and settling cues without one is what keeps a
+  document grouping the same way on every machine. `style.max_width` is
+  therefore still yours to match: `max_width / (0.5 * font.size)` errs
+  narrow, and the reference gives the measured figures.
+
+- **The cue count says what grouped it.** `N453` read `55 cues read from
+  "captions.json"`, which does not say what would change it. It now adds
+  `grouped at up to 2 lines of 42 characters`, and says nothing extra for
+  a `.srt` or `.vtt`, which carries its own cues and is not grouped.
+
+- **Every field measured in pixels takes `"8px"` as well as `8`.** Only
+  `padding` did, so a text style could say `"padding": "14px"` and then
+  be refused `"radius": "3px"` one line below with `E103`, which is the
+  first thing someone writing CSS-shaped values will try. The rest now
+  read either spelling: a text `size`, `letter_spacing` and `radius`, an
+  outline's `width`, a shadow's `x`, `y` and `blur`, a fill's `width`,
+  `height`, `x` and `y`, a shape's and a mask's `radius`, a mask's
+  `feather`, a blur effect's `radius`, and the frame and picture sizes
+  under `output`, `compositions` and `outputs`. Keyframe values of these
+  fields take either spelling too.
+
+  A percentage is refused, with the reason, since none of these fields
+  has anything for it to be a percentage of; the fields that do take
+  one are lengths and already did. A frame or picture size must be a
+  whole number of pixels. Nothing that parsed before parses differently,
+  and a printed timeline still writes the number.
+
+- **Rate and audio flags on every verb**: `--max-bitrate`,
+  `--audio-codec`, `--audio-bitrate`, `--sample-rate` and `--channels`,
+  for the fields the format already had and the command line did not
+  reach. `geneva convert talk.mov -o talk.mkv --max-bitrate 6M
+  --audio-codec opus --audio-bitrate 128k` is now one command rather
+  than `--show-timeline`, an edit and a `render`. Rates take `6M`,
+  `800k` or a bare number of kb/s; a number over 1 Gb/s is refused with
+  the reason, since ffmpeg reads a bare number as bits per second. A
+  flag wins over what a `--for` target writes.
+
+  The sound is copied when what is asked matches the source (codec,
+  rate, channels) and encoded otherwise, with the picture still copied
+  beside it. There is still no fixed average bitrate, constant bitrate
+  or two-pass encode: the video is constant quality under an optional
+  ceiling, and the CLI reference now has a section saying so, with the
+  ceiling's two-second buffer and what each encoder does with it.
+
 ### Changed
 
 - **Timeline format 1.0.** The first public release starts the format
@@ -164,91 +217,6 @@ The first public release.
   render-time remarks came from the planner, never from the painter, and
   a wrapper in the middle would have swallowed them.
 
-### Documentation
-
-- A shipped family is the one drawn wherever it is named, by asset id or
-  by the family in the file, in markup and in a `text` source alike.
-- `transform.position` is one animated point, so its keyframes carry both
-  axes together; a `keyframes` object under `x` is `E103`, which reports
-  the length it expected rather than the point it wanted.
-- The group buffer bound, what it allows, and that a composition has none.
-- `examples/words.json` was described as whisper's output pasted in as
-  it came. `iss.mp4` has no sound, so it cannot be: the words were
-  written for the clip in whisper's format. The README and the examples
-  page now say so.
-- The README's lower third has captions of its own,
-  `examples/commentary.json`: three sentences where it had seven words
-  in two cues. The render ends 3 s after the card leaves, at 9 s, and
-  its report and frame counts in the README are the ones it prints now.
-  `scripts/demo-gif.sh` writes the WebP figures the pages use rather
-  than GIFs nothing did.
-- The reference no longer mentions denoising in three places it
-  outlived the feature.
-- `cli.md` is a reference now: tables per command, the output modes in
-  one table. `architecture.md` is shorter and more technical.
-  `timeline.md` ends with a short list of known limitations in place of
-  "What it does not do", and corrects what it said about hardware
-  encoders (used, not ignored), un-probed clip lengths, the renderers,
-  colour spellings and two missing fields (`subtitles`,
-  `transition_out`).
-
-### Added
-
-- **`max_chars` on the `captions` source.** Cue grouping is a budget of
-  `max_lines` lines of `max_chars` characters, and the character count
-  was fixed at 42 with no way to reach it from a document, so `max_lines`
-  was the only lever: the same 724 words grouped into the same 55 cues
-  at `style.max_width` 700 and at 1900. It is a field now, defaulting to
-  the 42 it always was. Under 8 is `E402` rather than a quiet clamp,
-  since a line that short cannot hold a word.
-
-  Grouping still counts characters rather than measuring, because it runs
-  before a font is loaded, and settling cues without one is what keeps a
-  document grouping the same way on every machine. `style.max_width` is
-  therefore still yours to match: `max_width / (0.5 * font.size)` errs
-  narrow, and the reference gives the measured figures.
-
-- **The cue count says what grouped it.** `N453` read `55 cues read from
-  "captions.json"`, which does not say what would change it. It now adds
-  `grouped at up to 2 lines of 42 characters`, and says nothing extra for
-  a `.srt` or `.vtt`, which carries its own cues and is not grouped.
-
-- **Every field measured in pixels takes `"8px"` as well as `8`.** Only
-  `padding` did, so a text style could say `"padding": "14px"` and then
-  be refused `"radius": "3px"` one line below with `E103`, which is the
-  first thing someone writing CSS-shaped values will try. The rest now
-  read either spelling: a text `size`, `letter_spacing` and `radius`, an
-  outline's `width`, a shadow's `x`, `y` and `blur`, a fill's `width`,
-  `height`, `x` and `y`, a shape's and a mask's `radius`, a mask's
-  `feather`, a blur effect's `radius`, and the frame and picture sizes
-  under `output`, `compositions` and `outputs`. Keyframe values of these
-  fields take either spelling too.
-
-  A percentage is refused, with the reason, since none of these fields
-  has anything for it to be a percentage of; the fields that do take
-  one are lengths and already did. A frame or picture size must be a
-  whole number of pixels. Nothing that parsed before parses differently,
-  and a printed timeline still writes the number.
-
-- **Rate and audio flags on every verb**: `--max-bitrate`,
-  `--audio-codec`, `--audio-bitrate`, `--sample-rate` and `--channels`,
-  for the fields the format already had and the command line did not
-  reach. `geneva convert talk.mov -o talk.mkv --max-bitrate 6M
-  --audio-codec opus --audio-bitrate 128k` is now one command rather
-  than `--show-timeline`, an edit and a `render`. Rates take `6M`,
-  `800k` or a bare number of kb/s; a number over 1 Gb/s is refused with
-  the reason, since ffmpeg reads a bare number as bits per second. A
-  flag wins over what a `--for` target writes.
-
-  The sound is copied when what is asked matches the source (codec,
-  rate, channels) and encoded otherwise, with the picture still copied
-  beside it. There is still no fixed average bitrate, constant bitrate
-  or two-pass encode: the video is constant quality under an optional
-  ceiling, and the CLI reference now has a section saying so, with the
-  ceiling's two-second buffer and what each encoder does with it.
-
-### Fixed
-
 - **A ceiling on VP9 did not encode.** libvpx refuses `maxrate` without
   a bitrate, so any document setting `max_bitrate_kbps` for VP9 failed
   to open the encoder. The ceiling is now the bitrate of libvpx's
@@ -285,6 +253,32 @@ The first public release.
   carried page links to one that is not carried.
 
 ### Documentation
+
+- A shipped family is the one drawn wherever it is named, by asset id or
+  by the family in the file, in markup and in a `text` source alike.
+- `transform.position` is one animated point, so its keyframes carry both
+  axes together; a `keyframes` object under `x` is `E103`, which reports
+  the length it expected rather than the point it wanted.
+- The group buffer bound, what it allows, and that a composition has none.
+- `examples/words.json` was described as whisper's output pasted in as
+  it came. `iss.mp4` has no sound, so it cannot be: the words were
+  written for the clip in whisper's format. The README and the examples
+  page now say so.
+- The README's lower third has captions of its own,
+  `examples/commentary.json`: three sentences where it had seven words
+  in two cues. The render ends 3 s after the card leaves, at 9 s, and
+  its report and frame counts in the README are the ones it prints now.
+  `scripts/demo-gif.sh` writes the WebP figures the pages use rather
+  than GIFs nothing did.
+- The reference no longer mentions denoising in three places it
+  outlived the feature.
+- `cli.md` is a reference now: tables per command, the output modes in
+  one table. `architecture.md` is shorter and more technical.
+  `timeline.md` ends with a short list of known limitations in place of
+  "What it does not do", and corrects what it said about hardware
+  encoders (used, not ignored), un-probed clip lengths, the renderers,
+  colour spellings and two missing fields (`subtitles`,
+  `transition_out`).
 
 Found by pointing an agent at the 0.7.1 binary with `geneva guide` as its
 only source and watching where it went wrong.
