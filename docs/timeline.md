@@ -1,10 +1,10 @@
-# Timeline format 0.5
+# Timeline format 1.0
 
 A timeline is a JSON document that describes a video composition: the output
 frame, a table of assets, visual layers made of clips, and audio tracks.
 This page is the reference for humans and for programs that generate
 timelines. The machine-readable schema is in
-[`schema/geneva-timeline-0.5.schema.json`](../schema/geneva-timeline-0.5.schema.json)
+[`schema/geneva-timeline-1.0.schema.json`](../schema/geneva-timeline-1.0.schema.json)
 and is printed by `geneva schema`.
 
 Unknown fields are errors everywhere. That is deliberate: a misspelled
@@ -15,7 +15,7 @@ silently ignored.
 
 ```json
 {
-  "geneva": "0.5",
+  "geneva": "1.0",
   "output": { "width": 1280, "height": 720, "fps": 30, "duration": "3s" },
   "layers": [
     { "clips": [ { "source": { "kind": "solid", "color": "#1d2230" } } ] }
@@ -219,7 +219,7 @@ is composited exactly as a hand-written one is.
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `geneva` | yes | Format version, `"0.5"`. Documents written for `"0.1"` to `"0.4"` are still read; any other version is E110. |
+| `geneva` | yes | Format version, `"1.0"`. Any other version is E110. |
 | `output` | yes | Frame size, rate, duration, background, color, audio and encoding settings. |
 | `outputs` | no | Map of name to [output entry](#outputs): the files one render writes from the composition, when there is more than one. |
 | `assets` | no | Map of asset id to asset. |

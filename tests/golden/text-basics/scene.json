@@ -1,5 +1,5 @@
 {
-  "geneva": "0.1",
+  "geneva": "1.0",
   "output": { "width": 480, "height": 270, "fps": 30, "duration": "2s", "background": "#1d2230" },
   "assets": {
     "sans": { "src": "fonts/LiberationSans-Regular.ttf" },

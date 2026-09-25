@@ -23,7 +23,7 @@ fn schema_rejects_what_the_parser_rejects() {
     let schema = json_schema();
     let validator = jsonschema::validator_for(&schema).unwrap();
     let bad = serde_json::json!({
-        "geneva": "0.1",
+        "geneva": "1.0",
         "output": { "width": 16, "height": 16, "fps": 30 },
         "layers": [ { "clips": [ { "source": { "kind": "solid", "color": "#fff" }, "opacty": 1 } ] } ]
     });

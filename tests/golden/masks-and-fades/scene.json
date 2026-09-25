@@ -1,5 +1,5 @@
 {
-  "geneva": "0.1",
+  "geneva": "1.0",
   "output": { "width": 320, "height": 180, "fps": 30, "duration": "3s", "background": "#1c2430" },
   "assets": { "checker": { "src": "image-transform/checker.png" } },
   "layers": [

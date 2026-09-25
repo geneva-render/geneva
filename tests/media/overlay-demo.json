@@ -1,5 +1,5 @@
 {
-  "geneva": "0.1",
+  "geneva": "1.0",
   "output": { "width": 384, "height": 216, "fps": 25 },
   "assets": { "clip": { "src": "clip.mp4" } },
   "layers": [

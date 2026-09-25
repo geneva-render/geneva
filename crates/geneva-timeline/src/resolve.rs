@@ -980,14 +980,24 @@ impl Resolver<'_> {
                     format!("unsupported format version {:?}", tl.geneva),
                 )
                 .with_value(tl.geneva.clone())
-                .with_help(format!(
-                    "this build writes version \"{FORMAT_VERSION}\" and reads {}",
-                    ACCEPTED_VERSIONS
-                        .iter()
-                        .map(|v| format!("\"{v}\""))
-                        .collect::<Vec<_>>()
-                        .join(" and ")
-                )),
+                .with_help(if tl.geneva.starts_with("0.") {
+                    // The 0.x formats came before the first public
+                    // release; 1.0 reads everything they did.
+                    format!(
+                        "a document from before 1.0: set \"geneva\" to \"{FORMAT_VERSION}\" \
+                         and nothing else needs changing, except that \
+                         output.audio.denoise is gone"
+                    )
+                } else {
+                    format!(
+                        "this build writes version \"{FORMAT_VERSION}\" and reads {}",
+                        ACCEPTED_VERSIONS
+                            .iter()
+                            .map(|v| format!("\"{v}\""))
+                            .collect::<Vec<_>>()
+                            .join(" and ")
+                    )
+                }),
             );
         }
 

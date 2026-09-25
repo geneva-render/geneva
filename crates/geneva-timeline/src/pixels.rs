@@ -237,7 +237,7 @@ mod tests {
     /// values included, and the text style's fields going through the
     /// flattened text source.
     const AS_PX: &str = r##"{
-      "geneva": "0.5",
+      "geneva": "1.0",
       "output": { "width": "640px", "height": 360, "fps": 30, "duration": "1s", "background": "#223344" },
       "outputs": { "poster": { "kind": "poster", "width": "320px", "at": "0.5s" } },
       "layers": [
@@ -259,7 +259,7 @@ mod tests {
 
     /// The same document with each of those values written as the number.
     const AS_NUMBERS: &str = r##"{
-      "geneva": "0.5",
+      "geneva": "1.0",
       "output": { "width": 640, "height": 360, "fps": 30, "duration": "1s", "background": "#223344" },
       "outputs": { "poster": { "kind": "poster", "width": 320, "at": "0.5s" } },
       "layers": [

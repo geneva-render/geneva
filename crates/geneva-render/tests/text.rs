@@ -11,7 +11,7 @@ fn golden_root() -> PathBuf {
 
 fn render(body: &str, t: Ratio) -> Frame {
     let text = format!(
-        r##"{{"geneva":"0.1","output":{{"width":320,"height":120,"fps":30,"duration":"2s","background":"transparent"}},
+        r##"{{"geneva":"1.0","output":{{"width":320,"height":120,"fps":30,"duration":"2s","background":"transparent"}},
             "assets":{{"sans":{{"src":"fonts/LiberationSans-Regular.ttf"}},"bold":{{"src":"fonts/LiberationSans-Bold.ttf"}}}},
             "layers":[{{"clips":[{{"source":{body},"transform":{{"position":{{"x":"50%","y":"50%"}}}}}}]}}]}}"##
     );
@@ -231,7 +231,7 @@ fn a_text_source_draws_in_a_shipped_family_named_by_family() {
     };
     let text = |body: String| {
         format!(
-            r##"{{"geneva":"0.1","output":{{"width":640,"height":120,"fps":30,"duration":"2s","background":"transparent"}},
+            r##"{{"geneva":"1.0","output":{{"width":640,"height":120,"fps":30,"duration":"2s","background":"transparent"}},
                 "assets":{{"only_bold":{{"src":"fonts/LiberationSans-Bold.ttf","kind":"font"}}}},
                 "layers":[{{"clips":[{{"source":{body},"transform":{{"position":{{"x":"50%","y":"50%"}}}}}}]}}]}}"##
         )

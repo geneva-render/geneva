@@ -35,7 +35,7 @@ fn rgba8(frame: &Frame) -> Rgba8Image {
 
 fn scene(src: &str) -> String {
     format!(
-        r##"{{"geneva":"0.4","output":{{"width":320,"height":180,"fps":25,"duration":"2s","background":"#202830"}},
+        r##"{{"geneva":"1.0","output":{{"width":320,"height":180,"fps":25,"duration":"2s","background":"#202830"}},
         "assets":{{"v":{{"src":"{src}"}}}},
         "layers":[{{"clips":[{{"source":{{"kind":"video","asset":"v"}},"fit":"contain","duration":"2s",
           "transform":{{"position":{{"x":"50%","y":"50%"}},"rotation":{{"keyframes":[{{"t":0,"v":0}},{{"t":"2s","v":20}}]}}}}}}]}}]}}"##
@@ -111,7 +111,7 @@ fn a_rotated_clip_goes_up_as_a_picture_and_matches_the_cpu() {
 /// alpha) is exercised.
 fn pack_scene(width: u32, height: u32) -> String {
     format!(
-        r##"{{"geneva":"0.4","output":{{"width":{width},"height":{height},"fps":25,"duration":"1s","background":"#00000000"}},
+        r##"{{"geneva":"1.0","output":{{"width":{width},"height":{height},"fps":25,"duration":"1s","background":"#00000000"}},
         "layers":[
           {{"clips":[{{"source":{{"kind":"shape","shape":"rect","width":"70%","height":"60%","fill":"#ff8040c0","radius":12}},
              "effects":[{{"kind":"blur","radius":5}}],"transform":{{"position":{{"x":"45%","y":"50%"}},"rotation":10}}}}]}},

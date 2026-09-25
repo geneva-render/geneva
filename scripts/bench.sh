@@ -17,7 +17,7 @@ height=$(printf '%s' "$probe" | sed -n 's/.*"height": *\([0-9]*\).*/\1/p' | head
 fps=$(printf '%s' "$probe" | sed -n 's/.*"fps": *\([0-9.]*\).*/\1/p' | head -1)
 
 cat > "$work/timeline.json" <<JSON
-{ "geneva": "0.1",
+{ "geneva": "1.0",
   "output": { "width": $width, "height": $height, "fps": $fps,
               "encode": { "video": { "codec": "h264", "crf": $crf, "preset": "$preset" } } },
   "assets": { "in": { "src": "input", "kind": "video" } },

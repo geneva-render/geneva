@@ -177,7 +177,7 @@ fn compositor_keeps_the_marks_in_place() {
         // straight from the decoder to the encoder; its audio goes
         // through the mixer as the clip's own.
         let text = format!(
-            r#"{{"geneva":"0.2",
+            r#"{{"geneva":"1.0",
                 "output":{{"width":160,"height":90,"fps":"{}/{}","duration":"3s",
                            "encode":{{"video":{{"crf":16,"preset":"ultrafast"}}}}}},
                 "assets":{{"clip":{{"src":"{name}"}}}},
@@ -284,7 +284,7 @@ fn chunked_encoding_keeps_the_marks_in_place() {
         let fps = info.video.unwrap().fps;
         // Three stretches of a 3 s output, encoded at once and joined.
         let text = format!(
-            r#"{{"geneva":"0.2",
+            r#"{{"geneva":"1.0",
                 "output":{{"width":160,"height":90,"fps":"{}/{}","duration":"3s",
                            "encode":{{"video":{{"crf":16,"preset":"ultrafast","chunks":3}}}}}},
                 "assets":{{"clip":{{"src":"{name}"}}}},
@@ -314,7 +314,7 @@ fn chunked_and_single_runs_give_the_same_frames() {
     let name = "cfr.mp4";
     let render = |chunks: u32| {
         let text = format!(
-            r#"{{"geneva":"0.2",
+            r#"{{"geneva":"1.0",
                 "output":{{"width":160,"height":90,"fps":24,"duration":"3s",
                            "encode":{{"video":{{"crf":10,"preset":"ultrafast","chunks":{chunks}}}}}}},
                 "assets":{{"clip":{{"src":"{name}"}}}},

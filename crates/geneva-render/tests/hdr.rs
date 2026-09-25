@@ -15,7 +15,7 @@ fn golden_root() -> PathBuf {
 /// Renders one of the patterns at its own size.
 fn render(name: &str, transfer: &str) -> Frame {
     let text = format!(
-        r##"{{"geneva":"0.2","output":{{"width":256,"height":64,"fps":24,"duration":"1s","background":"black"}},
+        r##"{{"geneva":"1.0","output":{{"width":256,"height":64,"fps":24,"duration":"1s","background":"black"}},
             "assets":{{"hdr":{{"src":"hdr-to-sdr/{name}.png","color":{{"primaries":"bt2020","transfer":"{transfer}"}}}}}},
             "layers":[{{"clips":[{{"source":{{"kind":"image","asset":"hdr"}}}}]}}]}}"##
     );
@@ -147,7 +147,7 @@ fn bt2020_primaries_land_inside_the_cube_with_their_hue() {
 #[test]
 fn an_untagged_8bit_image_is_still_plain_srgb() {
     // The checker of the image-transform case: pure black and white.
-    let text = r##"{"geneva":"0.2","output":{"width":64,"height":64,"fps":24,"duration":"1s","background":"black"},
+    let text = r##"{"geneva":"1.0","output":{"width":64,"height":64,"fps":24,"duration":"1s","background":"black"},
         "assets":{"c":{"src":"image-transform/checker.png"}},
         "layers":[{"clips":[{"source":{"kind":"image","asset":"c"},"transform":{"anchor":{"x":0,"y":0},"position":{"x":0,"y":0}}}]}]}"##;
     let comp = load(text).composition.unwrap();

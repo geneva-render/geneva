@@ -37,7 +37,7 @@ fn load(
     files: Vec<(&'static str, &'static str)>,
 ) -> geneva_timeline::Loaded {
     let text = format!(
-        r#"{{"geneva":"0.3","output":{{"width":1280,"height":720,"fps":30,"duration":"8s"}},
+        r#"{{"geneva":"1.0","output":{{"width":1280,"height":720,"fps":30,"duration":"8s"}},
         "assets":{{"c":{{"src":"{src}"}}}},
         "layers":[{{"id":"captions","clips":[{{"source":{source}}}]}}]}}"#
     );
@@ -163,7 +163,7 @@ fn cue_times_are_relative_to_the_clip_start() {
     // so a clip that plays that media later in the output has to carry
     // its cues with it. Timing rule 6: every time in a document is
     // relative to the clip it is written on.
-    let text = r#"{"geneva":"0.4","output":{"width":1280,"height":720,"fps":30,"duration":"20s"},
+    let text = r#"{"geneva":"1.0","output":{"width":1280,"height":720,"fps":30,"duration":"20s"},
         "assets":{"c":{"src":"w.json"}},
         "layers":[{"id":"captions","clips":[
             {"source":{"kind":"captions","asset":"c"},"start":"4.4s"}]}]}"#;

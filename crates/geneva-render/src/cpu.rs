@@ -987,7 +987,7 @@ mod tests {
 
     fn doc(body: &str) -> String {
         format!(
-            r##"{{"geneva":"0.1","output":{{"width":64,"height":32,"fps":30,"duration":"2s"}},{body}}}"##
+            r##"{{"geneva":"1.0","output":{{"width":64,"height":32,"fps":30,"duration":"2s"}},{body}}}"##
         )
     }
 
@@ -1287,7 +1287,7 @@ mod tests {
 
     #[test]
     fn transparent_background_stays_transparent() {
-        let text = r##"{"geneva":"0.1","output":{"width":8,"height":8,"fps":30,"duration":"1s","background":"transparent"},
+        let text = r##"{"geneva":"1.0","output":{"width":8,"height":8,"fps":30,"duration":"1s","background":"transparent"},
             "layers":[{"clips":[{"source":{"kind":"shape","shape":"ellipse","width":4,"height":4,"fill":"red"}}]}]}"##;
         let f = render(text, "0s");
         assert_eq!(f.get(0, 0).to_srgb8(), [0, 0, 0, 0]);

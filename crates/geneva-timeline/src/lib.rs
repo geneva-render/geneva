@@ -8,7 +8,7 @@
 //!
 //! ```
 //! let text = r##"{
-//!   "geneva": "0.1",
+//!   "geneva": "1.0",
 //!   "output": { "width": 640, "height": 360, "fps": 30, "duration": "2s" },
 //!   "layers": [ { "clips": [ { "source": { "kind": "solid", "color": "#336699" } } ] } ]
 //! }"##;

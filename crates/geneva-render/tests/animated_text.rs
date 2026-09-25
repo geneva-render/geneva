@@ -6,7 +6,7 @@ use geneva_timeline::{Ratio, load};
 
 fn frame_at(clip: &str, tenths: i64) -> geneva_render::Frame {
     let text = format!(
-        r##"{{"geneva":"0.3","output":{{"width":240,"height":120,"fps":30,"duration":"2s",
+        r##"{{"geneva":"1.0","output":{{"width":240,"height":120,"fps":30,"duration":"2s",
         "background":"transparent"}},"layers":[{{"clips":[{{{clip}}}]}}]}}"##
     );
     let l = load(&text);
@@ -141,7 +141,7 @@ fn a_sweeping_fill_moves_with_its_keyframes() {
 
 #[test]
 fn a_fill_that_does_not_parse_is_named() {
-    let text = r##"{"geneva":"0.3","output":{"width":240,"height":120,"fps":30,"duration":"2s"},
+    let text = r##"{"geneva":"1.0","output":{"width":240,"height":120,"fps":30,"duration":"2s"},
         "layers":[{"clips":[{"source":{"kind":"text","text":"Hi","fill":"conic-gradient(red, blue)"},
         "duration":"2s"}]}]}"##;
     let l = load(text);

@@ -1,5 +1,5 @@
 {
-  "geneva": "0.2",
+  "geneva": "1.0",
   "output": { "width": 256, "height": 144, "fps": 24, "duration": "1s", "background": "#202020" },
   "assets": {
     "pq": { "src": "hdr-to-sdr/pq.png", "color": { "primaries": "bt2020", "transfer": "pq" } },

@@ -13,7 +13,7 @@ fn markup_codes(css_family: &str, info: &dyn AssetInfo, assets: &str) -> Vec<Str
     let html =
         format!("<style>.c {{ font-family: {css_family} }}</style><div class=\"c\">Hi</div>");
     let text = format!(
-        r#"{{"geneva":"0.3","output":{{"width":320,"height":180,"fps":25,"duration":"1s"}},
+        r#"{{"geneva":"1.0","output":{{"width":320,"height":180,"fps":25,"duration":"1s"}},
         "assets":{{{assets}}},
         "layers":[{{"id":"m","clips":[{{"source":{{"kind":"html","html":{}}}}}]}}]}}"#,
         serde_json::to_string(&html).unwrap()
@@ -48,7 +48,7 @@ impl AssetInfo for NoFonts {
 
 fn codes(font: &str, info: &dyn AssetInfo, assets: &str) -> Vec<String> {
     let text = format!(
-        r#"{{"geneva":"0.3","output":{{"width":320,"height":180,"fps":25,"duration":"1s"}},
+        r#"{{"geneva":"1.0","output":{{"width":320,"height":180,"fps":25,"duration":"1s"}},
         "assets":{{{assets}}},
         "layers":[{{"id":"t","clips":[{{"source":{{"kind":"text","text":"Hello",
         "font":"{font}"}}}}]}}]}}"#

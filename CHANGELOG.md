@@ -1,11 +1,14 @@
 # Changelog
 
 All notable changes to Geneva are recorded here. The project follows
-semantic versioning once it reaches 1.0; until then minor versions may
-change the timeline format, and the `geneva` field in every document names
-the format version it was written for.
+semantic versioning. The `geneva` field in every document names the format
+version it was written for; within 1.x the format only gains optional
+fields, so a document keeps meaning what it meant. Before 1.0, minor
+versions changed the format freely.
 
-## Unreleased
+## 1.0.0 (2026-09-25)
+
+The first public release.
 
 ### Added
 
@@ -30,22 +33,21 @@ the format version it was written for.
 
 ### Changed
 
-- **Timeline format 0.5.** `FORMAT_VERSION` moves with the format
-  changes below it, which is what publishes a schema file of its own
-  rather than editing one an older binary was built against.
-  `schema/geneva-timeline-0.4.schema.json` is back to the byte-for-byte
-  file 0.7.1 published, and `geneva-timeline-0.5.schema.json` is new
-  beside it.
+- **Timeline format 1.0.** The first public release starts the format
+  clean: every document declares `"geneva": "1.0"`, which is the only
+  version this binary reads, and `schema/geneva-timeline-1.0.schema.json`
+  is the only schema file. The 0.x formats were only ever read by the
+  author's own documents. A document declaring one of them is E110,
+  whose help says what to do: set `"geneva"` to `"1.0"`, and nothing
+  else needs changing except that `output.audio.denoise` is gone (see
+  Removed). What 1.0 reads is what 0.5 did: everything from 0.1 to 0.4,
+  plus `max_chars` on the captions source and `"8px"` in every field
+  measured in pixels.
 
-  It matters because the types refuse unknown fields in 24 places: a
-  document using `max_chars` while declaring `"0.4"` is rejected by a
-  0.7.1 binary, which is the version it is claiming to be. Documents
-  from 0.1 to 0.4 are still read as they are.
-
-  0.5 is also the first version to take a field away rather than only
-  add one, so the rule that each version is the one before it with more
-  optional fields no longer holds. `output.audio.denoise` is the field;
-  see Removed.
+  From here the published schema is a promise: a 1.x version adds only
+  optional fields, so a document written for an earlier 1.x is read as
+  it is, and anything that would change what a written document means
+  is a 2.0.
 
 - **Video drawn small converts only what it shows.** On the CPU
   renderer a video drawn smaller than it is is made smaller while it is
@@ -89,6 +91,10 @@ the format version it was written for.
 
 ### Fixed
 
+- A time with a unit spelled out, `"4 seconds"` or `"2 min"`, failed with
+  `invalid number "4 second"`, which points at the number rather than
+  the unit. It now names the unit and the form to write: `unknown unit
+  "seconds" in "4 seconds"; write "4s"` (`"2 minutes"`: `"120s"`).
 - **Two clips of one video decoded every frame twice over.** When a
   source's frames sit a little after the output's frame times (8 ms, in
   a 23.976 fps file), the second request for the same time, which the

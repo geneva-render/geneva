@@ -1,4 +1,4 @@
-//! The timeline document model, version 0.2.
+//! The timeline document model.
 //!
 //! Every type here is the source of truth for both the parser and the
 //! published JSON Schema; doc comments become schema descriptions.
@@ -17,33 +17,24 @@ use crate::length::{Length, Point, Scale};
 use crate::time::{Fps, Time};
 
 /// The timeline format version this crate writes.
-pub const FORMAT_VERSION: &str = "0.5";
+pub const FORMAT_VERSION: &str = "1.0";
 
-/// The format versions this crate reads: 0.2 added crop, effects, mask
-/// and speed on a clip, 0.3 the outputs map, 0.4 the keyframes map, the
-/// captions source and loudness and hygiene on output audio, 0.5
-/// `max_chars` on the captions source and `"8px"` in every field
-/// measured in pixels.
+/// The format versions this crate reads.
 ///
-/// Up to 0.4 each version was the one before it with more optional
-/// fields, so an older document needed nothing doing to it. 0.5 is the
-/// first that also takes something away: `output.audio.denoise` went
-/// with the speech denoiser, and a document that sets it is an unknown
-/// field whatever version it declares. Every other 0.1 to 0.4 document
-/// is still read as it is.
-///
-/// A published schema file is never rewritten. Change the format and
-/// this constant moves, which publishes a new file beside the old ones
-/// rather than editing what an older binary was built against.
-pub const ACCEPTED_VERSIONS: &[&str] = &["0.1", "0.2", "0.3", "0.4", "0.5"];
+/// A published schema file is never rewritten. A 1.x version is the one
+/// before it with more optional fields, so every document written for
+/// an earlier 1.x is read as it is; anything that would change what a
+/// written document means is a 2.0. Change the format and this constant
+/// moves, which publishes a new file beside the old ones rather than
+/// editing what an older binary was built against.
+pub const ACCEPTED_VERSIONS: &[&str] = &["1.0"];
 
 /// A complete composition: output settings, assets and layers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(title = "Geneva timeline")]
 pub struct Timeline {
-    /// Format version: "0.5". Documents written for "0.1" to "0.4" are
-    /// still read.
+    /// Format version: "1.0".
     pub geneva: String,
     /// Frame size, rate, duration and encoding settings of the output.
     pub output: Output,

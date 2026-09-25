@@ -177,7 +177,7 @@ fn a_video_drawn_small_is_fetched_small_and_draws_the_same() {
     // which is laid out on the frame's own pixels and so comes whole.
     let comp = load(
         r#"{
-          "geneva": "0.5",
+          "geneva": "1.0",
           "output": { "width": 192, "height": 108, "fps": 25, "duration": "1s" },
           "assets": { "clip": { "src": "clip.mp4" } },
           "layers": [
@@ -406,7 +406,7 @@ fn streamed_blocks_equal_one_whole_read() {
     // The mixer's blocks of any size make the same mix.
     let root = clip().parent().unwrap().to_path_buf();
     let text = r#"{
-      "geneva": "0.2",
+      "geneva": "1.0",
       "output": { "width": 64, "height": 64, "fps": 25, "duration": "1.5s" },
       "assets": { "clip": { "src": "clip.mp4" } },
       "layers": [ { "clips": [ { "source": { "kind": "video", "asset": "clip" }, "duration": "1.5s" } ] } ],
@@ -432,7 +432,7 @@ fn streamed_blocks_equal_one_whole_read() {
 fn mixing_applies_gain_and_skips_muted_video_audio() {
     let root = clip().parent().unwrap().to_path_buf();
     let text = r#"{
-      "geneva": "0.1",
+      "geneva": "1.0",
       "output": { "width": 64, "height": 64, "fps": 25, "duration": "1s" },
       "assets": { "clip": { "src": "clip.mp4" } },
       "layers": [ { "clips": [ { "source": { "kind": "video", "asset": "clip", "audio": false } } ] } ],
@@ -457,7 +457,7 @@ fn a_crossfade_holds_the_level_across_the_overlap() {
     // to cross too, and at constant power rather than summing to +3 dB.
     let root = clip().parent().unwrap().to_path_buf();
     let text = r#"{
-      "geneva": "0.1",
+      "geneva": "1.0",
       "output": { "width": 64, "height": 64, "fps": 25, "duration": "3s" },
       "assets": { "clip": { "src": "clip.mp4" } },
       "layers": [ { "clips": [
@@ -504,7 +504,7 @@ fn audio_lands_at_its_timeline_position_in_the_output_file() {
     let out = dir.path().join("sync.mp4");
     let root = clip().parent().unwrap().to_path_buf();
     let text = r#"{
-      "geneva": "0.1",
+      "geneva": "1.0",
       "output": { "width": 64, "height": 64, "fps": 25, "duration": "2s" },
       "assets": { "clip": { "src": "clip.mp4" } },
       "layers": [ { "clips": [ { "source": { "kind": "solid", "color": "black" } } ] } ],
@@ -577,7 +577,7 @@ fn stream_copy_trims_at_keyframes_and_joins_compatible_sources() {
 
     // A plain cut: one video clip at natural size, no other layers.
     let text = r#"{
-      "geneva": "0.1",
+      "geneva": "1.0",
       "output": { "width": 192, "height": 108, "fps": 25 },
       "assets": { "clip": { "src": "clip.mp4" } },
       "layers": [ { "clips": [ { "source": { "kind": "video", "asset": "clip", "in": "0.6s", "out": "1.5s" } } ] } ]
@@ -606,7 +606,7 @@ fn stream_copy_trims_at_keyframes_and_joins_compatible_sources() {
 
     // Joining the same file twice is a copy; the output is twice as long.
     let text = r#"{
-      "geneva": "0.1",
+      "geneva": "1.0",
       "output": { "width": 192, "height": 108, "fps": 25 },
       "assets": { "clip": { "src": "clip.mp4" } },
       "layers": [ { "clips": [
@@ -670,7 +670,7 @@ fn stream_copy_tolerates_a_printed_duration() {
         ),
     ];
     for (body, container, copyable) in cases {
-        let text = format!(r#"{{"geneva":"0.1",{body}}}"#);
+        let text = format!(r#"{{"geneva":"1.0",{body}}}"#);
         let loaded = geneva_timeline::load_with(&text, &Durations);
         let comp = loaded
             .composition
@@ -693,7 +693,7 @@ fn overlays_laid_onto_direct_frames_match_the_compositor() {
 
     let root = clip().parent().unwrap().to_path_buf();
     let text = r#"{
-      "geneva": "0.1",
+      "geneva": "1.0",
       "output": { "width": 192, "height": 108, "fps": 25, "duration": "2s" },
       "assets": { "clip": { "src": "clip.mp4" } },
       "layers": [
@@ -788,7 +788,7 @@ fn stream_copy_is_refused_when_anything_would_change_the_picture() {
            "layers": [ { "clips": [ { "source": { "kind": "video", "asset": "clip" }, "opacity": 0.5 } ] } ]"#,
     ];
     for body in cases {
-        let text = format!(r#"{{"geneva":"0.1",{body}}}"#);
+        let text = format!(r#"{{"geneva":"1.0",{body}}}"#);
         let loaded = geneva_timeline::load_with(&text, &Durations);
         let comp = loaded
             .composition
@@ -801,7 +801,7 @@ fn stream_copy_is_refused_when_anything_would_change_the_picture() {
         );
     }
     // WebM cannot hold H.264, and a different requested codec forces encoding.
-    let text = r#"{"geneva":"0.1","output": { "width": 192, "height": 108, "fps": 25 }, "assets": { "clip": { "src": "clip.mp4" } },
+    let text = r#"{"geneva":"1.0","output": { "width": 192, "height": 108, "fps": 25 }, "assets": { "clip": { "src": "clip.mp4" } },
            "layers": [ { "clips": [ { "source": { "kind": "video", "asset": "clip", "out": "2s" } } ] } ]}"#;
     let comp = load(text).composition.unwrap();
     assert!(
@@ -888,7 +888,7 @@ fn direct_frames_match_the_reference_renderer() {
     let doc = |clip_extra: &str| {
         format!(
             r#"{{
-              "geneva": "0.1",
+              "geneva": "1.0",
               "output": {{ "width": 192, "height": 108, "fps": 25 }},
               "assets": {{ "clip": {{ "src": "clip.mp4" }} }},
               "layers": [ {{ "clips": [ {{
@@ -962,7 +962,7 @@ fn direct_frames_match_the_reference_renderer() {
     // video on a portrait canvas) is scaled to its place on the direct
     // path too, and the bars come out in the background color.
     let portrait = r##"{
-      "geneva": "0.1",
+      "geneva": "1.0",
       "output": { "width": 108, "height": 192, "fps": 25, "background": "#336699" },
       "assets": { "clip": { "src": "clip.mp4" } },
       "layers": [ { "clips": [ {
@@ -1273,7 +1273,7 @@ fn scaled_and_repacked_direct_frames_match_the_reference_renderer() {
     let doc = |width: u32, height: u32| {
         format!(
             r#"{{
-              "geneva": "0.1",
+              "geneva": "1.0",
               "output": {{ "width": {width}, "height": {height}, "fps": 25 }},
               "assets": {{ "clip": {{ "src": "clip.mp4" }} }},
               "layers": [ {{ "clips": [ {{
@@ -1376,7 +1376,7 @@ fn smart_cut_plans_copies_between_keyframes_and_clean_boundaries() {
     // the source is the first wanted, 24 the first IDR after it.
     let comp = load(
         r#"{
-          "geneva": "0.1",
+          "geneva": "1.0",
           "output": { "width": 192, "height": 108, "fps": 25 },
           "assets": { "clip": { "src": "clip.mp4" } },
           "layers": [ { "clips": [ {
@@ -1439,7 +1439,7 @@ fn smart_cut_plans_copies_between_keyframes_and_clean_boundaries() {
     // A cut on a keyframe copies everything; a re-encode is never planned.
     let comp = load(
         r#"{
-          "geneva": "0.1",
+          "geneva": "1.0",
           "output": { "width": 192, "height": 108, "fps": 25 },
           "assets": { "clip": { "src": "clip.mp4" } },
           "layers": [ { "clips": [ {
@@ -1760,7 +1760,7 @@ fn stream_copy_refuses_an_hdr_source_for_an_sdr_output() {
     let timeline = |color: &str| {
         format!(
             r#"{{
-              "geneva": "0.2",
+              "geneva": "1.0",
               "output": {{ "width": 64, "height": 64, "fps": 25, "duration": "1s" {color} }},
               "assets": {{ "hlg": {{ "src": "hlg.mkv" }} }},
               "layers": [ {{ "clips": [ {{ "source": {{ "kind": "video", "asset": "hlg", "audio": false }} }} ] }} ]

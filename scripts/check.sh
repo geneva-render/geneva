@@ -111,7 +111,7 @@ echo "working in $work"
 
 # --- test material -----------------------------------------------------------
 cat > "$work/shapes.json" <<'JSON'
-{ "geneva": "0.1",
+{ "geneva": "1.0",
   "output": { "width": 1280, "height": 720, "fps": 30, "duration": "10s", "background": "#1d2230" },
   "layers": [
     { "clips": [ { "source": { "kind": "shape", "shape": "ellipse", "width": 240, "height": 240, "fill": "#ff8800" },
@@ -124,7 +124,7 @@ cat > "$work/shapes.json" <<'JSON'
   ] }
 JSON
 cat > "$work/logo.json" <<'JSON'
-{ "geneva": "0.1", "output": { "width": 320, "height": 120, "fps": 1, "duration": "1s", "background": "#00000000" },
+{ "geneva": "1.0", "output": { "width": 320, "height": 120, "fps": 1, "duration": "1s", "background": "#00000000" },
   "layers": [ { "clips": [ { "source": { "kind": "shape", "shape": "rect", "width": 320, "height": 120, "fill": "#ffffffc0", "radius": 24 } } ] },
               { "clips": [ { "source": { "kind": "text", "text": "LOGO", "size": 64, "color": "#1d2230" } } ] } ] }
 JSON
@@ -159,12 +159,12 @@ cat > "$work/markup.html" <<'HTML'
 </div></div>
 HTML
 cat > "$work/markup.json" <<'JSON'
-{ "geneva": "0.4", "output": { "width": 960, "height": 540, "fps": 30, "duration": "5s", "background": "black" },
+{ "geneva": "1.0", "output": { "width": 960, "height": 540, "fps": 30, "duration": "5s", "background": "black" },
   "assets": { "markup": { "src": "markup.html" } },
   "layers": [ { "clips": [ { "source": { "kind": "html", "asset": "markup" }, "duration": "5s" } ] } ] }
 JSON
 cat > "$work/styled.json" <<'JSON'
-{ "geneva": "0.1", "output": { "width": 1280, "height": 720, "fps": 30, "duration": "3s", "background": "#1d2230" },
+{ "geneva": "1.0", "output": { "width": 1280, "height": 720, "fps": 30, "duration": "3s", "background": "#1d2230" },
   "layers": [ { "clips": [ { "source": { "kind": "text", "text": "CSS shorthands", "font": "italic 600 72px/1.2 sans-serif", "color": "#ffdd00",
       "shadow": "0 4px 12px #000c", "outline": "3px #101820", "background": "#ffffff20", "padding": "16px", "radius": 12 } } ] } ] }
 JSON
@@ -236,7 +236,7 @@ if [ "$quick" = 0 ]; then
 fi
 if [ "$(uname -s)" = Darwin ]; then
   cat > "$work/hevc.json" <<'JSON'
-{ "geneva": "0.1", "output": { "width": 1280, "height": 720, "fps": 30, "duration": "3s", "encode": { "video": { "codec": "h265", "hardware": "require" } } },
+{ "geneva": "1.0", "output": { "width": 1280, "height": 720, "fps": 30, "duration": "3s", "encode": { "video": { "codec": "h265", "hardware": "require" } } },
   "layers": [ { "clips": [ { "source": { "kind": "solid", "color": "#336699" } } ] } ] }
 JSON
   run "H.265 via VideoToolbox" "$work/hevc.mp4" "$geneva" render "$work/hevc.json" -o "$work/hevc.mp4"; noff

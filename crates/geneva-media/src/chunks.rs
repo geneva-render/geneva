@@ -149,7 +149,7 @@ mod tests {
 
     fn comp(duration: &str, clips: &str) -> Composition {
         let text = format!(
-            r#"{{"geneva":"0.2","output":{{"width":64,"height":64,"fps":24,"duration":"{duration}"}},
+            r#"{{"geneva":"1.0","output":{{"width":64,"height":64,"fps":24,"duration":"{duration}"}},
                 "layers":[{{"clips":[{clips}]}}]}}"#
         );
         load(&text).composition.unwrap()

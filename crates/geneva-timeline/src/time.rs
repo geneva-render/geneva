@@ -59,6 +59,9 @@ impl Time {
         if s.contains(':') {
             return parse_timecode(s).map(Self::Seconds);
         }
+        if let Some(message) = spelled_unit(s) {
+            return Err(message);
+        }
         if let Some(body) = s.strip_suffix("ms") {
             let v = parse_decimal(body)?;
             return Ok(Self::Seconds(v / Ratio::from_int(1000)));
@@ -76,6 +79,31 @@ impl Time {
         }
         parse_decimal(s).map(Self::Seconds)
     }
+}
+
+/// For a number followed by a unit other than `s`, `ms` or `f` ("4
+/// seconds", "2 min"), the error that names the unit and the form to
+/// write instead; `None` for anything else, which parses as before.
+fn spelled_unit(s: &str) -> Option<String> {
+    let at = s.find(|c: char| c.is_alphabetic())?;
+    let (number, unit) = (s[..at].trim(), s[at..].trim());
+    let value = parse_decimal(number).ok()?.to_f64();
+    let in_seconds = |factor: f64| format!("\"{}s\"", value * factor);
+    let instead = match unit.to_ascii_lowercase().as_str() {
+        "s" | "ms" | "f" => return None,
+        "sec" | "secs" | "second" | "seconds" => format!("\"{number}s\""),
+        "msec" | "msecs" | "millisecond" | "milliseconds" => format!("\"{number}ms\""),
+        "frame" | "frames" => format!("\"{number}f\""),
+        "m" | "min" | "mins" | "minute" | "minutes" => in_seconds(60.0),
+        "h" | "hr" | "hrs" | "hour" | "hours" => in_seconds(3600.0),
+        _ => {
+            return Some(format!(
+                "unknown unit {unit:?} in {s:?}; a time is seconds (1.5 or \"1.5s\"), \
+                 milliseconds (\"1500ms\"), frames (\"45f\") or a timecode (\"1:02.5\")"
+            ));
+        }
+    };
+    Some(format!("unknown unit {unit:?} in {s:?}; write {instead}"))
 }
 
 /// Parses a decimal string such as `-1.25` into an exact ratio.
@@ -366,6 +394,32 @@ mod tests {
         assert_eq!(
             Time::parse("-0.5s").unwrap(),
             Time::Seconds(Ratio::new(-1, 2))
+        );
+    }
+
+    #[test]
+    fn a_spelled_out_unit_is_pointed_at_the_form_to_write() {
+        let err = |s: &str| Time::parse(s).unwrap_err();
+        assert_eq!(
+            err("4 seconds"),
+            r#"unknown unit "seconds" in "4 seconds"; write "4s""#
+        );
+        assert!(err("1.5 secs").ends_with(r#"write "1.5s""#));
+        assert!(err("4seconds").ends_with(r#"write "4s""#));
+        assert!(err("2 minutes").ends_with(r#"write "120s""#));
+        assert!(err("1.5 min").ends_with(r#"write "90s""#));
+        assert!(err("30 frames").ends_with(r#"write "30f""#));
+        assert!(err("250 milliseconds").ends_with(r#"write "250ms""#));
+        assert!(err("3 fortnights").contains("a time is seconds"));
+        // The accepted forms, spaced or not, still parse.
+        assert_eq!(
+            Time::parse("1.5 s").unwrap(),
+            Time::Seconds(Ratio::new(3, 2))
+        );
+        assert_eq!(Time::parse("45 f").unwrap(), Time::Frames(45));
+        assert_eq!(
+            Time::parse("1500 ms").unwrap(),
+            Time::Seconds(Ratio::new(3, 2))
         );
     }
 

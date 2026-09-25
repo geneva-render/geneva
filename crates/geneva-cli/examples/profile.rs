@@ -47,7 +47,7 @@ const FULL_IMAGE: &str = r##"{ "clips": [ { "source": { "kind": "composition", "
 
 fn scene(width: u32, height: u32, layers: &[&str]) -> String {
     format!(
-        r##"{{ "geneva": "0.2",
+        r##"{{ "geneva": "1.0",
   "output": {{ "width": {width}, "height": {height}, "fps": 30, "duration": "10s", "background": "#1d2230" }},
   "assets": {{ "img": {{ "src": "img.png" }} }},
   "compositions": {{ "bg": {{ "width": {width}, "height": {height}, "background": "#304050", "layers": [ {RECT} ] }},

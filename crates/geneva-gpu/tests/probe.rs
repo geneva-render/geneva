@@ -53,7 +53,7 @@ fn an_empty_scene_is_its_background_and_times_are_checked() {
         return;
     };
     let loaded = load(
-        r##"{"geneva":"0.4","output":{"width":16,"height":16,"fps":30,"duration":"1s","background":"#336699"},"layers":[]}"##,
+        r##"{"geneva":"1.0","output":{"width":16,"height":16,"fps":30,"duration":"1s","background":"#336699"},"layers":[]}"##,
     );
     let comp = loaded.composition.expect("a valid scene");
     let mut renderer = GpuRenderer::new(gpu, NoAssets);

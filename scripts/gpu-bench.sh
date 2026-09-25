@@ -96,7 +96,7 @@ PYEOF
 cp card.html "$dir/card.html"
 
 cat > "$dir/overlay.json" <<JSON
-{ "geneva": "0.4",
+{ "geneva": "1.0",
   "output": { "width": 1920, "height": 1080, "fps": 30, "duration": "${seconds}s" },
   "assets": { "src": { "src": "long.mp4" }, "card": { "src": "card.html" } },
   "layers": [
@@ -105,7 +105,7 @@ cat > "$dir/overlay.json" <<JSON
         "duration": "${seconds}s" } ] } ] }
 JSON
 cat > "$dir/lower-third.json" <<JSON
-{ "geneva": "0.4",
+{ "geneva": "1.0",
   "output": { "width": 1920, "height": 1080, "fps": 30, "duration": "${seconds}s" },
   "assets": { "src": { "src": "long.mp4" }, "card": { "src": "card.html" } },
   "layers": [

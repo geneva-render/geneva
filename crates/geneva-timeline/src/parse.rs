@@ -87,7 +87,7 @@ fn strip_location(msg: &str) -> String {
 mod tests {
     use super::*;
 
-    const MINIMAL: &str = r#"{"geneva":"0.1","output":{"width":16,"height":16,"fps":30}}"#;
+    const MINIMAL: &str = r#"{"geneva":"1.0","output":{"width":16,"height":16,"fps":30}}"#;
 
     #[test]
     fn parses_minimal_document() {
@@ -98,14 +98,14 @@ mod tests {
 
     #[test]
     fn syntax_errors_are_e100_with_location() {
-        let d = parse("{\"geneva\": \"0.1\",\n  \"output\": {").unwrap_err();
+        let d = parse("{\"geneva\": \"1.0\",\n  \"output\": {").unwrap_err();
         assert_eq!(d.code, "E100");
         assert!(d.location.is_some());
     }
 
     #[test]
     fn unknown_fields_point_at_their_location() {
-        let text = r##"{"geneva":"0.1","output":{"width":16,"height":16,"fps":30},
+        let text = r##"{"geneva":"1.0","output":{"width":16,"height":16,"fps":30},
           "layers":[{"clips":[{"source":{"kind":"solid","color":"#fff"},"opacty":0.5}]}]}"##;
         let d = parse(text).unwrap_err();
         assert_eq!(d.code, "E101");
@@ -116,7 +116,7 @@ mod tests {
 
     #[test]
     fn wrong_types_deep_in_keyframes_keep_their_path() {
-        let text = r##"{"geneva":"0.1","output":{"width":16,"height":16,"fps":30},
+        let text = r##"{"geneva":"1.0","output":{"width":16,"height":16,"fps":30},
           "layers":[{"clips":[{"source":{"kind":"solid","color":"#fff"},
             "opacity":{"keyframes":[{"t":0,"v":0},{"t":"1s","v":"one"}]}}]}]}"##;
         let d = parse(text).unwrap_err();
@@ -126,7 +126,7 @@ mod tests {
 
     #[test]
     fn missing_source_kind_is_reported_as_missing_field() {
-        let text = r##"{"geneva":"0.1","output":{"width":16,"height":16,"fps":30},
+        let text = r##"{"geneva":"1.0","output":{"width":16,"height":16,"fps":30},
           "layers":[{"clips":[{"source":{"color":"#fff"}}]}]}"##;
         let d = parse(text).unwrap_err();
         assert_eq!(d.code, "E102");
@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn bad_time_strings_are_explained() {
         let text =
-            r#"{"geneva":"0.1","output":{"width":16,"height":16,"fps":30,"duration":"3 sec"}}"#;
+            r#"{"geneva":"1.0","output":{"width":16,"height":16,"fps":30,"duration":"3 sec"}}"#;
         let d = parse(text).unwrap_err();
         assert_eq!(d.code, "E103");
         assert_eq!(d.path, "/output/duration");

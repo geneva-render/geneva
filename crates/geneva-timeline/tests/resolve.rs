@@ -17,7 +17,7 @@ fn errors(text: &str) -> Vec<(&'static str, String)> {
     )
 }
 
-const HEAD: &str = r#""geneva":"0.1","output":{"width":640,"height":360,"fps":30,"duration":"4s"}"#;
+const HEAD: &str = r#""geneva":"1.0","output":{"width":640,"height":360,"fps":30,"duration":"4s"}"#;
 
 fn doc(body: &str) -> String {
     format!("{{{HEAD},{body}}}")
@@ -97,8 +97,18 @@ fn open_ended_clips_run_to_the_output_end() {
 
 #[test]
 fn unsupported_version() {
-    let text = r#"{"geneva":"0.9","output":{"width":640,"height":360,"fps":30,"duration":1}}"#;
-    assert_eq!(errors(text), vec![("E110", "/geneva".to_owned())]);
+    let help = |version: &str| {
+        let text = format!(
+            r#"{{"geneva":"{version}","output":{{"width":640,"height":360,"fps":30,"duration":1}}}}"#
+        );
+        assert_eq!(errors(&text), vec![("E110", "/geneva".to_owned())]);
+        let l = load(&text);
+        let e = l.diagnostics.iter().find(|d| d.code == "E110").unwrap();
+        e.help.clone().unwrap()
+    };
+    assert!(help("2.0").contains(r#"reads "1.0""#));
+    // A document from before the first public format is told what to do.
+    assert!(help("0.5").contains(r#"set "geneva" to "1.0""#));
 }
 
 #[test]
@@ -188,7 +198,7 @@ fn keyframes_past_the_clip_end_warn() {
 
 #[test]
 fn duration_must_be_determinable() {
-    let text = r#"{"geneva":"0.1","output":{"width":640,"height":360,"fps":30},
+    let text = r#"{"geneva":"1.0","output":{"width":640,"height":360,"fps":30},
         "layers":[{"clips":[{"source":{"kind":"solid","color":"red"}}]}]}"#;
     let e = errors(text);
     assert!(e.contains(&("E305", "/layers/0/clips/0".to_owned())));
@@ -483,14 +493,14 @@ fn a_clip_cannot_play_a_rule_past_transform_and_opacity() {
 
 #[test]
 fn fixed_keyframes_need_an_interval() {
-    let text = r#"{"geneva":"0.2","output":{"width":640,"height":360,"fps":30,"duration":1,"encode":{"video":{"fixed_keyframes":true}}}}"#;
+    let text = r#"{"geneva":"1.0","output":{"width":640,"height":360,"fps":30,"duration":1,"encode":{"video":{"fixed_keyframes":true}}}}"#;
     let errs = errors(text);
     assert!(
         errs.iter()
             .any(|(c, p)| *c == "E422" && p == "/output/encode/video/fixed_keyframes"),
         "{errs:?}"
     );
-    let text = r#"{"geneva":"0.2","output":{"width":640,"height":360,"fps":30,"duration":1,"encode":{"video":{"fixed_keyframes":true,"keyframe_interval":2}}}}"#;
+    let text = r#"{"geneva":"1.0","output":{"width":640,"height":360,"fps":30,"duration":1,"encode":{"video":{"fixed_keyframes":true,"keyframe_interval":2}}}}"#;
     assert!(errors(text).is_empty());
 }
 
@@ -506,7 +516,7 @@ fn tune_names_are_x264s() {
         ("zerolatency", VideoTune::ZeroLatency),
     ] {
         let text = format!(
-            r#"{{"geneva":"0.2","output":{{"width":640,"height":360,"fps":30,"duration":1,"encode":{{"video":{{"tune":"{name}"}}}}}}}}"#
+            r#"{{"geneva":"1.0","output":{{"width":640,"height":360,"fps":30,"duration":1,"encode":{{"video":{{"tune":"{name}"}}}}}}}}"#
         );
         let l = load(&text);
         assert!(errors(&text).is_empty(), "{name}");
@@ -515,7 +525,7 @@ fn tune_names_are_x264s() {
         assert_eq!(tune.as_str(), name);
     }
     assert!(
-        errors(r#"{"geneva":"0.2","output":{"width":640,"height":360,"fps":30,"duration":1,"encode":{"video":{"tune":"psnr"}}}}"#)
+        errors(r#"{"geneva":"1.0","output":{"width":640,"height":360,"fps":30,"duration":1,"encode":{"video":{"tune":"psnr"}}}}"#)
             .iter()
             .any(|(c, _)| c.starts_with("E1"))
     );
@@ -524,13 +534,13 @@ fn tune_names_are_x264s() {
 #[test]
 fn hdr_output_needs_a_ten_bit_codec() {
     // No codec: the default is H.264, eight bits.
-    let text = r#"{"geneva":"0.2","output":{"width":640,"height":360,"fps":30,"duration":1,"color":{"transfer":"pq"}}}"#;
+    let text = r#"{"geneva":"1.0","output":{"width":640,"height":360,"fps":30,"duration":1,"color":{"transfer":"pq"}}}"#;
     assert!(errors(text).iter().any(|(c, _)| *c == "E420"));
-    let text = r#"{"geneva":"0.2","output":{"width":640,"height":360,"fps":30,"duration":1,"color":{"transfer":"hlg"},"encode":{"video":{"codec":"h264"}}}}"#;
+    let text = r#"{"geneva":"1.0","output":{"width":640,"height":360,"fps":30,"duration":1,"color":{"transfer":"hlg"},"encode":{"video":{"codec":"h264"}}}}"#;
     assert!(errors(text).iter().any(|(c, _)| *c == "E420"));
     for codec in ["h265", "av1", "vp9", "prores"] {
         let text = format!(
-            r#"{{"geneva":"0.2","output":{{"width":640,"height":360,"fps":30,"duration":1,"color":{{"primaries":"bt2020","transfer":"pq","matrix":"bt2020-ncl"}},"encode":{{"video":{{"codec":"{codec}"}}}}}}}}"#
+            r#"{{"geneva":"1.0","output":{{"width":640,"height":360,"fps":30,"duration":1,"color":{{"primaries":"bt2020","transfer":"pq","matrix":"bt2020-ncl"}},"encode":{{"video":{{"codec":"{codec}"}}}}}}}}"#
         );
         assert!(errors(&text).is_empty(), "{codec}: {:?}", errors(&text));
     }
@@ -620,13 +630,13 @@ fn unknown_and_cyclic_compositions_are_errors() {
 
 #[test]
 fn output_color_defaults_to_bt709_at_any_size() {
-    let text = r#"{"geneva":"0.1","output":{"width":320,"height":180,"fps":30,"duration":1}}"#;
+    let text = r#"{"geneva":"1.0","output":{"width":320,"height":180,"fps":30,"duration":1}}"#;
     let comp = load(text).composition.unwrap();
     assert_eq!(comp.color, geneva_color::ResolvedTags::SDR_VIDEO);
 }
 
 const HEAD3: &str =
-    r#""geneva":"0.3","output":{"width":640,"height":360,"fps":30,"duration":"4s"}"#;
+    r#""geneva":"1.0","output":{"width":640,"height":360,"fps":30,"duration":"4s"}"#;
 
 fn doc3(body: &str) -> String {
     format!("{{{HEAD3},{body}}}")
@@ -705,7 +715,7 @@ fn outputs_need_format_0_3_and_are_absent_by_default() {
 #[test]
 fn a_fade_shows_one_clip_at_a_time_and_a_crossfade_shows_both() {
     let text = r##"{
-      "geneva": "0.3",
+      "geneva": "1.0",
       "output": { "width": 64, "height": 64, "fps": 25 },
       "layers": [ { "clips": [
         { "source": { "kind": "solid", "color": "red" }, "duration": "2s" },
@@ -748,7 +758,7 @@ fn a_fade_shows_one_clip_at_a_time_and_a_crossfade_shows_both() {
 #[test]
 fn a_transition_colour_on_a_crossfade_is_a_warning() {
     let text = r#"{
-      "geneva": "0.3",
+      "geneva": "1.0",
       "output": { "width": 64, "height": 64, "fps": 25 },
       "layers": [ { "clips": [
         { "source": { "kind": "solid", "color": "red" }, "duration": "2s" },
@@ -768,7 +778,7 @@ fn a_transition_colour_on_a_crossfade_is_a_warning() {
 #[test]
 fn a_transition_can_open_and_close_a_layer() {
     let text = r#"{
-      "geneva": "0.3",
+      "geneva": "1.0",
       "output": { "width": 64, "height": 64, "fps": 25, "duration": "3s" },
       "layers": [ { "clips": [
         { "source": { "kind": "solid", "color": "red" }, "duration": "3s",
@@ -808,7 +818,7 @@ fn a_transition_can_open_and_close_a_layer() {
 #[test]
 fn transition_out_beside_the_next_clips_transition_is_an_error() {
     let text = r#"{
-      "geneva": "0.3",
+      "geneva": "1.0",
       "output": { "width": 64, "height": 64, "fps": 25, "duration": "4s" },
       "layers": [ { "clips": [
         { "source": { "kind": "solid", "color": "red" }, "duration": "2s",
@@ -831,7 +841,7 @@ fn an_easing_shapes_the_transition_ramp() {
     let make = |ease: &str| {
         let text = format!(
             r#"{{
-              "geneva": "0.3",
+              "geneva": "1.0",
               "output": {{ "width": 64, "height": 64, "fps": 25, "duration": "2s" }},
               "layers": [ {{ "clips": [
                 {{ "source": {{ "kind": "solid", "color": "red" }}, "duration": "2s",

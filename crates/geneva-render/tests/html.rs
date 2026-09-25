@@ -6,7 +6,7 @@ use geneva_timeline::{Ratio, load};
 
 fn frame(body: &str) -> geneva_render::Frame {
     let text = format!(
-        r#"{{"geneva":"0.3","output":{{"width":200,"height":100,"fps":30,"duration":"1s",
+        r#"{{"geneva":"1.0","output":{{"width":200,"height":100,"fps":30,"duration":"1s",
         "background":"transparent"}},{body}}}"#
     );
     let l = load(&text);
@@ -94,7 +94,7 @@ fn text_is_drawn_inside_the_box() {
 
 #[test]
 fn a_bad_document_is_a_diagnostic_not_a_panic() {
-    let text = r#"{"geneva":"0.3","output":{"width":200,"height":100,"fps":30,"duration":"1s"},
+    let text = r#"{"geneva":"1.0","output":{"width":200,"height":100,"fps":30,"duration":"1s"},
         "layers":[{"clips":[{"source":{"kind":"html","html":"<div><p>oops</div>"}}]}]}"#;
     let l = load(text);
     assert!(!l.is_ok());
@@ -104,7 +104,7 @@ fn a_bad_document_is_a_diagnostic_not_a_panic() {
 
 #[test]
 fn an_unsupported_property_is_a_warning_and_the_rest_still_draws() {
-    let text = r#"{"geneva":"0.3","output":{"width":200,"height":100,"fps":30,"duration":"1s"},
+    let text = r#"{"geneva":"1.0","output":{"width":200,"height":100,"fps":30,"duration":"1s"},
         "layers":[{"clips":[{"source":{"kind":"html","html":"<div class='a'></div>",
         "css":".a { float: left; height: 10px; background: red }"}}]}]}"#;
     let l = load(text);
@@ -253,7 +253,7 @@ fn a_background_clipped_to_text_fills_the_glyphs_and_not_the_box() {
 /// transparent output two seconds long.
 fn markup_at(html: &str, css: &str, tenths: i64) -> geneva_render::Frame {
     let text = format!(
-        r#"{{"geneva":"0.3","output":{{"width":200,"height":100,"fps":30,"duration":"2s",
+        r#"{{"geneva":"1.0","output":{{"width":200,"height":100,"fps":30,"duration":"2s",
         "background":"transparent"}},"layers":[{{"clips":[{{"source":{{"kind":"html","width":200,"height":100,
         "html":{html},"css":{css}}},"duration":"2s",
         "transform":{{"anchor":"top left","position":"0 0"}}}}]}}]}}"#,

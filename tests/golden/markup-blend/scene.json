@@ -1,5 +1,5 @@
 {
-  "geneva": "0.4",
+  "geneva": "1.0",
   "output": { "width": 320, "height": 180, "fps": 25, "duration": "2s", "background": "#101010" },
   "assets": {
     "blend": { "src": "markup-blend/blend.html" },

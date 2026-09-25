@@ -54,7 +54,7 @@ fn write_logo(dir: &std::path::Path, name: &str) {
 
 fn run(dir: &std::path::Path, markup: &str) -> (Vec<(&'static str, String)>, Option<Frame>) {
     fs::write(dir.join("card.html"), markup).unwrap();
-    let text = r#"{"geneva":"0.3","output":{"width":60,"height":40,"fps":30,"duration":"1s",
+    let text = r#"{"geneva":"1.0","output":{"width":60,"height":40,"fps":30,"duration":"1s",
         "background":"transparent"},"assets":{"c":{"src":"card.html"}},
         "layers":[{"clips":[{"source":{"kind":"html","asset":"c"},
         "transform":{"anchor":"top left","position":"0 0"}}]}]}"#;

@@ -57,7 +57,7 @@ Every command above is shorthand for a document like this one, which turns a lan
 
 ```json
 {
-  "geneva": "0.5",
+  "geneva": "1.0",
   "output": { "width": 1080, "height": 1920, "fps": 30 },
   "assets": { "iss": { "src": "iss.mp4" }, "words": { "src": "words.json" } },
 

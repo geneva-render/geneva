@@ -29,7 +29,7 @@ fn validate_reports_errors_with_paths_and_exit_code_one() {
     let path = dir.path().join("bad.json");
     std::fs::write(
         &path,
-        r#"{"geneva":"0.1","output":{"width":640,"height":360,"fps":30,"duration":"2s"},
+        r#"{"geneva":"1.0","output":{"width":640,"height":360,"fps":30,"duration":"2s"},
             "layers":[{"clips":[{"source":{"kind":"image","asset":"missing"}}]}]}"#,
     )
     .unwrap();
@@ -48,7 +48,7 @@ fn validate_json_output_is_machine_readable() {
     let path = dir.path().join("bad.json");
     std::fs::write(
         &path,
-        r#"{"geneva":"0.1","output":{"width":641,"height":360,"fps":30,"duration":1}}"#,
+        r#"{"geneva":"1.0","output":{"width":641,"height":360,"fps":30,"duration":1}}"#,
     )
     .unwrap();
     let out = geneva()
@@ -332,7 +332,7 @@ fn render_copies_plain_cuts_and_reencodes_with_exact() {
     let timeline = dir.path().join("cut.json");
     std::fs::write(
         &timeline,
-        r#"{"geneva":"0.1","output":{"width":192,"height":108,"fps":25},
+        r#"{"geneva":"1.0","output":{"width":192,"height":108,"fps":25},
             "assets":{"clip":{"src":"clip.mp4"}},
             "layers":[{"clips":[{"source":{"kind":"video","asset":"clip","in":"0.6s","out":"1.5s"}}]}]}"#,
     )
@@ -698,7 +698,7 @@ fn convert_flags_set_a_bitrate_ceiling_and_the_audio_format() {
     std::fs::copy(&clip, out("clip.mp4")).unwrap();
     std::fs::write(
         &doc_path,
-        r#"{ "geneva": "0.5",
+        r#"{ "geneva": "1.0",
   "output": { "width": 192, "height": 108, "fps": 25,
               "encode": { "video": { "max_bitrate_kbps": 100 } } },
   "assets": { "clip": { "src": "clip.mp4" } },
@@ -1305,7 +1305,7 @@ fn verbs_keep_the_source_color_encoding() {
     let sd = dir.path().join("sd.mp4");
     std::fs::write(
         dir.path().join("sd.json"),
-        r##"{ "geneva": "0.1",
+        r##"{ "geneva": "1.0",
             "output": { "width": 320, "height": 240, "fps": 25, "duration": "1s",
                         "color": { "primaries": "bt601-625", "matrix": "bt601" } },
             "layers": [ { "clips": [ { "source": { "kind": "solid", "color": "#4080c0" } } ] } ] }"##,
@@ -1362,7 +1362,7 @@ fn exact_cuts_copy_the_untouched_stretches() {
     let logo = dir.path().join("logo.json");
     std::fs::write(
         &logo,
-        r##"{ "geneva": "0.1", "output": { "width": 40, "height": 20, "fps": 1, "duration": "1s", "background": "#ff0000" }, "layers": [] }"##,
+        r##"{ "geneva": "1.0", "output": { "width": 40, "height": 20, "fps": 1, "duration": "1s", "background": "#ff0000" }, "layers": [] }"##,
     )
     .unwrap();
     let png = dir.path().join("logo.png");
@@ -1468,7 +1468,7 @@ fn render_writes_every_output_of_a_document_in_one_pass() {
     std::fs::write(
         &doc,
         r##"{
-          "geneva": "0.3",
+          "geneva": "1.0",
           "output": { "width": 160, "height": 90, "fps": 24,
             "color": { "primaries": "bt601-625", "transfer": "bt709", "matrix": "bt601", "range": "limited" } },
           "assets": { "clip": { "src": "sync/cfr.mp4" } },
@@ -1688,7 +1688,7 @@ fn the_removed_denoise_field_is_refused_as_unknown() {
     let path = dir.path().join("denoise.json");
     std::fs::write(
         &path,
-        r##"{"geneva":"0.4","output":{"width":320,"height":240,"fps":25,
+        r##"{"geneva":"1.0","output":{"width":320,"height":240,"fps":25,
             "audio":{"denoise":true}},
             "layers":[{"clips":[{"start":"0s","duration":"1s",
             "source":{"kind":"solid","color":"#000000"}}]}]}"##,
@@ -1891,7 +1891,7 @@ fn a_diagnostic_from_a_real_run_can_be_explained() {
     let path = dir.path().join("bad.json");
     std::fs::write(
         &path,
-        r#"{"geneva":"0.1","output":{"width":640,"height":360,"fps":30,"duration":"2s"},
+        r#"{"geneva":"1.0","output":{"width":640,"height":360,"fps":30,"duration":"2s"},
             "layers":[{"clips":[{"source":{"kind":"image","asset":"missing"}}]}]}"#,
     )
     .unwrap();
