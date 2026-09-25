@@ -99,7 +99,7 @@ note[N600]: H.264 runs encoded with the system's x264 (build 164) at CRF 18
 wrote dragon.mp4 (300 frames, 10s of video)
 ```
 
-The box grows to fit its text, and percentages are of the frame, so the same card works at any output size. With an H.264 source and x264 on the system, the frames with nothing on them are copied from the source rather than re-encoded; without x264 they still skip the compositor and go straight from the decoder to the encoder. [examples/lower-third.json](examples/lower-third.json) adds word-by-word captions from a Whisper transcript:
+The box grows to fit its text, and percentages are of the frame, so the same card works at any output size. With an H.264 source and x264 on the system, the frames with nothing on them are copied from the source rather than re-encoded; without x264 they still skip the compositor and go straight from the decoder to the encoder. [examples/lower-third.json](examples/lower-third.json) adds word-by-word captions, one more layer that reads the Whisper transcript as it is. In ffmpeg that takes a script to turn the transcript into an ASS subtitle file with one event per word, then a `subtitles=` filter, and ASS still can't round the box or keep it even behind the highlighted word:
 
 <img src="docs/demo.webp" alt="A name card sliding in at the top left over footage of a Dragon capsule at the space station, with captions below" width="640" height="360">
 
@@ -107,7 +107,7 @@ The box grows to fit its text, and percentages are of the frame, so the same car
 
 Wrappers like ffmpeg-python or fluent-ffmpeg give you a nicer way to write the same filtergraph, so they inherit what the filtergraph can't do. geneva never writes an ffmpeg command. It reads the whole edit first and decides how to carry it out, and that's what makes the rest possible:
 
-- **It does the cheapest thing that gets the result.** Streams that can be copied are copied. A frame-accurate cut re-encodes only the frames between the cut and the next keyframe (when your system has x264; see below). Frames with nothing drawn on them skip the compositor, or with x264 are copied as they are. Changing only the sound leaves the picture alone. ffmpeg can do much of this if you know the flags; geneva does it without being asked.
+- **It does less work.** Streams that can be copied are copied. A frame-accurate cut re-encodes only the frames between the cut and the next keyframe (when your system has x264; see below). Frames with nothing drawn on them skip the compositor, or with x264 are copied as they are. Changing only the sound leaves the picture alone. ffmpeg can do much of this if you know the flags; geneva does it without being asked.
 - **It catches mistakes before the render, not after.** The whole edit is checked up front, and a problem comes back with a code, its place in the document and usually a hint:
 
   ```text
