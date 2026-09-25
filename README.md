@@ -1,8 +1,8 @@
 <img src="docs/wordmark-any.png" alt="Geneva" width="240" height="77">
 
-A command-line video editor. One binary, no dependencies: cut, join, convert and caption video, and draw HTML and CSS overlays on it without a browser, either with everyday commands or by handing it a JSON document that describes the whole edit.
+**A Rust rewrite of ffmpeg's command line, with real composition.**
 
-It's built on ffmpeg's libraries but not its command line: it re-encodes only what your edit changes and copies the rest, and it checks the whole edit before rendering, so a mistake comes back as an error that points at it, not as a broken file and exit code 0.
+The decoding and encoding are still FFmpeg's libraries. Everything above them is new: a planner that works out the cheapest way to produce your edit, a compositor with layers, keyframes, masks and transitions, and a layout engine that draws titles and graphics written in HTML and CSS, without a browser. It all ships as one binary with no dependencies.
 
 https://github.com/user-attachments/assets/6d8566dd-7270-49bc-ac66-dab1585817a3
 
@@ -22,7 +22,7 @@ irm https://raw.githubusercontent.com/geneva-render/geneva/main/scripts/install.
 
 Or download an archive from [Releases](https://github.com/geneva-render/geneva/releases). Runs on Linux (x64, arm64), macOS on Apple silicon and Windows x64. Everything it needs is inside the binary.
 
-## Try it
+## The everyday things
 
 ```sh
 geneva trim match.mp4 -o goal.mp4 --from 41:10 --to 41:40   # no re-encode, done in a blink
@@ -32,14 +32,83 @@ geneva subtitles talk.mp4 -o talk-subbed.mp4 --burn talk.srt
 geneva probe talk.mp4                                       # what's actually in the file
 ```
 
-Stick `--show-timeline` on any of these and geneva prints the JSON document the command turns into, instead of running it. Full list of commands and flags: [docs/cli.md](docs/cli.md).
+No filtergraphs and no flag order to remember. Every command becomes a JSON document describing the edit, and geneva renders that; add `--show-timeline` to see it instead. All commands and flags: [docs/cli.md](docs/cli.md).
 
-## Why I replaced ffmpeg's command line
+## The same lower third, twice
 
-Let me be clear about what's under the hood: FFmpeg's libraries. I didn't rewrite a single decoder, encoder or container format. They all come from libavcodec and libavformat, which are some of the best code in open source. What I replaced is ffmpeg's *command line*, the flags and filtergraphs we all copy from Stack Overflow, with an engine of my own. Not for nicer syntax, but because a command line that runs one pipeline can't know what your edit actually needs:
+A name card that slides in over ten seconds of footage at 2 seconds and fades out 4 seconds later. In ffmpeg:
 
-- **It works out the cheapest way to get the result.** Before touching a frame, geneva plans the whole job: which streams can be copied as they are, which frames really need re-encoding, which can go straight from decoder to encoder untouched. A frame-accurate cut re-encodes only the few frames between the cut and the next keyframe, and copies the rest (when your system has x264; see below). Changing only the audio leaves the picture alone. With ffmpeg, that's all on you, and one filter anywhere means everything gets re-encoded.
-- **It catches mistakes before the render, not after.** The whole job is checked up front. Problems come back with a code, the exact place in the document and usually a hint:
+```sh
+ffmpeg -i iss.mp4 -filter_complex "
+  color=c=0x0a0f14@0.8:s=422x82:d=4,format=rgba,
+  drawbox=w=5:h=ih:c=0xc4362f:t=fill,
+  drawtext=fontfile=LiberationSans-Bold.ttf:text='Dragon CRS-17':fontsize=29:fontcolor=0xf2f5f7:x=29:y=14,
+  drawtext=fontfile=LiberationSans-Regular.ttf:text='BERTHING AT THE ISS  ·  NASA':fontsize=13:fontcolor=0x94a6b6:x=29:y=56,
+  fade=t=in:d=0.3:alpha=1,fade=t=out:st=3.7:d=0.3:alpha=1,
+  setpts=PTS+2/TB[card];
+  [0:v][card]overlay=x='56-422*pow(1-min((t-2)/0.5\,1)\,3)':y=54:eof_action=pass
+" dragon.mp4
+```
+
+It works, but every number in it is a pixel someone measured. Change the title and the box doesn't grow. Change the output size and nothing scales. There's no letter-spacing and no shadow, because `drawtext` has neither. And all 300 frames are decoded and re-encoded, including the 180 with nothing on them.
+
+In geneva the card is an HTML file, which looks and moves the same when you open it in a browser:
+
+```html
+<style>
+  @keyframes slide-in { from { translate: -100% } to { translate: 0 } }
+  @keyframes fade-in  { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes fade-out { from { opacity: 1 } to { opacity: 0 } }
+
+  .card {
+    animation: slide-in 0.5s ease-out, fade-in 0.3s, fade-out 0.3s 3.7s;
+    position: absolute; left: 4.4%; top: 7.5%; width: 33%;
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 14px 24px;
+    background: #0a0f14cc; border-left: 5px solid #c4362f;
+    box-shadow: 0 4px 18px #00000059;
+  }
+  .card h1 { margin: 0; font: 600 29px Liberation Sans; color: #f2f5f7 }
+  .card p  { margin: 0; font: 500 13px Liberation Sans; letter-spacing: 1.4px; color: #94a6b6 }
+</style>
+
+<div class="card">
+  <h1>Dragon CRS-17</h1>
+  <p>BERTHING AT THE ISS &nbsp;&middot;&nbsp; NASA</p>
+</div>
+```
+
+and a document says when it appears:
+
+```json
+{
+  "geneva": "1.0",
+  "output": { "width": 1280, "height": 720, "fps": 30 },
+  "assets": { "iss": { "src": "iss.mp4" }, "card": { "src": "card.html" } },
+  "layers": [
+    { "id": "footage", "clips": [ { "source": { "kind": "video", "asset": "iss" } } ] },
+    { "id": "card", "clips": [ { "source": { "kind": "html", "asset": "card" }, "start": "2s", "duration": "4s" } ] }
+  ]
+}
+```
+
+```text
+$ geneva render dragon.json -o dragon.mp4
+note[N600]: smart cut: 165 of 300 frames copied from the source, 135 encoded in 1 run around the cuts and overlays
+note[N600]: H.264 runs encoded with the system's x264 (build 164) at CRF 18
+wrote dragon.mp4 (300 frames, 10s of video)
+```
+
+The box grows to fit its text, and percentages are of the frame, so the same card works at any output size. With an H.264 source and x264 on the system, the frames with nothing on them are copied from the source rather than re-encoded; without x264 they still skip the compositor and go straight from the decoder to the encoder. [examples/lower-third.json](examples/lower-third.json) adds word-by-word captions from a Whisper transcript:
+
+<img src="docs/demo.webp" alt="A name card sliding in at the top left over footage of a Dragon capsule at the space station, with captions below" width="640" height="360">
+
+## Not a wrapper
+
+Wrappers like ffmpeg-python or fluent-ffmpeg give you a nicer way to write the same filtergraph, so they inherit what the filtergraph can't do. geneva never writes an ffmpeg command. It reads the whole edit first and decides how to carry it out, and that's what makes the rest possible:
+
+- **It does the cheapest thing that gets the result.** Streams that can be copied are copied. A frame-accurate cut re-encodes only the frames between the cut and the next keyframe (when your system has x264; see below). Frames with nothing drawn on them skip the compositor, or with x264 are copied as they are. Changing only the sound leaves the picture alone. ffmpeg can do much of this if you know the flags; geneva does it without being asked.
+- **It catches mistakes before the render, not after.** The whole edit is checked up front, and a problem comes back with a code, its place in the document and usually a hint:
 
   ```text
   error[E200]: unknown asset "crad"
@@ -47,72 +116,15 @@ Let me be clear about what's under the hood: FFmpeg's libraries. I didn't rewrit
      = help: did you mean "card"? assets are declared under "assets"
   ```
 
-  ffmpeg is happy to hand you a broken file and exit 0, which matters most when the one running it is an agent that can't watch the result. In a small test I ran (20 editing tasks answered blind by one model, twice; I wrote the tasks, so it's a hint, not a benchmark), the ffmpeg answers produced 8 files that exited 0 and were quietly wrong: shifted colours, cuts tens of milliseconds off, sound drifting out of sync. The geneva answers got all 20 right in both runs, once I'd fixed the one bug the test turned up.
-- **It has an actual compositor.** Layers, keyframes, masks, blend modes and transitions, on exact frame timing, blended in linear light with colour metadata preserved (and HDR tone-mapped when needed). Titles and graphics can be plain HTML and CSS, flexbox and `@keyframes` included, which geneva lays out itself. GPU when you have one, CPU when you don't.
-- **It tells you what it did.** Every run ends with a few notes: the encoder it picked, what it copied, what it had to guess about your source. Add `--format json` and all of it is machine-readable.
+  ffmpeg is happy to hand you a broken file and exit 0. In a small test I ran (20 editing tasks answered blind by one model, twice; I wrote the tasks, so it's a hint, not a benchmark), the ffmpeg answers produced 8 files that exited 0 and were quietly wrong: shifted colours, cuts tens of milliseconds off, sound drifting out of sync. The geneva answers got all 20 right in both runs, once I'd fixed the one bug the test turned up.
+- **It has an actual compositor.** Layers, keyframes, masks, blend modes and transitions on exact frame times, blended in linear light, with colour metadata kept and HDR tone-mapped when needed. Animations are worked out from each frame's timestamp, so frame 1234 is the same picture every time. GPU when you have one, CPU when you don't.
+- **It tells you what it did.** Every run ends with a few notes: the encoder it picked, what it copied, what it had to guess about your source. `--format json` makes all of it machine-readable.
 
-**"Couldn't an agent just use Playwright and ffmpeg, or Remotion?"** It could, and people do: screenshot the HTML frame by frame in a headless browser, then have ffmpeg lay the shots over the footage. But everything apart from the overlay is still ffmpeg flags, with the pitfalls above. The browser's animations run on the wall clock, so its clock has to be faked for every frame. And it's a second full encode, with Chromium, Node and ffmpeg to install first. geneva does it in one pass with no browser. On the same 4-core machine with the same x264 settings, a 4-second name card over 9 seconds of 720p footage took 6 seconds against 14.7 for Playwright plus ffmpeg, and the Popeye video at the top took 113 seconds against 195. Remotion packages the same approach and says in its own docs not to use CSS `@keyframes` or transitions, since frames render out of order; geneva plays them as written, and the card's HTML file looks the same opened in a browser. What the browser does better: any CSS and any JavaScript, where geneva handles [a subset of CSS](docs/timeline.md#markup) and no JavaScript.
-
-## One document, the whole edit
-
-Every command above is shorthand for a document. Written by hand, one looks like this: nine seconds of space-station footage, captions from a word-timed transcript, and a name card that slides in at 2 seconds.
-
-```json
-{
-  "geneva": "1.0",
-  "output": { "width": 1280, "height": 720, "fps": 30 },
-  "assets": {
-    "iss":   { "src": "iss.mp4" },
-    "card":  { "src": "card.html" },
-    "words": { "src": "commentary.json" }
-  },
-
-  "layers": [
-    { "id": "footage", "clips": [ {
-        "source": { "kind": "video", "asset": "iss" }, "duration": "9s" } ] },
-
-    { "id": "captions", "clips": [ {
-        "source": { "kind": "captions", "asset": "words", "margin": "9%",
-          "style": { "font": "500 34px/1.35 Liberation Sans", "color": "#b6c2cd",
-                     "highlight": { "color": "#ffffff" }, "background": "#0a0f14cc",
-                     "padding": "14px", "radius": "3px", "max_width": "66%" } } } ] },
-
-    { "id": "lower-third", "clips": [ {
-        "source": { "kind": "html", "asset": "card" }, "start": "2s", "duration": "4s" } ] }
-  ]
-}
-```
-
-The card is a plain HTML file, and opened in a browser it looks and moves the same:
-
-```html
-<style>
-  @keyframes slide-in { from { translate: -100% } to { translate: 0 } }
-  .card {
-    animation: slide-in 0.5s ease-out;
-    position: absolute; left: 4.4%; top: 7.5%; width: 33%;
-    padding: 14px 24px;
-    background: #0a0f14cc; border-left: 5px solid #c4362f;
-  }
-  /* ... */
-</style>
-<div class="card">
-  <h1>Dragon CRS-17</h1>
-  <p>BERTHING AT THE ISS &nbsp;&middot;&nbsp; NASA</p>
-</div>
-```
-
-```sh
-geneva render examples/lower-third.json -o dragon.mp4
-```
-
-<img src="docs/demo.webp" alt="A name card sliding in at the top left over footage of a Dragon capsule at the space station, with captions below" width="640" height="360">
-
-The document says when things appear, the HTML says how they look. Percentages are relative to the frame, so the layout scales with the output. `commentary.json` is a word-timed transcript, the kind Whisper writes. Documents are plain JSON with a published schema, so they diff nicely, live happily in git and are easy for a program to write. The format is in [docs/timeline.md](docs/timeline.md); [examples/](examples/README.md) has the full card and more to copy from.
+**"Couldn't I use Playwright and ffmpeg, or Remotion?"** You could, and people do: screenshot the HTML frame by frame in a headless browser, then have ffmpeg lay the shots over the footage. Everything apart from the overlay is still ffmpeg flags. The browser's animations run on the wall clock, so its clock has to be faked for every frame, and it's a second full encode, with Chromium, Node and ffmpeg to install first. Remotion packages the same approach and its docs say not to use CSS `@keyframes` or transitions, since frames render out of order; geneva plays them as written. On the same 4-core machine with the same x264 settings, a 4-second name card over 9 seconds of 720p footage took 6 seconds against 14.7 for Playwright plus ffmpeg, and the Popeye video at the top 113 seconds against 195. What the browser does better: any CSS and any JavaScript, where geneva handles [a subset of CSS](docs/timeline.md#markup) (flexbox, gradients, shadows, clip paths, blend modes, keyframes) and no JavaScript.
 
 ## Made to be driven by agents
 
-Everything an agent needs is in the binary: `geneva guide` prints the manual, `geneva explain <code>` explains any error, and `--format json` works on every command.
+Everything an agent needs is in the binary: `geneva guide` prints the manual, `geneva explain <code>` explains any error, and `--format json` works on every command. Documents are plain JSON with a [published schema](docs/timeline.md), and graphics are HTML and CSS, which models already write well.
 
 The video at the top is an agent's first attempt with that and nothing else. It worked out the layout, wrote the lower third in HTML and CSS, pulled the headlines from a Whisper transcript of the clip, and rendered it, all from this prompt:
 
