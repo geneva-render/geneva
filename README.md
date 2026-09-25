@@ -53,33 +53,60 @@ Let me be clear about what's under the hood: FFmpeg's libraries. I didn't rewrit
 
 ## One document, the whole edit
 
-Every command above is shorthand for a document like this one, which turns a landscape clip into a vertical video with word-by-word captions:
+Every command above is shorthand for a document. Written by hand, one looks like this: nine seconds of space-station footage, captions from a word-timed transcript, and a name card that slides in at 2 seconds.
 
 ```json
 {
   "geneva": "1.0",
-  "output": { "width": 1080, "height": 1920, "fps": 30 },
-  "assets": { "iss": { "src": "iss.mp4" }, "words": { "src": "words.json" } },
+  "output": { "width": 1280, "height": 720, "fps": 30 },
+  "assets": {
+    "iss":   { "src": "iss.mp4" },
+    "card":  { "src": "card.html" },
+    "words": { "src": "commentary.json" }
+  },
 
   "layers": [
-    { "id": "backdrop", "clips": [ {
-        "source": { "kind": "video", "asset": "iss", "audio": false },
-        "fit": "cover", "effects": [ { "kind": "blur", "radius": 45 } ] } ] },
-
-    { "id": "picture", "clips": [ {
-        "source": { "kind": "video", "asset": "iss" }, "fit": "contain" } ] },
+    { "id": "footage", "clips": [ {
+        "source": { "kind": "video", "asset": "iss" }, "duration": "9s" } ] },
 
     { "id": "captions", "clips": [ {
-        "source": { "kind": "captions", "asset": "words", "margin": "28%",
-          "style": { "font": "700 72px/1.25 Liberation Sans", "color": "white",
-                     "highlight": { "color": "#ffd233" }, "outline": "4px #000000cc" } } } ] }
+        "source": { "kind": "captions", "asset": "words", "margin": "9%",
+          "style": { "font": "500 34px/1.35 Liberation Sans", "color": "#b6c2cd",
+                     "highlight": { "color": "#ffffff" }, "background": "#0a0f14cc",
+                     "padding": "14px", "radius": "3px", "max_width": "66%" } } } ] },
+
+    { "id": "lower-third", "clips": [ {
+        "source": { "kind": "html", "asset": "card" }, "start": "2s", "duration": "4s" } ] }
   ]
 }
 ```
 
-<img src="docs/reframe.jpg" alt="A frame of the vertical output: the landscape footage in the middle, a blurred copy of it filling the top and bottom, and a caption with the spoken word highlighted in yellow" width="270" height="480">
+The card is a plain HTML file, and opened in a browser it looks and moves the same:
 
-`words.json` is a word-timed transcript, the kind Whisper writes. Documents are plain JSON with a published schema, so they diff nicely, live happily in git and are easy for a program to write. The format is in [docs/timeline.md](docs/timeline.md); [examples/](examples/README.md) has more to copy from.
+```html
+<style>
+  @keyframes slide-in { from { translate: -100% } to { translate: 0 } }
+  .card {
+    animation: slide-in 0.5s ease-out;
+    position: absolute; left: 4.4%; top: 7.5%; width: 33%;
+    padding: 14px 24px;
+    background: #0a0f14cc; border-left: 5px solid #c4362f;
+  }
+  /* ... */
+</style>
+<div class="card">
+  <h1>Dragon CRS-17</h1>
+  <p>BERTHING AT THE ISS &nbsp;&middot;&nbsp; NASA</p>
+</div>
+```
+
+```sh
+geneva render examples/lower-third.json -o dragon.mp4
+```
+
+<img src="docs/demo.webp" alt="A name card sliding in at the top left over footage of a Dragon capsule at the space station, with captions below" width="640" height="360">
+
+The document says when things appear, the HTML says how they look. Percentages are relative to the frame, so the layout scales with the output. `commentary.json` is a word-timed transcript, the kind Whisper writes. Documents are plain JSON with a published schema, so they diff nicely, live happily in git and are easy for a program to write. The format is in [docs/timeline.md](docs/timeline.md); [examples/](examples/README.md) has the full card and more to copy from.
 
 ## Made to be driven by agents
 
