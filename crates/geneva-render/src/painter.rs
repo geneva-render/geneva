@@ -223,6 +223,21 @@ impl<A: AssetSource> Painter<A> {
         t: Ratio,
         local: f64,
     ) -> Result<Painted<'_>, RenderError> {
+        self.paint_shrunk(comp, clip, t, local, [1, 1])
+    }
+
+    /// [`paint`](Self::paint), with a video's frame asked for `shrink`
+    /// times smaller on each axis (see
+    /// [`AssetSource::video_frame_shrunk`]); the picture is whatever size
+    /// the source returns.
+    pub fn paint_shrunk(
+        &mut self,
+        comp: &Composition,
+        clip: &ResolvedClip,
+        t: Ratio,
+        local: f64,
+        shrink: [u32; 2],
+    ) -> Result<Painted<'_>, RenderError> {
         let mut key = None;
         let paint = match &clip.source {
             ResolvedSource::Solid { color } => Paint::Solid {
@@ -261,11 +276,13 @@ impl<A: AssetSource> Painter<A> {
             }
             ResolvedSource::Video { asset, in_, .. } => {
                 let source_time = *in_ + (t - clip.start) * clip.speed;
-                Paint::Image(Cow::Borrowed(self.assets.video_frame(
-                    comp,
-                    asset,
-                    source_time,
-                )?))
+                let frame = if shrink == [1, 1] {
+                    self.assets.video_frame(comp, asset, source_time)?
+                } else {
+                    self.assets
+                        .video_frame_shrunk(comp, asset, source_time, shrink)?
+                };
+                Paint::Image(Cow::Borrowed(frame))
             }
             ResolvedSource::Html(html) => {
                 // With nothing inside the markup moving, the box is drawn

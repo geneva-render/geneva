@@ -120,6 +120,7 @@ impl<A: AssetSource> CpuRenderer<A> {
         clip: &ResolvedClip,
         t: Ratio,
         local: f64,
+        shrink: [u32; 2],
     ) -> Result<Option<Paint<'_>>, RenderError> {
         if let ResolvedSource::Composition(nested) = &clip.source {
             let inner = self.render_layers(
@@ -134,7 +135,51 @@ impl<A: AssetSource> CpuRenderer<A> {
                 inner,
             )))));
         }
-        Ok(Some(self.painter.paint(comp, clip, t, local)?.paint))
+        Ok(Some(
+            self.painter
+                .paint_shrunk(comp, clip, t, local, shrink)?
+                .paint,
+        ))
+    }
+
+    /// How many times smaller, on each axis, a video clip's frame can be
+    /// fetched, and the frame's full size: a video drawn at half its size
+    /// or less (after the reduction `reduce` a blur applies on top) comes
+    /// shrunk by the whole number of times that keeps it at least as
+    /// large as it is drawn, so the rest of the reduction happens in
+    /// linear light. `None` for anything else, a masked clip included,
+    /// since a mask is laid out on the frame's own pixels.
+    fn shrink_for(
+        &mut self,
+        comp: &Composition,
+        clip: &ResolvedClip,
+        local: f64,
+        (frame_w, frame_h): (u32, u32),
+        reduce: f64,
+    ) -> Result<Option<Shrunk>, RenderError> {
+        let ResolvedSource::Video { asset, .. } = &clip.source else {
+            return Ok(None);
+        };
+        if clip.mask.is_some() {
+            return Ok(None);
+        }
+        let Some((w, h)) = self.painter.assets_mut().video_size(comp, asset)? else {
+            return Ok(None);
+        };
+        let size = (f64::from(w), f64::from(h));
+        let Some(window) = crop_window(clip, size) else {
+            return Ok(None);
+        };
+        let Some(place) = Placement::new(frame_w, frame_h, clip, local, window, None, None) else {
+            return Ok(None);
+        };
+        let times =
+            |scale: f64, len: u32| ((reduce / scale.abs()).floor().max(1.0) as u32).min(len);
+        let shrink = [times(place.scale[0], w), times(place.scale[1], h)];
+        Ok((shrink != [1, 1]).then_some(Shrunk {
+            full: size,
+            times: shrink,
+        }))
     }
 
     /// Whether every clip above the first layer composites normally, so
@@ -185,20 +230,18 @@ impl<A: AssetSource> CpuRenderer<A> {
                     continue;
                 }
                 let mask_image = self.mask_image(comp, clip)?;
-                let Some(paint) = self.paint_for(comp, clip, t, local)? else {
+                let shrunk = self.shrink_for(comp, clip, local, (comp.width, comp.height), 1.0)?;
+                let shrink = shrunk.map_or([1, 1], |s| s.times);
+                let Some(paint) = self.paint_for(comp, clip, t, local, shrink)? else {
                     continue;
                 };
                 let paint = paint.into_owned();
-                let Some(window) = crop_window(clip, paint.size()) else {
-                    continue;
-                };
-                let Some(place) = Placement::new(
-                    comp.width,
-                    comp.height,
+                let Some(place) = place_paint(
+                    (comp.width, comp.height),
                     clip,
                     local,
-                    window,
-                    paint.content(),
+                    &paint,
+                    shrunk.map(|s| s.full),
                     mask_image,
                 ) else {
                     continue;
@@ -307,19 +350,18 @@ impl<A: AssetSource> CpuRenderer<A> {
                 Vec::new()
             };
             let mask_image = self.mask_image(comp, clip)?;
-            let Some(paint) = self.paint_for(comp, clip, t, local)? else {
+            let shrunk =
+                self.shrink_for(comp, clip, local, (width, height), blur_reduction(sigma))?;
+            let shrink = shrunk.map_or([1, 1], |s| s.times);
+            let Some(paint) = self.paint_for(comp, clip, t, local, shrink)? else {
                 continue;
             };
-            let Some(window) = crop_window(clip, paint.size()) else {
-                continue;
-            };
-            let Some(placement) = Placement::new(
-                width,
-                height,
+            let Some(placement) = place_paint(
+                (width, height),
                 clip,
                 local,
-                window,
-                paint.content(),
+                &paint,
+                shrunk.map(|s| s.full),
                 mask_image,
             ) else {
                 continue;
@@ -358,6 +400,52 @@ impl<A: AssetSource> CpuRenderer<A> {
     }
 }
 
+/// A video frame to fetch smaller: its full size, and how many times
+/// smaller on each axis.
+#[derive(Debug, Clone, Copy)]
+struct Shrunk {
+    full: (f64, f64),
+    times: [u32; 2],
+}
+
+/// How many times smaller a blur of `sigma` output pixels draws its
+/// layer (see [`draw_blurred`]).
+fn blur_reduction(sigma: f64) -> f64 {
+    if sigma >= 4.0 {
+        (sigma / 2.0).floor().min(8.0)
+    } else {
+        1.0
+    }
+}
+
+/// Places `paint` for `clip`. `full`, for a video frame fetched smaller,
+/// is the frame's full size, which the clip's crop and fit are worked
+/// out on; the placement is then carried over to the smaller texels.
+fn place_paint(
+    (width, height): (u32, u32),
+    clip: &ResolvedClip,
+    local: f64,
+    paint: &Paint,
+    full: Option<(f64, f64)>,
+    mask_image: Option<Arc<Image>>,
+) -> Option<Placement> {
+    let size = paint.size();
+    let window = crop_window(clip, full.unwrap_or(size))?;
+    let place = Placement::new(
+        width,
+        height,
+        clip,
+        local,
+        window,
+        paint.content(),
+        mask_image,
+    )?;
+    match full {
+        Some((w, h)) if (w, h) != size => place.in_texels([w / size.0, h / size.1]),
+        _ => Some(place),
+    }
+}
+
 /// Draws a clip blurred by `sigma` output pixels: the picture goes onto
 /// a transparent layer covering everything whose blur can reach the
 /// frame, the layer is blurred, and the result is laid onto the frame
@@ -384,11 +472,7 @@ fn draw_blurred(
     if x1 <= x0 || y1 <= y0 {
         return scratch;
     }
-    let k = if sigma >= 4.0 {
-        (sigma / 2.0).floor().min(8.0)
-    } else {
-        1.0
-    };
+    let k = blur_reduction(sigma);
     let lw = ((x1 - x0) / k).ceil().max(1.0) as u32;
     let lh = ((y1 - y0) / k).ceil().max(1.0) as u32;
     let mut layer = Frame::from_pixels(scratch);
@@ -885,6 +969,39 @@ mod tests {
         format!(
             r##"{{"geneva":"0.1","output":{{"width":64,"height":32,"fps":30,"duration":"2s"}},{body}}}"##
         )
+    }
+
+    #[test]
+    fn a_placement_carried_to_smaller_texels_lands_on_the_same_points() {
+        // Rotated, scaled, anchored off center and cropped: every output
+        // point must meet the same point of the picture, measured in the
+        // picture's pixels, whichever size of it is drawn.
+        let comp = load(&doc(r##""layers":[{"clips":[
+              {"source":{"kind":"shape","shape":"rect","width":400,"height":200,"fill":"#ffffff"},
+               "crop":{"x":40,"y":10,"width":340,"height":160},
+               "transform":{"position":{"x":"40%","y":"60%"},"anchor":{"x":"25%","y":"70%"},
+                            "scale":{"x":0.3,"y":0.2},"rotation":30}},
+              {"source":{"kind":"shape","shape":"rect","width":400,"height":200,"fill":"#ffffff"},
+               "mask":{"shape":"ellipse"}}]}]"##))
+        .composition
+        .unwrap();
+        let clips = &comp.layers[0].clips;
+        let window = crop_window(&clips[0], (400.0, 200.0)).unwrap();
+        let place = Placement::new(64, 32, &clips[0], 0.0, window, None, None).unwrap();
+        let f = [4.0, 2.5];
+        let small = place.in_texels(f).unwrap();
+        assert_eq!(small.bounds, place.bounds);
+        for (x, y) in [(0.5, 0.5), (20.25, 11.0), (40.0, 30.75), (63.5, 16.0)] {
+            let (u, v) = place.inverse(x, y);
+            let (su, sv) = small.inverse(x, y);
+            assert!((su * f[0] - u).abs() < 1e-9 && (sv * f[1] - v).abs() < 1e-9);
+        }
+        let window = crop_window(&clips[1], (400.0, 200.0)).unwrap();
+        let masked = Placement::new(64, 32, &clips[1], 0.0, window, None, None).unwrap();
+        assert!(
+            masked.in_texels(f).is_none(),
+            "a mask is laid out on the picture's pixels"
+        );
     }
 
     #[test]

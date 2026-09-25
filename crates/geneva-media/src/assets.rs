@@ -104,6 +104,31 @@ impl AssetSource for MediaAssets {
         }))
     }
 
+    fn video_size(
+        &mut self,
+        comp: &Composition,
+        id: &str,
+    ) -> Result<Option<(u32, u32)>, RenderError> {
+        let reader = self.video(comp, id)?;
+        Ok(Some((reader.width(), reader.height())))
+    }
+
+    fn video_frame_shrunk(
+        &mut self,
+        comp: &Composition,
+        id: &str,
+        source_time: Ratio,
+        shrink: [u32; 2],
+    ) -> Result<&Image, RenderError> {
+        let reader = self.video(comp, id)?;
+        reader
+            .frame_at_shrunk(source_time, shrink)
+            .map_err(|e| RenderError::Asset {
+                id: id.to_owned(),
+                reason: e.to_string(),
+            })
+    }
+
     fn video_frame(
         &mut self,
         comp: &Composition,

@@ -192,6 +192,19 @@ pub struct VideoReader {
     unrotated: Option<Image>,
     /// How many times a frame request has seeked.
     seeks: u64,
+    /// Conversions that shrink as they widen, by output size, each with
+    /// the frame it writes, for [`frame_at_shrunk`](Self::frame_at_shrunk).
+    shrinkers: Vec<Shrinker>,
+    /// Shrunk images kept for the next conversions.
+    spare_shrunk: Vec<Image>,
+}
+
+/// A conversion that widens and shrinks a frame to one size, and the
+/// frame it writes: the scaler refuses a frame of any other size.
+struct Shrinker {
+    size: (u32, u32),
+    context: scaling::Context,
+    out: frame::Video,
 }
 
 /// A decoded frame, converted to the compositing format on first use.
@@ -200,7 +213,13 @@ struct Current {
     from: Ratio,
     raw: frame::Video,
     image: Option<Image>,
+    /// The frame converted smaller, by how many times on each axis.
+    shrunk: Vec<([u32; 2], Image)>,
 }
+
+/// How many shrunk sizes a reader keeps a conversion and an image for:
+/// the few sizes one source is drawn at in a composition.
+const SHRUNK_KEPT: usize = 4;
 
 impl VideoReader {
     /// Opens the first video stream of `path`. `overrides` are color tags
@@ -302,6 +321,8 @@ impl VideoReader {
             unrotated: None,
             spare: None,
             seeks: 0,
+            shrinkers: Vec::new(),
+            spare_shrunk: Vec::new(),
         })
     }
 
@@ -361,6 +382,39 @@ impl VideoReader {
         }
         let current = self.current.insert(current);
         Ok(current.image.as_ref().expect("converted above"))
+    }
+
+    /// The frame at `t` made `shrink` times smaller on each axis (as
+    /// displayed, after the file's rotation) while it is still Y'CbCr,
+    /// then converted: for a picture drawn at a fraction of its size,
+    /// which then converts only the pixels it can show. The size is the
+    /// frame's divided by `shrink`, rounded up. Shrinking in Y'CbCr
+    /// averages gamma-encoded values, which dims fine bright detail a
+    /// little against doing it in linear light; the caller keeps what is
+    /// left of the reduction for linear light. `[1, 1]` is
+    /// [`frame_at`](Self::frame_at).
+    pub fn frame_at_shrunk(&mut self, t: Ratio, shrink: [u32; 2]) -> Result<&Image, MediaError> {
+        if shrink[0] <= 1 && shrink[1] <= 1 {
+            return self.frame_at(t);
+        }
+        self.advance_to(t)?;
+        let mut current = self.current.take().expect("advance_to leaves a frame");
+        let found = current.shrunk.iter().position(|(s, _)| *s == shrink);
+        let index = match found {
+            Some(i) => i,
+            None => {
+                let mut image = self.spare_shrunk.pop().unwrap_or_default();
+                let converted = self.convert_shrunk(&current.raw, shrink, &mut image);
+                if let Err(e) = converted {
+                    self.current = Some(current);
+                    return Err(e);
+                }
+                current.shrunk.push((shrink, image));
+                current.shrunk.len() - 1
+            }
+        };
+        let current = self.current.insert(current);
+        Ok(&current.shrunk[index].1)
     }
 
     /// The frame at `t` as 8-bit 4:2:0 planes with the tags that convert
@@ -478,6 +532,7 @@ impl VideoReader {
                     from,
                     raw,
                     image: None,
+                    shrunk: Vec::new(),
                 });
                 if pts > t {
                     break;
@@ -502,6 +557,9 @@ impl VideoReader {
             if cur.image.is_some() {
                 self.spare = cur.image;
             }
+            self.spare_shrunk
+                .extend(cur.shrunk.into_iter().map(|(_, image)| image));
+            self.spare_shrunk.truncate(SHRUNK_KEPT);
         }
     }
 
@@ -558,11 +616,18 @@ impl VideoReader {
                 e,
             )
         })?;
-        let (w, h) = (self.scaled.width(), self.scaled.height());
+        self.linearize(&self.scaled, into);
+        Ok(())
+    }
+
+    /// Converts a frame widened by one of the scalers (RGBA, or 16-bit
+    /// 4:4:4 Y'CbCr) to linear light.
+    fn linearize(&self, scaled: &frame::Video, into: &mut Image) {
+        let (w, h) = (scaled.width(), scaled.height());
         if self.rgb {
             rgba8_into(
-                self.scaled.data(0),
-                self.scaled.stride(0),
+                scaled.data(0),
+                scaled.stride(0),
                 w,
                 h,
                 self.tags.transfer,
@@ -571,10 +636,10 @@ impl VideoReader {
         } else {
             ycbcr16_into(
                 &Planes16 {
-                    y: self.scaled.data(0),
-                    cb: self.scaled.data(1),
-                    cr: self.scaled.data(2),
-                    stride: self.scaled.stride(0),
+                    y: scaled.data(0),
+                    cb: scaled.data(1),
+                    cr: scaled.data(2),
+                    stride: scaled.stride(0),
                 },
                 w,
                 h,
@@ -583,7 +648,83 @@ impl VideoReader {
                 into,
             );
         }
-        Ok(())
+    }
+
+    /// [`convert`](Self::convert), shrinking on the way: the scaler
+    /// widens to the same layouts as the full-size one, so the samples
+    /// mean the same, at a size `shrink` times smaller.
+    fn convert_shrunk(
+        &mut self,
+        raw: &frame::Video,
+        shrink: [u32; 2],
+        into: &mut Image,
+    ) -> Result<(), MediaError> {
+        // `shrink` is by displayed axis; the scaler works on coded ones.
+        let [sx, sy] = if self.rotation % 180 == 90 {
+            [shrink[1], shrink[0]]
+        } else {
+            shrink
+        };
+        let size = (
+            raw.width().div_ceil(sx.max(1)),
+            raw.height().div_ceil(sy.max(1)),
+        );
+        let found = self.shrinkers.iter().position(|s| s.size == size);
+        let index = match found {
+            Some(i) => i,
+            None => {
+                let dst = if self.rgb {
+                    Pixel::RGBA
+                } else {
+                    Pixel::YUV444P16LE
+                };
+                let context = scaling::Context::get(
+                    raw.format(),
+                    raw.width(),
+                    raw.height(),
+                    dst,
+                    size.0,
+                    size.1,
+                    scaling::Flags::BICUBIC,
+                )
+                .map_err(|e| {
+                    codec_error(
+                        format!("{}: shrinking conversion", self.inner.path.display()),
+                        e,
+                    )
+                })?;
+                if self.shrinkers.len() >= SHRUNK_KEPT {
+                    self.shrinkers.remove(0);
+                }
+                self.shrinkers.push(Shrinker {
+                    size,
+                    context,
+                    out: frame::Video::empty(),
+                });
+                self.shrinkers.len() - 1
+            }
+        };
+        let shrinker = &mut self.shrinkers[index];
+        let mut out = std::mem::replace(&mut shrinker.out, frame::Video::empty());
+        let ran = shrinker.context.run(raw, &mut out);
+        let result = ran
+            .map_err(|e| {
+                codec_error(
+                    format!("{}: shrinking conversion", self.inner.path.display()),
+                    e,
+                )
+            })
+            .map(|()| {
+                if self.rotation == 0 {
+                    self.linearize(&out, into);
+                } else {
+                    let mut flat = Image::default();
+                    self.linearize(&out, &mut flat);
+                    rotate_into(&flat, self.rotation, into);
+                }
+            });
+        self.shrinkers[index].out = out;
+        result
     }
 }
 

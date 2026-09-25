@@ -25,6 +25,25 @@ pub fn crop_window(clip: &ResolvedClip, (w, h): (f64, f64)) -> Option<[f64; 4]> 
     }
 }
 
+/// Whether a placement maps its window's pixels one-to-one onto output
+/// pixels: no rotation, unit scale, whole-pixel offsets.
+fn pixel_aligned(
+    window: [f64; 4],
+    anchor: [f64; 2],
+    position: [f64; 2],
+    scale: [f64; 2],
+    (cos, sin): (f64, f64),
+) -> bool {
+    let rotation_is_identity = (cos - 1.0).abs() < 1e-12 && sin.abs() < 1e-12;
+    let unit_scale = (scale[0] - 1.0).abs() < 1e-12 && (scale[1] - 1.0).abs() < 1e-12;
+    let integer_offset = |v: f64| (v - v.round()).abs() < 1e-9;
+    rotation_is_identity
+        && unit_scale
+        && integer_offset(position[0] - anchor[0])
+        && integer_offset(position[1] - anchor[1])
+        && window.iter().all(|v| integer_offset(*v))
+}
+
 /// The affine mapping from a clip's box to the output frame, and its
 /// inverse. Every renderer places a clip through it, so the GPU renderer
 /// draws the same pixels as the reference by construction rather than by
@@ -237,14 +256,7 @@ impl Placement {
             (x1.ceil().min(out_w)) as u32,
             (y1.ceil().min(out_h)) as u32,
         ];
-        let rotation_is_identity = (cos - 1.0).abs() < 1e-12 && sin.abs() < 1e-12;
-        let unit_scale = (scale[0] - 1.0).abs() < 1e-12 && (scale[1] - 1.0).abs() < 1e-12;
-        let integer_offset = |v: f64| (v - v.round()).abs() < 1e-9;
-        let pixel_aligned = rotation_is_identity
-            && unit_scale
-            && integer_offset(position[0] - anchor[0])
-            && integer_offset(position[1] - anchor[1])
-            && window.iter().all(|v| integer_offset(*v));
+        let pixel_aligned = pixel_aligned(window, anchor, position, scale, (cos, sin));
         Some(Self {
             window,
             anchor,
@@ -291,6 +303,36 @@ impl Placement {
             (frame_w, frame_h),
             mask,
         )
+    }
+
+    /// The same placement over a picture each of whose texels covers
+    /// `f` of this one's on each axis (a frame fetched smaller): paint
+    /// coordinates are divided by `f` and the scale multiplied by it, so
+    /// every output pixel lands on the same point of the picture. A mask
+    /// is evaluated in the picture's own coordinates, so a masked
+    /// placement has no such counterpart.
+    pub fn in_texels(&self, f: [f64; 2]) -> Option<Self> {
+        if self.mask.is_some() {
+            return None;
+        }
+        let [cx, cy, w, h] = self.window;
+        let window = [cx / f[0], cy / f[1], w / f[0], h / f[1]];
+        let anchor = [self.anchor[0] / f[0], self.anchor[1] / f[1]];
+        let scale = [self.scale[0] * f[0], self.scale[1] * f[1]];
+        Some(Self {
+            window,
+            anchor,
+            scale,
+            pixel_aligned: pixel_aligned(
+                window,
+                anchor,
+                self.position,
+                scale,
+                (self.cos, self.sin),
+            ),
+            mask: None,
+            ..self.clone()
+        })
     }
 
     /// Whether the placement only moves and scales (no rotation, or a

@@ -67,6 +67,147 @@ fn video_frames_are_decoded_in_any_order() {
 }
 
 #[test]
+fn a_frame_fetched_shrunk_is_the_whole_frame_made_smaller() {
+    let mut reader = VideoReader::open(&clip(), ColorTags::default()).unwrap();
+    let t = Ratio::new(1, 2);
+    let whole = reader.frame_at(t).unwrap().clone();
+    assert_eq!(
+        reader.frame_at_shrunk(t, [1, 1]).unwrap().pixels,
+        whole.pixels
+    );
+    for shrink in [[2, 2], [3, 2], [4, 4], [5, 7]] {
+        let small = reader.frame_at_shrunk(t, shrink).unwrap().clone();
+        let (w, h) = (192u32.div_ceil(shrink[0]), 108u32.div_ceil(shrink[1]));
+        assert_eq!((small.width, small.height), (w, h), "{shrink:?}");
+        if 192 % shrink[0] != 0 || 108 % shrink[1] != 0 {
+            // Stretched over the whole frame, which is no whole number
+            // of blocks; the renderer places it by its actual size.
+            continue;
+        }
+        // Each texel is close to the block of the whole frame it stands
+        // for: shrinking in Y'CbCr averages gamma-encoded values, which
+        // is near but not equal to averaging light.
+        let (mut abs, mut count) = (0.0f32, 0.0f32);
+        for y in 0..h - 1 {
+            for x in 0..w - 1 {
+                let mut sum = 0.0f32;
+                for dy in 0..shrink[1] {
+                    for dx in 0..shrink[0] {
+                        let p = whole.pixels
+                            [((y * shrink[1] + dy) * 192 + x * shrink[0] + dx) as usize];
+                        sum += p.r + p.g + p.b;
+                    }
+                }
+                let block = sum / (shrink[0] * shrink[1] * 3) as f32;
+                let p = small.pixels[(y * w + x) as usize];
+                abs += ((p.r + p.g + p.b) / 3.0 - block).abs();
+                count += 1.0;
+            }
+        }
+        assert!(
+            abs / count < 0.03,
+            "{shrink:?}: mean difference {}",
+            abs / count
+        );
+    }
+}
+
+#[test]
+fn a_video_drawn_small_is_fetched_small_and_draws_the_same() {
+    use geneva_media::MediaAssets;
+    use geneva_render::{AssetSource, CpuRenderer, Image, RenderError, Renderer};
+    use geneva_timeline::Composition;
+    use std::sync::{Arc, Mutex};
+
+    /// The media assets, telling what shrink each frame was asked with;
+    /// with `whole`, they cannot tell a video's size, so the renderer
+    /// fetches frames whole, as it did before frames came shrunk.
+    struct Assets {
+        media: MediaAssets,
+        whole: bool,
+        asked: Arc<Mutex<Vec<[u32; 2]>>>,
+    }
+    impl AssetSource for Assets {
+        fn image(&mut self, comp: &Composition, id: &str) -> Result<&Image, RenderError> {
+            self.media.image(comp, id)
+        }
+        fn video_size(
+            &mut self,
+            comp: &Composition,
+            id: &str,
+        ) -> Result<Option<(u32, u32)>, RenderError> {
+            if self.whole {
+                return Ok(None);
+            }
+            self.media.video_size(comp, id)
+        }
+        fn video_frame(
+            &mut self,
+            comp: &Composition,
+            id: &str,
+            source_time: Ratio,
+        ) -> Result<&Image, RenderError> {
+            self.asked.lock().unwrap().push([1, 1]);
+            self.media.video_frame(comp, id, source_time)
+        }
+        fn video_frame_shrunk(
+            &mut self,
+            comp: &Composition,
+            id: &str,
+            source_time: Ratio,
+            shrink: [u32; 2],
+        ) -> Result<&Image, RenderError> {
+            self.asked.lock().unwrap().push(shrink);
+            self.media.video_frame_shrunk(comp, id, source_time, shrink)
+        }
+    }
+
+    let root = clip().parent().unwrap().to_path_buf();
+    // The 192x108 clip at a quarter of its size, and a masked copy,
+    // which is laid out on the frame's own pixels and so comes whole.
+    let comp = load(
+        r#"{
+          "geneva": "0.5",
+          "output": { "width": 192, "height": 108, "fps": 25, "duration": "1s" },
+          "assets": { "clip": { "src": "clip.mp4" } },
+          "layers": [
+            { "clips": [ { "source": { "kind": "video", "asset": "clip", "audio": false },
+                "transform": { "position": { "x": "30%", "y": "50%" }, "scale": 0.25 } } ] },
+            { "clips": [ { "source": { "kind": "video", "asset": "clip", "audio": false },
+                "transform": { "position": { "x": "70%", "y": "50%" }, "scale": 0.25 },
+                "mask": { "shape": "ellipse" } } ] }
+          ]
+        }"#,
+    )
+    .composition
+    .unwrap();
+    let render = |whole: bool| {
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let mut renderer = CpuRenderer::new(Assets {
+            media: MediaAssets::new(root.clone()),
+            whole,
+            asked: asked.clone(),
+        });
+        let frame = renderer.render_frame(&comp, comp.frame_time(12)).unwrap();
+        let asked = asked.lock().unwrap().clone();
+        (frame, asked)
+    };
+    let (small, asked) = render(false);
+    assert_eq!(asked, vec![[4, 4], [1, 1]], "the masked clip comes whole");
+    let (whole, asked) = render(true);
+    assert_eq!(asked, vec![[1, 1], [1, 1]]);
+    let (mut abs, mut signed) = (0.0f32, 0.0f32);
+    for (a, b) in small.pixels().iter().zip(whole.pixels()) {
+        let d = (a.r + a.g + a.b - b.r - b.g - b.b) / 3.0;
+        abs += d.abs();
+        signed += d;
+    }
+    let n = small.pixels().len() as f32;
+    assert!(abs / n < 0.01, "mean difference {}", abs / n);
+    assert!((signed / n).abs() < 0.003, "bias {}", signed / n);
+}
+
+#[test]
 fn asking_twice_for_a_time_just_before_a_frame_does_not_seek() {
     // Two clips of one source ask for each time twice. A frame whose
     // timestamp lies a hair after the time asked is the frame for it,

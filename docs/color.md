@@ -18,6 +18,15 @@ browser does, on sRGB-encoded values, and the finished box is converted to
 linear light once before it is composited like any other clip. See the
 gradients section of [timeline.md](timeline.md).
 
+Another, on the CPU renderer: a video drawn at half its size or less is
+first made smaller while it is still Y'CbCr, by the whole number of times
+that keeps it at least as large as it is drawn, and the rest of the
+reduction happens in linear light. A 4K clip in a 1080p frame then converts
+a quarter of its pixels. Averaging encoded values dims fine bright detail
+slightly (a fraction of a code value on average; thin bright lines lose a
+little more); a clip with a mask is converted whole, since the mask is laid
+out on the picture's own pixels.
+
 The 32-bit float is the CPU renderer's. The GPU renderer composites in the
 same space with half that precision, `Rgba16Float`, which holds every value
 the pipeline produces and costs half the bandwidth; its blur layers are

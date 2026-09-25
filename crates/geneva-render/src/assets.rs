@@ -240,6 +240,35 @@ pub trait AssetSource {
         Ok(None)
     }
 
+    /// The size of a video asset's frames as displayed, when the source
+    /// can tell it without decoding one; `None` otherwise, which is what
+    /// the default says.
+    fn video_size(
+        &mut self,
+        comp: &Composition,
+        id: &str,
+    ) -> Result<Option<(u32, u32)>, RenderError> {
+        let _ = (comp, id);
+        Ok(None)
+    }
+
+    /// The frame of a video asset shown at `source_time`, made `shrink`
+    /// times smaller on each axis (its size divided and rounded up) by
+    /// whatever is cheapest before it is converted to linear light. For
+    /// a picture drawn at a fraction of its size; the renderer places the
+    /// frame by the size it gets, so a source may return it whole, as
+    /// the default does.
+    fn video_frame_shrunk(
+        &mut self,
+        comp: &Composition,
+        id: &str,
+        source_time: Ratio,
+        shrink: [u32; 2],
+    ) -> Result<&Image, RenderError> {
+        let _ = shrink;
+        self.video_frame(comp, id, source_time)
+    }
+
     /// Returns the frame of a video asset shown at `source_time`.
     ///
     /// The default has no decoder and reports the asset as unavailable.
