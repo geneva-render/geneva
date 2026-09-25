@@ -1,151 +1,89 @@
 <img src="docs/wordmark-any.png" alt="Geneva" width="240" height="77">
 
-geneva is a programmatic video editor, built as an alternative to the ffmpeg command line. It's designed to work well with AI agents, too.
+A command-line video editor. One binary, no dependencies: cut, join, convert, caption and composite video, either with everyday commands or by handing it a JSON document that describes the whole edit.
 
-Simple jobs take one line. More complex ones go in as JSON + optional assets, so you can read, diff, validate and check into git.
+https://github.com/user-attachments/assets/6d8566dd-7270-49bc-ac66-dab1585817a3
 
-geneva validates the job before decoding anything, so bad options fail
-immediately instead of an hour into the render. It also reports what it
-is doing as it runs.
+<sub>An AI agent made this on its first try, from one prompt, with nothing but geneva and whisper-cli. [The prompt is below.](#made-to-be-driven-by-agents)</sub>
+
+## Install
 
 ```sh
-geneva trim talk.mp4 -o intro.mp4 --to 30s        # copies the streams, no re-encode
-geneva subtitles talk.mp4 -o subbed.mp4 --burn transcript.json --highlight "#ffd233"
-geneva render job.json -o out/                    # everything the document asks for
+# Linux, macOS
+curl -fsSL https://raw.githubusercontent.com/geneva-render/geneva/main/scripts/install.sh | sh
 ```
 
-Under the hood is a compositor: layers, keyframes, shaped text, masks and
-blend modes. Overlays use HTML and CSS, including flexbox, the box model
-and `@keyframes`, without a browser. Colour is handled in linear light,
-and video goes through libavformat and libavcodec.
-
-## How it works
-
-Here is a name card and captions over ten seconds of space-station
-footage. The card is just an HTML file. Open it in a browser and it looks and
-moves the same:
-
-```html
-<!-- A lower third. Open this file in a browser: it looks and moves the same. -->
-<style>
-  @keyframes slide-in { from { translate: -100% } to   { translate: 0 } }
-  @keyframes fade-in  { from { opacity: 0 }      to   { opacity: 1 } }
-  @keyframes fade-out { from { opacity: 1 }      to   { opacity: 0 } }
-
-  .card {
-    animation: slide-in 0.5s ease-out, fade-in 0.3s, fade-out 0.3s 3.7s;
-
-    position: absolute;
-    left: 4.4%;
-    top: 7.5%;
-    width: 33%;
-
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    padding: 14px 24px;
-    box-sizing: border-box;
-
-    background: #0a0f14cc;
-    border-left: 5px solid #c4362f;
-    box-shadow: 0 4px 18px #00000059;
-  }
-
-  .card h1 {
-    margin: 0;
-    font: 600 29px Liberation Sans;
-    color: #f2f5f7;
-  }
-
-  .card p {
-    margin: 0;
-    font: 500 13px Liberation Sans;
-    letter-spacing: 1.4px;
-    color: #94a6b6;
-  }
-</style>
-
-<div class="card">
-  <h1>Dragon CRS-17</h1>
-  <p>BERTHING AT THE ISS &nbsp;&middot;&nbsp; NASA</p>
-</div>
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/geneva-render/geneva/main/scripts/install.ps1 | iex
 ```
 
-The captions come from `commentary.json`, in the JSON format Whisper
-writes. The clip has no sound, so the words were written for it rather
-than recognised. The JSON ties the footage, card and captions together:
+Or download an archive from [Releases](https://github.com/geneva-render/geneva/releases). Runs on Linux (x64, arm64), macOS on Apple silicon and Windows x64. Everything it needs is inside the binary.
+
+## Try it
+
+```sh
+geneva trim match.mp4 -o goal.mp4 --from 41:10 --to 41:40   # no re-encode, done in a blink
+geneva concat day1.mp4 day2.mp4 -o trip.mp4 --crossfade 1s
+geneva convert talk.mov -o talk.mp4 --for web               # sensible codec, size and settings for the destination
+geneva subtitles talk.mp4 -o talk-subbed.mp4 --burn talk.srt
+geneva probe talk.mp4                                       # what's actually in the file
+```
+
+Stick `--show-timeline` on any of these and geneva prints the JSON document the command turns into, instead of running it. Full list of commands and flags: [docs/cli.md](docs/cli.md).
+
+## Why build a new ffmpeg front end?
+
+Let's be clear about what's under the hood: FFmpeg's libraries. Every decoder, encoder and container format comes from libavcodec and libavformat, and they're some of the best code in open source. What geneva throws away is ffmpeg's *command line*, the flags and filtergraphs we all copy from Stack Overflow, and replaces it with its own engine. Not for the sake of nicer syntax, but because a command line that runs one pipeline can't know what your edit actually needs:
+
+- **It works out the cheapest way to get the result.** Before touching a frame, geneva plans the whole job: which streams can be copied as they are, which frames really need re-encoding, which can go straight from decoder to encoder untouched. A frame-accurate cut re-encodes only the few frames between the cut and the next keyframe, and copies the rest (when your system has x264; see below). Changing only the audio leaves the picture alone. With ffmpeg, that's all on you, and one filter anywhere means everything gets re-encoded.
+- **It catches mistakes before the render, not after.** The whole job is checked up front. Problems come back with a code, the exact place in the document and usually a hint:
+
+  ```text
+  error[E200]: unknown asset "crad"
+    --> /layers/2/clips/0/source/asset = "crad"
+     = help: did you mean "card"? assets are declared under "assets"
+  ```
+
+  ffmpeg is happy to hand you a broken file and exit 0.
+- **It has an actual compositor.** Layers, keyframes, masks, blend modes and transitions, on exact frame timing, blended in linear light with colour metadata preserved (and HDR tone-mapped when needed). Titles and graphics can be plain HTML and CSS, flexbox and `@keyframes` included, which geneva lays out itself. GPU when you have one, CPU when you don't.
+- **It tells you what it did.** Every run ends with a few notes: the encoder it picked, what it copied, what it had to guess about your source. Add `--format json` and all of it is machine-readable.
+
+## One document, the whole edit
+
+Every command above is shorthand for a document like this one, which turns a landscape clip into a vertical video with word-by-word captions:
 
 ```json
 {
   "geneva": "0.5",
-  "output": { "width": 1280, "height": 720, "fps": 30 },
-
-  "assets": {
-    "iss":   { "src": "iss.mp4" },
-    "card":  { "src": "card.html" },
-    "words": { "src": "commentary.json" }
-  },
+  "output": { "width": 1080, "height": 1920, "fps": 30 },
+  "assets": { "iss": { "src": "iss.mp4" }, "words": { "src": "words.json" } },
 
   "layers": [
-    { "id": "footage", "clips": [ {
-        "source": { "kind": "video", "asset": "iss" }, "duration": "9s" } ] },
+    { "id": "backdrop", "clips": [ {
+        "source": { "kind": "video", "asset": "iss", "audio": false },
+        "fit": "cover", "effects": [ { "kind": "blur", "radius": 45 } ] } ] },
+
+    { "id": "picture", "clips": [ {
+        "source": { "kind": "video", "asset": "iss" }, "fit": "contain" } ] },
 
     { "id": "captions", "clips": [ {
-        "source": {
-          "kind": "captions", "asset": "words", "margin": "9%",
-          "style": {
-            "font": "500 34px/1.35 Liberation Sans",
-            "color": "#b6c2cd",
-            "highlight": { "color": "#ffffff" },
-            "background": "#0a0f14cc",
-            "padding": "14px",
-            "radius": "3px",
-            "max_width": "66%"
-          } } } ] },
-
-    { "id": "lower-third", "clips": [ {
-        "source": { "kind": "html", "asset": "card" },
-        "start": "2s", "duration": "4s" } ] }
+        "source": { "kind": "captions", "asset": "words", "margin": "28%",
+          "style": { "font": "700 72px/1.25 Liberation Sans", "color": "white",
+                     "highlight": { "color": "#ffd233" }, "outline": "4px #000000cc" } } } ] }
   ]
 }
 ```
 
-```sh
-geneva render examples/lower-third.json -o dragon.mp4
-```
+<img src="docs/reframe.jpg" alt="A frame of the vertical output: the landscape footage in the middle, a blurred copy of it filling the top and bottom, and a caption with the spoken word highlighted in yellow" width="270" height="480">
 
-<img src="docs/demo.webp" alt="A name card sliding in at the top left over footage of a Dragon capsule at the space station, with captions below" width="640" height="360">
+`words.json` is a word-timed transcript, the kind Whisper writes. Documents are plain JSON with a published schema, so they diff nicely, live happily in git and are easy for a program to write. The format is in [docs/timeline.md](docs/timeline.md); [examples/](examples/README.md) has more to copy from.
 
-```text
-note[N453]: 3 cues read from "commentary.json", grouped at up to 2 lines of 42 characters
-note[N600]: the video is used as it is, so frames are handed to the encoder as decoded, with the layers above drawn onto the frames that show them
-note[N600]: H.264 encoded with the system's x264 (build 164)
-note[N600]: overlays were drawn onto 222 of 270 frames; the others went from the decoder to the encoder untouched
-wrote dragon.mp4 (270 frames, 9s of video, 4.6s elapsed)
-```
+## Made to be driven by agents
 
-The document controls when things appear. The HTML controls how they
-look. geneva handles the CSS layout itself, without a browser.
-Percentages are relative to the frame, so the layout scales with the
-output.
+Everything an agent needs is in the binary: `geneva guide` prints the manual, `geneva explain <code>` explains any error, and `--format json` works on every command.
 
-Overlays are drawn onto 222 of the 270 frames. The other 48, where
-nothing is on screen, go from the decoder to the encoder without being
-composited.
-
-## Good transitions and nice sprites, via cli
-
-LLMs can be shown an example, and write custom good-looking intros and
-transitions as [HTML+CSS markup](examples/opening.html). geneva can
-render them natively over the footage using a simple
-[JSON file](examples/opening.json), in a single pass.
-
-https://github.com/user-attachments/assets/6e6456f3-2bb4-4b00-917f-8e793622815d
-
-**An agent's first attempt**
-
-An agent with the `geneva` binary and `whisper-cli`, and no checkout,
-made this from the prompt below on its first try:
+The video at the top is an agent's first attempt with that and nothing else. It worked out the layout, wrote the lower third in HTML and CSS, pulled the headlines from a Whisper transcript of the clip, and rendered it, all from this prompt:
 
 > Using only the built-in geneva guide and whisper-cli, take a 1m clip
 > from public-domain popeye and overlay a realistic CNN style animated
@@ -154,111 +92,27 @@ made this from the prompt below on its first try:
 > so output 16:9 1080p with the empty sides filled by a blurred copy of
 > the video.
 
-https://github.com/user-attachments/assets/6d8566dd-7270-49bc-ac66-dab1585817a3
+## H.264 and x264
 
-The whole 62 s clip, re-encoded to fit GitHub's 10 MB upload limit.
-
-**Compared with ffmpeg and Remotion**
-
-| | ffmpeg | Remotion | geneva |
-| --- | --- | --- | --- |
-| Layout | none: `drawtext` at pixel positions | a browser | HTML and CSS, a [subset](docs/timeline.md#known-limitations) |
-| Animation | an expression per filter option | `interpolate()` per frame; [not `@keyframes`](https://www.remotion.dev/docs/troubleshooting/css-animations) | `@keyframes` as written |
-| Runs on | one binary | Node, headless Chrome, then ffmpeg | one binary |
-| Mistakes | often a wrong file with exit status 0 | type errors when bundling; the rest in the output | checked before rendering, with a code and the field |
-| Unchanged frames | re-encoded once any filter runs | re-encoded | copied where the source allows |
-| Licence | LGPL or GPL | paid for companies of 4 or more | MIT |
-
-## Installing
-
-On Linux and macOS:
+geneva ships with OpenH264 for H.264. If x264 is installed on your system, geneva uses it instead, and you get noticeably smaller files. It isn't bundled because it's GPL.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/geneva-render/geneva/main/scripts/install.sh | sh
+sudo apt install libx264-164   # Debian 12, Ubuntu 24.04 (libx264-163 on 22.04)
+brew install x264              # macOS
 ```
 
-On Windows, in PowerShell:
+On Windows, drop `libx264-<build>.dll` next to `geneva.exe` (MSYS2's `mingw-w64-ucrt-x86_64-libx264` has one), or point `GENEVA_X264` at it.
 
-```powershell
-irm https://raw.githubusercontent.com/geneva-render/geneva/main/scripts/install.ps1 | iex
-```
+## Docs
 
-The archives are on the [releases
-page](https://github.com/geneva-render/geneva/releases) if you would
-rather pick one yourself. Linux needs glibc 2.35+, macOS 12+ on Apple
-silicon, Windows 10 or 11 on x64. Codecs, containers and font shaping
-are built in.
-
-One thing to know about H.264: geneva bundles OpenH264, which produces
-larger files than x264 at the same quality. It does not bundle x264
-because it is GPL, but it will use your system copy if available and
-always reports which encoder it used.
-
-```sh
-sudo apt install libx264-164     # Debian 12, Ubuntu 24.04 (libx264-163 on 22.04)
-brew install x264                # macOS
-```
-
-On Windows it looks for `libx264-<build>.dll` next to `geneva.exe` (the
-one in MSYS2's `mingw-w64-ucrt-x86_64-libx264` package works on its own),
-or takes the file that `GENEVA_X264` names.
-
-## What else it does
-
-| | What it does | Where |
-| --- | --- | --- |
-| **Cut and join without re-encoding** | Copies the streams instead of decoding and encoding them again | [examples](examples/README.md#cuts-that-dont-re-encode) |
-| **Several outputs in one pass** | Multiple renditions, a poster, and speech audio from one read | [examples](examples/README.md#one-read-many-files) |
-| **Vertical video reframing** | Turns 16:9 into 9:16 over a blurred copy instead of cropping | [examples](examples/README.md#vertical-video) |
-| **Destination presets** | `--for instagram`, `--for web`, `--for phone` set size, codec, quality, keyframes, audio and, where the platform normalises it, loudness, and warn when limits are exceeded | [docs/cli.md](docs/cli.md#targets) |
-| **Transitions** | Dissolve or dip through a colour at joins or clip boundaries, with picture and sound kept together | [docs/timeline.md](docs/timeline.md#transitions) |
-| **Colour** | Preserves BT.601/BT.709, reports guesses for untagged material, and tone-maps HDR with BT.2446 | [docs/color.md](docs/color.md) |
-| **Scripts and agents** | `--format json`, field-level diagnostics, deterministic output | [docs/agents.md](docs/agents.md) |
-
-## Commands
-
-Every command and flag is in [docs/cli.md](docs/cli.md).
-
-```sh
-geneva resize talk.mp4 -o talk-720.mp4 --height 720
-geneva trim talk.mp4 -o clip.mp4 --from 12s --exact     # frame-accurate, smart cut
-geneva concat part1.mp4 part2.mp4 -o all.mp4            # copied when the streams match
-geneva concat a.mp4 b.mp4 -o ab.mp4 --crossfade 0.5s    # dissolve, picture and sound
-geneva concat a.mp4 b.mp4 -o ab.mp4 --fade 0.6s         # dip through black
-geneva overlay talk.mp4 logo.png -o branded.mp4 --at bottom-right --scale 0.5
-geneva convert talk.mp4 -o web.mp4 --for web            # copied if a browser can already play it
-geneva convert talk.mov -o talk.mp4 --crf 20 --preset slow --fps 30 --height 1080
-geneva convert talk.mov -o talk.mkv --max-bitrate 6M --audio-codec opus --audio-bitrate 128k --sample-rate 48k
-geneva convert talk.mp4 -o talk.mov --codec prores --profile hq
-geneva convert talk.mp4 -o frames/%04d.png              # image sequence
-geneva audio talk.mp4 -o talk.wav --extract --speech    # 16 kHz mono, for whisper etc.
-geneva audio talk.mp4 -o scored.mp4 --mix music.mp3 --gain -12
-geneva subtitles talk.mp4 -o burned.mp4 --burn en.srt --fit
-geneva frame talk.mp4 -o thumb.jpg                      # first clear frame past the opening
-geneva probe talk.mp4                                   # streams, colour tags, what was guessed
-```
-
-`geneva targets` prints the preset table. Add `--show-timeline` to any
-verb to print its JSON instead of rendering it. It is the quickest way
-to get a working document.
-
-## Documentation
-
-| Page | What's in it |
-| --- | --- |
-| [examples/README.md](examples/README.md) | Examples with their document, command and output |
-| [docs/timeline.md](docs/timeline.md) | The format, fields, defaults and rules |
-| [docs/cli.md](docs/cli.md) | Commands, flags, targets, containers and codecs |
-| [docs/agents.md](docs/agents.md) | The short version for scripts and AI agents |
-| [docs/errors.md](docs/errors.md) | Error codes and what to do about them |
-| [docs/color.md](docs/color.md) | Colour tags, guessing, working space and HDR |
-| [docs/architecture.md](docs/architecture.md) | Renderer, copy planner and encoders |
-| [CHANGELOG.md](CHANGELOG.md) | Version changes and unresolved format decisions |
-
-The first five of those pages are carried in the binary too, so a
-machine that has `geneva` and no checkout can read them: `geneva guide`
-prints the agent page, `geneva guide --list` names the rest, and
-`geneva explain E302` says what one diagnostic code means.
+- [Commands and flags](docs/cli.md)
+- [The document format](docs/timeline.md)
+- [Examples](examples/README.md)
+- [For scripts and agents](docs/agents.md)
+- [Error codes](docs/errors.md)
+- [Colour and HDR](docs/color.md)
+- [How it's built](docs/architecture.md)
+- [Changelog](CHANGELOG.md)
 
 ## How this was built
 
@@ -266,41 +120,19 @@ This was built almost entirely with Fable/Opus, which wrote the code,
 tests and docs under my guidance. I am being upfront about that so you
 can decide how much you trust the code.
 
-## Where this is going
+## Where it's at
 
-geneva is pre-1.0. The timeline format still moves between minor
-versions, and the engine is the whole of it: there is no hosted service
-and no editor.
-
-Two directions are being weighed. One is running renders for people who
-would rather not run the infrastructure. The other is describing an edit
-and getting it, which is nearer than it sounds: given `geneva guide` and
-no checkout, an agent built a lower third over a talk, with the
-headlines written from the talk's own transcript and word-timed captions
-under them, from a description in English.
-
-Which of those gets built depends on what people are making. If that
-includes you, [tell me what](https://genevarender.com/building), or open
-a [discussion](https://github.com/geneva-render/geneva/discussions) if
-you would rather not leave an address.
+geneva is young and it's just the engine: no GUI, no hosted service. If you're making something with it, or would like to, [I'd love to hear what](https://genevarender.com/building). Issues and [discussions](https://github.com/geneva-render/geneva/discussions) are open.
 
 ## Building from source
 
 ```sh
-scripts/build-media-libs.sh   # builds the media libraries once, 10 to 20 minutes
+scripts/build-media-libs.sh   # builds the media libraries once, takes a while
 cargo build --release
 ```
 
-You will need a C/C++ toolchain, cmake, meson, ninja, nasm, pkg-config
-and clang. [CONTRIBUTING.md](CONTRIBUTING.md) lists the packages for each
-platform and explains how to run the tests.
-[docs/architecture.md](docs/architecture.md) maps the crates.
+[CONTRIBUTING.md](CONTRIBUTING.md) has the toolchain for each platform and how to run the tests.
 
 ## Licence
 
-MIT.
-
-See [LICENSE](LICENSE).
-
-Bundled third-party components and their licences are listed in
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+MIT. Bundled libraries and their licences are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
