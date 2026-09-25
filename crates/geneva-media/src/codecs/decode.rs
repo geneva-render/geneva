@@ -213,13 +213,14 @@ struct Current {
     from: Ratio,
     raw: frame::Video,
     image: Option<Image>,
-    /// The frame converted smaller, by how many times on each axis.
+    /// The frame converted smaller, by size.
     shrunk: Vec<([u32; 2], Image)>,
 }
 
 /// How many shrunk sizes a reader keeps a conversion and an image for:
-/// the few sizes one source is drawn at in a composition.
-const SHRUNK_KEPT: usize = 4;
+/// the sizes one source is drawn at in a composition, and the next steps
+/// of a zoom.
+const SHRUNK_KEPT: usize = 8;
 
 impl VideoReader {
     /// Opens the first video stream of `path`. `overrides` are color tags
@@ -384,32 +385,39 @@ impl VideoReader {
         Ok(current.image.as_ref().expect("converted above"))
     }
 
-    /// The frame at `t` made `shrink` times smaller on each axis (as
-    /// displayed, after the file's rotation) while it is still Y'CbCr,
-    /// then converted: for a picture drawn at a fraction of its size,
-    /// which then converts only the pixels it can show. The size is the
-    /// frame's divided by `shrink`, rounded up. Shrinking in Y'CbCr
-    /// averages gamma-encoded values, which dims fine bright detail a
-    /// little against doing it in linear light; the caller keeps what is
-    /// left of the reduction for linear light. `[1, 1]` is
-    /// [`frame_at`](Self::frame_at).
-    pub fn frame_at_shrunk(&mut self, t: Ratio, shrink: [u32; 2]) -> Result<&Image, MediaError> {
-        if shrink[0] <= 1 && shrink[1] <= 1 {
+    /// The frame at `t` made smaller to `size` (as displayed, after the
+    /// file's rotation) while it is still Y'CbCr, then converted: for a
+    /// picture drawn smaller than it is, which then converts only the
+    /// pixels it can show. Shrinking in Y'CbCr averages gamma-encoded
+    /// values, which dims fine bright detail a little against doing it
+    /// in linear light. A size keeping more than three quarters of the
+    /// frame's pixels is [`frame_at`](Self::frame_at): the shrink is a
+    /// resize in the scaler, which the whole 8-bit 4:2:0 frame converts
+    /// without, and it pays only once enough pixels are left out
+    /// (measured on 1440p footage: fetched at 0.56 of its pixels, a
+    /// 1080p job took 29% less time; at 0.88, 8% more).
+    pub fn frame_at_shrunk(&mut self, t: Ratio, size: [u32; 2]) -> Result<&Image, MediaError> {
+        let size = [
+            size[0].clamp(1, self.width()),
+            size[1].clamp(1, self.height()),
+        ];
+        let area = |[w, h]: [u32; 2]| u64::from(w) * u64::from(h);
+        if area(size) * 4 > area([self.width(), self.height()]) * 3 {
             return self.frame_at(t);
         }
         self.advance_to(t)?;
         let mut current = self.current.take().expect("advance_to leaves a frame");
-        let found = current.shrunk.iter().position(|(s, _)| *s == shrink);
+        let found = current.shrunk.iter().position(|(s, _)| *s == size);
         let index = match found {
             Some(i) => i,
             None => {
                 let mut image = self.spare_shrunk.pop().unwrap_or_default();
-                let converted = self.convert_shrunk(&current.raw, shrink, &mut image);
+                let converted = self.convert_shrunk(&current.raw, size, &mut image);
                 if let Err(e) = converted {
                     self.current = Some(current);
                     return Err(e);
                 }
-                current.shrunk.push((shrink, image));
+                current.shrunk.push((size, image));
                 current.shrunk.len() - 1
             }
         };
@@ -652,23 +660,19 @@ impl VideoReader {
 
     /// [`convert`](Self::convert), shrinking on the way: the scaler
     /// widens to the same layouts as the full-size one, so the samples
-    /// mean the same, at a size `shrink` times smaller.
+    /// mean the same, at `size` as displayed.
     fn convert_shrunk(
         &mut self,
         raw: &frame::Video,
-        shrink: [u32; 2],
+        size: [u32; 2],
         into: &mut Image,
     ) -> Result<(), MediaError> {
-        // `shrink` is by displayed axis; the scaler works on coded ones.
-        let [sx, sy] = if self.rotation % 180 == 90 {
-            [shrink[1], shrink[0]]
+        // `size` is as displayed; the scaler works on the coded frame.
+        let size = if self.rotation % 180 == 90 {
+            (size[1], size[0])
         } else {
-            shrink
+            (size[0], size[1])
         };
-        let size = (
-            raw.width().div_ceil(sx.max(1)),
-            raw.height().div_ceil(sy.max(1)),
-        );
         let found = self.shrinkers.iter().position(|s| s.size == size);
         let index = match found {
             Some(i) => i,

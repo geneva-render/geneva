@@ -167,11 +167,13 @@ Everything else: decode to 16-bit 4:4:4 (RGBA for R'G'B' sources),
 normalize range, apply the tagged matrix and transfer into the working
 format, render, then linear to the output transfer, to Y'CbCr, 2×2
 chroma average and quantize straight to the target depth (a 10-bit
-output is not a widened 8-bit one). A video drawn at half its size or less
-is fetched shrunk by a whole factor per axis (`AssetSource::video_frame_shrunk`,
-libswscale widening and shrinking in one pass) and its placement carried to
-the smaller texels (`Placement::in_texels`); the remaining reduction is
-resampled in linear light. The encoder runs on its own thread
+output is not a widened 8-bit one). A video drawn smaller than it is is
+fetched at its drawn size, rounded up to a sixteenth of its own when its
+scale is animated so a zoom goes through a few sizes (`AssetSource::video_frame_shrunk`, libswscale
+widening and shrinking in one pass; the reader returns the whole frame when
+the smaller one would keep more than three quarters of the pixels), and its
+placement is carried to the smaller texels (`Placement::in_texels`); the
+remaining reduction is resampled in linear light. The encoder runs on its own thread
 behind a short queue, so compositing and encoding overlap.
 
 ### Chunked encoding

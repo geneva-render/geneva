@@ -223,20 +223,19 @@ impl<A: AssetSource> Painter<A> {
         t: Ratio,
         local: f64,
     ) -> Result<Painted<'_>, RenderError> {
-        self.paint_shrunk(comp, clip, t, local, [1, 1])
+        self.paint_shrunk(comp, clip, t, local, None)
     }
 
-    /// [`paint`](Self::paint), with a video's frame asked for `shrink`
-    /// times smaller on each axis (see
-    /// [`AssetSource::video_frame_shrunk`]); the picture is whatever size
-    /// the source returns.
+    /// [`paint`](Self::paint), with a video's frame asked for at a
+    /// smaller `size` (see [`AssetSource::video_frame_shrunk`]); the
+    /// picture is whatever size the source returns.
     pub fn paint_shrunk(
         &mut self,
         comp: &Composition,
         clip: &ResolvedClip,
         t: Ratio,
         local: f64,
-        shrink: [u32; 2],
+        size: Option<[u32; 2]>,
     ) -> Result<Painted<'_>, RenderError> {
         let mut key = None;
         let paint = match &clip.source {
@@ -276,11 +275,11 @@ impl<A: AssetSource> Painter<A> {
             }
             ResolvedSource::Video { asset, in_, .. } => {
                 let source_time = *in_ + (t - clip.start) * clip.speed;
-                let frame = if shrink == [1, 1] {
-                    self.assets.video_frame(comp, asset, source_time)?
-                } else {
-                    self.assets
-                        .video_frame_shrunk(comp, asset, source_time, shrink)?
+                let frame = match size {
+                    None => self.assets.video_frame(comp, asset, source_time)?,
+                    Some(size) => self
+                        .assets
+                        .video_frame_shrunk(comp, asset, source_time, size)?,
                 };
                 Paint::Image(Cow::Borrowed(frame))
             }

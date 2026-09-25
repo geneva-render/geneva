@@ -72,18 +72,28 @@ fn a_frame_fetched_shrunk_is_the_whole_frame_made_smaller() {
     let t = Ratio::new(1, 2);
     let whole = reader.frame_at(t).unwrap().clone();
     assert_eq!(
-        reader.frame_at_shrunk(t, [1, 1]).unwrap().pixels,
+        reader.frame_at_shrunk(t, [192, 108]).unwrap().pixels,
         whole.pixels
     );
-    for shrink in [[2, 2], [3, 2], [4, 4], [5, 7]] {
-        let small = reader.frame_at_shrunk(t, shrink).unwrap().clone();
-        let (w, h) = (192u32.div_ceil(shrink[0]), 108u32.div_ceil(shrink[1]));
-        assert_eq!((small.width, small.height), (w, h), "{shrink:?}");
-        if 192 % shrink[0] != 0 || 108 % shrink[1] != 0 {
-            // Stretched over the whole frame, which is no whole number
-            // of blocks; the renderer places it by its actual size.
+    assert_eq!(
+        reader.frame_at_shrunk(t, [500, 500]).unwrap().pixels,
+        whole.pixels,
+        "no larger than the frame"
+    );
+    assert_eq!(
+        reader.frame_at_shrunk(t, [180, 100]).unwrap().pixels,
+        whole.pixels,
+        "too little left out to pay for the shrink"
+    );
+    for [w, h] in [[96, 54], [64, 54], [48, 27], [144, 81], [39, 16]] {
+        let small = reader.frame_at_shrunk(t, [w, h]).unwrap().clone();
+        assert_eq!((small.width, small.height), (w, h));
+        if 192 % w != 0 || 108 % h != 0 {
+            // No whole number of pixels per texel; the renderer places
+            // it by its actual size.
             continue;
         }
+        let shrink = [192 / w, 108 / h];
         // Each texel is close to the block of the whole frame it stands
         // for: shrinking in Y'CbCr averages gamma-encoded values, which
         // is near but not equal to averaging light.
@@ -106,7 +116,7 @@ fn a_frame_fetched_shrunk_is_the_whole_frame_made_smaller() {
         }
         assert!(
             abs / count < 0.03,
-            "{shrink:?}: mean difference {}",
+            "{w}x{h}: mean difference {}",
             abs / count
         );
     }
@@ -119,13 +129,13 @@ fn a_video_drawn_small_is_fetched_small_and_draws_the_same() {
     use geneva_timeline::Composition;
     use std::sync::{Arc, Mutex};
 
-    /// The media assets, telling what shrink each frame was asked with;
+    /// The media assets, telling what size each frame was asked at;
     /// with `whole`, they cannot tell a video's size, so the renderer
     /// fetches frames whole, as it did before frames came shrunk.
     struct Assets {
         media: MediaAssets,
         whole: bool,
-        asked: Arc<Mutex<Vec<[u32; 2]>>>,
+        asked: Arc<Mutex<Vec<Option<[u32; 2]>>>>,
     }
     impl AssetSource for Assets {
         fn image(&mut self, comp: &Composition, id: &str) -> Result<&Image, RenderError> {
@@ -147,7 +157,7 @@ fn a_video_drawn_small_is_fetched_small_and_draws_the_same() {
             id: &str,
             source_time: Ratio,
         ) -> Result<&Image, RenderError> {
-            self.asked.lock().unwrap().push([1, 1]);
+            self.asked.lock().unwrap().push(None);
             self.media.video_frame(comp, id, source_time)
         }
         fn video_frame_shrunk(
@@ -155,10 +165,10 @@ fn a_video_drawn_small_is_fetched_small_and_draws_the_same() {
             comp: &Composition,
             id: &str,
             source_time: Ratio,
-            shrink: [u32; 2],
+            size: [u32; 2],
         ) -> Result<&Image, RenderError> {
-            self.asked.lock().unwrap().push(shrink);
-            self.media.video_frame_shrunk(comp, id, source_time, shrink)
+            self.asked.lock().unwrap().push(Some(size));
+            self.media.video_frame_shrunk(comp, id, source_time, size)
         }
     }
 
@@ -193,9 +203,14 @@ fn a_video_drawn_small_is_fetched_small_and_draws_the_same() {
         (frame, asked)
     };
     let (small, asked) = render(false);
-    assert_eq!(asked, vec![[4, 4], [1, 1]], "the masked clip comes whole");
+    // A quarter of 192x108, 48x27, to the pixel since the scale holds.
+    assert_eq!(
+        asked,
+        vec![Some([48, 27]), None],
+        "the masked clip comes whole"
+    );
     let (whole, asked) = render(true);
-    assert_eq!(asked, vec![[1, 1], [1, 1]]);
+    assert_eq!(asked, vec![None, None]);
     let (mut abs, mut signed) = (0.0f32, 0.0f32);
     for (a, b) in small.pixels().iter().zip(whole.pixels()) {
         let d = (a.r + a.g + a.b - b.r - b.g - b.b) / 3.0;

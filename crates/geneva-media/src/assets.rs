@@ -118,11 +118,11 @@ impl AssetSource for MediaAssets {
         comp: &Composition,
         id: &str,
         source_time: Ratio,
-        shrink: [u32; 2],
+        size: [u32; 2],
     ) -> Result<&Image, RenderError> {
         let reader = self.video(comp, id)?;
         reader
-            .frame_at_shrunk(source_time, shrink)
+            .frame_at_shrunk(source_time, size)
             .map_err(|e| RenderError::Asset {
                 id: id.to_owned(),
                 reason: e.to_string(),

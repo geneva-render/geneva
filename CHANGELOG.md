@@ -48,15 +48,18 @@ the format version it was written for.
   see Removed.
 
 - **Video drawn small converts only what it shows.** On the CPU
-  renderer a video drawn at half its size or less is made smaller while
-  it is still Y'CbCr (libswscale), by the whole number of times that
-  keeps it at least as large as it is drawn, and the rest of the
-  reduction is done in linear light as before. A 2x2 grid of 4K clips in
-  a 1080p frame renders in 24 s where it took 48; 4K footage with a
-  picture-in-picture over it, in 26 s where it took 47. The price is a
-  fraction of a code value on average, since averaging encoded values
-  dims fine bright detail a little; a clip with a mask is converted
-  whole. An asset source opts in through `AssetSource::video_size` and
+  renderer a video drawn smaller than it is is made smaller while it is
+  still Y'CbCr (libswscale), to its drawn size (rounded up to a
+  sixteenth of its own while its scale is animated, so a zoom goes
+  through a few sizes rather than one per frame), and the rest of the reduction is done in linear light as before. Where
+  that would leave out less than a quarter of the pixels the frame is
+  converted whole: the resize then costs more than it saves. 10 s at
+  1080p, 4 cores: a 2x2 grid of 4K clips in 24 s where it took 49; 4K
+  footage with a picture-in-picture over it in 26 s (47); 1440p footage
+  in 17 s (23); a 4K clip zooming out from 0.9 to 0.3 of its size in
+  27 s (30). The price is a fraction of a code value on average, since
+  averaging encoded values dims fine bright detail a little; a clip with
+  a mask is converted whole. An asset source opts in through `AssetSource::video_size` and
   `video_frame_shrunk`, so the goldens and the GPU renderer are
   unchanged.
 

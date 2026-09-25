@@ -252,20 +252,19 @@ pub trait AssetSource {
         Ok(None)
     }
 
-    /// The frame of a video asset shown at `source_time`, made `shrink`
-    /// times smaller on each axis (its size divided and rounded up) by
-    /// whatever is cheapest before it is converted to linear light. For
-    /// a picture drawn at a fraction of its size; the renderer places the
-    /// frame by the size it gets, so a source may return it whole, as
-    /// the default does.
+    /// The frame of a video asset shown at `source_time`, made smaller to
+    /// `size` (as displayed) by whatever is cheapest before it is
+    /// converted to linear light. For a picture drawn smaller than it
+    /// is; the renderer places the frame by the size it gets, so a
+    /// source may return it whole, as the default does.
     fn video_frame_shrunk(
         &mut self,
         comp: &Composition,
         id: &str,
         source_time: Ratio,
-        shrink: [u32; 2],
+        size: [u32; 2],
     ) -> Result<&Image, RenderError> {
-        let _ = shrink;
+        let _ = size;
         self.video_frame(comp, id, source_time)
     }
 

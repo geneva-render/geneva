@@ -120,7 +120,7 @@ impl<A: AssetSource> CpuRenderer<A> {
         clip: &ResolvedClip,
         t: Ratio,
         local: f64,
-        shrink: [u32; 2],
+        size: Option<[u32; 2]>,
     ) -> Result<Option<Paint<'_>>, RenderError> {
         if let ResolvedSource::Composition(nested) = &clip.source {
             let inner = self.render_layers(
@@ -136,18 +136,16 @@ impl<A: AssetSource> CpuRenderer<A> {
             )))));
         }
         Ok(Some(
-            self.painter
-                .paint_shrunk(comp, clip, t, local, shrink)?
-                .paint,
+            self.painter.paint_shrunk(comp, clip, t, local, size)?.paint,
         ))
     }
 
-    /// How many times smaller, on each axis, a video clip's frame can be
-    /// fetched, and the frame's full size: a video drawn at half its size
-    /// or less (after the reduction `reduce` a blur applies on top) comes
-    /// shrunk by the whole number of times that keeps it at least as
-    /// large as it is drawn, so the rest of the reduction happens in
-    /// linear light. `None` for anything else, a masked clip included,
+    /// The smaller size a video clip's frame can be fetched at, and its
+    /// full size: a video drawn smaller than it is (after the reduction
+    /// `reduce` a blur applies on top) comes at its drawn size, rounded
+    /// up to the pixel, or to a sixteenth of its own when its scale is
+    /// animated, so that a zoom goes through a few sizes rather than one
+    /// per frame; what is left of the reduction happens in linear light. `None` for anything else, a masked clip included,
     /// since a mask is laid out on the frame's own pixels.
     fn shrink_for(
         &mut self,
@@ -173,12 +171,18 @@ impl<A: AssetSource> CpuRenderer<A> {
         let Some(place) = Placement::new(frame_w, frame_h, clip, local, window, None, None) else {
             return Ok(None);
         };
-        let times =
-            |scale: f64, len: u32| ((reduce / scale.abs()).floor().max(1.0) as u32).min(len);
-        let shrink = [times(place.scale[0], w), times(place.scale[1], h)];
-        Ok((shrink != [1, 1]).then_some(Shrunk {
+        let steps = if clip.scale.is_constant() {
+            1
+        } else {
+            ZOOM_STEPS
+        };
+        let fetched = [
+            shrunk_len(w, place.scale[0].abs() / reduce, steps),
+            shrunk_len(h, place.scale[1].abs() / reduce, steps),
+        ];
+        Ok((fetched != [w, h]).then_some(Shrunk {
             full: size,
-            times: shrink,
+            size: fetched,
         }))
     }
 
@@ -231,8 +235,8 @@ impl<A: AssetSource> CpuRenderer<A> {
                 }
                 let mask_image = self.mask_image(comp, clip)?;
                 let shrunk = self.shrink_for(comp, clip, local, (comp.width, comp.height), 1.0)?;
-                let shrink = shrunk.map_or([1, 1], |s| s.times);
-                let Some(paint) = self.paint_for(comp, clip, t, local, shrink)? else {
+                let Some(paint) = self.paint_for(comp, clip, t, local, shrunk.map(|s| s.size))?
+                else {
                     continue;
                 };
                 let paint = paint.into_owned();
@@ -352,8 +356,7 @@ impl<A: AssetSource> CpuRenderer<A> {
             let mask_image = self.mask_image(comp, clip)?;
             let shrunk =
                 self.shrink_for(comp, clip, local, (width, height), blur_reduction(sigma))?;
-            let shrink = shrunk.map_or([1, 1], |s| s.times);
-            let Some(paint) = self.paint_for(comp, clip, t, local, shrink)? else {
+            let Some(paint) = self.paint_for(comp, clip, t, local, shrunk.map(|s| s.size))? else {
                 continue;
             };
             let Some(placement) = place_paint(
@@ -400,12 +403,29 @@ impl<A: AssetSource> CpuRenderer<A> {
     }
 }
 
-/// A video frame to fetch smaller: its full size, and how many times
-/// smaller on each axis.
+/// A video frame to fetch smaller: its full size, and the size to fetch.
 #[derive(Debug, Clone, Copy)]
 struct Shrunk {
     full: (f64, f64),
-    times: [u32; 2],
+    size: [u32; 2],
+}
+
+/// The steps, as fractions of a frame's side, that a frame whose scale
+/// is animated is fetched at.
+const ZOOM_STEPS: u32 = 16;
+
+/// The length a side of `len` pixels drawn at `scale` of it is fetched
+/// at: the drawn length rounded up to the next of `steps` steps (1: to
+/// the pixel), and never more than `len`.
+fn shrunk_len(len: u32, scale: f64, steps: u32) -> u32 {
+    let step = if steps > 1 {
+        len.div_ceil(steps).max(1)
+    } else {
+        1
+    };
+    // A hair under a whole number is that number, not the next one up.
+    let drawn = (f64::from(len) * scale - 1e-6).ceil().max(1.0) as u32;
+    (drawn.div_ceil(step) * step).min(len)
 }
 
 /// How many times smaller a blur of `sigma` output pixels draws its
@@ -969,6 +989,23 @@ mod tests {
         format!(
             r##"{{"geneva":"0.1","output":{{"width":64,"height":32,"fps":30,"duration":"2s"}},{body}}}"##
         )
+    }
+
+    #[test]
+    fn a_frame_drawn_smaller_is_fetched_at_its_drawn_size_or_a_step_above() {
+        // Held still: to the pixel, a whole-number product included.
+        assert_eq!(shrunk_len(192, 0.5, 1), 96);
+        assert_eq!(shrunk_len(108, 0.25, 1), 27);
+        assert_eq!(shrunk_len(1440, 0.75, 1), 1080);
+        assert_eq!(shrunk_len(658, 0.365, 1), 241);
+        // Zooming: to the next sixteenth, so a zoom meets few sizes.
+        assert_eq!(shrunk_len(108, 0.25, ZOOM_STEPS), 28);
+        assert_eq!(shrunk_len(3840, 0.61, ZOOM_STEPS), 2400);
+        assert_eq!(shrunk_len(3840, 0.6, ZOOM_STEPS), 2400);
+        // Never past the frame, never below a pixel.
+        assert_eq!(shrunk_len(100, 1.0, ZOOM_STEPS), 100);
+        assert_eq!(shrunk_len(100, 0.97, ZOOM_STEPS), 98, "steps of 7");
+        assert_eq!(shrunk_len(100, 0.0001, 1), 1);
     }
 
     #[test]
