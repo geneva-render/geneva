@@ -46,8 +46,19 @@ Let me be clear about what's under the hood: FFmpeg's libraries. I didn't rewrit
   ```
 
   ffmpeg is happy to hand you a broken file and exit 0.
-- **It has an actual compositor.** Layers, keyframes, masks, blend modes and transitions, on exact frame timing, blended in linear light with colour metadata preserved (and HDR tone-mapped when needed). Titles and graphics can be plain HTML and CSS, flexbox and `@keyframes` included. Tools that turn HTML into video usually drive a headless Chrome and screenshot it frame by frame; geneva lays out the HTML itself and draws it straight onto your footage, so there's no browser to install and no separate pass. GPU when you have one, CPU when you don't.
+- **It has an actual compositor.** Layers, keyframes, masks, blend modes and transitions, on exact frame timing, blended in linear light with colour metadata preserved (and HDR tone-mapped when needed). Titles and graphics can be plain HTML and CSS, flexbox and `@keyframes` included, which geneva lays out itself. GPU when you have one, CPU when you don't.
 - **It tells you what it did.** Every run ends with a few notes: the encoder it picked, what it copied, what it had to guess about your source. Add `--format json` and all of it is machine-readable.
+
+## "Couldn't an agent just use Playwright and ffmpeg?"
+
+It could, and people do: load the HTML in a headless browser, screenshot every frame, then have ffmpeg lay the screenshots over the footage. It works. Here's what it costs:
+
+- **The hard part is still ffmpeg.** The overlay is the easy bit. Cutting, timing captions to words, mixing the sound, keeping colours and sync right: that's all ffmpeg flags again, and that's exactly where agents slip. I ran a small test, 20 editing tasks answered blind by one model, twice (tasks I wrote myself, so it's a hint, not a benchmark). The ffmpeg answers produced 8 files that exited 0, looked plausible and were wrong: shifted colours, cuts tens of milliseconds off, a speed change that pulled the sound out of sync. The geneva answers got all 20 right in both runs, once I'd fixed the one bug the test turned up. An agent can't watch the result, so a wrong file that looks fine is the failure that matters.
+- **Browsers don't keep frame time.** CSS animations run on the wall clock, so capturing frame by frame means faking the page's clock and seeking it for every frame. Remotion's docs flat out tell you not to use CSS animations for this reason. geneva computes every animation from the frame's timestamp, so frame 1234 is the same picture every time.
+- **It's a second pass over the whole video.** The screenshots get layered onto the footage in a separate ffmpeg run, which decodes and re-encodes every frame, including the ones nothing is drawn on. geneva draws the HTML in the same pass that cuts and encodes, and stretches with nothing on them can be copied rather than re-encoded.
+- **Chromium, Node, Playwright and ffmpeg is a lot to install** on a server, in CI or in an agent's sandbox. geneva is one binary.
+
+To be fair to the browser: it runs any CSS and any JavaScript. geneva handles [a subset of CSS](docs/timeline.md#markup) (layout, gradients, shadows, clip paths, blend modes, keyframes) and no JavaScript at all. If your frames need the whole web platform, the browser route is the right one.
 
 ## One document, the whole edit
 
