@@ -904,6 +904,46 @@ fn expand(a: &Animation, steps: &[(f64, AnimValues)], length: f64, out: &mut Ani
 /// rather than "and reset the scale and rotation too". An element inside
 /// markup is played differently: there a lone `to` starts from the value
 /// under it.
+/// Fills in the keyframes a rule leaves out, as CSS does: a property
+/// the rule animates but does not set at 0% or 100% takes the element's
+/// own value there. For a clip that is no movement, no scaling, no
+/// turning, and the clip's own opacity, which the animation's replaces.
+/// `@keyframes out { to { opacity: 0 } }` therefore fades from the
+/// clip's opacity rather than being one lone keyframe with nothing to
+/// move between.
+fn with_implicit_ends(steps: &[(f64, AnimValues)], own_opacity: f64) -> Vec<(f64, AnimValues)> {
+    let mut steps = steps.to_vec();
+    let sets = |f: fn(&AnimValues) -> bool| steps.iter().any(|(_, v)| f(v));
+    let translate = sets(|v| v.translate.is_some());
+    let scale = sets(|v| v.scale.is_some());
+    let rotate = sets(|v| v.rotate.is_some());
+    let opacity = sets(|v| v.opacity.is_some());
+    for end in [0.0, 1.0] {
+        let at = match steps.iter().position(|(o, _)| *o == end) {
+            Some(at) => at,
+            None => {
+                let at = if end == 0.0 { 0 } else { steps.len() };
+                steps.insert(at, (end, AnimValues::default()));
+                at
+            }
+        };
+        let v = &mut steps[at].1;
+        if translate && v.translate.is_none() {
+            v.translate = Some([Shift::Px(0.0), Shift::Px(0.0)]);
+        }
+        if scale && v.scale.is_none() {
+            v.scale = Some([1.0, 1.0]);
+        }
+        if rotate && v.rotate.is_none() {
+            v.rotate = Some(0.0);
+        }
+        if opacity && v.opacity.is_none() {
+            v.opacity = Some(own_opacity);
+        }
+    }
+    steps
+}
+
 fn thinned(steps: &[(f64, AnimValues)]) -> Vec<(f64, AnimValues)> {
     let mut steps = steps.to_vec();
     let thin = |steps: &[(f64, AnimValues)], f: fn(&AnimValues) -> bool| {
@@ -2325,8 +2365,19 @@ transitions in over the same join"
                     } else {
                         markup.animated_box
                     };
-                    let k =
-                        self.resolve_animation(spec, &apath, length, &markup.rules, relative_to);
+                    // A rule that leaves out its first or last keyframe
+                    // starts or ends at the clip's own value, as a browser
+                    // starts from the element's; opacity is the one such
+                    // value the clip holds, the others add to it.
+                    let own_opacity = opacity.keyframes()[0].value;
+                    let k = self.resolve_animation(
+                        spec,
+                        &apath,
+                        length,
+                        &markup.rules,
+                        relative_to,
+                        own_opacity,
+                    );
                     (
                         self.animated_over(
                             position,
@@ -3329,6 +3380,7 @@ letter-spacing, a size or background-position",
         length: Ratio,
         extra: &BTreeMap<String, Vec<(f64, AnimValues)>>,
         clip_box: (Option<f64>, Option<f64>),
+        own_opacity: f64,
     ) -> AnimationKnots {
         let mut knots = AnimationKnots::default();
         let animations = match parse_animation_spec(spec.shorthand.as_deref(), &spec.longhands) {
@@ -3398,7 +3450,7 @@ an animation on an element inside the outermost one, which is played there",
                 );
                 continue;
             }
-            let steps = thinned(steps);
+            let steps = thinned(&with_implicit_ends(steps, own_opacity));
             if steps.len() < 2 {
                 self.push(
                     Diagnostic::warning(

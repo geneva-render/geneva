@@ -10,6 +10,16 @@ versions changed the format freely.
 
 ### Fixed
 
+- **An animation on markup's outermost element with only a `to` (or only
+  a `from`) keyframe was dropped** with `W440, nothing interpolates`.
+  CSS starts such a rule from the element's own value, so
+  `@keyframes out { to { opacity: 0 } }` fades out in a browser; geneva
+  played the outermost element's animation on the clip and found one
+  keyframe with nothing to move between. A missing first or last keyframe
+  now takes the clip's own value: no movement, no scaling, no turning,
+  and the clip's opacity. The same holds for a clip's `animation` in the
+  document. Found by the intro card of a benchmark package, whose
+  `card-out` fade never ran.
 - **Overlays over a video cost less when they are far apart.** With a
   card at the top of the frame and captions at the bottom, the two were
   drawn onto one transparent frame spanning both, two thirds of a 720p

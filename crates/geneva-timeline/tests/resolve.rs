@@ -295,6 +295,44 @@ fn two_animations_share_one_property_over_disjoint_ranges() {
 }
 
 #[test]
+fn a_rule_without_a_first_keyframe_starts_from_the_clip() {
+    // `to` alone: CSS starts from the element's own value, which for a
+    // clip is where it stands and the opacity it has. It used to be one
+    // keyframe with nothing to move between, and W440 dropped it.
+    let text = animated(
+        r#""out":{"to":"opacity: 0; translate: 0 -18px"}"#,
+        r#""opacity":0.8,"transform":{"position":"50 50"},"animation":"out 1s 1s linear forwards""#,
+    );
+    let l = load(&text);
+    assert!(l.is_ok(), "{:?}", l.diagnostics);
+    assert!(
+        l.diagnostics.iter().all(|d| d.code != "W440"),
+        "{:?}",
+        l.diagnostics
+    );
+    let clip = &l.composition.unwrap().layers[0].clips[0];
+    assert_eq!(clip.opacity.sample(0.5), 0.8);
+    assert_eq!(clip.opacity.sample(1.0), 0.8);
+    assert!((clip.opacity.sample(1.5) - 0.4).abs() < 1e-9);
+    assert_eq!(clip.position.sample(1.0), [50.0, 50.0]);
+    assert_eq!(clip.position.sample(1.5), [50.0, 41.0]);
+}
+
+#[test]
+fn a_rule_without_a_last_keyframe_ends_at_the_clip() {
+    let text = animated(
+        r#""in":{"from":"scale: 0.5"}"#,
+        r#""animation":"in 1s linear""#,
+    );
+    let l = load(&text);
+    assert!(l.is_ok(), "{:?}", l.diagnostics);
+    let clip = &l.composition.unwrap().layers[0].clips[0];
+    assert_eq!(clip.scale.sample(0.0), [0.5, 0.5]);
+    assert_eq!(clip.scale.sample(0.5), [0.75, 0.75]);
+    assert_eq!(clip.scale.sample(1.5), [1.0, 1.0]);
+}
+
+#[test]
 fn an_infinite_animation_fills_the_clip() {
     let text = animated(
         r#""spin":{"from":"rotate: 0deg","to":"rotate: 360deg"}"#,
