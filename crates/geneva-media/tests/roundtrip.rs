@@ -718,17 +718,16 @@ fn overlays_laid_onto_direct_frames_match_the_compositor() {
 
     // Before the caption: nothing to draw, frames are the decoder's.
     let t = comp.frame_time(2);
-    assert!(renderer.render_overlays(&comp, t).unwrap().is_none());
+    assert!(renderer.render_overlays(&comp, t).unwrap().is_empty());
 
     // During the caption: only its box changes, and the result agrees
     // with the full compositor there.
     let t = comp.frame_time(20);
     let mut planes = base.frame(t).unwrap();
     let before = planes.clone();
-    let (overlay, rect) = renderer
-        .render_overlays(&comp, t)
-        .unwrap()
-        .expect("caption shown");
+    let mut drawn = renderer.render_overlays(&comp, t).unwrap();
+    assert_eq!(drawn.len(), 1, "one caption, one box");
+    let (overlay, rect) = drawn.pop().expect("caption shown");
     assert!(rect[1] > 50 && rect[3] <= 108, "{rect:?}");
     blend_overlay(&mut planes, &overlay, rect, comp.color);
     let slow = frame_to_planes(

@@ -750,10 +750,12 @@ pub fn blend_overlay(planes: &mut Planes, overlay: &Frame, rect: [u32; 4], tags:
             let by = by0 + bi;
             let rows = y_block_rows.len() / y_stride;
             for bx in bx0..bx1 {
-                let xs: Vec<usize> = (bx * dx..bx * dx + dx).filter(|&x| x < w).collect();
+                // A range, not a collected list: most blocks of a wide
+                // overlay are transparent, and this runs for every one.
+                let xs = bx * dx..(bx * dx + dx).min(w);
                 let covered = (0..rows).any(|r| {
-                    xs.iter()
-                        .any(|&x| src_at(x as u32, (by * dy + r) as u32).a > 0.0)
+                    xs.clone()
+                        .any(|x| src_at(x as u32, (by * dy + r) as u32).a > 0.0)
                 });
                 if !covered {
                     continue;
@@ -762,7 +764,7 @@ pub fn blend_overlay(planes: &mut Planes, overlay: &Frame, rect: [u32; 4], tags:
                 let cr = load(cr_row, bx);
                 let (mut sum_b, mut sum_r, mut count) = (0.0f64, 0.0f64, 0.0f64);
                 for r in 0..rows {
-                    for &x in &xs {
+                    for x in xs.clone() {
                         let yi = r * y_stride / format.bytes_per_sample() + x;
                         let y_code = load(y_block_rows, yi);
                         let [yn, cbn, crn] =

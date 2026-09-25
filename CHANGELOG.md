@@ -6,6 +6,22 @@ version it was written for; within 1.x the format only gains optional
 fields, so a document keeps meaning what it meant. Before 1.0, minor
 versions changed the format freely.
 
+## Unreleased
+
+### Fixed
+
+- **Overlays over a video cost less when they are far apart.** With a
+  card at the top of the frame and captions at the bottom, the two were
+  drawn onto one transparent frame spanning both, two thirds of a 720p
+  picture, and every block of it was visited and a small list allocated
+  for each before the transparent ones were skipped. Clips whose boxes
+  do not touch are now drawn and laid on separately, blocks are skipped
+  without allocating, and word-timed captions are drawn again only when
+  the lit word changes. The output is the same to the bit. On
+  `examples/lower-third.json` (720p, 9 s, 4 cores) the render takes
+  5.9 s where it took 6.2; ffmpeg, drawing the same card and an ASS
+  version of the captions, takes 5.5.
+
 ## 1.0.0 (2026-09-25)
 
 The first public release.

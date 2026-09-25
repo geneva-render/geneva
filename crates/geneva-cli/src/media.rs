@@ -1992,7 +1992,7 @@ mod imp {
                     d.frame_with(t, &mut pool)
                 } else if let Some(b) = base.as_mut() {
                     b.frame_with(t, &mut pool).and_then(|mut planes| {
-                        if let Some((overlay, rect)) =
+                        for (overlay, rect) in
                             renderer.render_overlays(comp, t).map_err(render_err)?
                         {
                             geneva_media::convert::blend_overlay(
@@ -2724,10 +2724,13 @@ mod imp {
                 if let Some(b) = base.as_mut() {
                     let mut planes = b.frame_with(t, &mut pool).map_err(media_err)?;
                     let overlays = overlays.as_mut().expect("made with the base");
-                    if let Some((overlay, rect)) = overlays.render_overlays(comp, t)? {
+                    let drawn = overlays.render_overlays(comp, t)?;
+                    if !drawn.is_empty() {
+                        composited += 1;
+                    }
+                    for (overlay, rect) in drawn {
                         let tags = output_tags.expect("video output has tags");
                         geneva_media::convert::blend_overlay(&mut planes, &overlay, rect, tags);
-                        composited += 1;
                     }
                     return Ok(planes);
                 }

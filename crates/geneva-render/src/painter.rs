@@ -20,6 +20,10 @@ use crate::assets::{AssetSource, Image};
 use crate::html::MarkupLayers;
 use crate::text::TextEngine;
 
+/// How many word-timed text pictures the painter keeps: a few cues on
+/// screen at once, each with the word lit now.
+const WORD_TEXT_KEEP: usize = 8;
+
 /// A markup source ready to draw.
 struct Scene {
     /// The clip this scene was made for, so a remark can name it.
@@ -40,6 +44,11 @@ pub struct Painter<A: AssetSource> {
     /// Rendered text images that do not change with time, by a hash of
     /// the clip and its text, so a caption is laid out once per clip.
     text_cache: HashMap<u64, Image>,
+    /// Word-timed text drawn lately, by a hash of the clip, its text and
+    /// the word lit: the picture only changes when the lit word does, and
+    /// frames come in order, so the last few are all worth keeping. Most
+    /// recent first, at most [`WORD_TEXT_KEEP`].
+    word_text: Vec<(u64, Image)>,
     /// Markup prepared earlier, by a hash of the clip: the parsed
     /// document and its pictures, and the drawn box when nothing in the
     /// markup moves, which is then the same picture at every time.
@@ -93,6 +102,7 @@ impl<A: AssetSource> Painter<A> {
             assets,
             text: TextEngine::new(),
             text_cache: HashMap::new(),
+            word_text: Vec::new(),
             html_cache: HashMap::new(),
             warnings: std::collections::BTreeSet::new(),
         }
@@ -333,15 +343,18 @@ impl<A: AssetSource> Painter<A> {
                 // document draw in the document's font under an id and in
                 // the machine's under the family it declares.
                 self.load_font_assets(comp)?;
-                if text.words.is_empty() && text.is_static() {
-                    // Static text: laid out once per clip. A colour or
-                    // shadow with keyframes is drawn fresh each frame.
+                let text_key = || {
                     let mut hasher = std::collections::hash_map::DefaultHasher::new();
                     clip.path.hash(&mut hasher);
                     text.text.hash(&mut hasher);
                     text.max_width.to_bits().hash(&mut hasher);
                     format!("{:?}", text.spec).hash(&mut hasher);
-                    let text_key = hasher.finish();
+                    hasher
+                };
+                if text.words.is_empty() && text.is_static() {
+                    // Static text: laid out once per clip. A colour or
+                    // shadow with keyframes is drawn fresh each frame.
+                    let text_key = text_key().finish();
                     key = Some(text_key);
                     let engine = &mut self.text;
                     let image = self
@@ -349,6 +362,30 @@ impl<A: AssetSource> Painter<A> {
                         .entry(text_key)
                         .or_insert_with(|| engine.render(text, local));
                     Paint::Image(Cow::Borrowed(image))
+                } else if text.is_static() {
+                    // Word-timed text with nothing animated: the picture
+                    // is the same until the lit word changes, which is
+                    // how `TextEngine::render` chooses it.
+                    let lit = text
+                        .words
+                        .iter()
+                        .position(|(_, s, e)| s.to_f64() <= local && local < e.to_f64());
+                    let mut hasher = text_key();
+                    lit.hash(&mut hasher);
+                    let word_key = hasher.finish();
+                    key = Some(word_key);
+                    match self.word_text.iter().position(|(k, _)| *k == word_key) {
+                        Some(i) => {
+                            let kept = self.word_text.remove(i);
+                            self.word_text.insert(0, kept);
+                        }
+                        None => {
+                            let image = self.text.render(text, local);
+                            self.word_text.insert(0, (word_key, image));
+                            self.word_text.truncate(WORD_TEXT_KEEP);
+                        }
+                    }
+                    Paint::Image(Cow::Borrowed(&self.word_text[0].1))
                 } else {
                     Paint::Image(Cow::Owned(self.text.render(text, local)))
                 }

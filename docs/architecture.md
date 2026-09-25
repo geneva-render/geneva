@@ -153,10 +153,12 @@ Picture untouched but not copyable (another codec, a quality setting,
   the coded Y'CbCr, bicubic, threaded. This is the one place geneva
   resamples outside linear light; with nothing composited there is no
   blend to get wrong.
-- Overlays on higher layers keep the path: they are rendered on a
-  transparent frame the size of their bounding box and laid over the
-  decoded planes, converting only covered pixels to linear light and
-  back. Untouched pixels stay byte-identical.
+- Overlays on higher layers keep the path: they are rendered on
+  transparent frames the size of their bounding boxes, one per group of
+  clips whose boxes touch (a card at the top and captions at the bottom
+  are two), and laid over the decoded planes, converting only covered
+  pixels to linear light and back. Untouched pixels stay byte-identical.
+  Word-timed text is drawn again only when the lit word changes.
 - RGB outputs from 8-bit Y'CbCr sources go through the scaler with the
   source matrix and range and a per-channel transfer table. Other
   matrix or primaries conversions go through the compositor.

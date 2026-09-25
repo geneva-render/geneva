@@ -207,21 +207,21 @@ impl<A: AssetSource> CpuRenderer<A> {
     }
 
     /// Draws the clips above the first layer that are visible at `t` onto
-    /// a transparent frame covering just their bounding box, and returns
-    /// it with the box `[x0, y0, x1, y1]` in output pixels; `None` when
-    /// nothing is shown above the first layer. Laying the result over the
-    /// first layer's picture gives the composited frame when
+    /// transparent frames covering just their bounding boxes, one per
+    /// group of clips whose boxes touch, and returns each with its box
+    /// `[x0, y0, x1, y1]` in output pixels; empty when nothing is shown
+    /// above the first layer. Laying them all over the first layer's
+    /// picture, in any order, gives the composited frame when
     /// [`overlays_are_plain`](Self::overlays_are_plain) holds.
     pub fn render_overlays(
         &mut self,
         comp: &Composition,
         t: Ratio,
-    ) -> Result<Option<(Frame, [u32; 4])>, RenderError> {
+    ) -> Result<Vec<(Frame, [u32; 4])>, RenderError> {
         let Some(layers) = comp.layers.get(1..) else {
-            return Ok(None);
+            return Ok(Vec::new());
         };
         let mut items: Vec<(Paint<'static>, Placement, f32, BlendMode)> = Vec::new();
-        let mut bounds: Option<[u32; 4]> = None;
         for layer in layers {
             for (i, clip) in layer.clips.iter().enumerate() {
                 if clip.start > t || t >= clip.end {
@@ -254,35 +254,65 @@ impl<A: AssetSource> CpuRenderer<A> {
                 if b[0] >= b[2] || b[1] >= b[3] {
                     continue;
                 }
-                bounds = Some(match bounds {
-                    None => b,
-                    Some(u) => [
-                        u[0].min(b[0]),
-                        u[1].min(b[1]),
-                        u[2].max(b[2]),
-                        u[3].max(b[3]),
-                    ],
-                });
                 items.push((paint, place, opacity as f32, clip.blend));
             }
         }
-        let Some(rect) = bounds else {
-            return Ok(None);
-        };
-        let mut frame = Frame::new(rect[2] - rect[0], rect[3] - rect[1], Color::TRANSPARENT);
-        for (paint, place, opacity, blend) in items {
-            draw(
-                &mut frame,
-                [rect[0], rect[1]],
-                &paint,
-                &place,
-                opacity,
-                blend,
-            );
-            let pixels = owned_pixels(paint);
-            self.recycle(pixels);
+        if items.is_empty() {
+            return Ok(Vec::new());
         }
-        Ok(Some((frame, rect)))
+        // Clips far apart (a card at the top, captions at the bottom) get
+        // a frame each rather than one spanning both, which would be
+        // mostly transparent and still converted and laid on in full.
+        // Boxes are grouped when they touch once widened to whole 2×2
+        // blocks, so no chroma block is laid on twice, and the result is
+        // the pixels one frame over the union would give.
+        let widen = |b: [u32; 4]| [b[0] & !1, b[1] & !1, (b[2] + 1) & !1, (b[3] + 1) & !1];
+        let touch =
+            |a: [u32; 4], b: [u32; 4]| a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+        let join = |a: [u32; 4], b: [u32; 4]| {
+            [
+                a[0].min(b[0]),
+                a[1].min(b[1]),
+                a[2].max(b[2]),
+                a[3].max(b[3]),
+            ]
+        };
+        // Each group: its box, its widened box, and its items in order.
+        let mut groups: Vec<([u32; 4], [u32; 4], Vec<usize>)> = Vec::new();
+        for (i, (_, place, _, _)) in items.iter().enumerate() {
+            let (mut rect, mut wide, mut members) = (place.bounds, widen(place.bounds), vec![i]);
+            // Absorbing a group can make this one reach another, so keep
+            // going until nothing more touches.
+            while let Some(g) = groups.iter().position(|g| touch(g.1, wide)) {
+                let (r, w, m) = groups.remove(g);
+                rect = join(rect, r);
+                wide = join(wide, w);
+                members.extend(m);
+            }
+            groups.push((rect, wide, members));
+        }
+        let mut items: Vec<Option<_>> = items.into_iter().map(Some).collect();
+        let mut out = Vec::with_capacity(groups.len());
+        for (rect, _, mut members) in groups {
+            // Painter's order within a group, as in one shared frame.
+            members.sort_unstable();
+            let mut frame = Frame::new(rect[2] - rect[0], rect[3] - rect[1], Color::TRANSPARENT);
+            for i in members {
+                let (paint, place, opacity, blend) = items[i].take().expect("in one group");
+                draw(
+                    &mut frame,
+                    [rect[0], rect[1]],
+                    &paint,
+                    &place,
+                    opacity,
+                    blend,
+                );
+                let pixels = owned_pixels(paint);
+                self.recycle(pixels);
+            }
+            out.push((frame, rect));
+        }
+        Ok(out)
     }
 
     /// Renders a set of layers into a fresh frame at time `t`, which is
