@@ -32,9 +32,9 @@ geneva probe talk.mp4                                       # what's actually in
 
 Stick `--show-timeline` on any of these and geneva prints the JSON document the command turns into, instead of running it. Full list of commands and flags: [docs/cli.md](docs/cli.md).
 
-## Why build a new ffmpeg front end?
+## Why I replaced ffmpeg's command line
 
-Let's be clear about what's under the hood: FFmpeg's libraries. Every decoder, encoder and container format comes from libavcodec and libavformat, and they're some of the best code in open source. What geneva throws away is ffmpeg's *command line*, the flags and filtergraphs we all copy from Stack Overflow, and replaces it with its own engine. Not for the sake of nicer syntax, but because a command line that runs one pipeline can't know what your edit actually needs:
+Let me be clear about what's under the hood: FFmpeg's libraries. I didn't rewrite a single decoder, encoder or container format. They all come from libavcodec and libavformat, which are some of the best code in open source. What I replaced is ffmpeg's *command line*, the flags and filtergraphs we all copy from Stack Overflow, with an engine of my own. Not for nicer syntax, but because a command line that runs one pipeline can't know what your edit actually needs:
 
 - **It works out the cheapest way to get the result.** Before touching a frame, geneva plans the whole job: which streams can be copied as they are, which frames really need re-encoding, which can go straight from decoder to encoder untouched. A frame-accurate cut re-encodes only the few frames between the cut and the next keyframe, and copies the rest (when your system has x264; see below). Changing only the audio leaves the picture alone. With ffmpeg, that's all on you, and one filter anywhere means everything gets re-encoded.
 - **It catches mistakes before the render, not after.** The whole job is checked up front. Problems come back with a code, the exact place in the document and usually a hint:
@@ -94,7 +94,7 @@ The video at the top is an agent's first attempt with that and nothing else. It 
 
 ## H.264 and x264
 
-geneva ships with OpenH264 for H.264. If x264 is installed on your system, geneva uses it instead, and you get noticeably smaller files. It isn't bundled because it's GPL.
+geneva ships with OpenH264 for H.264. If x264 is installed on your system, geneva uses it instead, and you get noticeably smaller files. I don't bundle it because it's GPL and geneva is MIT.
 
 ```sh
 sudo apt install libx264-164   # Debian 12, Ubuntu 24.04 (libx264-163 on 22.04)
@@ -122,7 +122,7 @@ can decide how much you trust the code.
 
 ## Where it's at
 
-geneva is young and it's just the engine: no GUI, no hosted service. If you're making something with it, or would like to, [I'd love to hear what](https://genevarender.com/building). Issues and [discussions](https://github.com/geneva-render/geneva/discussions) are open.
+geneva is young, and for now it's just the engine: no GUI, no hosted service. What I build next depends on what people make with it, so if that's you, or you'd like it to be, [I'd love to hear what you're working on](https://genevarender.com/building). Issues and [discussions](https://github.com/geneva-render/geneva/discussions) are open.
 
 ## Building from source
 
