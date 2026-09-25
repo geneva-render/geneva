@@ -13,8 +13,9 @@
 # where their glibc 2.35 floor comes from; on Apple Silicon the arm64 one
 # is native and the x86_64 one is emulated, so it is the slow one. Set
 # APPLE_CERTIFICATE_P12 and the other APPLE_* variables the workflow reads
-# to get a signed and notarized macOS binary; without them it ships
-# unsigned, as the workflow also does.
+# to get a signed and notarized macOS binary (APPLE_API_KEY may hold the
+# .p8 key's text or its path); without them it ships unsigned, as the
+# workflow also does.
 #
 # Needs: docker (for the Linux targets), gh and a push remote (--publish),
 # and the build tools scripts/build-media-libs.sh lists (macOS target).
@@ -195,6 +196,11 @@ restore_keychains() {
   return 0
 }
 
+# A string field of notarytool's one-line JSON answer.
+json_field() {
+  printf '%s' "$2" | sed -n "s/.*\"$1\" *: *\"\([^\"]*\)\".*/\1/p"
+}
+
 sign_macos() {
   local bin=$1 work=$2 password line
   password=$(uuidgen)
@@ -229,9 +235,24 @@ sign_macos() {
   codesign --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp --force "$bin"
   codesign --verify --strict --verbose=2 "$bin"
 
+  # Notarized with an App Store Connect API key, as in the workflow;
+  # notarytool exits 0 on a rejection, so the status is read.
+  local key=$APPLE_API_KEY result
+  if [ ! -f "$key" ]; then
+    key=$work/AuthKey.p8
+    printf '%s\n' "$APPLE_API_KEY" > "$key"
+    chmod 600 "$key"
+  fi
+  local auth=(--key "$key" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID")
   ditto -c -k "$bin" "$work/geneva.zip"
-  xcrun notarytool submit "$work/geneva.zip" --wait \
-    --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
+  result=$(xcrun notarytool submit "$work/geneva.zip" --wait --output-format json "${auth[@]}")
+  echo "$result"
+  if [ "$(json_field status "$result")" != Accepted ]; then
+    xcrun notarytool log "$(json_field id "$result")" "${auth[@]}" || true
+    [ "$key" = "$work/AuthKey.p8" ] && rm -f "$key"
+    die "notarization was not accepted"
+  fi
+  [ "$key" = "$work/AuthKey.p8" ] && rm -f "$key"
 }
 
 # ----------------------------------------------------------- macOS build

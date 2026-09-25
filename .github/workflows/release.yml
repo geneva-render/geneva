@@ -20,13 +20,17 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       # Set these repository secrets to get signed and notarized macOS
-      # binaries; without them the macOS build is shipped unsigned.
+      # binaries; without them the macOS build is shipped unsigned. The
+      # Developer ID certificate as a base64 .p12 with its password and
+      # identity, and an App Store Connect API key (the .p8 file's text,
+      # its key ID and the issuer ID) for notarization, so no Apple ID
+      # or account email is involved.
       APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
       APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
     strategy:
       fail-fast: false
       matrix:
@@ -99,12 +103,24 @@ jobs:
           codesign --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp \
             --force dist/geneva
           codesign --verify --strict --verbose=2 dist/geneva
+      # notarytool exits 0 on a rejected submission too, so the status is
+      # read from its answer, and Apple's log printed when it is not
+      # Accepted. A bare binary cannot be stapled; Gatekeeper looks the
+      # ticket up online on first run.
       - name: Notarize (macOS)
         if: runner.os == 'macOS' && env.APPLE_CERTIFICATE_P12 != ''
         run: |
+          key=$RUNNER_TEMP/AuthKey.p8
+          printf '%s\n' "$APPLE_API_KEY" > "$key"
+          auth=(--key "$key" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID")
           ditto -c -k dist/geneva "$RUNNER_TEMP/geneva.zip"
-          xcrun notarytool submit "$RUNNER_TEMP/geneva.zip" --wait \
-            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
+          result=$(xcrun notarytool submit "$RUNNER_TEMP/geneva.zip" --wait --output-format json "${auth[@]}")
+          echo "$result"
+          if [ "$(echo "$result" | jq -r .status)" != Accepted ]; then
+            xcrun notarytool log "$(echo "$result" | jq -r .id)" "${auth[@]}" || true
+            exit 1
+          fi
+          rm -f "$key"
       # A zip for Windows, with the PowerShell installer in place of the
       # shell scripts; a tarball everywhere else.
       - name: Package
