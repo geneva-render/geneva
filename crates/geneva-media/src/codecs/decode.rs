@@ -190,6 +190,8 @@ pub struct VideoReader {
     rotation: u16,
     /// A buffer for the unrotated conversion when a rotation applies.
     unrotated: Option<Image>,
+    /// How many times a frame request has seeked.
+    seeks: u64,
 }
 
 /// A decoded frame, converted to the compositing format on first use.
@@ -299,7 +301,15 @@ impl VideoReader {
             rotation,
             unrotated: None,
             spare: None,
+            seeks: 0,
         })
+    }
+
+    /// How many times a frame request has seeked in the file, the first
+    /// request included. Reading frames in order seeks once; a seek per
+    /// frame means every frame is decoded again from a keyframe.
+    pub fn seeks(&self) -> u64 {
+        self.seeks
     }
 
     /// Pixel format of the decoded frames.
@@ -412,20 +422,32 @@ impl VideoReader {
         // millisecond off their grid, and nothing is a quarter of a
         // frame away from the one before it.
         let slack = self.frame_duration / Ratio::from_int(4);
+        // The current frame is still the one for `t` by that same rule,
+        // so asking again for the time it was taken for (two clips of
+        // one source do, every frame) neither decodes nor seeks.
         let covered = match (&self.current, &self.pending) {
-            (Some(cur), Some((next, _))) => cur.from <= t && t + slack < *next,
-            (Some(cur), None) => cur.from <= t && self.inner.eof,
+            (Some(cur), Some((next, _))) => cur.from <= t + slack && t + slack < *next,
+            (Some(cur), None) => {
+                // With no next frame read yet, only a frame taken by the
+                // slack is known to still hold: the next one is a whole
+                // frame later, past `t + slack`.
+                (t < cur.from && cur.from <= t + slack) || (cur.from <= t && self.inner.eof)
+            }
             _ => false,
         };
         if covered {
             return Ok(());
         }
-        let backwards = self.current.as_ref().is_some_and(|cur| t < cur.from);
+        let backwards = self
+            .current
+            .as_ref()
+            .is_some_and(|cur| t + slack < cur.from);
         let far_ahead = self
             .position
             .is_some_and(|p| (t - p).to_f64() > FORWARD_DECODE_WINDOW_SECS);
         if self.position.is_none() || backwards || far_ahead {
             self.inner.seek(t, &mut self.decoder)?;
+            self.seeks += 1;
             self.retire_current();
             self.pending = None;
             self.position = None;

@@ -67,6 +67,23 @@ fn video_frames_are_decoded_in_any_order() {
 }
 
 #[test]
+fn asking_twice_for_a_time_just_before_a_frame_does_not_seek() {
+    // Two clips of one source ask for each time twice. A frame whose
+    // timestamp lies a hair after the time asked is the frame for it,
+    // and asking again must keep it rather than seek back and decode
+    // from the keyframe, which cost a whole decode per frame.
+    let mut reader = VideoReader::open(&clip(), ColorTags::default()).unwrap();
+    let hair = Ratio::new(1, 1000);
+    for i in 0..12 {
+        let t = Ratio::new(i, 25) - hair;
+        let first = reader.frame_at(t).unwrap().clone();
+        let again = reader.frame_at(t).unwrap().clone();
+        assert_eq!(first.pixels, again.pixels);
+    }
+    assert_eq!(reader.seeks(), 1, "only the first request seeks");
+}
+
+#[test]
 fn audio_reads_are_exact_in_length_and_stereo() {
     let mut reader = AudioReader::open(&clip()).unwrap();
     assert_eq!(reader.sample_rate(), 48000);

@@ -146,7 +146,7 @@ impl Image {
 }
 
 #[inline]
-fn lerp(a: LinearRgba, b: LinearRgba, t: f32) -> LinearRgba {
+pub(crate) fn lerp(a: LinearRgba, b: LinearRgba, t: f32) -> LinearRgba {
     LinearRgba {
         r: a.r + (b.r - a.r) * t,
         g: a.g + (b.g - a.g) * t,
@@ -158,7 +158,7 @@ fn lerp(a: LinearRgba, b: LinearRgba, t: f32) -> LinearRgba {
 /// Splits a coordinate into its floor and fractional part. Truncation
 /// with a correction for negatives avoids a library call per sample.
 #[inline]
-fn split(v: f64) -> (i64, f32) {
+pub(crate) fn split(v: f64) -> (i64, f32) {
     let t = v as i64;
     let floor = if (t as f64) > v { t - 1 } else { t };
     (floor, (v - floor as f64) as f32)

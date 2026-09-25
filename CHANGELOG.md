@@ -73,6 +73,18 @@ the format version it was written for.
 
 ### Fixed
 
+- **Two clips of one video decoded every frame twice over.** When a
+  source's frames sit a little after the output's frame times (8 ms, in
+  a 23.976 fps file), the second request for the same time, which the
+  blur fill's backdrop and picture make every frame, took the frame as
+  one it had passed, seeked back to the keyframe and decoded forward
+  again. It now keeps the frame it already has. The pictures are the
+  same to the bit; a 1080p blur fill with markup over it renders in 30 s
+  where it took 64.
+- The CPU compositor lays a wide blur's small layer back onto the frame
+  a row at a time, working out each column's texels once rather than
+  per pixel, and an unrotated enlarged picture reuses its columns on
+  every row. Same pixels, less work.
 - **Text on a machine with no fonts panicked** ("no default font
   found"), in a bare container as much as in a fresh Wine prefix. Such a
   machine now draws in Liberation Sans, built in for that case only

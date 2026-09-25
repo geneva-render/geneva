@@ -9,7 +9,7 @@ use geneva_timeline::{
 };
 use rayon::prelude::*;
 
-use crate::assets::{AssetSource, FileAssets, Image};
+use crate::assets::{AssetSource, FileAssets, Image, lerp, split};
 use crate::frame::Frame;
 use crate::painter::{Paint, Painter};
 use crate::placement::{Placement, SUBSAMPLES, crop_window};
@@ -425,22 +425,75 @@ fn composite_layer(
     let plain = opacity >= 1.0 && blend == BlendMode::Normal;
     let width = fw as usize;
     let rows = &mut frame.pixels_mut()[y0 as usize * width..y1 as usize * width];
-    let direct = k == 1.0 && origin[0].fract() == 0.0 && origin[1].fract() == 0.0;
-    rows.par_chunks_mut(width).enumerate().for_each(|(i, row)| {
-        let y = y0 + i as u32;
-        for x in x0..x1 {
-            let src = if direct {
-                layer.texel(
+    if k == 1.0 && origin[0].fract() == 0.0 && origin[1].fract() == 0.0 {
+        rows.par_chunks_mut(width).enumerate().for_each(|(i, row)| {
+            let y = y0 + i as u32;
+            for x in x0..x1 {
+                let src = layer.texel(
                     i64::from(x) - origin[0] as i64,
                     i64::from(y) - origin[1] as i64,
-                )
-            } else {
-                layer.sample(
-                    (f64::from(x) + 0.5 - origin[0]) / k,
-                    (f64::from(y) + 0.5 - origin[1]) / k,
-                )
+                );
+                put(row, x as usize, src, opacity, blend, plain);
+            }
+        });
+        return;
+    }
+    // Bilinear magnification is separable: every layer row the frame
+    // rows touch is stretched to the frame's width once, and each frame
+    // row is then one blend of two stretched rows. The weights are the
+    // ones `Image::sample` computes, texels outside the layer are
+    // transparent as there, and the result is the same to the bit.
+    let columns: Vec<(i64, f32)> = (x0..x1)
+        .map(|x| split((f64::from(x) + 0.5 - origin[0]) / k - 0.5))
+        .collect();
+    let row_of = |y: u32| split((f64::from(y) + 0.5 - origin[1]) / k - 0.5);
+    let (lw, lh) = (i64::from(layer.width), i64::from(layer.height));
+    let first = row_of(y0).0.max(0);
+    let last = (row_of(y1 - 1).0 + 1).min(lh - 1);
+    let span = columns.len();
+    let mut stretched = vec![LinearRgba::TRANSPARENT; span * (last - first + 1).max(0) as usize];
+    stretched
+        .par_chunks_mut(span)
+        .enumerate()
+        .for_each(|(i, out)| {
+            let r = first + i as i64;
+            let src = &layer.pixels[(r * lw) as usize..][..lw as usize];
+            let texel = |x: i64| {
+                if x >= 0 && x < lw {
+                    src[x as usize]
+                } else {
+                    LinearRgba::TRANSPARENT
+                }
             };
-            put(row, x as usize, src, opacity, blend, plain);
+            for (o, &(xi, tx)) in out.iter_mut().zip(&columns) {
+                *o = if xi >= 0 && xi + 1 < lw {
+                    lerp(src[xi as usize], src[xi as usize + 1], tx)
+                } else {
+                    lerp(texel(xi), texel(xi + 1), tx)
+                };
+            }
+        });
+    let stretched_row = |r: i64| {
+        (first..=last)
+            .contains(&r)
+            .then(|| &stretched[(r - first) as usize * span..][..span])
+    };
+    rows.par_chunks_mut(width).enumerate().for_each(|(i, row)| {
+        let (yi, ty) = row_of(y0 + i as u32);
+        let out = &mut row[x0 as usize..x1 as usize];
+        match (stretched_row(yi), stretched_row(yi + 1)) {
+            (Some(top), Some(bottom)) => {
+                for (j, (&t, &b)) in top.iter().zip(bottom).enumerate() {
+                    put(out, j, lerp(t, b, ty), opacity, blend, plain);
+                }
+            }
+            (top, bottom) => {
+                for j in 0..span {
+                    let t = top.map_or(LinearRgba::TRANSPARENT, |r| r[j]);
+                    let b = bottom.map_or(LinearRgba::TRANSPARENT, |r| r[j]);
+                    put(out, j, lerp(t, b, ty), opacity, blend, plain);
+                }
+            }
         }
     });
 }
@@ -512,6 +565,16 @@ fn draw(
         }
         _ => None,
     };
+    // Unrotated and magnified, every row samples the same source
+    // columns, so they are worked out once for the whole draw.
+    let columns = match spans {
+        Some((img, interior)) if place.sin == 0.0 && magnified(place) => {
+            let fast0 = interior[0].clamp(i64::from(x0), i64::from(x1)) as u32;
+            let fast1 = interior[2].clamp(i64::from(x0), i64::from(x1)) as u32;
+            span_columns(img, place, fast0, fast1)
+        }
+        _ => Vec::new(),
+    };
     // The texels shown: the window, within the image.
     let [wx, wy, ww, wh] = place.window.map(|v| v.round() as i64);
     // Rows are independent, so they are drawn in parallel.
@@ -553,7 +616,15 @@ fn draw(
                 put(row, (x - ox) as usize, src, opacity, blend, plain);
             }
             if fast0 < fast1 {
-                draw_span(row, ox, img, place, fast0, fast1, y, opacity, blend, plain);
+                let span = Span {
+                    img,
+                    place,
+                    x0: fast0,
+                    x1: fast1,
+                    y,
+                    columns: &columns,
+                };
+                draw_span(row, ox, &span, opacity, blend, plain);
             }
             for x in fast1.max(x0)..x1 {
                 let src = sample_pixel(paint, place, x, y);
@@ -620,27 +691,64 @@ struct RowPair<'a> {
     u0: f64,
 }
 
-/// Resamples the output pixels `[x0, x1)` of row `y` from an axis-aligned
-/// image whose texels around every sample lie inside the window (see
-/// [`Placement::interior`]). Magnified or unit-scale pictures take one
-/// bilinear sample at the pixel center, which is the usual resampling;
-/// minified ones keep the subsample average so that detail is filtered
-/// rather than dropped.
-#[allow(clippy::too_many_arguments)]
-fn draw_span(
-    row: &mut [LinearRgba],
-    ox: u32,
-    img: &Image,
-    place: &Placement,
+/// A run of output pixels `[x0, x1)` of row `y` resampled from an
+/// axis-aligned image whose texels around every sample lie inside the
+/// window (see [`Placement::interior`]). `columns`, when not empty, holds
+/// the source column and weight of each pixel of the run, the same for
+/// every row of an unrotated magnified picture.
+struct Span<'a> {
+    img: &'a Image,
+    place: &'a Placement,
     x0: u32,
     x1: u32,
     y: u32,
+    columns: &'a [(usize, f32)],
+}
+
+/// Whether a placement enlarges its picture on both axes, which is
+/// resampled with one bilinear sample per pixel.
+fn magnified(place: &Placement) -> bool {
+    place.scale[0].abs() >= 1.0 && place.scale[1].abs() >= 1.0
+}
+
+/// The texel column left of each center sample of the pixels `[x0, x1)`
+/// and the weight of the one right of it, as [`draw_span`] computes them
+/// for one row.
+fn span_columns(img: &Image, place: &Placement, x0: u32, x1: u32) -> Vec<(usize, f32)> {
+    let w = img.width as usize;
+    let du = place.cos / place.scale[0];
+    let (u0, _) = place.inverse(f64::from(x0) + 0.5, 0.5);
+    (0..x1.saturating_sub(x0))
+        .map(|k| {
+            let fx = u0 + f64::from(k) * du - 0.5;
+            let xi = (fx.max(0.0) as usize).min(w - 2);
+            (xi, (fx - xi as f64) as f32)
+        })
+        .collect()
+}
+
+/// Resamples a [`Span`]. Magnified or unit-scale pictures take one
+/// bilinear sample at the pixel center, which is the usual resampling;
+/// minified ones keep the subsample average so that detail is filtered
+/// rather than dropped.
+fn draw_span(
+    row: &mut [LinearRgba],
+    ox: u32,
+    span: &Span,
     opacity: f32,
     blend: BlendMode,
     plain: bool,
 ) {
     const CENTER: [(f64, f64); 1] = [(0.5, 0.5)];
-    let magnified = place.scale[0].abs() >= 1.0 && place.scale[1].abs() >= 1.0;
+    let Span {
+        img,
+        place,
+        x0,
+        x1,
+        y,
+        columns,
+    } = *span;
+    let magnified = magnified(place);
     let samples: &[(f64, f64)] = if magnified { &CENTER } else { &SUBSAMPLES };
     let weight = 1.0 / samples.len() as f32;
     let (w, h) = (img.width as usize, img.height as usize);
@@ -649,7 +757,9 @@ fn draw_span(
     for (k, (sx, sy)) in samples.iter().enumerate() {
         let (u, v) = place.inverse(f64::from(x0) + sx, f64::from(y) + sy);
         let fy = v - 0.5;
-        let yi = (fy.floor().max(0.0) as usize).min(h - 2);
+        // Truncation is the floor once negatives are clamped to 0, and
+        // spares a library call.
+        let yi = (fy.max(0.0) as usize).min(h - 2);
         pairs[k] = Some(RowPair {
             top: &img.pixels[yi * w..][..w],
             bottom: &img.pixels[(yi + 1) * w..][..w],
@@ -657,17 +767,22 @@ fn draw_span(
             u0: u,
         });
     }
-    let lerp = |a: LinearRgba, b: LinearRgba, t: f32| LinearRgba {
-        r: a.r + (b.r - a.r) * t,
-        g: a.g + (b.g - a.g) * t,
-        b: a.b + (b.b - a.b) * t,
-        a: a.a + (b.a - a.a) * t,
-    };
+    if !columns.is_empty()
+        && let Some(pair) = &pairs[0]
+    {
+        let out = &mut row[(x0 - ox) as usize..(x1 - ox) as usize];
+        for (i, &(xi, tx)) in columns.iter().enumerate() {
+            let top = lerp(pair.top[xi], pair.top[xi + 1], tx);
+            let bottom = lerp(pair.bottom[xi], pair.bottom[xi + 1], tx);
+            put(out, i, lerp(top, bottom, pair.ty), opacity, blend, plain);
+        }
+        return;
+    }
     for (k, x) in (x0..x1).enumerate() {
         let mut acc = LinearRgba::TRANSPARENT;
         for pair in pairs.iter().flatten() {
             let fx = pair.u0 + k as f64 * du - 0.5;
-            let xi = (fx.floor().max(0.0) as usize).min(w - 2);
+            let xi = (fx.max(0.0) as usize).min(w - 2);
             let tx = (fx - xi as f64) as f32;
             let top = lerp(pair.top[xi], pair.top[xi + 1], tx);
             let bottom = lerp(pair.bottom[xi], pair.bottom[xi + 1], tx);
