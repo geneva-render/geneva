@@ -1,0 +1,80 @@
+<!-- A full-screen intro: drifting blurred colour, rotating outlines,
+     diagonal sweeps, a title that rises letter by letter out of a blur,
+     then the whole card lifts away into the footage. 1920x1080, 10 s. -->
+<style>
+  html, body { margin: 0 }
+  .stage { position: absolute; inset: 0; overflow: hidden; background: #07070c;
+    font-family: "Liberation Sans";
+    animation: out 1s 9s cubic-bezier(.55,0,.8,.2) forwards }
+  @keyframes out { to { opacity: 0; transform: scale(1.08) } }
+
+  .blob { position: absolute; width: 900px; height: 900px; border-radius: 450px;
+    filter: blur(40px); mix-blend-mode: screen; opacity: .85 }
+  .b1 { left: -200px; top: -250px; background: radial-gradient(circle, #6d28d9 0%, #6d28d900 70%);
+    animation: drift1 10s ease-in-out forwards }
+  .b2 { left: 900px; top: 300px; background: radial-gradient(circle, #0891b2 0%, #0891b200 70%);
+    animation: drift2 10s ease-in-out forwards }
+  .b3 { left: 300px; top: 500px; background: radial-gradient(circle, #db2777 0%, #db277700 70%);
+    animation: drift3 10s ease-in-out forwards }
+  @keyframes drift1 { from { transform: translate(0, 0) scale(1) } to { transform: translate(420px, 180px) scale(1.25) } }
+  @keyframes drift2 { from { transform: translate(0, 0) scale(1.1) } to { transform: translate(-380px, -220px) scale(.9) } }
+  @keyframes drift3 { from { transform: translate(0, 0) scale(.9) } to { transform: translate(260px, -300px) scale(1.2) } }
+
+  .sq { position: absolute; width: 180px; height: 180px; border: 3px solid #ffffff2e; border-radius: 18px;
+    animation: spin 10s linear forwards }
+  .s1 { left: 160px; top: 140px } .s2 { left: 1560px; top: 180px; animation-duration: 14s }
+  .s3 { left: 220px; top: 760px; animation-duration: 12s } .s4 { left: 1500px; top: 740px; animation-duration: 9s }
+  @keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
+
+  .bar { position: absolute; inset: 0;
+    clip-path: polygon(-30% 0%, -12% 0%, -32% 100%, -50% 100%);
+    animation: sweep 1.3s cubic-bezier(.65,.02,.31,1) forwards }
+  .bar1 { background: linear-gradient(90deg, #22d3ee, #a78bfa); animation-delay: .3s }
+  .bar2 { background: #ffffff; opacity: .9; animation-delay: .45s }
+  @keyframes sweep { from { transform: translateX(0%) } to { transform: translateX(200%) } }
+
+  .title { position: absolute; left: 0; right: 0; top: 36%; display: flex; justify-content: center }
+  .l { font-size: 150px; font-weight: 700; letter-spacing: -.02em; color: #f8fafc; opacity: 0;
+    text-shadow: 0 10px 60px #0ea5e999;
+    animation: rise .9s cubic-bezier(.2,.8,.2,1) forwards }
+  .gap { width: 48px }
+  @keyframes rise { from { opacity: 0; transform: translateY(70px) rotate(-8deg); filter: blur(14px) }
+                    to   { opacity: 1; transform: translateY(0) rotate(0deg); filter: blur(0px) } }
+
+  .rule { position: absolute; left: 50%; top: 56%; width: 0; height: 6px; margin-left: -450px;
+    background: linear-gradient(90deg, #22d3ee, #a78bfa, #f472b6);
+    animation: grow .8s 2.2s cubic-bezier(.22,.61,.36,1) forwards }
+  @keyframes grow { to { width: 900px } }
+
+  .sub { position: absolute; left: 0; right: 0; top: 60%; display: flex; justify-content: center;
+    font-size: 30px; font-weight: 700; color: #cbd5e1; letter-spacing: .6em; opacity: 0;
+    animation: tighten 1.2s 2.6s cubic-bezier(.22,.61,.36,1) forwards }
+  @keyframes tighten { to { letter-spacing: .3em; opacity: 1 } }
+
+  .chips { position: absolute; left: 0; right: 0; top: 70%; display: flex; justify-content: center; gap: 24px }
+  .chip { padding: 12px 28px; border-radius: 26px; border: 2px solid #ffffff55; background: #ffffff14;
+    font-size: 26px; font-weight: 700; color: #f1f5f9; letter-spacing: .12em; opacity: 0;
+    animation: pop .5s cubic-bezier(.34,1.56,.64,1) forwards }
+  @keyframes pop { from { opacity: 0; transform: scale(.2) } to { opacity: 1; transform: scale(1) } }
+</style>
+<div class="stage">
+  <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div>
+  <div class="sq s1"></div><div class="sq s2"></div><div class="sq s3"></div><div class="sq s4"></div>
+  <div class="bar bar1"></div><div class="bar bar2"></div>
+  <div class="title"><div class="l" style="animation-delay: 1.00s">G</div><div class="l" style="animation-delay: 1.06s">E</div><div class="l" style="animation-delay: 1.12s">N</div><div class="l" style="animation-delay: 1.18s">E</div><div class="l" style="animation-delay: 1.24s">V</div><div class="l" style="animation-delay: 1.30s">A</div><div class="gap"></div><div class="l" style="animation-delay: 1.36s">R</div><div class="l" style="animation-delay: 1.42s">E</div><div class="l" style="animation-delay: 1.48s">N</div><div class="l" style="animation-delay: 1.54s">D</div><div class="l" style="animation-delay: 1.60s">E</div><div class="l" style="animation-delay: 1.66s">R</div></div>
+  <div class="rule"></div>
+  <div class="sub">A COMMAND-LINE VIDEO EDITOR</div>
+  <div class="chips"><div class="chip" style="animation-delay: 3.50s">HTML</div><div class="chip" style="animation-delay: 3.65s">CSS</div><div class="chip" style="animation-delay: 3.80s">VIDEO</div></div>
+</div>
+
+<script>
+  window.ready = Promise.resolve();
+  window.setTime = (t) => {
+    // Outside its time the page draws nothing, so the blank frame the
+    // capture takes first is really blank.
+    document.body.style.visibility = (t < 0 || t >= 10) ? 'hidden' : '';
+    if (t < 0 || t >= 10) return false;
+    document.getAnimations().forEach(a => { a.pause(); a.currentTime = t * 1000; });
+    return true;
+  };
+</script>

@@ -1,0 +1,187 @@
+<!-- The broadcast package for the browser route: each graphic file as
+     written, played on its own clock from its start, and the film's
+     subtitles in a box. -->
+<style>
+  /* An eight second title card over the opening shot. Authored in the
+     subset both a browser and geneva draw: block and flex only, no
+     inline runs, animation on elements rather than transitions. */
+  html, body { margin: 0 }
+  .stage { position: absolute; inset: 0; overflow: hidden;
+    font-family: "Liberation Sans"; font-size: 20px }
+
+  .scrim { position: absolute; inset: 0;
+    background: linear-gradient(105deg, #050b14f2 0%, #050b14b8 42%, #050b1400 78%);
+    opacity: 0; animation: fade-in .8s ease-out forwards }
+
+  .rule { position: absolute; left: 6%; top: 44%; width: 0; height: 4px;
+    background: linear-gradient(90deg, #e8b53a, #e8b53a00);
+    animation: rule-out .7s .5s cubic-bezier(.22,.61,.36,1) forwards }
+
+  .block { position: absolute; left: 6%; top: 48%; display: flex;
+    flex-direction: column; gap: 10px }
+
+  .kicker { font-size: .9em; font-weight: 700; letter-spacing: .34em;
+    color: #e8b53a; opacity: 0;
+    animation: rise .6s .35s cubic-bezier(.22,.61,.36,1) forwards }
+
+  .title { font-size: 4.2em; font-weight: 700; letter-spacing: -.02em;
+    line-height: 1.04; color: #f4f7fa; opacity: 0;
+    text-shadow: 0 6px 34px #030a12cc;
+    animation: rise .75s .5s cubic-bezier(.22,.61,.36,1) forwards }
+
+  .sub { font-size: 1.15em; font-weight: 400; letter-spacing: .02em;
+    color: #9fb2c6; opacity: 0;
+    animation: rise .7s .72s cubic-bezier(.22,.61,.36,1) forwards }
+
+  /* The whole card leaves together at 6.4s. */
+  .stage { animation: card-out .9s 6.4s ease-in forwards }
+
+  @keyframes fade-in { to { opacity: 1 } }
+  @keyframes rise { from { opacity: 0; transform: translateY(26px) }
+                    to   { opacity: 1; transform: none } }
+  @keyframes rule-out { to { width: 30% } }
+  @keyframes card-out { to { opacity: 0; transform: translateY(-18px) } }
+</style><style>
+  /* A one second diagonal wipe: a bar sweeps the frame, a thin accent
+     edge leads it. clip-path polygon() is drawn by both renderers. */
+  html, body { margin: 0 }
+  .sweep { position: absolute; inset: 0; background: #050b14;
+    clip-path: polygon(-40% 0%, -10% 0%, -30% 100%, -60% 100%);
+    animation: sweep 1s cubic-bezier(.65,.02,.31,1) forwards }
+  .edge { position: absolute; inset: 0; background: #e8b53a;
+    clip-path: polygon(-12% 0%, -10% 0%, -30% 100%, -32% 100%);
+    animation: sweep 1s cubic-bezier(.65,.02,.31,1) forwards }
+  @keyframes sweep { to { transform: translateX(190%) } }
+</style><style>
+  /* A lower third, four seconds on screen: slides in, holds, fades. */
+  html, body { margin: 0 }
+  .card { position: absolute; left: 5.2%; bottom: 13%; width: 33%;
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 16px 26px; box-sizing: border-box;
+    font-family: "Liberation Sans";
+    background: #050b14d9; border-left: 5px solid #e8b53a;
+    box-shadow: 0 6px 26px #00000066;
+    animation: slide-in .5s cubic-bezier(.22,.61,.36,1),
+               fade-in .34s, fade-out .4s 3.6s forwards }
+  .card .name { font-size: 31px; font-weight: 600; color: #f4f7fa }
+  .card .role { font-size: 14px; font-weight: 500; letter-spacing: .14em;
+    color: #9fb2c6 }
+  @keyframes slide-in { from { transform: translateX(-108%) } to { transform: none } }
+  @keyframes fade-in  { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes fade-out { from { opacity: 1 } to { opacity: 0 } }
+</style><style>
+  /* A lower third, four seconds on screen: slides in, holds, fades. */
+  html, body { margin: 0 }
+  .card { position: absolute; left: 5.2%; bottom: 13%; width: 33%;
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 16px 26px; box-sizing: border-box;
+    font-family: "Liberation Sans";
+    background: #050b14d9; border-left: 5px solid #e8b53a;
+    box-shadow: 0 6px 26px #00000066;
+    animation: slide-in .5s cubic-bezier(.22,.61,.36,1),
+               fade-in .34s, fade-out .4s 3.6s forwards }
+  .card .name { font-size: 31px; font-weight: 600; color: #f4f7fa }
+  .card .role { font-size: 14px; font-weight: 500; letter-spacing: .14em;
+    color: #9fb2c6 }
+  @keyframes slide-in { from { transform: translateX(-108%) } to { transform: none } }
+  @keyframes fade-in  { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes fade-out { from { opacity: 1 } to { opacity: 0 } }
+</style><style>
+  /* A lower third, four seconds on screen: slides in, holds, fades. */
+  html, body { margin: 0 }
+  .card { position: absolute; left: 5.2%; bottom: 13%; width: 33%;
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 16px 26px; box-sizing: border-box;
+    font-family: "Liberation Sans";
+    background: #050b14d9; border-left: 5px solid #e8b53a;
+    box-shadow: 0 6px 26px #00000066;
+    animation: slide-in .5s cubic-bezier(.22,.61,.36,1),
+               fade-in .34s, fade-out .4s 3.6s forwards }
+  .card .name { font-size: 31px; font-weight: 600; color: #f4f7fa }
+  .card .role { font-size: 14px; font-weight: 500; letter-spacing: .14em;
+    color: #9fb2c6 }
+  @keyframes slide-in { from { transform: translateX(-108%) } to { transform: none } }
+  @keyframes fade-in  { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes fade-out { from { opacity: 1 } to { opacity: 0 } }
+</style><style>
+  /* A lower third, four seconds on screen: slides in, holds, fades. */
+  html, body { margin: 0 }
+  .card { position: absolute; left: 5.2%; bottom: 13%; width: 33%;
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 16px 26px; box-sizing: border-box;
+    font-family: "Liberation Sans";
+    background: #050b14d9; border-left: 5px solid #e8b53a;
+    box-shadow: 0 6px 26px #00000066;
+    animation: slide-in .5s cubic-bezier(.22,.61,.36,1),
+               fade-in .34s, fade-out .4s 3.6s forwards }
+  .card .name { font-size: 31px; font-weight: 600; color: #f4f7fa }
+  .card .role { font-size: 14px; font-weight: 500; letter-spacing: .14em;
+    color: #9fb2c6 }
+  @keyframes slide-in { from { transform: translateX(-108%) } to { transform: none } }
+  @keyframes fade-in  { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes fade-out { from { opacity: 1 } to { opacity: 0 } }
+</style>
+<style>
+  html, body { margin: 0; width: 1920px; height: 800px; background: transparent; }
+  .g { position: absolute; inset: 0; }
+  .subs { position: absolute; left: 0; right: 0; bottom: 9%; display: flex; justify-content: center; }
+  .subs div { max-width: 66%; padding: 14px; border-radius: 3px; background: #050b14cc;
+              font: 500 34px/1.35 "Liberation Sans"; color: #f4f7fa; text-align: center; white-space: pre-line; }
+</style>
+<div class="g" id="intro" data-start="0" data-dur="8" style="display:none">
+<div class="stage">
+    <div class="scrim"></div>
+    <div class="rule"></div>
+    <div class="block">
+      <div class="kicker">MANGO OPEN MOVIE PROJECT</div>
+      <div class="title">Tears of Steel</div>
+      <div class="sub">Blender Foundation &middot; Amsterdam, 2012</div>
+    </div>
+  </div>
+</div><div class="g" id="wipe0" data-start="45" data-dur="1" style="display:none">
+<div class="sweep"></div><div class="edge"></div>
+</div><div class="g" id="wipe1" data-start="90" data-dur="1" style="display:none">
+<div class="sweep"></div><div class="edge"></div>
+</div><div class="g" id="wipe2" data-start="135" data-dur="1" style="display:none">
+<div class="sweep"></div><div class="edge"></div>
+</div><div class="g" id="l1" data-start="9" data-dur="4" style="display:none">
+<div class="card">
+    <div class="name">Thom</div>
+    <div class="role">CYBORG ENGINEER</div>
+  </div>
+</div><div class="g" id="l2" data-start="57" data-dur="4" style="display:none">
+<div class="card">
+    <div class="name">Celia</div>
+    <div class="role">ROBOTICS, AMSTERDAM</div>
+  </div>
+</div><div class="g" id="l3" data-start="114" data-dur="4" style="display:none">
+<div class="card">
+    <div class="name">Barley</div>
+    <div class="role">FIELD OPERATIONS</div>
+  </div>
+</div><div class="g" id="l4" data-start="156" data-dur="4" style="display:none">
+<div class="card">
+    <div class="name">The Team</div>
+    <div class="role">37 YEARS LATER</div>
+  </div>
+</div>
+<div class="subs"></div>
+<script>
+  const cues = [{"start": 23.0, "end": 24.5, "text": "You're a jerk, Thom."}, {"start": 25.0, "end": 27.0, "text": "Look Celia, we have to follow our passions;"}, {"start": 27.0, "end": 30.5, "text": "...you have your robotics, and I just want to be awesome in space."}, {"start": 30.8, "end": 34.0, "text": "Why don't you just admit that you're freaked out by my robot hand?"}, {"start": 34.5, "end": 36.0, "text": "I'm not freaked out by- it's..."}, {"start": 37.0, "end": 38.0, "text": "...alright! Fine!"}, {"start": 38.0, "end": 41.0, "text": "I'm freaked out! I have nightmares that I'm being chased..."}, {"start": 41.0, "end": 42.0, "text": "...by these giant robotic claws of death..."}, {"start": 42.2, "end": 45.0, "text": "\"Fourty years later\" Whatever, Thom. We're done."}, {"start": 50.0, "end": 53.5, "text": "Robot's memory synced and locked!"}, {"start": 61.0, "end": 63.0, "text": "This is pretty freaky."}, {"start": 117.0, "end": 119.0, "text": "Shouldn't you be down there?"}, {"start": 131.0, "end": 133.0, "text": "I heard you guys talking last night."}, {"start": 136.0, "end": 138.0, "text": "It's not my fault, you know."}];
+  const subs = document.querySelector('.subs');
+  const gs = [...document.querySelectorAll('.g')];
+  window.ready = Promise.resolve();
+  window.setTime = (t) => {
+    let any = false;
+    for (const g of gs) {
+      const local = t - Number(g.dataset.start);
+      const on = local >= 0 && local < Number(g.dataset.dur);
+      g.style.display = on ? '' : 'none';
+      if (on) { any = true; g.getAnimations({ subtree: true }).forEach(a => { a.pause(); a.currentTime = local * 1000; }); }
+    }
+    subs.innerHTML = '';
+    const c = cues.find(c => c.start <= t && t < c.end);
+    if (c) { const d = document.createElement('div'); d.textContent = c.text; subs.append(d); any = true; }
+    return any;
+  };
+</script>

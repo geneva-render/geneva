@@ -1,0 +1,103 @@
+{
+ "geneva": "1.0",
+ "output": {
+  "width": 1920,
+  "height": 800,
+  "fps": 24,
+  "duration": "90s"
+ },
+ "assets": {
+  "film": {
+   "src": "media/dynamic-film.mp4"
+  },
+  "words": {
+   "src": "media/dynamic-words.json"
+  },
+  "badge": {
+   "src": "job/badge.html"
+  },
+  "nc1": {
+   "src": "job/namecard-1.html"
+  },
+  "nc2": {
+   "src": "job/namecard-2.html"
+  },
+  "nc3": {
+   "src": "job/namecard-3.html"
+  }
+ },
+ "layers": [
+  {
+   "id": "footage",
+   "clips": [
+    {
+     "source": {
+      "kind": "video",
+      "asset": "film"
+     }
+    }
+   ]
+  },
+  {
+   "id": "captions",
+   "clips": [
+    {
+     "source": {
+      "kind": "captions",
+      "asset": "words",
+      "margin": "10%",
+      "style": {
+       "font": "800 54px/1.2 Liberation Sans",
+       "color": "white",
+       "outline": "5px #000000",
+       "highlight": {
+        "color": "#22d3ee"
+       },
+       "max_width": "70%"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "cards",
+   "clips": [
+    {
+     "source": {
+      "kind": "html",
+      "asset": "nc1"
+     },
+     "start": "3s",
+     "duration": "4s"
+    },
+    {
+     "source": {
+      "kind": "html",
+      "asset": "nc2"
+     },
+     "start": "30s",
+     "duration": "4s"
+    },
+    {
+     "source": {
+      "kind": "html",
+      "asset": "nc3"
+     },
+     "start": "60s",
+     "duration": "4s"
+    }
+   ]
+  },
+  {
+   "id": "badge",
+   "clips": [
+    {
+     "source": {
+      "kind": "html",
+      "asset": "badge"
+     }
+    }
+   ]
+  }
+ ]
+}

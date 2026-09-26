@@ -1,0 +1,137 @@
+{
+ "geneva": "1.0",
+ "output": {
+  "width": 1920,
+  "height": 800,
+  "fps": 24,
+  "duration": "180s"
+ },
+ "assets": {
+  "film": {
+   "src": "media/broadcast.mp4"
+  },
+  "intro": {
+   "src": "job/intro.html"
+  },
+  "wipe": {
+   "src": "job/wipe.html"
+  },
+  "subs": {
+   "src": "media/broadcast-subs.srt"
+  },
+  "l1": {
+   "src": "job/lower-1.html"
+  },
+  "l2": {
+   "src": "job/lower-2.html"
+  },
+  "l3": {
+   "src": "job/lower-3.html"
+  },
+  "l4": {
+   "src": "job/lower-4.html"
+  }
+ },
+ "layers": [
+  {
+   "id": "footage",
+   "clips": [
+    {
+     "source": {
+      "kind": "video",
+      "asset": "film"
+     }
+    }
+   ]
+  },
+  {
+   "id": "graphics",
+   "clips": [
+    {
+     "source": {
+      "kind": "html",
+      "asset": "intro"
+     },
+     "start": "0s",
+     "duration": "8s"
+    },
+    {
+     "source": {
+      "kind": "html",
+      "asset": "l1"
+     },
+     "start": "9s",
+     "duration": "4s"
+    },
+    {
+     "source": {
+      "kind": "html",
+      "asset": "wipe"
+     },
+     "start": "45s",
+     "duration": "1s"
+    },
+    {
+     "source": {
+      "kind": "html",
+      "asset": "l2"
+     },
+     "start": "57s",
+     "duration": "4s"
+    },
+    {
+     "source": {
+      "kind": "html",
+      "asset": "wipe"
+     },
+     "start": "90s",
+     "duration": "1s"
+    },
+    {
+     "source": {
+      "kind": "html",
+      "asset": "l3"
+     },
+     "start": "114s",
+     "duration": "4s"
+    },
+    {
+     "source": {
+      "kind": "html",
+      "asset": "wipe"
+     },
+     "start": "135s",
+     "duration": "1s"
+    },
+    {
+     "source": {
+      "kind": "html",
+      "asset": "l4"
+     },
+     "start": "156s",
+     "duration": "4s"
+    }
+   ]
+  },
+  {
+   "id": "captions",
+   "clips": [
+    {
+     "source": {
+      "kind": "captions",
+      "asset": "subs",
+      "margin": "9%",
+      "style": {
+       "font": "500 34px/1.35 Liberation Sans",
+       "color": "#f4f7fa",
+       "background": "#050b14cc",
+       "padding": "14px",
+       "radius": 3,
+       "max_width": "66%"
+      }
+     }
+    }
+   ]
+  }
+ ]
+}

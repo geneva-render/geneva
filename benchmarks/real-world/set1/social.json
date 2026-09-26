@@ -1,0 +1,70 @@
+{
+ "geneva": "1.0",
+ "output": {
+  "width": 1080,
+  "height": 1920,
+  "fps": 24
+ },
+ "assets": {
+  "film": {
+   "src": "media/social.mp4"
+  },
+  "words": {
+   "src": "media/social-words.json"
+  }
+ },
+ "layers": [
+  {
+   "id": "backdrop",
+   "clips": [
+    {
+     "source": {
+      "kind": "video",
+      "asset": "film",
+      "audio": false
+     },
+     "fit": "cover",
+     "effects": [
+      {
+       "kind": "blur",
+       "radius": 45
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "picture",
+   "clips": [
+    {
+     "source": {
+      "kind": "video",
+      "asset": "film"
+     },
+     "fit": "contain"
+    }
+   ]
+  },
+  {
+   "id": "captions",
+   "clips": [
+    {
+     "source": {
+      "kind": "captions",
+      "asset": "words",
+      "margin": "28%",
+      "style": {
+       "font": "700 72px/1.25 Liberation Sans",
+       "color": "white",
+       "highlight": {
+        "color": "#ffd233"
+       },
+       "outline": "4px #000000cc",
+       "max_width": "80%"
+      }
+     }
+    }
+   ]
+  }
+ ]
+}

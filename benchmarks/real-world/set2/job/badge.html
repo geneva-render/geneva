@@ -1,0 +1,18 @@
+<!-- A corner badge on screen the whole time: a pulsing dot, a label,
+     a thin sheen crossing it every three seconds. -->
+<style>
+  html, body { margin: 0 }
+  .badge { position: absolute; right: 3%; top: 6%; display: flex; align-items: center; gap: 12px;
+    padding: 10px 18px; border-radius: 6px; background: #0b0f14d9; box-shadow: 0 4px 18px #00000066;
+    font-family: "Liberation Sans"; overflow: hidden }
+  .dot { width: 14px; height: 14px; border-radius: 7px; background: #ef4444;
+    animation: pulse 1s ease-in-out infinite alternate }
+  @keyframes pulse { from { opacity: 1; transform: scale(1) } to { opacity: .35; transform: scale(.7) } }
+  .live { font-size: 20px; font-weight: 700; letter-spacing: .14em; color: #ffffff }
+  .org { font-size: 20px; font-weight: 400; letter-spacing: .08em; color: #94a3b8 }
+  .sheen { position: absolute; top: 0; bottom: 0; left: -60px; width: 40px;
+    background: linear-gradient(90deg, #ffffff00, #ffffff33, #ffffff00);
+    animation: sheen 3s linear infinite }
+  @keyframes sheen { from { transform: translateX(0px) } to { transform: translateX(420px) } }
+</style>
+<div class="badge"><div class="dot"></div><div class="live">LIVE</div><div class="org">MANGO NEWS</div><div class="sheen"></div></div>

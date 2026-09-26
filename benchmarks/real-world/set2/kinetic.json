@@ -1,0 +1,6 @@
+{
+  "geneva": "1.0",
+  "output": { "width": 1920, "height": 1080, "fps": 30, "duration": "16s", "background": "black" },
+  "assets": { "kinetic": { "src": "job/kinetic.html" } },
+  "layers": [ { "id": "type", "clips": [ { "source": { "kind": "html", "asset": "kinetic" } } ] } ]
+}

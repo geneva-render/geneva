@@ -1,0 +1,10 @@
+src/
+out/
+f-*/
+rm-bundle/
+node_modules/
+log-*.txt
+results.txt
+remotion/public/
+*/media/*.mp4
+*/media/opening.html

@@ -1,0 +1,20 @@
+<!-- Outlined subtitles for the browser route, styled as captions.json. -->
+<style>
+  html, body { margin: 0; width: 1920px; height: 800px; background: transparent; }
+  .subs { position: absolute; left: 0; right: 0; bottom: 7%; display: flex; justify-content: center; }
+  .subs div { max-width: 70%; font: 600 40px/1.3 "Liberation Sans"; color: white; text-align: center; white-space: pre-line;
+              -webkit-text-stroke: 6px #000000; paint-order: stroke fill; text-shadow: 0 3px 10px #000000aa; }
+</style>
+<div class="subs"></div>
+<script>
+  const cues = [{"start": 1.0, "end": 2.0, "text": "Are you ready?"}, {"start": 3.0, "end": 5.0, "text": "Of course you're ready, you're a rockstar."}, {"start": 7.0, "end": 8.0, "text": "How's it looking, Barley?"}, {"start": 9.0, "end": 11.0, "text": "We should have about ten minutes..."}, {"start": 11.5, "end": 13.0, "text": "Well that's perfect."}, {"start": 13.5, "end": 16.5, "text": "We're on in one! All systems go!\nYeah you, go!"}, {"start": 18.0, "end": 22.0, "text": "Go! Move your asses! Go go go!"}, {"start": 23.0, "end": 27.0, "text": "I love it! Come on, go!"}, {"start": 33.0, "end": 34.0, "text": "That's nice."}, {"start": 34.5, "end": 35.7, "text": "Nothing to worry about."}, {"start": 36.0, "end": 37.0, "text": "Thom."}, {"start": 41.0, "end": 43.0, "text": "There she is."}, {"start": 43.5, "end": 44.5, "text": "Now."}, {"start": 45.0, "end": 46.0, "text": "You love her."}, {"start": 47.0, "end": 48.5, "text": "She is your passion!"}, {"start": 50.0, "end": 51.0, "text": "Be tender to her."}, {"start": 51.5, "end": 54.5, "text": "Be honest! Eh- be tender."}, {"start": 55.0, "end": 58.0, "text": "Remind her what love is."}, {"start": 102.0, "end": 105.0, "text": "...and, action!"}, {"start": 106.5, "end": 108.0, "text": "Memory overwrite in progress!"}, {"start": 109.0, "end": 111.0, "text": "You're a jerk, Thom!"}, {"start": 112.5, "end": 115.0, "text": "Ohp- Sorry! Sorry."}, {"start": 126.0, "end": 127.0, "text": "Look Celia."}, {"start": 128.0, "end": 130.0, "text": "We have to follow our passions."}, {"start": 131.0, "end": 133.0, "text": "You have your robotics..."}, {"start": 135.0, "end": 138.0, "text": "...and I just want to be awesome in space."}, {"start": 149.0, "end": 151.0, "text": "Okay, they're coming. Two minutes left!"}, {"start": 153.0, "end": 154.0, "text": "Speed it up, Thom!"}, {"start": 155.0, "end": 156.0, "text": "Vivacissimo!"}, {"start": 157.0, "end": 160.0, "text": "Why don't you just admit that you're\nfreaked out by my robot hand?"}, {"start": 166.0, "end": 169.0, "text": "Listen Celia, I was young..."}, {"start": 169.5, "end": 171.0, "text": "...and a dick."}, {"start": 171.0, "end": 173.0, "text": "But that's no reason to\ndestroy the world."}, {"start": 175.0, "end": 176.0, "text": "Why does he do this?"}, {"start": 176.5, "end": 178.5, "text": "We already tried that one!"}, {"start": 181.5, "end": 182.5, "text": "Abort!"}, {"start": 183.0, "end": 184.0, "text": "Cut!"}, {"start": 184.0, "end": 185.0, "text": "Whoaaa!"}, {"start": 189.0, "end": 190.0, "text": "Whoaaa!"}, {"start": 191.0, "end": 193.0, "text": "Nooooo!"}, {"start": 193.0, "end": 195.0, "text": "You broke my heart."}, {"start": 196.0, "end": 197.0, "text": "I know."}, {"start": 197.0, "end": 199.0, "text": "You forgot me on earth."}, {"start": 199.0, "end": 200.0, "text": "I know."}, {"start": 200.5, "end": 203.0, "text": "I should just crush you."}, {"start": 206.0, "end": 207.0, "text": "I'm-"}, {"start": 217.0, "end": 218.0, "text": "I'm sorry."}, {"start": 220.0, "end": 221.0, "text": "Good ad-lib."}, {"start": 229.0, "end": 230.5, "text": "Not my fault!"}, {"start": 232.0, "end": 233.0, "text": "This time."}, {"start": 238.0, "end": 239.5, "text": "Quiet on set!"}];
+  const subs = document.querySelector('.subs');
+  window.ready = Promise.resolve();
+  window.setTime = (t) => {
+    subs.innerHTML = '';
+    const c = cues.find(c => c.start <= t && t < c.end);
+    if (!c) return false;
+    const d = document.createElement('div'); d.textContent = c.text; subs.append(d);
+    return true;
+  };
+</script>

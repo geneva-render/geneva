@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>geneva opening</title>
+<style>
+  body { margin: 0; font-family: "Liberation Sans" }
+  .stage { position: relative; width: 960px; height: 540px; font-size: 15.36px; overflow: hidden }
+  .sheet, .under { position: absolute; inset: 0; clip-path: polygon(0% 0%, 100% 0%, 100% 200%, 0% 260%) }
+  .sheet { background: #07100C; animation: roll-up .85s 8.55s cubic-bezier(.62,.03,.31,1) forwards }
+  .under.teal   { background: linear-gradient(160deg, #00EEE1, #0B8F86); animation: roll-up .85s 8.69s cubic-bezier(.62,.03,.31,1) forwards }
+  .under.yellow { background: linear-gradient(160deg, #FFD233, #C99A17); animation: roll-up .85s 8.83s cubic-bezier(.62,.03,.31,1) forwards }
+  @keyframes roll-up { to { clip-path: polygon(0% 0%, 100% 0%, 100% -62%, 0% 0%) } }
+  @keyframes show { to { opacity: 1 } }
+  @keyframes hide { to { opacity: 0 } }
+
+  .mesh { position: absolute; inset: 0; opacity: 0; animation: show 1.4s .5s ease-out forwards }
+  .blob { position: absolute }
+  .blob.teal { left: -48%; top: -76%; width: 128%; height: 200%;
+    background: radial-gradient(circle at 50% 50%, rgba(0,238,225,.36) 0%, rgba(0,238,225,.15) 38%, rgba(0,238,225,0) 68%);
+    animation: teal-walk 12s .5s cubic-bezier(.45,0,.25,1) forwards }
+  .blob.yellow { right: -55%; bottom: -84%; width: 140%; height: 200%;
+    background: radial-gradient(circle at 50% 50%, rgba(255,210,51,.29) 0%, rgba(255,210,51,.11) 36%, rgba(255,210,51,0) 66%);
+    animation: yellow-walk 12s .5s cubic-bezier(.45,0,.25,1) forwards }
+  @keyframes teal-walk { 0% {transform:none} 26% {transform:translate(8%,5%) scale(1.07)} 52% {transform:translate(40%,17%) scale(1.16)} 74% {transform:translate(12%,-13%) scale(1.02)} 100% {transform:translate(48%,9%) scale(1.2)} }
+  @keyframes yellow-walk { 0% {transform:none} 26% {transform:translate(-6%,-5%) scale(1.05)} 52% {transform:translate(-34%,-21%) scale(1.15)} 74% {transform:translate(-7%,11%) scale(1)} 100% {transform:translate(-42%,-15%) scale(1.18)} }
+  .vignette { position: absolute; inset: 0;
+    background: radial-gradient(ellipse at 50% 48%, rgba(7,16,12,0) 26%, rgba(7,16,12,.55) 68%, rgba(7,16,12,.88) 100%) }
+  .bright { position: absolute; inset: 0; opacity: 0; background: #EAF6EC;
+    animation: show .001s 2.86s forwards, hide .001s 6.02s forwards }
+  .bright div { position: absolute }
+  .bright .b1 { left: -54%; top: -85%; width: 144%; height: 220%;
+    background: radial-gradient(circle at 50% 50%, rgba(0,238,225,.3) 0%, rgba(0,238,225,.11) 40%, rgba(0,238,225,0) 70%);
+    animation: teal-walk 12s .5s cubic-bezier(.45,0,.25,1) forwards }
+  .bright .b2 { right: -60%; bottom: -91%; width: 152%; height: 220%;
+    background: radial-gradient(circle at 50% 50%, rgba(255,210,51,.33) 0%, rgba(255,210,51,.13) 38%, rgba(255,210,51,0) 68%);
+    animation: yellow-walk 12s .5s cubic-bezier(.45,0,.25,1) forwards }
+  .bright .lift { inset: 0;
+    background: radial-gradient(ellipse at 50% 48%, rgba(234,246,236,.8) 18%, rgba(234,246,236,.28) 58%, rgba(234,246,236,0) 100%) }
+
+  .scene { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center }
+  .c { display: block; width: 0; opacity: 0 }
+  @keyframes type-in-s1 {
+    from { opacity: 0; filter: blur(8px); transform: translateY(12.90px); color: #78C7BF }
+    to   { opacity: 1; filter: blur(0);   transform: none; color: #EFFBEE } }
+  @keyframes type-in-s2 {
+    from { opacity: 0; filter: blur(8px); transform: translateY(5.35px); color: #5B9E93 }
+    to   { opacity: 1; filter: blur(0);   transform: none; color: transparent } }
+  @keyframes type-in-s3 {
+    from { opacity: 0; filter: blur(8px); transform: translateY(4.61px); color: #78C7BF }
+    to   { opacity: 1; filter: blur(0);   transform: none; color: #EFFBEE } }
+
+  .s1 { animation: hide .001s 2.86s forwards }
+  .word { display: flex; align-items: flex-start; font-size: 7em; font-weight: 700;
+    letter-spacing: -.035em; line-height: 1.18; color: #EFFBEE;
+    animation: word-glow 1s .55s cubic-bezier(.22,.61,.36,1) forwards, title-out 2s .88s linear(0, .018 5%, .046 10%, .138 15%, .323 20%, .539 25%, .66 30%, .723 35%, .784 40%, .83 45%, .862 50%, .908 60%, .941 70%, .969 80%, .983 90%, 1) forwards }
+  @keyframes title-out { to { transform: scale(.458) } }
+  @keyframes word-glow { from { text-shadow: 0 0 0 rgba(239,251,238,0) }
+    55% { text-shadow: 0 0 32.26px rgba(239,251,238,.7), 0 0 102.14px rgba(0,238,225,.55) }
+    to  { text-shadow: 0 0 25.80px rgba(239,251,238,.4), 0 0 91.39px rgba(0,238,225,.36) } }
+  @keyframes open-g0 { to { width: 61.92px } }
+  @keyframes open-g1 { to { width: 56.04px } }
+  @keyframes open-g2 { to { width: 61.92px } }
+  @keyframes open-g3 { to { width: 56.04px } }
+  @keyframes open-g4 { to { width: 56.04px } }
+  @keyframes open-g5 { to { width: 56.04px } }
+  .cursor { width: .052em; height: .776em; margin: .209em 0 0 .075em; flex: none;
+    background: #FFD233; box-shadow: 0 0 .45em rgba(255,210,51,.9), 0 0 1.3em rgba(255,210,51,.45);
+    opacity: 0; animation: show .001s .12s forwards, blink .22s .62s steps(1,end) 2, hide .18s 1.02s ease-out forwards }
+  @keyframes blink { 0%,49% { opacity: 1 } 50%,100% { opacity: .05 } }
+
+  .s2 { opacity: 0; animation: show .001s 2.86s forwards, hide .001s 6.02s forwards }
+  .s2 .line { display: flex; align-items: flex-start; font-size: 2.9em; font-weight: 600; letter-spacing: .01em;
+    animation: small-out 1.25s 4.85s linear(0, .018 5%, .046 10%, .138 15%, .323 20%, .539 25%, .66 30%, .723 35%, .784 40%, .83 45%, .862 50%, .908 60%, .941 70%, .969 80%, .983 90%, 1) forwards }
+  @keyframes small-out { to { transform: scale(.5) } }
+  .s2 .c { background: linear-gradient(100deg, #12897C 0%, #0E1F17 38%, #0E1F17 62%, #B8742A 100%);
+    background-size: 743px 100%;
+    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent }
+  @keyframes sweep-k0 { from { background-position: -0.00px 0 } to { background-position: -371.70px 0 } }
+  @keyframes open-k0 { to { width: 32.57px } }
+  @keyframes sweep-k1 { from { background-position: -32.57px 0 } to { background-position: -404.27px 0 } }
+  @keyframes open-k1 { to { width: 28.02px } }
+  @keyframes sweep-k2 { from { background-position: -60.59px 0 } to { background-position: -432.29px 0 } }
+  @keyframes open-k2 { to { width: 14.26px } }
+  @keyframes sweep-k3 { from { background-position: -74.85px 0 } to { background-position: -446.55px 0 } }
+  @keyframes open-k3 { to { width: 12.83px } }
+  @keyframes sweep-k4 { from { background-position: -87.68px 0 } to { background-position: -459.38px 0 } }
+  @keyframes open-k4 { to { width: 24.59px } }
+  @keyframes sweep-k5 { from { background-position: -112.27px 0 } to { background-position: -483.97px 0 } }
+  @keyframes open-k5 { to { width: 12.92px } }
+  @keyframes sweep-k6 { from { background-position: -125.19px 0 } to { background-position: -496.89px 0 } }
+  @keyframes open-k6 { to { width: 28.11px } }
+  @keyframes sweep-k7 { from { background-position: -153.30px 0 } to { background-position: -525.00px 0 } }
+  @keyframes open-k7 { to { width: 26.42px } }
+  @keyframes sweep-k8 { from { background-position: -179.72px 0 } to { background-position: -551.42px 0 } }
+  @keyframes open-k8 { to { width: 27.80px } }
+  @keyframes sweep-k9 { from { background-position: -207.52px 0 } to { background-position: -579.22px 0 } }
+  @keyframes open-k9 { to { width: 12.83px } }
+  @keyframes sweep-k10 { from { background-position: -220.35px 0 } to { background-position: -592.05px 0 } }
+  @keyframes open-k10 { to { width: 26.42px } }
+  @keyframes sweep-k11 { from { background-position: -246.77px 0 } to { background-position: -618.47px 0 } }
+  @keyframes open-k11 { to { width: 28.11px } }
+  @keyframes sweep-k12 { from { background-position: -274.88px 0 } to { background-position: -646.58px 0 } }
+  @keyframes open-k12 { to { width: 12.92px } }
+  @keyframes sweep-k13 { from { background-position: -287.80px 0 } to { background-position: -659.50px 0 } }
+  @keyframes open-k13 { to { width: 15.51px } }
+  @keyframes sweep-k14 { from { background-position: -303.31px 0 } to { background-position: -675.01px 0 } }
+  @keyframes open-k14 { to { width: 12.92px } }
+  @keyframes sweep-k15 { from { background-position: -316.23px 0 } to { background-position: -687.93px 0 } }
+  @keyframes open-k15 { to { width: 27.76px } }
+  @keyframes sweep-k16 { from { background-position: -343.99px 0 } to { background-position: -715.69px 0 } }
+  @keyframes open-k16 { to { width: 27.71px } }
+
+  .s3 { opacity: 0; animation: show .001s 6.02s forwards, hide .3s 7.98s linear forwards }
+  .mono { display: flex; align-items: flex-start; font-family: "DejaVu Sans Mono";
+    font-size: 2.5em; font-weight: 700; color: #EFFBEE; text-shadow: 0 0 .5em rgba(7,16,12,.8) }
+  @keyframes open-m0 { to { width: 23.12px } }
+  @keyframes open-m1 { to { width: 23.12px } }
+  @keyframes open-m2 { to { width: 23.12px } }
+  @keyframes open-m3 { to { width: 23.12px } }
+  @keyframes open-m4 { to { width: 23.12px } }
+  @keyframes open-m5 { to { width: 23.12px } }
+  @keyframes open-m6 { to { width: 23.12px } }
+  @keyframes open-m7 { to { width: 23.12px } }
+  @keyframes open-m8 { to { width: 23.12px } }
+  @keyframes open-m9 { to { width: 23.12px } }
+  @keyframes open-m10 { to { width: 23.12px } }
+  @keyframes open-m11 { to { width: 23.12px } }
+  @keyframes open-m12 { to { width: 23.12px } }
+  @keyframes open-m13 { to { width: 23.12px } }
+  @keyframes open-m14 { to { width: 23.12px } }
+  @keyframes open-m15 { to { width: 23.12px } }
+  .caret { width: .08em; height: .918em; margin: .131em 0 0 5.55px; flex: none;
+    background: #FFD233; box-shadow: 0 0 .4em rgba(255,210,51,.85); opacity: 0;
+    animation: show .001s 6.1s forwards, blink .24s 7.4s steps(1,end) 2, hide .2s 7.8s ease-out forwards }
+</style></head>
+<body>
+  <div class="stage"><div class="under yellow"></div><div class="under teal"></div><div class="sheet">
+    <div class="mesh"><div class="blob teal"></div><div class="blob yellow"></div></div>
+    <div class="vignette"></div>
+    <div class="bright"><div class="b1"></div><div class="b2"></div><div class="lift"></div></div>
+    <div class="scene s1"><div class="word"><span class="c" style="animation: open-g0 0.08s 0.200s cubic-bezier(.3,0,.15,1) forwards, type-in-s1 0.24s 0.200s cubic-bezier(.2,.75,.3,1) forwards;">g</span><span class="c" style="animation: open-g1 0.08s 0.267s cubic-bezier(.3,0,.15,1) forwards, type-in-s1 0.24s 0.267s cubic-bezier(.2,.75,.3,1) forwards;">e</span><span class="c" style="animation: open-g2 0.08s 0.334s cubic-bezier(.3,0,.15,1) forwards, type-in-s1 0.24s 0.334s cubic-bezier(.2,.75,.3,1) forwards;">n</span><span class="c" style="animation: open-g3 0.08s 0.401s cubic-bezier(.3,0,.15,1) forwards, type-in-s1 0.24s 0.401s cubic-bezier(.2,.75,.3,1) forwards;">e</span><span class="c" style="animation: open-g4 0.08s 0.468s cubic-bezier(.3,0,.15,1) forwards, type-in-s1 0.24s 0.468s cubic-bezier(.2,.75,.3,1) forwards;">v</span><span class="c" style="animation: open-g5 0.08s 0.535s cubic-bezier(.3,0,.15,1) forwards, type-in-s1 0.24s 0.535s cubic-bezier(.2,.75,.3,1) forwards;">a</span><span class="cursor"></span></div></div>
+    <div class="scene s2"><div class="line"><span class="c" style="animation: open-k0 0.42s 3.020s cubic-bezier(.3,0,.15,1) forwards, type-in-s2 0.24s 3.020s cubic-bezier(.2,.75,.3,1) forwards, sweep-k0 2.6s 3s ease-in-out infinite alternate; background-position: -0.00px 0;">C</span><span class="c" style="animation: open-k1 0.42s 3.095s cubic-bezier(.3,0,.15,1) forwards, type-in-s2 0.24s 3.095s cubic-bezier(.2,.75,.3,1) forwards, sweep-k1 2.6s 3s ease-in-out infinite alternate; background-position: -32.57px 0;">L</span><span class="c" style="animation: open-k2 0.42s 3.170s cubic-bezier(.3,0,.15,1) forwards, type-in-s2 0.24s 3.170s cubic-bezier(.2,.75,.3,1) forwards, sweep-k2 2.6s 3s ease-in-out infinite alternate; background-position: -60.59px 0;">I</span><span class="c" style="animation: open-k3 0.42s 3.245s cubic-bezier(.3,0,.15,1) forwards, type-in-s2 0.24s 3.665s cubic-bezier(.2,.75,.3,1) forwards, sweep-k3 2.6s 3s ease-in-out infinite alternate; background-position: -74.85px 0;">&nbsp;</span><span class="c" style="animation: open-k4 0.42s 3.245s cubic-bezier(.3,0,.15,1) forwards, type-in-s2 0.24s 3.740s cubic-bezier(.2,.75,.3,1) forwards, sweep-k4 2.6s 3s ease-in-out infinite alternate; background-position: -87.68px 0;">v</span><span class="c" style="animation: open-k5 0.42s 3.245s cubic-bezier(.3,0,.15,1) forwards, type-in-s2 0.24s 3.815s cubic-bezier(.2,.75,.3,1) forwards, sweep-k5 2.6s 3s ease-in-out infinite alternate; background-position: -112.27px 0;">i</span><span class="c" style="animation: open-k6 0.42s 3.245s cubic-bezier(.3,0,.15,1) forwards, type-in-s2 0.24s 3.890s cubic-bezier(.2,.75,.3,1) forwards, sweep-k6 2.6s 3s ease-in-out infinite alternate; background-position: -125.19px 0;">d</span><span class="c" style="animation: open-k7 0.42s 3.245s cubic-bezier(.3,0,.15,1) forwards, type-in-s2 0.24s 3.965s cubic-bezier(.2,.75,.3,1) forwards, sweep-k7 2.6s 3s ease-in-out infinite alternate; background-position: -153.30px 0;">e</span><span class="c" style="animation: open-k8 0.42s 3.245s cubic-bezier(.3,0,.15,1) forwards, type-in-s2 0.24s 4.040s cubic-bezier(.2,.75,.3,1) forwards, sweep-k8 2.6s 3s ease-in-out infinite alternate; background-position: -179.72px 0;">o</span><span class="c" style="animation: open-k9 0.42s 3.245s cubic-bezier(.3,0,.15,1) forwards, type-in-s2 0.24s 4.115s cubic-bezier(.2,.75,.3,1) forwards, sweep-k9 2.6s 3s ease-in-out infinite alternate; background-position: -207.52px 0;">&nbsp;</span><span class="c" style="animation: open-k10 0.42s 3.245s cubic-bezier(.3,0,.15,1) forwards, type-in-s2 0.24s 4.190s cubic-bezier(.2,.75,.3,1) forwards, sweep-k10 2.6s 3s ease-in-out infinite alternate; background-position: -220.35px 0;">e</span><span class="c" style="animation: open-k11 0.42s 3.245s cubic-bezier(.3,0,.15,1) forwards, type-in-s2 0.24s 4.265s cubic-bezier(.2,.75,.3,1) forwards, sweep-k11 2.6s 3s ease-in-out infinite alternate; background-position: -246.77px 0;">d</span><span class="c" style="animation: open-k12 0.42s 3.245s cubic-bezier(.3,0,.15,1) forwards, type-in-s2 0.24s 4.340s cubic-bezier(.2,.75,.3,1) forwards, sweep-k12 2.6s 3s ease-in-out infinite alternate; background-position: -274.88px 0;">i</span><span class="c" style="animation: open-k13 0.42s 3.245s cubic-bezier(.3,0,.15,1) forwards, type-in-s2 0.24s 4.415s cubic-bezier(.2,.75,.3,1) forwards, sweep-k13 2.6s 3s ease-in-out infinite alternate; background-position: -287.80px 0;">t</span><span class="c" style="animation: open-k14 0.42s 3.245s cubic-bezier(.3,0,.15,1) forwards, type-in-s2 0.24s 4.490s cubic-bezier(.2,.75,.3,1) forwards, sweep-k14 2.6s 3s ease-in-out infinite alternate; background-position: -303.31px 0;">i</span><span class="c" style="animation: open-k15 0.42s 3.245s cubic-bezier(.3,0,.15,1) forwards, type-in-s2 0.24s 4.565s cubic-bezier(.2,.75,.3,1) forwards, sweep-k15 2.6s 3s ease-in-out infinite alternate; background-position: -316.23px 0;">n</span><span class="c" style="animation: open-k16 0.42s 3.245s cubic-bezier(.3,0,.15,1) forwards, type-in-s2 0.24s 4.640s cubic-bezier(.2,.75,.3,1) forwards, sweep-k16 2.6s 3s ease-in-out infinite alternate; background-position: -343.99px 0;">g</span></div></div>
+    <div class="scene s3"><div class="mono"><span class="c" style="animation: open-m0 0.08s 6.220s cubic-bezier(.3,0,.15,1) forwards, type-in-s3 0.24s 6.220s cubic-bezier(.2,.75,.3,1) forwards;">B</span><span class="c" style="animation: open-m1 0.08s 6.287s cubic-bezier(.3,0,.15,1) forwards, type-in-s3 0.24s 6.287s cubic-bezier(.2,.75,.3,1) forwards;">u</span><span class="c" style="animation: open-m2 0.08s 6.354s cubic-bezier(.3,0,.15,1) forwards, type-in-s3 0.24s 6.354s cubic-bezier(.2,.75,.3,1) forwards;">i</span><span class="c" style="animation: open-m3 0.08s 6.421s cubic-bezier(.3,0,.15,1) forwards, type-in-s3 0.24s 6.421s cubic-bezier(.2,.75,.3,1) forwards;">l</span><span class="c" style="animation: open-m4 0.08s 6.488s cubic-bezier(.3,0,.15,1) forwards, type-in-s3 0.24s 6.488s cubic-bezier(.2,.75,.3,1) forwards;">t</span><span class="c" style="animation: open-m5 0.08s 6.915s cubic-bezier(.3,0,.15,1) forwards, type-in-s3 0.24s 6.915s cubic-bezier(.2,.75,.3,1) forwards;">&nbsp;</span><span class="c" style="animation: open-m6 0.08s 6.982s cubic-bezier(.3,0,.15,1) forwards, type-in-s3 0.24s 6.982s cubic-bezier(.2,.75,.3,1) forwards;">f</span><span class="c" style="animation: open-m7 0.08s 7.049s cubic-bezier(.3,0,.15,1) forwards, type-in-s3 0.24s 7.049s cubic-bezier(.2,.75,.3,1) forwards;">o</span><span class="c" style="animation: open-m8 0.08s 7.116s cubic-bezier(.3,0,.15,1) forwards, type-in-s3 0.24s 7.116s cubic-bezier(.2,.75,.3,1) forwards;">r</span><span class="c" style="animation: open-m9 0.08s 7.183s cubic-bezier(.3,0,.15,1) forwards, type-in-s3 0.24s 7.183s cubic-bezier(.2,.75,.3,1) forwards;">&nbsp;</span><span class="c" style="animation: open-m10 0.08s 7.250s cubic-bezier(.3,0,.15,1) forwards, type-in-s3 0.24s 7.250s cubic-bezier(.2,.75,.3,1) forwards;">a</span><span class="c" style="animation: open-m11 0.08s 7.317s cubic-bezier(.3,0,.15,1) forwards, type-in-s3 0.24s 7.317s cubic-bezier(.2,.75,.3,1) forwards;">g</span><span class="c" style="animation: open-m12 0.08s 7.384s cubic-bezier(.3,0,.15,1) forwards, type-in-s3 0.24s 7.384s cubic-bezier(.2,.75,.3,1) forwards;">e</span><span class="c" style="animation: open-m13 0.08s 7.451s cubic-bezier(.3,0,.15,1) forwards, type-in-s3 0.24s 7.451s cubic-bezier(.2,.75,.3,1) forwards;">n</span><span class="c" style="animation: open-m14 0.08s 7.518s cubic-bezier(.3,0,.15,1) forwards, type-in-s3 0.24s 7.518s cubic-bezier(.2,.75,.3,1) forwards;">t</span><span class="c" style="animation: open-m15 0.08s 7.585s cubic-bezier(.3,0,.15,1) forwards, type-in-s3 0.24s 7.585s cubic-bezier(.2,.75,.3,1) forwards;">s</span><span class="caret"></span></div></div>
+  </div></div>
+</body></html>
+
+<script>
+  window.ready = Promise.resolve();
+  window.setTime = (t) => {
+    if (t >= 9.7) return false;
+    document.getAnimations().forEach(a => { a.pause(); a.currentTime = t * 1000; });
+    return true;
+  };
+</script>

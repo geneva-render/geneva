@@ -1,0 +1,21 @@
+<!-- A name card, top left, four seconds: a bar grows, the name slides in
+     behind a mask, the role follows, all of it leaves together. -->
+<style>
+  html, body { margin: 0 }
+  .nc { position: absolute; left: 4%; top: 8%; display: flex; flex-direction: column; gap: 8px;
+    font-family: "Liberation Sans"; animation: leave .4s 3.6s ease-in forwards }
+  @keyframes leave { to { opacity: 0; transform: translateY(-12px) } }
+  .bar { width: 0; height: 5px; background: #22d3ee; animation: bar .45s cubic-bezier(.22,.61,.36,1) forwards }
+  @keyframes bar { to { width: 120px } }
+  .mask { overflow: hidden }
+  .name { font-size: 46px; font-weight: 700; color: #ffffff; text-shadow: 0 4px 20px #000000aa;
+    animation: up .55s .15s cubic-bezier(.22,.61,.36,1) both }
+  .role { font-size: 20px; font-weight: 700; letter-spacing: .2em; color: #22d3ee;
+    animation: up .55s .3s cubic-bezier(.22,.61,.36,1) both }
+  @keyframes up { from { transform: translateY(110%) } to { transform: translateY(0%) } }
+</style>
+<div class="nc">
+  <div class="bar"></div>
+  <div class="mask"><div class="name">Thom</div></div>
+  <div class="mask"><div class="role">CYBORG ENGINEER</div></div>
+</div>

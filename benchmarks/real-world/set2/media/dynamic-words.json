@@ -1,0 +1,653 @@
+{
+ "text": "",
+ "segments": [
+  {
+   "start": 0,
+   "end": 1.0,
+   "text": " You're a jerk, Thom!",
+   "words": [
+    {
+     "word": " You're",
+     "start": 0,
+     "end": 0.333
+    },
+    {
+     "word": " a",
+     "start": 0.333,
+     "end": 0.429
+    },
+    {
+     "word": " jerk,",
+     "start": 0.429,
+     "end": 0.714
+    },
+    {
+     "word": " Thom!",
+     "start": 0.714,
+     "end": 1.0
+    }
+   ]
+  },
+  {
+   "start": 2.5,
+   "end": 5.0,
+   "text": " Ohp- Sorry! Sorry.",
+   "words": [
+    {
+     "word": " Ohp-",
+     "start": 2.5,
+     "end": 3.158
+    },
+    {
+     "word": " Sorry!",
+     "start": 3.158,
+     "end": 4.079
+    },
+    {
+     "word": " Sorry.",
+     "start": 4.079,
+     "end": 5.0
+    }
+   ]
+  },
+  {
+   "start": 16.0,
+   "end": 17.0,
+   "text": " Look Celia.",
+   "words": [
+    {
+     "word": " Look",
+     "start": 16.0,
+     "end": 16.417
+    },
+    {
+     "word": " Celia.",
+     "start": 16.417,
+     "end": 17.0
+    }
+   ]
+  },
+  {
+   "start": 18.0,
+   "end": 20.0,
+   "text": " We have to follow our passions.",
+   "words": [
+    {
+     "word": " We",
+     "start": 18.0,
+     "end": 18.188
+    },
+    {
+     "word": " have",
+     "start": 18.188,
+     "end": 18.5
+    },
+    {
+     "word": " to",
+     "start": 18.5,
+     "end": 18.688
+    },
+    {
+     "word": " follow",
+     "start": 18.688,
+     "end": 19.125
+    },
+    {
+     "word": " our",
+     "start": 19.125,
+     "end": 19.375
+    },
+    {
+     "word": " passions.",
+     "start": 19.375,
+     "end": 20.0
+    }
+   ]
+  },
+  {
+   "start": 21.0,
+   "end": 23.0,
+   "text": " You have your robotics...",
+   "words": [
+    {
+     "word": " You",
+     "start": 21.0,
+     "end": 21.308
+    },
+    {
+     "word": " have",
+     "start": 21.308,
+     "end": 21.692
+    },
+    {
+     "word": " your",
+     "start": 21.692,
+     "end": 22.077
+    },
+    {
+     "word": " robotics...",
+     "start": 22.077,
+     "end": 23.0
+    }
+   ]
+  },
+  {
+   "start": 25.0,
+   "end": 28.0,
+   "text": " ...and I just want to be awesome in space.",
+   "words": [
+    {
+     "word": " ...and",
+     "start": 25.0,
+     "end": 25.488
+    },
+    {
+     "word": " I",
+     "start": 25.488,
+     "end": 25.628
+    },
+    {
+     "word": " just",
+     "start": 25.628,
+     "end": 25.977
+    },
+    {
+     "word": " want",
+     "start": 25.977,
+     "end": 26.326
+    },
+    {
+     "word": " to",
+     "start": 26.326,
+     "end": 26.535
+    },
+    {
+     "word": " be",
+     "start": 26.535,
+     "end": 26.744
+    },
+    {
+     "word": " awesome",
+     "start": 26.744,
+     "end": 27.302
+    },
+    {
+     "word": " in",
+     "start": 27.302,
+     "end": 27.512
+    },
+    {
+     "word": " space.",
+     "start": 27.512,
+     "end": 28.0
+    }
+   ]
+  },
+  {
+   "start": 39.0,
+   "end": 41.0,
+   "text": " Okay, they're coming. Two minutes left!",
+   "words": [
+    {
+     "word": " Okay,",
+     "start": 39.0,
+     "end": 39.3
+    },
+    {
+     "word": " they're",
+     "start": 39.3,
+     "end": 39.7
+    },
+    {
+     "word": " coming.",
+     "start": 39.7,
+     "end": 40.1
+    },
+    {
+     "word": " Two",
+     "start": 40.1,
+     "end": 40.3
+    },
+    {
+     "word": " minutes",
+     "start": 40.3,
+     "end": 40.7
+    },
+    {
+     "word": " left!",
+     "start": 40.7,
+     "end": 41.0
+    }
+   ]
+  },
+  {
+   "start": 43.0,
+   "end": 44.0,
+   "text": " Speed it up, Thom!",
+   "words": [
+    {
+     "word": " Speed",
+     "start": 43.0,
+     "end": 43.316
+    },
+    {
+     "word": " it",
+     "start": 43.316,
+     "end": 43.474
+    },
+    {
+     "word": " up,",
+     "start": 43.474,
+     "end": 43.684
+    },
+    {
+     "word": " Thom!",
+     "start": 43.684,
+     "end": 44.0
+    }
+   ]
+  },
+  {
+   "start": 45.0,
+   "end": 46.0,
+   "text": " Vivacissimo!",
+   "words": [
+    {
+     "word": " Vivacissimo!",
+     "start": 45.0,
+     "end": 46.0
+    }
+   ]
+  },
+  {
+   "start": 47.0,
+   "end": 50.0,
+   "text": " Why don't you just admit that you're freaked out by my robot hand?",
+   "words": [
+    {
+     "word": " Why",
+     "start": 47.0,
+     "end": 47.179
+    },
+    {
+     "word": " don't",
+     "start": 47.179,
+     "end": 47.448
+    },
+    {
+     "word": " you",
+     "start": 47.448,
+     "end": 47.627
+    },
+    {
+     "word": " just",
+     "start": 47.627,
+     "end": 47.851
+    },
+    {
+     "word": " admit",
+     "start": 47.851,
+     "end": 48.119
+    },
+    {
+     "word": " that",
+     "start": 48.119,
+     "end": 48.343
+    },
+    {
+     "word": " you're",
+     "start": 48.343,
+     "end": 48.657
+    },
+    {
+     "word": " freaked",
+     "start": 48.657,
+     "end": 49.015
+    },
+    {
+     "word": " out",
+     "start": 49.015,
+     "end": 49.194
+    },
+    {
+     "word": " by",
+     "start": 49.194,
+     "end": 49.328
+    },
+    {
+     "word": " my",
+     "start": 49.328,
+     "end": 49.463
+    },
+    {
+     "word": " robot",
+     "start": 49.463,
+     "end": 49.731
+    },
+    {
+     "word": " hand?",
+     "start": 49.731,
+     "end": 50.0
+    }
+   ]
+  },
+  {
+   "start": 56.0,
+   "end": 59.0,
+   "text": " Listen Celia, I was young...",
+   "words": [
+    {
+     "word": " Listen",
+     "start": 56.0,
+     "end": 56.724
+    },
+    {
+     "word": " Celia,",
+     "start": 56.724,
+     "end": 57.448
+    },
+    {
+     "word": " I",
+     "start": 57.448,
+     "end": 57.655
+    },
+    {
+     "word": " was",
+     "start": 57.655,
+     "end": 58.069
+    },
+    {
+     "word": " young...",
+     "start": 58.069,
+     "end": 59.0
+    }
+   ]
+  },
+  {
+   "start": 59.5,
+   "end": 61.0,
+   "text": " ...and a dick.",
+   "words": [
+    {
+     "word": " ...and",
+     "start": 59.5,
+     "end": 60.2
+    },
+    {
+     "word": " a",
+     "start": 60.2,
+     "end": 60.4
+    },
+    {
+     "word": " dick.",
+     "start": 60.4,
+     "end": 61.0
+    }
+   ]
+  },
+  {
+   "start": 61.0,
+   "end": 63.0,
+   "text": " But that's no reason to destroy the world.",
+   "words": [
+    {
+     "word": " But",
+     "start": 61.0,
+     "end": 61.186
+    },
+    {
+     "word": " that's",
+     "start": 61.186,
+     "end": 61.512
+    },
+    {
+     "word": " no",
+     "start": 61.512,
+     "end": 61.651
+    },
+    {
+     "word": " reason",
+     "start": 61.651,
+     "end": 61.977
+    },
+    {
+     "word": " to",
+     "start": 61.977,
+     "end": 62.116
+    },
+    {
+     "word": " destroy",
+     "start": 62.116,
+     "end": 62.488
+    },
+    {
+     "word": " the",
+     "start": 62.488,
+     "end": 62.674
+    },
+    {
+     "word": " world.",
+     "start": 62.674,
+     "end": 63.0
+    }
+   ]
+  },
+  {
+   "start": 65.0,
+   "end": 66.0,
+   "text": " Why does he do this?",
+   "words": [
+    {
+     "word": " Why",
+     "start": 65.0,
+     "end": 65.19
+    },
+    {
+     "word": " does",
+     "start": 65.19,
+     "end": 65.429
+    },
+    {
+     "word": " he",
+     "start": 65.429,
+     "end": 65.571
+    },
+    {
+     "word": " do",
+     "start": 65.571,
+     "end": 65.714
+    },
+    {
+     "word": " this?",
+     "start": 65.714,
+     "end": 66.0
+    }
+   ]
+  },
+  {
+   "start": 66.5,
+   "end": 68.5,
+   "text": " We already tried that one!",
+   "words": [
+    {
+     "word": " We",
+     "start": 66.5,
+     "end": 66.722
+    },
+    {
+     "word": " already",
+     "start": 66.722,
+     "end": 67.315
+    },
+    {
+     "word": " tried",
+     "start": 67.315,
+     "end": 67.759
+    },
+    {
+     "word": " that",
+     "start": 67.759,
+     "end": 68.13
+    },
+    {
+     "word": " one!",
+     "start": 68.13,
+     "end": 68.5
+    }
+   ]
+  },
+  {
+   "start": 71.5,
+   "end": 72.5,
+   "text": " Abort!",
+   "words": [
+    {
+     "word": " Abort!",
+     "start": 71.5,
+     "end": 72.5
+    }
+   ]
+  },
+  {
+   "start": 73.0,
+   "end": 74.0,
+   "text": " Cut!",
+   "words": [
+    {
+     "word": " Cut!",
+     "start": 73.0,
+     "end": 74.0
+    }
+   ]
+  },
+  {
+   "start": 74.0,
+   "end": 75.0,
+   "text": " Whoaaa!",
+   "words": [
+    {
+     "word": " Whoaaa!",
+     "start": 74.0,
+     "end": 75.0
+    }
+   ]
+  },
+  {
+   "start": 79.0,
+   "end": 80.0,
+   "text": " Whoaaa!",
+   "words": [
+    {
+     "word": " Whoaaa!",
+     "start": 79.0,
+     "end": 80.0
+    }
+   ]
+  },
+  {
+   "start": 81.0,
+   "end": 83.0,
+   "text": " Nooooo!",
+   "words": [
+    {
+     "word": " Nooooo!",
+     "start": 81.0,
+     "end": 83.0
+    }
+   ]
+  },
+  {
+   "start": 83.0,
+   "end": 85.0,
+   "text": " You broke my heart.",
+   "words": [
+    {
+     "word": " You",
+     "start": 83.0,
+     "end": 83.4
+    },
+    {
+     "word": " broke",
+     "start": 83.4,
+     "end": 84.0
+    },
+    {
+     "word": " my",
+     "start": 84.0,
+     "end": 84.3
+    },
+    {
+     "word": " heart.",
+     "start": 84.3,
+     "end": 85.0
+    }
+   ]
+  },
+  {
+   "start": 86.0,
+   "end": 87.0,
+   "text": " I know.",
+   "words": [
+    {
+     "word": " I",
+     "start": 86.0,
+     "end": 86.25
+    },
+    {
+     "word": " know.",
+     "start": 86.25,
+     "end": 87.0
+    }
+   ]
+  },
+  {
+   "start": 87.0,
+   "end": 89.0,
+   "text": " You forgot me on earth.",
+   "words": [
+    {
+     "word": " You",
+     "start": 87.0,
+     "end": 87.333
+    },
+    {
+     "word": " forgot",
+     "start": 87.333,
+     "end": 87.917
+    },
+    {
+     "word": " me",
+     "start": 87.917,
+     "end": 88.167
+    },
+    {
+     "word": " on",
+     "start": 88.167,
+     "end": 88.417
+    },
+    {
+     "word": " earth.",
+     "start": 88.417,
+     "end": 89.0
+    }
+   ]
+  },
+  {
+   "start": 89.0,
+   "end": 90.0,
+   "text": " I know.",
+   "words": [
+    {
+     "word": " I",
+     "start": 89.0,
+     "end": 89.25
+    },
+    {
+     "word": " know.",
+     "start": 89.25,
+     "end": 90.0
+    }
+   ]
+  }
+ ]
+}

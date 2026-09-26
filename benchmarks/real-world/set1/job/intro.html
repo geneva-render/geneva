@@ -1,0 +1,50 @@
+<style>
+  /* An eight second title card over the opening shot. Authored in the
+     subset both a browser and geneva draw: block and flex only, no
+     inline runs, animation on elements rather than transitions. */
+  html, body { margin: 0 }
+  .stage { position: absolute; inset: 0; overflow: hidden;
+    font-family: "Liberation Sans"; font-size: 20px }
+
+  .scrim { position: absolute; inset: 0;
+    background: linear-gradient(105deg, #050b14f2 0%, #050b14b8 42%, #050b1400 78%);
+    opacity: 0; animation: fade-in .8s ease-out forwards }
+
+  .rule { position: absolute; left: 6%; top: 44%; width: 0; height: 4px;
+    background: linear-gradient(90deg, #e8b53a, #e8b53a00);
+    animation: rule-out .7s .5s cubic-bezier(.22,.61,.36,1) forwards }
+
+  .block { position: absolute; left: 6%; top: 48%; display: flex;
+    flex-direction: column; gap: 10px }
+
+  .kicker { font-size: .9em; font-weight: 700; letter-spacing: .34em;
+    color: #e8b53a; opacity: 0;
+    animation: rise .6s .35s cubic-bezier(.22,.61,.36,1) forwards }
+
+  .title { font-size: 4.2em; font-weight: 700; letter-spacing: -.02em;
+    line-height: 1.04; color: #f4f7fa; opacity: 0;
+    text-shadow: 0 6px 34px #030a12cc;
+    animation: rise .75s .5s cubic-bezier(.22,.61,.36,1) forwards }
+
+  .sub { font-size: 1.15em; font-weight: 400; letter-spacing: .02em;
+    color: #9fb2c6; opacity: 0;
+    animation: rise .7s .72s cubic-bezier(.22,.61,.36,1) forwards }
+
+  /* The whole card leaves together at 6.4s. */
+  .stage { animation: card-out .9s 6.4s ease-in forwards }
+
+  @keyframes fade-in { to { opacity: 1 } }
+  @keyframes rise { from { opacity: 0; transform: translateY(26px) }
+                    to   { opacity: 1; transform: none } }
+  @keyframes rule-out { to { width: 30% } }
+  @keyframes card-out { to { opacity: 0; transform: translateY(-18px) } }
+</style>
+<div class="stage">
+    <div class="scrim"></div>
+    <div class="rule"></div>
+    <div class="block">
+      <div class="kicker">MANGO OPEN MOVIE PROJECT</div>
+      <div class="title">Tears of Steel</div>
+      <div class="sub">Blender Foundation &middot; Amsterdam, 2012</div>
+    </div>
+  </div>

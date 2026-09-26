@@ -1,0 +1,22 @@
+<style>
+  /* A lower third, four seconds on screen: slides in, holds, fades. */
+  html, body { margin: 0 }
+  .card { position: absolute; left: 5.2%; bottom: 13%; width: 33%;
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 16px 26px; box-sizing: border-box;
+    font-family: "Liberation Sans";
+    background: #050b14d9; border-left: 5px solid #e8b53a;
+    box-shadow: 0 6px 26px #00000066;
+    animation: slide-in .5s cubic-bezier(.22,.61,.36,1),
+               fade-in .34s, fade-out .4s 3.6s forwards }
+  .card .name { font-size: 31px; font-weight: 600; color: #f4f7fa }
+  .card .role { font-size: 14px; font-weight: 500; letter-spacing: .14em;
+    color: #9fb2c6 }
+  @keyframes slide-in { from { transform: translateX(-108%) } to { transform: none } }
+  @keyframes fade-in  { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes fade-out { from { opacity: 1 } to { opacity: 0 } }
+</style>
+<div class="card">
+    <div class="name">The Team</div>
+    <div class="role">37 YEARS LATER</div>
+  </div>

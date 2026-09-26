@@ -1,0 +1,9 @@
+{
+  "geneva": "1.0",
+  "output": { "width": 1920, "height": 1080, "fps": 30, "duration": "14s", "background": "black" },
+  "assets": { "intro": { "src": "job/intro.html" }, "film": { "src": "media/intro-film.mp4" } },
+  "layers": [
+    { "id": "footage", "clips": [ { "source": { "kind": "video", "asset": "film" }, "fit": "cover", "start": "9s", "duration": "5s" } ] },
+    { "id": "intro", "clips": [ { "source": { "kind": "html", "asset": "intro" }, "duration": "10s" } ] }
+  ]
+}
