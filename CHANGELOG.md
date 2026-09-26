@@ -10,6 +10,14 @@ versions changed the format freely.
 
 ### Fixed
 
+- **A keyframe's `letter-spacing` in `em` failed the render** with `E442,
+  invalid length ".3em"`, although the same length works in a static
+  rule and in a browser: keyframes were parsed without the element, so
+  only pixels could be read. An `em` is now kept as written and resolved
+  against the element's own font size when the animation is played on
+  it. `normal` reads as `0`; `rem` and percentages are still refused.
+  Found by a kinetic typography piece whose word collapses from `.6em`
+  to `-.02em`.
 - **An animation on markup's outermost element with only a `to` (or only
   a `from`) keyframe was dropped** with `W440, nothing interpolates`.
   CSS starts such a rule from the element's own value, so

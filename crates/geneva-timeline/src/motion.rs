@@ -137,7 +137,7 @@ impl NodeMotion {
                 plays,
                 t,
                 base.text.letter_spacing,
-                |v| v.letter_spacing,
+                |v| v.letter_spacing.map(|l| l.to_px(base.text.size)),
                 lerp,
             ),
             width: stacked(

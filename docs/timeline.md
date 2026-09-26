@@ -943,7 +943,8 @@ as longhands too, comma lists and all. A keyframe inside sets
 `letter-spacing`, `width`, `height`, `max-width`, `min-width`,
 `background-position` or `clip-path`; anything else is E442. `color` and
 `text-shadow` reach the element's text and the descendants that
-inherited them. Two polygons with the same number of points mix point by
+inherited them. A keyframe's `letter-spacing` takes `px` or `em`, the
+`em` being the element's own font size, as in a static rule. Two polygons with the same number of points mix point by
 point; any other pair, as in CSS, is a step at the halfway mark. A length
 and a percentage do not mix either (a browser folds them into a `calc()`;
 here the change is a step), except that a zero mixes with either.

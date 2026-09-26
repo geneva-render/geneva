@@ -134,8 +134,8 @@ pub struct Values {
     pub color: Option<Color>,
     /// `text-shadow`: the list front to back, empty for `none`.
     pub text_shadow: Option<Vec<TextShadow>>,
-    /// `letter-spacing`, in pixels.
-    pub letter_spacing: Option<f64>,
+    /// `letter-spacing`.
+    pub letter_spacing: Option<Spacing>,
     /// `width`.
     pub width: Option<Shift>,
     /// `height`.
@@ -272,6 +272,46 @@ fn angle(token: &str) -> Result<f64, String> {
 }
 
 /// A distance: `-656px`, `12`, `0`, or `-100%` of the clip's own box.
+/// A `letter-spacing` in a keyframe. An `em` is the element's own font
+/// size, which only the element knows, so it is kept as written and
+/// resolved when the animation is played on it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Spacing {
+    /// Pixels.
+    Px(f64),
+    /// Multiples of the element's font size.
+    Em(f64),
+}
+
+impl Spacing {
+    /// In pixels, for an element whose font size is `font_size`.
+    #[must_use]
+    pub fn to_px(self, font_size: f64) -> f64 {
+        match self {
+            Spacing::Px(p) => p,
+            Spacing::Em(e) => e * font_size,
+        }
+    }
+}
+
+fn spacing(value: &str) -> Result<Spacing, String> {
+    let value = value.trim();
+    if value == "normal" {
+        return Ok(Spacing::Px(0.0));
+    }
+    if let Some(body) = value.strip_suffix("em").filter(|b| !b.ends_with('r')) {
+        let v: f64 = body
+            .trim()
+            .parse()
+            .map_err(|_| format!("invalid length {value:?}; write it like \"2px\" or \".3em\""))?;
+        return finite(v, value).map(Spacing::Em);
+    }
+    match pixels(value)? {
+        Shift::Px(p) => Ok(Spacing::Px(p)),
+        Shift::Percent(_) => Err(format!("letter-spacing takes a length, not {value:?}")),
+    }
+}
+
 fn pixels(token: &str) -> Result<Shift, String> {
     if let Some(body) = token.strip_suffix('%') {
         let v: f64 = body
@@ -793,14 +833,7 @@ pub fn parse_declarations(block: &str) -> Result<Values, String> {
                     Some(Color::from_str(value).map_err(|_| format!("{value:?} is not a colour"))?);
             }
             "text-shadow" => v.text_shadow = Some(text_shadow(value)?),
-            "letter-spacing" => {
-                v.letter_spacing = Some(match pixels(value)? {
-                    Shift::Px(p) => p,
-                    Shift::Percent(_) => {
-                        return Err(format!("letter-spacing takes a length, not {value:?}"));
-                    }
-                });
-            }
+            "letter-spacing" => v.letter_spacing = Some(spacing(value)?),
             "width" => v.width = Some(pixels(value)?),
             "height" => v.height = Some(pixels(value)?),
             "max-width" => v.max_width = Some(pixels(value)?),
@@ -1031,6 +1064,17 @@ mod tests {
         assert_eq!(a.easing, Easing::Named(NamedEasing::EaseOut));
         assert_eq!(a.iterations, 1.0);
         assert_eq!(a.direction, Direction::Normal);
+    }
+
+    #[test]
+    fn a_keyframe_letter_spacing_keeps_its_ems_for_the_element() {
+        let at = |s: &str| parse_declarations(s).map(|v| v.letter_spacing);
+        assert_eq!(at("letter-spacing: .3em"), Ok(Some(Spacing::Em(0.3))));
+        assert_eq!(at("letter-spacing: -2px"), Ok(Some(Spacing::Px(-2.0))));
+        assert_eq!(at("letter-spacing: normal"), Ok(Some(Spacing::Px(0.0))));
+        assert!(at("letter-spacing: 10%").is_err());
+        assert!(at("letter-spacing: 1rem").is_err());
+        assert_eq!(Spacing::Em(0.3).to_px(30.0), 9.0);
     }
 
     #[test]
