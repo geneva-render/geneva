@@ -1,0 +1,7 @@
+social     gv-def   64.9/  220  gv-par   64.4/  222  pw  137.7/  317  rm  280.2/ 1057  n=[3, 3, 3, 3]  x_pw 2.12 x_rm 4.32
+broadcast  gv-def   56.7/  180  gv-par  109.2/  380  pw  242.6/  583  rm  343.2/ 1199  n=[3, 3, 3, 3]  x_pw 4.28 x_rm 6.05
+opening    gv-def   15.6/   41  gv-par   15.8/   41  pw   64.0/   86  rm   20.6/   53  n=[3, 3, 3, 3]  x_pw 4.11 x_rm 1.32
+intro      gv-def   76.2/  198  gv-par   76.3/  197  pw  147.9/  236  rm   61.8/  172  n=[3, 3, 3, 3]  x_pw 1.94 x_rm 0.81
+kinetic    gv-def   64.1/  170  gv-par   64.6/  172  pw   65.5/   98  rm   34.6/   68  n=[3, 3, 3, 3]  x_pw 1.02 x_rm 0.54
+captions   gv-def  100.3/  337  gv-par  146.3/  540  pw  307.8/  823  rm  469.5/ 1665  n=[3, 3, 3, 3]  x_pw 3.07 x_rm 4.68
+dynamic    gv-def   61.4/  222  gv-par   63.1/  225  pw  189.0/  390  rm  175.5/  621  n=[3, 3, 3, 3]  x_pw 3.08 x_rm 2.86

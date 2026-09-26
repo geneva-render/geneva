@@ -7,9 +7,11 @@ ffmpeg to lay over the footage (Playwright + ffmpeg), and
 clip to a four-minute subtitle burn to pure motion graphics with no
 footage at all.
 
-**In short:** wherever there is footage, geneva is 2 to 6 times quicker
-than both and uses 2 to 5 times less CPU than Remotion. On full-screen
-motion graphics with no footage, Remotion is quicker.
+**In short:** geneva is quicker than both on all seven jobs. With footage
+it is 2 to 5 times quicker than Playwright + ffmpeg and 3 to 6 times
+quicker than Remotion, on 3 to 7 times less CPU than Remotion. On the
+three pieces of motion graphics with no footage it is about twice as
+quick as Remotion and 4 to 6 times quicker than Playwright + ffmpeg.
 
 Contents: [the jobs](#the-jobs), [results](#results),
 [what it says](#what-it-says), [how it was run](#how-it-was-run),
@@ -73,33 +75,35 @@ rounds. Every tool encodes x264 at CRF 23, preset `medium`, 4:2:0.
 
 | Job | geneva | Playwright + ffmpeg | Remotion |
 | --- | --- | --- | --- |
-| Social clip, 60 s | **64.9 s** (220 s CPU) | 137.7 s (317 s) | 280.2 s (1057 s) |
-| Broadcast package, 3 min | **56.7 s** (180 s) | 242.6 s (583 s) | 343.2 s (1199 s) |
-| Static captions, 4 min | **100.3 s** (337 s) | 307.8 s (823 s) | 469.5 s (1665 s) |
-| Dynamic captions, 90 s | **61.4 s** (222 s) | 189.0 s (390 s) | 175.5 s (621 s) |
-| Opening, 13 s | **15.6 s** (41 s) | 64.0 s (86 s) | 20.6 s (53 s) |
-| Intro, 14 s | 76.2 s (198 s) | 147.9 s (236 s) | **61.8 s** (172 s) |
-| Kinetic typography, 16 s | 64.1 s (170 s) | 65.5 s (98 s) | **34.6 s** (68 s) |
+| Social clip, 60 s | **60.8 s** (207 s CPU) | 140.6 s (319 s) | 270.3 s (1023 s) |
+| Broadcast package, 3 min | **52.2 s** (170 s) | 244.2 s (586 s) | 324.3 s (1113 s) |
+| Static captions, 4 min | **95.6 s** (323 s) | 300.4 s (773 s) | 444.7 s (1576 s) |
+| Dynamic captions, 90 s | **58.1 s** (211 s) | 190.9 s (372 s) | 164.7 s (560 s) |
+| Opening, 13 s | **10.0 s** (27 s) | 64.2 s (85 s) | 19.1 s (50 s) |
+| Intro, 14 s | **30.4 s** (96 s) | 145.0 s (223 s) | 63.4 s (156 s) |
+| Kinetic typography, 16 s | **14.2 s** (42 s) | 56.2 s (84 s) | 30.2 s (58 s) |
 
 The geneva column is geneva with its defaults. With the encoder pinned to
 the other tools' settings, which also turns its frame copying off, the
-broadcast package takes 109.2 s and the static captions 146.3 s; the
-other jobs are within two seconds of the figures above.
+broadcast package takes 99.4 s and the static captions 140.7 s; the
+other jobs are within a second of the figures above.
 
 How much quicker geneva is, on wall time:
 
 | Job | than Playwright + ffmpeg | than Remotion |
 | --- | --- | --- |
-| Social clip | 2.1x | 4.3x |
-| Broadcast package | 4.3x | 6.1x |
+| Social clip | 2.3x | 4.4x |
+| Broadcast package | 4.7x | 6.2x |
 | Static captions | 3.1x | 4.7x |
-| Dynamic captions | 3.1x | 2.9x |
-| Opening | 4.1x | 1.3x |
-| Intro | 1.9x | 0.8x (Remotion 1.2x quicker) |
-| Kinetic typography | 1.0x | 0.5x (Remotion 1.9x quicker) |
+| Dynamic captions | 3.3x | 2.8x |
+| Opening | 6.4x | 1.9x |
+| Intro | 4.8x | 2.1x |
+| Kinetic typography | 4.0x | 2.1x |
 
-Every run is in [`benchmarks/real-world/results`](../benchmarks/real-world/results/);
-the spread between rounds was a few percent.
+Every run is in [`benchmarks/real-world/results`](../benchmarks/real-world/results/).
+Most rounds were within 10% of each other. The shortest jobs varied most
+(geneva's kinetic runs took 13.6 to 18.1 s), and no round changed which
+tool was quicker.
 
 ## What it says
 
@@ -108,22 +112,30 @@ the spread between rounds was a few percent.
   separately; geneva decodes, draws and encodes in one pass, compositing only
   where the graphics are, and with its defaults copies the
   stretches the graphics leave alone. That copying is why the longest,
-  sparsest jobs show the widest gaps: the broadcast package takes 56.7 s
-  with it and 109.2 s without.
-- **Without footage, Remotion is quicker.** On the kinetic typography
-  piece, 190-pixel type over full-frame `clip-path` panels on every frame,
-  Chromium's painter does the work with less than half of geneva's CPU.
-  The intro is closer (61.8 s against 76.2 s). The opening, also pure
-  markup but smaller and simpler per frame, still goes geneva's way. These
-  runs used geneva's CPU renderer; its GPU renderer was not measured.
-- **Playwright + ffmpeg sits between the two.** It captures one frame at
-  a time in one tab, so it is slowest on motion graphics, where Remotion's
-  four tabs pay off, and quicker than Remotion on footage, where Remotion
-  screenshots every frame whatever is on it.
+  sparsest jobs show the widest gaps: the broadcast package takes 52.2 s
+  with it and 99.4 s without.
+- **Without footage, geneva is about twice as quick as Remotion.** It
+  was not at first. The first run of these jobs, with geneva before
+  `c9e6dd5`, had Remotion quicker on the intro (61.8 s against 76.2 s)
+  and on the kinetic typography (34.6 s against 64.1 s). A profile found
+  geneva's markup painter doing work that never reached the picture: a
+  panel waiting to wipe in was painted over the whole frame and masked
+  away every frame, everything under an opaque panel was painted, and a
+  large soft shape was blurred again every frame. The painter now skips
+  all of that (see the [changelog](../CHANGELOG.md)), and the pictures
+  are the same to one level in 8 bits. Those numbers are kept in
+  [`results/before-c9e6dd5`](../benchmarks/real-world/results/before-c9e6dd5/).
+  These runs used geneva's CPU renderer; its GPU renderer was not
+  measured.
+- **Playwright + ffmpeg is slowest on motion graphics.** It captures one
+  frame at a time in one tab, so it trails wherever every frame has to be
+  drawn, where Remotion's four tabs pay off. On footage it is quicker
+  than Remotion, which screenshots every frame whatever is on it, except
+  on the dynamic captions, whose badge puts graphics on every frame.
 
 ## How it was run
 
-- **geneva** 1.0.0 with the fixes on `main` at the time of the run,
+- **geneva** at `c9e6dd5` on `main` (1.0.0 and the fixes since),
   release build, the system's x264 (build 164), CPU renderer.
 - **Playwright + ffmpeg**: Playwright 1.56.1 with Chromium's headless
   shell (build 1194) screenshots each frame that has graphics on it, with
