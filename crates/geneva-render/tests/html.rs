@@ -521,3 +521,145 @@ fn a_blurred_shadow_of_a_thin_bar_is_faint() {
     assert!(beside > 0.05 && beside < 0.35, "{beside}");
     assert!(at(&f, 125, 50).a < 0.02, "{}", at(&f, 125, 50).a);
 }
+
+/// Frames of one markup clip at each of `tenths`, all through one
+/// renderer, so that what the painter keeps between frames is used.
+fn markup_run(html: &str, css: &str, tenths: &[i64]) -> Vec<geneva_render::Frame> {
+    let text = format!(
+        r#"{{"geneva":"1.0","output":{{"width":200,"height":100,"fps":30,"duration":"2s",
+        "background":"transparent"}},"layers":[{{"clips":[{{"source":{{"kind":"html","width":200,"height":100,
+        "html":{html},"css":{css}}},"duration":"2s",
+        "transform":{{"anchor":"top left","position":"0 0"}}}}]}}]}}"#,
+        html = serde_json::to_string(html).unwrap(),
+        css = serde_json::to_string(css).unwrap(),
+    );
+    let l = load(&text);
+    assert!(l.is_ok(), "{:?}", l.diagnostics);
+    let comp = l.composition.unwrap();
+    let mut renderer = CpuRenderer::new(NoAssets);
+    tenths
+        .iter()
+        .map(|t| renderer.render_frame(&comp, Ratio::new(*t, 10)).unwrap())
+        .collect()
+}
+
+/// The largest difference in any channel between two frames.
+fn furthest(a: &geneva_render::Frame, b: &geneva_render::Frame) -> f32 {
+    let mut worst = 0.0f32;
+    for y in 0..a.height() {
+        for x in 0..a.width() {
+            let (p, q) = (a.get(x, y), b.get(x, y));
+            for d in [p.r - q.r, p.g - q.g, p.b - q.b, p.a - q.a] {
+                worst = worst.max(d.abs());
+            }
+        }
+    }
+    worst
+}
+
+#[test]
+fn a_panel_wiped_in_over_another_is_all_that_shows() {
+    // Once the second panel's wipe is open it covers the frame in an
+    // opaque colour, and the painter starts from it: the first panel and
+    // its moving word are not painted at all. The frame is what the
+    // second panel alone draws.
+    let css = ".stage { position: absolute; inset: 0; overflow: hidden; background: #101010 } \
+         .panel { position: absolute; inset: 0 } \
+         .p1 { background: #ff0000 } \
+         .word { position: absolute; left: 20px; top: 20px; width: 60px; height: 30px; background: #ffff00; \
+                 animation: slide 2s linear forwards } \
+         @keyframes slide { to { transform: translateX(80px) } } \
+         .p2 { background: #0000ff; clip-path: polygon(0% 0%, 0% 0%, -20% 100%, -20% 100%); \
+               animation: wipe .5s linear forwards } \
+         @keyframes wipe { to { clip-path: polygon(0% 0%, 120% 0%, 100% 100%, -20% 100%) } } \
+         .dot { position: absolute; left: 150px; top: 60px; width: 20px; height: 20px; background: #00ff00; \
+                animation: slide 2s linear forwards }";
+    let both = markup_at(
+        "<div class='stage'><div class='panel p1'><div class='word'></div></div>\
+         <div class='panel p2'><div class='dot'></div></div></div>",
+        css,
+        10,
+    );
+    let alone = markup_at(
+        "<div class='stage'><div class='panel p2'><div class='dot'></div></div></div>",
+        css,
+        10,
+    );
+    assert!(
+        near(at(&both, 40, 30), 0.0, 0.0, 1.0, 1.0),
+        "{:?}",
+        at(&both, 40, 30)
+    );
+    assert!(
+        furthest(&both, &alone) < 1e-6,
+        "{}",
+        furthest(&both, &alone)
+    );
+    // Before the wipe opens, the second panel is not drawn and the first
+    // shows whole.
+    let closed = markup_at(
+        "<div class='stage'><div class='panel p1'><div class='word'></div></div>\
+         <div class='panel p2'><div class='dot'></div></div></div>",
+        &css.replace(
+            "animation: wipe .5s linear forwards",
+            "animation: wipe .5s 1.5s linear forwards",
+        ),
+        0,
+    );
+    assert!(
+        near(at(&closed, 150, 80), 1.0, 0.0, 0.0, 1.0),
+        "{:?}",
+        at(&closed, 150, 80)
+    );
+}
+
+#[test]
+fn a_blend_inside_a_group_still_blends_against_the_group_alone() {
+    // The group is animated but at rest (opacity one, no transform), so
+    // it would be laid down exactly as painted. A child mixed in
+    // `multiply` inside it blends against the group's own empty picture,
+    // as in a browser, not against the red already on the surface: over
+    // an empty backdrop, multiply leaves the child as it is.
+    let f = markup_at(
+        "<div class='under'></div><div class='g'><div class='m'></div></div>",
+        ".under { position: absolute; left: 0; top: 0; width: 200px; height: 100px; background: #ff0000 } \
+         .g { position: absolute; left: 0; top: 0; width: 200px; height: 100px; \
+              animation: rest 2s linear forwards } \
+         @keyframes rest { from { opacity: 1 } to { opacity: 1 } } \
+         .m { position: absolute; left: 50px; top: 25px; width: 100px; height: 50px; \
+              background: #00ff00; mix-blend-mode: multiply; animation: rest 2s linear forwards }",
+        5,
+    );
+    assert!(
+        near(at(&f, 100, 50), 0.0, 1.0, 0.0, 1.0),
+        "{:?}",
+        at(&f, 100, 50)
+    );
+    assert!(
+        near(at(&f, 10, 10), 1.0, 0.0, 0.0, 1.0),
+        "{:?}",
+        at(&f, 10, 10)
+    );
+}
+
+#[test]
+fn a_blur_kept_between_frames_draws_what_a_fresh_one_does() {
+    // A soft shape drifting under a steady blur is blurred once and the
+    // blurred picture kept. The frames that use it match a renderer that
+    // starts cold at each of them.
+    let html = "<div class='blob'></div><div class='text'>Hi</div>";
+    let css = ".blob { position: absolute; left: 40px; top: 20px; width: 60px; height: 60px; \
+                border-radius: 30px; background: #ff00ff; filter: blur(8px); \
+                mix-blend-mode: screen; animation: drift 2s linear forwards } \
+         @keyframes drift { to { transform: translate(60px, 10px) scale(1.2) } } \
+         .text { position: absolute; left: 10px; top: 10px; font-size: 20px; color: #ffffff; \
+                 animation: fade 1s linear forwards } \
+         @keyframes fade { from { opacity: 0.2 } to { opacity: 1 } }";
+    let times = [0, 1, 2, 3, 5, 8, 13];
+    let run = markup_run(html, css, &times);
+    for (t, kept) in times.iter().zip(&run) {
+        let cold = markup_at(html, css, *t);
+        let d = furthest(kept, &cold);
+        assert!(d < 1e-4, "at {t} tenths: {d}");
+    }
+}

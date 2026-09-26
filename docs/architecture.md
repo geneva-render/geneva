@@ -95,9 +95,26 @@ and painted by the renderer into a picture placed like an image.
 - A box with nothing animated inside is painted once per clip.
 - An element with an animation, opacity, filter, blend mode or clip is a
   group: a buffer of its own, bounded to what its parent can show
-  (through the inverse transform, padded for blur, at most nine frames of
-  area), composited with those applied. Groups off the frame are
-  skipped. An animation that changes a size re-lays out each frame.
+  (through the inverse transform, padded for blur, cut to its
+  `clip-path` polygon, at most nine frames of area), composited with
+  those applied. Groups off the frame, and groups whose polygon covers
+  nothing, are skipped. An animation that changes a size re-lays out
+  each frame.
+- A group with no group inside keeps its picture between frames while
+  its boxes stay the same, blurred in place once its blur holds still
+  for two frames, and composited through its transform each frame. A
+  group whose boxes change three frames running is painted fresh until
+  they hold still again. Pictures not wanted in a frame are let go,
+  oldest first, when a new one would pass the budget (96 MB per
+  thread).
+- Painting starts at the last box that covers the whole surface in an
+  opaque colour with nothing between it and the surface that could let
+  what is under it show; the boxes before it are not painted.
+- A group that would be laid down exactly as painted (full opacity, no
+  blur, blend mode or transform, any clip or polygon covering what holds
+  it) gets no buffer: its boxes and groups are painted into what holds
+  it. A group with a blend mode inside it does this only while what
+  holds it is still empty, so the blend sees the same backdrop.
 - On the GPU, boxes, glyphs, shadows and polygon coverage are still
   painted on the CPU and uploaded; groups are composited on the device.
 

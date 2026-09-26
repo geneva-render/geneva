@@ -954,8 +954,25 @@ pub(crate) fn composite(src: LinearRgba, dst: LinearRgba, mode: BlendMode) -> Li
                 a: src.a + dst.a - src.a * dst.a,
             };
         }
-        BlendMode::Multiply => |cb, cs| cb * cs,
-        BlendMode::Screen => |cb, cs| cb + cs - cb * cs,
+        // On premultiplied values these two come out without dividing by
+        // either alpha: the general formula below, multiplied through.
+        BlendMode::Multiply => {
+            let (ks, kb) = (1.0 - src.a, 1.0 - dst.a);
+            return LinearRgba {
+                r: src.r * kb + dst.r * ks + src.r * dst.r,
+                g: src.g * kb + dst.g * ks + src.g * dst.g,
+                b: src.b * kb + dst.b * ks + src.b * dst.b,
+                a: src.a + dst.a - src.a * dst.a,
+            };
+        }
+        BlendMode::Screen => {
+            return LinearRgba {
+                r: src.r + dst.r - src.r * dst.r,
+                g: src.g + dst.g - src.g * dst.g,
+                b: src.b + dst.b - src.b * dst.b,
+                a: src.a + dst.a - src.a * dst.a,
+            };
+        }
         BlendMode::Overlay => |cb, cs| hard_light(cs, cb),
         BlendMode::Darken => f32::min,
         BlendMode::Lighten => f32::max,

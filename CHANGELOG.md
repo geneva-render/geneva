@@ -10,6 +10,30 @@ versions changed the format freely.
 
 ### Fixed
 
+- **Full-screen motion graphics in markup render two to four times
+  faster.** A benchmark against Remotion found geneva slower on pure
+  markup pieces, and a profile found work that changed nothing in the
+  picture. A panel waiting to wipe in, its `clip-path` still a line, was
+  painted over the whole frame every frame and then masked away; it is
+  now bounded to its polygon and skipped while the polygon covers
+  nothing. Everything under the last box that covers the frame in an
+  opaque colour is no longer painted. A group laid down exactly as
+  painted (full opacity, no blur, blend or transform, clips that cover
+  it) no longer gets a buffer of its own. A soft shape under a steady
+  `filter: blur()` is blurred once and kept, where it was blurred again
+  every frame. Inside a box, pixels well within its corners and its
+  clip skip the rounded-rectangle test, `screen` and `multiply` no
+  longer divide by alpha, and text is encoded through a table rather
+  than a power per pixel. Two faults in the cache of group pictures went
+  with it: a group whose boxes changed every frame was repainted over its
+  whole reach every frame instead of being given up on, and a picture no
+  longer shown was never let go, so it could keep a new one out of the
+  budget. On this machine a 16 s kinetic typography piece at 1080p
+  takes 14.3 s where it took 59.3, and a 14 s intro with blurred shapes
+  in `screen` 29.9 s where it took 74.3. The picture is the same to one
+  level in 8 bits, except that a glyph running past the edge of a group
+  that now has no buffer is drawn whole, as a browser draws it, rather
+  than cut at the buffer's edge.
 - **A keyframe's `letter-spacing` in `em` failed the render** with `E442,
   invalid length ".3em"`, although the same length works in a static
   rule and in a browser: keyframes were parsed without the element, so

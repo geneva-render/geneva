@@ -210,7 +210,7 @@ fn encode_pixel(p: LinearRgba) -> LinearRgba {
     if p.a <= 0.0 {
         return LinearRgba::TRANSPARENT;
     }
-    let enc = |v: f32| Transfer::Srgb.from_linear(f64::from(v / p.a)) as f32 * p.a;
+    let enc = |v: f32| srgb_from_linear(v / p.a) * p.a;
     LinearRgba {
         r: enc(p.r),
         g: enc(p.g),
@@ -252,6 +252,28 @@ fn srgb_to_linear(v: f32) -> f32 {
     let table = TABLE.get_or_init(|| {
         (0..=STEPS)
             .map(|i| Transfer::Srgb.to_linear(i as f64 / STEPS as f64) as f32)
+            .collect()
+    });
+    let at = v * STEPS as f32;
+    let i = (at as usize).min(STEPS - 1);
+    let f = at - i as f32;
+    table[i] + (table[i + 1] - table[i]) * f
+}
+
+/// The sRGB curve's inverse on `[0, 1]`, read off a table, for every
+/// pixel of text each time it is drawn. The curve is steepest just
+/// above its linear toe, and there the table is within 2e-5 of it, a
+/// fiftieth of a step of 10-bit video; a value outside the range takes
+/// the curve itself.
+fn srgb_from_linear(v: f32) -> f32 {
+    const STEPS: usize = 4096;
+    static TABLE: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
+    if !(0.0..=1.0).contains(&v) {
+        return Transfer::Srgb.from_linear(f64::from(v)) as f32;
+    }
+    let table = TABLE.get_or_init(|| {
+        (0..=STEPS)
+            .map(|i| Transfer::Srgb.from_linear(i as f64 / STEPS as f64) as f32)
             .collect()
     });
     let at = v * STEPS as f32;
@@ -380,6 +402,18 @@ fn group_bounds(
             continue;
         }
         let mut r = padded(r, group.blur * 3.0);
+        // A `clip-path` cuts the blurred picture before the transform, so
+        // nothing lands outside its polygon, and a polygon that covers
+        // nothing (the start of a wipe) hides the group and all in it.
+        if let Some(points) = &group.clip_path {
+            match polygon_reach(points).and_then(|p| intersect(r, p)) {
+                Some(cut) => r = cut,
+                None => {
+                    own[g] = None;
+                    continue;
+                }
+            }
+        }
         if let Some(tr) = &transforms[g] {
             r = transformed(r, centre_of(group.rect), tr);
         }
@@ -406,15 +440,98 @@ fn group_bounds(
             window = intersect(w, rect_bounds(clip));
         }
         let reach = group.blur * 3.0;
-        let visible = window.and_then(|w| match &transforms[g] {
-            Some(tr) if tr.scale[0] == 0.0 || tr.scale[1] == 0.0 => None,
-            Some(tr) => Some(padded(inverted(w, centre_of(group.rect), tr), reach)),
-            None => Some(padded(w, reach)),
+        let visible = window.and_then(|w| {
+            let seen = match &transforms[g] {
+                Some(tr) if tr.scale[0] == 0.0 || tr.scale[1] == 0.0 => return None,
+                Some(tr) => inverted(w, centre_of(group.rect), tr),
+                None => w,
+            };
+            // Only what is inside the polygon shows, and the blur reads
+            // no further than its reach outside that.
+            let seen = match &group.clip_path {
+                Some(points) => intersect(seen, polygon_reach(points)?)?,
+                None => seen,
+            };
+            Some(padded(seen, reach))
         });
         natural[g] = Some(padded(r, reach));
         own[g] = visible.and_then(|v| intersect(padded(r, reach), v));
     }
     (own, placed, natural)
+}
+
+/// The rectangle a `clip-path` polygon, in the surface's pixels, can
+/// cover, or `None` for one that covers nothing: fewer than three points,
+/// or all of them on one line, as a wipe's polygon is before it opens.
+fn polygon_reach(points: &[(f64, f64)]) -> Option<Bounds> {
+    let &first = points.first()?;
+    let other = points.iter().find(|p| **p != first)?;
+    let (dx, dy) = (other.0 - first.0, other.1 - first.1);
+    let flat = points
+        .iter()
+        .all(|p| (dx * (p.1 - first.1) - dy * (p.0 - first.0)).abs() <= 1e-9);
+    if points.len() < 3 || flat {
+        return None;
+    }
+    let mut out: Option<Bounds> = None;
+    for &(x, y) in points {
+        out = Some(union(out, [x, y, x, y]));
+    }
+    out
+}
+
+/// Whether a `clip-path` polygon covers every pixel of `r` (left, top,
+/// right, bottom, in whole pixels) whole, so that masking by it changes
+/// nothing there. Answered only for a convex polygon, which is what a
+/// wipe or an iris is once it is open: the rectangle is inside when its
+/// four corners are. Anything else answers no, which is always safe.
+fn polygon_covers(points: &[(f64, f64)], r: [i64; 4]) -> bool {
+    // Repeated points turn nothing; leave them out.
+    let mut ring: Vec<(f64, f64)> = Vec::with_capacity(points.len());
+    for &p in points {
+        if ring.last() != Some(&p) {
+            ring.push(p);
+        }
+    }
+    while ring.len() > 1 && ring.first() == ring.last() {
+        ring.pop();
+    }
+    let n = ring.len();
+    if n < 3 {
+        return false;
+    }
+    // Convex: every corner turns the same way, and the turns add up to
+    // one full turn, which rules out a star whose corners all turn alike.
+    let mut sign = 0.0f64;
+    let mut turned = 0.0f64;
+    for i in 0..n {
+        let (a, b, c) = (ring[i], ring[(i + 1) % n], ring[(i + 2) % n]);
+        let (ux, uy) = (b.0 - a.0, b.1 - a.1);
+        let (vx, vy) = (c.0 - b.0, c.1 - b.1);
+        let cross = ux * vy - uy * vx;
+        if cross.abs() > 1e-9 {
+            if sign != 0.0 && cross.signum() != sign {
+                return false;
+            }
+            sign = cross.signum();
+        }
+        turned += cross.atan2(ux * vx + uy * vy);
+    }
+    if sign == 0.0 || (turned.abs() - std::f64::consts::TAU).abs() > 1e-6 {
+        return false;
+    }
+    let corners = [
+        (r[0] as f64, r[1] as f64),
+        (r[2] as f64, r[1] as f64),
+        (r[2] as f64, r[3] as f64),
+        (r[0] as f64, r[3] as f64),
+    ];
+    corners.iter().all(|&(x, y)| {
+        (0..n).all(|i| {
+            let (a, b) = (ring[i], ring[(i + 1) % n]);
+            ((b.0 - a.0) * (y - a.1) - (b.1 - a.1) * (x - a.0)) * sign >= -1e-9
+        })
+    })
 }
 
 fn rect_bounds(rect: Rectangle) -> Bounds {
@@ -499,6 +616,14 @@ struct Layer {
     group: usize,
     image: Image,
     origin: (i64, i64),
+    /// Whether the group's blur is already in the pixels, as it is in a
+    /// picture kept blurred between frames.
+    blurred: bool,
+    /// A group painted straight into the buffer under it, which has no
+    /// pixels of its own (see [`passes_through`]).
+    through: bool,
+    /// Whether anything has been painted or composited into it yet.
+    touched: bool,
 }
 
 impl Layer {
@@ -515,6 +640,9 @@ impl Layer {
                     content: None,
                 },
                 origin: (0, 0),
+                blurred: false,
+                through: false,
+                touched: false,
             };
         };
         let ([x0, y0, x1, y1], _) = bound_group(b, surface);
@@ -525,11 +653,31 @@ impl Layer {
             image: Image {
                 width,
                 height,
-                pixels: vec![LinearRgba::TRANSPARENT; width as usize * height as usize],
+                pixels: transparent(width as usize * height as usize),
                 content: None,
             },
             origin: (x0, y0),
+            blurred: false,
+            through: false,
+            touched: false,
         }
+    }
+
+    /// A group painted straight into the buffer under it.
+    fn through(group: usize) -> Self {
+        let mut layer = Self::over(group, None, (0, 0));
+        layer.through = true;
+        layer
+    }
+
+    /// Its edges on the surface: left, top, right, bottom.
+    fn bounds(&self) -> [i64; 4] {
+        [
+            self.origin.0,
+            self.origin.1,
+            self.origin.0 + i64::from(self.image.width),
+            self.origin.1 + i64::from(self.image.height),
+        ]
     }
 }
 
@@ -545,8 +693,19 @@ struct Cached {
     origin: (i64, i64),
     /// Which painting this is, counted over the cache: a renderer that
     /// keeps a copy of the picture (a texture) tells one painting from
-    /// the next by it.
+    /// the next by it. Blurring the picture in place counts as a new
+    /// painting.
     generation: u64,
+    /// The blur already in the picture, zero for none.
+    blurred: f64,
+    /// The blur the group asked for the last time it was shown. A blur
+    /// that asks the same twice in a row is holding still, and the
+    /// picture is blurred in place and kept that way: blurring is the
+    /// dear part of a big soft element, and its picture never changes.
+    asked: f64,
+    /// The last frame this picture was wanted, for choosing which to
+    /// let go when a new one does not fit.
+    used: u64,
 }
 
 impl Cached {
@@ -579,8 +738,19 @@ impl Cached {
                 content: None,
             },
             origin: (want[0], want[1]),
+            blurred: self.blurred > 0.0,
+            through: false,
+            touched: true,
         }
     }
+}
+
+/// A group that keeps missing the cache, and the boxes it had the last
+/// time it did.
+#[derive(Default)]
+struct Strikes {
+    count: u8,
+    last: Vec<Painted>,
 }
 
 /// Pictures of groups that do not change from frame to frame, held
@@ -604,9 +774,11 @@ pub struct GroupCache {
     clipped: bool,
     entries: HashMap<usize, Cached>,
     /// Misses in a row, per group, and past [`STRIKES`] the group is
-    /// not painted into the cache again.
-    give_up: HashMap<usize, u8>,
+    /// not painted into the cache again until its boxes hold still.
+    give_up: HashMap<usize, Strikes>,
     bytes: usize,
+    /// Frames painted through this cache, for [`Cached::used`].
+    frame: u64,
     /// Paintings so far, so that each picture kept has a number of its
     /// own.
     generation: u64,
@@ -620,10 +792,12 @@ const MIN_PIXELS: i64 = 64 * 64;
 /// cache of its own, so this is what one costs.
 const BUDGET: usize = 96 << 20;
 
-/// How many times a group may be painted without its picture ever being
-/// used again before it is given up on. An element whose own boxes
+/// How many times in a row a group may be painted without its picture
+/// being used again before it is given up on. An element whose own boxes
 /// animate, a letter changing colour, never reuses one, and painting it
-/// a size larger than the frame needs is worse than not trying.
+/// a size larger than the frame needs is worse than not trying. Once its
+/// boxes are the same two frames running it is tried again: the
+/// animation is over, and the element holds still for the rest.
 const STRIKES: u8 = 3;
 
 impl GroupCache {
@@ -653,8 +827,28 @@ impl GroupCache {
         }
         self.bytes += entry.image.pixels.len() * size_of::<LinearRgba>();
         entry.generation = self.generation;
+        entry.used = self.frame;
         self.generation += 1;
         self.entries.insert(group, entry);
+    }
+
+    /// Lets go of pictures not wanted this frame, the longest unused
+    /// first, until `bytes` more fit in the budget. Whether they now do.
+    fn make_room(&mut self, bytes: usize) -> bool {
+        while self.bytes + bytes > BUDGET {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .filter(|(_, c)| c.used < self.frame)
+                .min_by_key(|(_, c)| c.used)
+                .map(|(g, _)| *g)
+            else {
+                return false;
+            };
+            let gone = self.entries.remove(&oldest).expect("found above");
+            self.bytes -= gone.image.pixels.len() * size_of::<LinearRgba>();
+        }
+        true
     }
 }
 
@@ -679,19 +873,24 @@ fn is_leaf(laid: &Laid, g: usize) -> bool {
 }
 
 /// Paints, or repaints, the groups whose pictures are worth keeping, and
-/// returns which ones the caller may take from the cache.
+/// returns which ones the caller may take from the cache. Boxes before
+/// `first` are under something that hides them (see [`first_seen`]) and
+/// are left out.
+#[allow(clippy::too_many_arguments)]
 fn fill_cache(
     cache: &mut GroupCache,
     laid: &Laid,
+    first: usize,
     own: &[Option<Bounds>],
     natural: &[Option<Bounds>],
     surface: (u32, u32),
     text: &mut TextEngine,
     images: &HashMap<String, Image>,
 ) -> HashSet<usize> {
-    let mut served = HashSet::new();
-    for g in 0..laid.groups.len() {
-        let Some(want) = buffer_rect(own[g], surface) else {
+    cache.frame += 1;
+    let mut candidates = Vec::new();
+    for (g, bounds) in own.iter().enumerate() {
+        let Some(want) = buffer_rect(*bounds, surface) else {
             continue;
         };
         if (want[2] - want[0]) * (want[3] - want[1]) < MIN_PIXELS {
@@ -700,8 +899,7 @@ fn fill_cache(
         if !is_leaf(laid, g) {
             continue;
         }
-        let boxes: Vec<Painted> = laid
-            .boxes
+        let boxes: Vec<Painted> = laid.boxes[first.min(laid.boxes.len())..]
             .iter()
             .filter(|b| b.group == Some(g) && b.opacity > 0.0)
             .cloned()
@@ -709,21 +907,38 @@ fn fill_cache(
         if boxes.is_empty() {
             continue;
         }
+        // Wanted this frame, fresh or not, so that making room for
+        // another picture never lets it go.
+        if let Some(c) = cache.entries.get_mut(&g) {
+            c.used = cache.frame;
+        }
+        candidates.push((g, want, boxes));
+    }
+    let mut served = HashSet::new();
+    for (g, want, boxes) in candidates {
+        let blur = laid.groups[g].blur;
         // Only the boxes are compared. A group's own opacity, blur and
         // clips are read when its picture is composited rather than when
         // it is painted, so they change nothing in the picture, and its
         // transform is the whole point: the picture stays put and the
-        // transform moves it.
-        let fresh = cache
-            .entries
-            .get(&g)
-            .is_some_and(|c| c.covers(want) && c.boxes == boxes);
-        if !fresh {
+        // transform moves it. The one exception is a blur already
+        // blurred into the picture, which has to be the blur asked for.
+        let fresh = cache.entries.get(&g).is_some_and(|c| {
+            c.covers(want) && c.boxes == boxes && (c.blurred == 0.0 || c.blurred == blur)
+        });
+        if fresh {
+            cache.give_up.remove(&g);
+        } else {
             let strikes = cache.give_up.entry(g).or_default();
-            if *strikes >= STRIKES {
+            if strikes.last == boxes {
+                strikes.count = 0;
+            }
+            if strikes.count >= STRIKES {
+                strikes.last = boxes;
                 continue;
             }
-            *strikes += 1;
+            strikes.count += 1;
+            strikes.last.clone_from(&boxes);
             // The whole of what the group covers, not just the window
             // this frame needs. The window slides and shrinks as the
             // element drifts and scales, so one that fits the frame
@@ -732,11 +947,15 @@ fn fill_cache(
             let Some(region) = natural[g] else {
                 continue;
             };
-            let mut layer = Layer::over(g, Some(region), surface);
-            let bytes = layer.image.pixels.len() * size_of::<LinearRgba>();
-            if cache.bytes + bytes > BUDGET {
+            let ([x0, y0, x1, y1], _) = bound_group(region, surface);
+            let pixels = ((x1 - x0).max(0) * (y1 - y0).max(0)) as usize;
+            if let Some(old) = cache.entries.remove(&g) {
+                cache.bytes -= old.image.pixels.len() * size_of::<LinearRgba>();
+            }
+            if !cache.make_room(pixels * size_of::<LinearRgba>()) {
                 continue;
             }
+            let mut layer = Layer::over(g, Some(region), surface);
             for b in &boxes {
                 let moved = shifted(b, layer.origin);
                 paint_one(&mut layer.image, &moved, text, images);
@@ -746,6 +965,9 @@ fn fill_cache(
                 image: layer.image,
                 origin: layer.origin,
                 generation: 0,
+                blurred: 0.0,
+                asked: -1.0,
+                used: 0,
             };
             // The clamp in `Layer::over` can cut a picture that reaches
             // far past the surface down to less than the frame asks for.
@@ -754,7 +976,15 @@ fn fill_cache(
             }
             cache.insert(g, entry);
         }
-        cache.give_up.remove(&g);
+        let entry = cache.entries.get_mut(&g).expect("fresh or kept above");
+        if blur > 0.0 && entry.blurred == 0.0 && entry.asked == blur {
+            let (w, h) = (entry.image.width as usize, entry.image.height as usize);
+            crate::blur::blur_pixels(&mut entry.image.pixels, w, h, blur);
+            entry.blurred = blur;
+            entry.generation = cache.generation;
+            cache.generation += 1;
+        }
+        entry.asked = blur;
         served.insert(g);
     }
     served
@@ -818,6 +1048,12 @@ fn content_of(laid: &Laid, placed: &[Option<Bounds>], surface: (u32, u32)) -> Op
 /// straight onto it; a group's boxes go into a buffer of its own, which
 /// is composited into whatever holds the group when its last box is
 /// done, under the group's opacity, blur, transform and outside clip.
+///
+/// Two things are left out that would change nothing in the picture:
+/// every box under the last one that covers the whole surface in an
+/// opaque colour (see [`first_seen`]), and the buffer of a group that
+/// would be laid down exactly as it was painted (see [`passes_through`]),
+/// whose boxes and inner groups go straight into what holds it.
 fn paint(
     laid: &Laid,
     transforms: &[Option<Transform>],
@@ -841,10 +1077,23 @@ fn paint(
     let mut surface = Image {
         width,
         height,
-        pixels: vec![LinearRgba::TRANSPARENT; width as usize * height as usize],
+        pixels: transparent(width as usize * height as usize),
         content,
     };
-    let served = fill_cache(cache, laid, &own, &natural, (width, height), text, images);
+    let first = first_seen(laid, transforms, (width, height));
+    let served = fill_cache(
+        cache,
+        laid,
+        first,
+        &own,
+        &natural,
+        (width, height),
+        text,
+        images,
+    );
+    let blends = blends_inside(laid);
+    // Whether anything has been laid on the surface yet.
+    let mut surface_touched = false;
     let mut stack: Vec<Layer> = Vec::new();
     // A group taken from the cache: its own boxes are already in the
     // picture, so they are not painted again.
@@ -852,7 +1101,7 @@ fn paint(
     // A group that would not show (no opacity, no size, nothing in it)
     // is skipped whole, boxes and inner groups alike.
     let mut skipping: Option<usize> = None;
-    for b in &laid.boxes {
+    for b in &laid.boxes[first.min(laid.boxes.len())..] {
         let chain = chain_of(laid, b.group);
         while let Some(top) = stack.last() {
             if chain.contains(&top.group) {
@@ -866,7 +1115,15 @@ fn paint(
             if serving == Some(layer.group) {
                 serving = None;
             }
-            close(layer, laid, transforms, &placed, &mut stack, &mut surface);
+            close(
+                layer,
+                laid,
+                transforms,
+                &placed,
+                &mut stack,
+                &mut surface,
+                &mut surface_touched,
+            );
         }
         for g in chain {
             if stack.iter().any(|l| l.group == g) {
@@ -886,23 +1143,34 @@ fn paint(
                 .then(|| buffer_rect(own[g], (width, height)))
                 .flatten()
                 .and_then(|want| cache.entries.get(&g).map(|c| c.window(g, want)));
-            match ready {
-                Some(layer) => {
-                    serving = Some(g);
-                    stack.push(layer);
-                }
-                None => stack.push(Layer::over(g, own[g], (width, height))),
+            if let Some(layer) = ready {
+                serving = Some(g);
+                stack.push(layer);
+                continue;
+            }
+            let (target, touched) = match stack.iter().rev().find(|l| !l.through) {
+                Some(l) => (l.bounds(), l.touched),
+                None => ([0, 0, i64::from(width), i64::from(height)], surface_touched),
+            };
+            if passes_through(group, transforms[g].as_ref(), target, blends[g] && touched) {
+                stack.push(Layer::through(g));
+            } else {
+                stack.push(Layer::over(g, own[g], (width, height)));
             }
         }
         if skipping.is_some() || serving.is_some() || b.opacity <= 0.0 {
             continue;
         }
-        match stack.last_mut() {
+        match stack.iter_mut().rev().find(|l| !l.through) {
             Some(layer) => {
                 let moved = shifted(b, layer.origin);
                 paint_one(&mut layer.image, &moved, text, images);
+                layer.touched |= marks(b);
             }
-            None => paint_one(&mut surface, b, text, images),
+            None => {
+                paint_one(&mut surface, b, text, images);
+                surface_touched |= marks(b);
+            }
         }
     }
     while let Some(layer) = stack.pop() {
@@ -913,12 +1181,138 @@ fn paint(
         if serving == Some(layer.group) {
             serving = None;
         }
-        close(layer, laid, transforms, &placed, &mut stack, &mut surface);
+        close(
+            layer,
+            laid,
+            transforms,
+            &placed,
+            &mut stack,
+            &mut surface,
+            &mut surface_touched,
+        );
     }
     surface
 }
 
-/// Composites a finished group into the layer under it, or the surface.
+/// Where painting can start: the last box that covers the whole surface
+/// in an opaque colour, laid straight onto it, since nothing painted
+/// before that box can show. The first box when there is no such box.
+///
+/// A box qualifies when its background is one colour with full alpha, it
+/// has full opacity, its rounded rectangle and any clip on it cover every
+/// pixel of the surface whole, and each group it is inside is laid down
+/// as painted: full opacity, no blur, no blend mode, no transform, and
+/// any clip or `clip-path` covering the surface too. That is a panel
+/// wiped in over the last one, once the wipe is done.
+fn first_seen(laid: &Laid, transforms: &[Option<Transform>], surface: (u32, u32)) -> usize {
+    let whole = [0, 0, i64::from(surface.0), i64::from(surface.1)];
+    let opaque = |b: &Painted| {
+        let solid = matches!(
+            &b.paint.background,
+            Some(geneva_html::style::Background::Color(c)) if c.a >= 1.0
+        );
+        solid
+            && b.opacity >= 1.0
+            && RoundRect::new(b.rect, b.paint.radius).covers(whole)
+            && clip_of(b).is_none_or(|c| c.covers(whole))
+            && chain_of(laid, b.group).iter().all(|&g| {
+                let group = &laid.groups[g];
+                group.opacity >= 1.0
+                    && group.blur <= 0.0
+                    && group.blend == geneva_html::Blend::Normal
+                    && transforms[g].is_none()
+                    && group
+                        .clip
+                        .is_none_or(|(rect, radius)| RoundRect::new(rect, radius).covers(whole))
+                    && group
+                        .clip_path
+                        .as_ref()
+                        .is_none_or(|points| polygon_covers(points, whole))
+            })
+    };
+    laid.boxes.iter().rposition(opaque).unwrap_or(0)
+}
+
+/// Whether a group can skip its buffer and have its boxes and inner
+/// groups painted straight into `target` (the buffer that holds it, as
+/// left, top, right and bottom on the surface): whether laying the
+/// buffer down would leave exactly what was painted in it. That takes
+/// full opacity, no blur, no blend mode and no transform, and any clip
+/// or `clip-path` it has covering the whole of the target, so that
+/// nothing painted there would have been cut.
+///
+/// A group with a blend mode somewhere inside it blends against what its
+/// own buffer holds, which starts out empty. Painted straight, the same
+/// element would blend against whatever is already in the target, so
+/// such a group goes straight only while the target is still empty
+/// (`isolated` false): an intro's stage whose blurred shapes are mixed
+/// in `screen`, drawn first on the surface.
+fn passes_through(
+    group: &Group,
+    transform: Option<&Transform>,
+    target: [i64; 4],
+    isolated: bool,
+) -> bool {
+    !isolated
+        && group.opacity >= 1.0
+        && group.blur <= 0.0
+        && group.blend == geneva_html::Blend::Normal
+        && transform.is_none()
+        && group
+            .clip
+            .is_none_or(|(rect, radius)| RoundRect::new(rect, radius).covers(target))
+        && group
+            .clip_path
+            .as_ref()
+            .is_none_or(|points| polygon_covers(points, target))
+}
+
+/// For each group, whether a group inside it (at any depth) has a blend
+/// mode.
+fn blends_inside(laid: &Laid) -> Vec<bool> {
+    let mut inside = vec![false; laid.groups.len()];
+    for group in &laid.groups {
+        if group.blend == geneva_html::Blend::Normal {
+            continue;
+        }
+        let mut up = group.parent;
+        while let Some(p) = up {
+            inside[p] = true;
+            up = laid.groups[p].parent;
+        }
+    }
+    inside
+}
+
+/// Whether painting a box can leave a mark: anything in it to draw.
+fn marks(b: &Painted) -> bool {
+    b.paint
+        .background
+        .as_ref()
+        .is_some_and(geneva_html::style::Background::visible)
+        || b.paint.shadow.iter().any(|s| s.color.a > 0.0)
+        || (b.border.iter().any(|w| *w > 0.0) && b.paint.border_color.iter().any(|c| c.a > 0.0))
+        || !matches!(b.content, Content::Empty)
+}
+
+/// `n` transparent pixels. A frame's worth is cleared on every thread at
+/// once rather than on one.
+fn transparent(n: usize) -> Vec<LinearRgba> {
+    if n < 4 * ROWS_PER_JOB {
+        return vec![LinearRgba::TRANSPARENT; n];
+    }
+    let mut pixels = Vec::with_capacity(n);
+    (0..n)
+        .into_par_iter()
+        .with_min_len(ROWS_PER_JOB)
+        .map(|_| LinearRgba::TRANSPARENT)
+        .collect_into_vec(&mut pixels);
+    pixels
+}
+
+/// Composites a finished group into the buffer under it that is not
+/// itself going straight through, or the surface; a group going
+/// straight through has nothing to composite.
 fn close(
     layer: Layer,
     laid: &Laid,
@@ -926,16 +1320,24 @@ fn close(
     placed: &[Option<Bounds>],
     stack: &mut [Layer],
     surface: &mut Image,
+    surface_touched: &mut bool,
 ) {
+    if layer.through {
+        return;
+    }
     let group = &laid.groups[layer.group];
     let tr = transforms[layer.group].as_ref();
     let landing = placed[layer.group];
-    match stack.last_mut() {
+    match stack.iter_mut().rev().find(|l| !l.through) {
         Some(parent) => {
             let origin = parent.origin;
+            parent.touched = true;
             composite(&mut parent.image, origin, layer, group, tr, landing);
         }
-        None => composite(surface, (0, 0), layer, group, tr, landing),
+        None => {
+            *surface_touched = true;
+            composite(surface, (0, 0), layer, group, tr, landing);
+        }
     }
 }
 
@@ -973,13 +1375,17 @@ fn composite(
     if layer.image.width == 0 || layer.image.height == 0 {
         return;
     }
-    if group.blur > 0.0 {
+    if group.blur > 0.0 && !layer.blurred {
         let (w, h) = (layer.image.width as usize, layer.image.height as usize);
         crate::blur::blur_pixels(&mut layer.image.pixels, w, h, group.blur);
     }
     // CSS clips after filtering and before the transform, so the polygon
-    // is applied in the buffer, where the group's own pixels are.
-    if let Some(points) = &group.clip_path {
+    // is applied in the buffer, where the group's own pixels are. A
+    // polygon that holds the whole buffer, a wipe once it is done, would
+    // change nothing.
+    if let Some(points) = &group.clip_path
+        && !polygon_covers(points, layer.bounds())
+    {
         mask_polygon(&mut layer.image, layer.origin, points);
     }
     let opacity = group.opacity.clamp(0.0, 1.0);
@@ -992,36 +1398,12 @@ fn composite(
         } else {
             mix
         };
-    // Where the clip covers a pixel whole, which is everywhere but a
-    // half-pixel band at its edge and its rounded corners. Inside this
-    // rectangle the coverage is exactly one, so the square root and the
-    // branches in `distance` are skipped, which is most of the pixels
-    // of a full-frame group.
-    let solid = group.clip.map(|(rect, radius)| {
-        let inset = radius.iter().fold(0.5f64, |a, r| a.max(*r));
-        [
-            f64::from(rect[0]) + inset,
-            f64::from(rect[1]) + inset,
-            f64::from(rect[0] + rect[2]) - inset,
-            f64::from(rect[1] + rect[3]) - inset,
-        ]
-    });
-    let clip = |px: f64, py: f64| -> f32 {
-        match group.clip {
-            None => 1.0,
-            Some((rect, radius)) => {
-                if let Some(s) = solid
-                    && px >= s[0]
-                    && py >= s[1]
-                    && px <= s[2]
-                    && py <= s[3]
-                {
-                    return 1.0;
-                }
-                coverage(px, py, rect, radius)
-            }
-        }
-    };
+    // Most pixels of a full-frame group are inside the clip whole, and
+    // skip its distance test.
+    let clip = group
+        .clip
+        .map(|(rect, radius)| RoundRect::new(rect, radius));
+    let clip = |px: f64, py: f64| -> f32 { clip_at(clip.as_ref(), px, py) };
     let src = &layer.image;
     let (sw, sh) = (i64::from(src.width), i64::from(src.height));
     let (dw, dh) = (i64::from(dst.width), i64::from(dst.height));
@@ -1379,10 +1761,66 @@ fn coverage(px: f64, py: f64, rect: Rectangle, radius: [f64; 4]) -> f32 {
     (0.5 - distance(px, py, rect, radius)).clamp(0.0, 1.0) as f32
 }
 
-/// The clip an ancestor imposes, as coverage.
-fn clip_coverage(b: &Painted, px: f64, py: f64) -> f32 {
-    b.clip
-        .map_or(1.0, |(rect, radius)| coverage(px, py, rect, radius))
+/// A rounded rectangle read at many pixels, with the part of it that
+/// covers a pixel whole worked out once: everywhere but a half-pixel
+/// band at its edge and its rounded corners. A pixel centre inside that
+/// part skips the square root and the branches of [`distance`], which is
+/// most of the pixels of a big box.
+#[derive(Clone, Copy)]
+struct RoundRect {
+    rect: Rectangle,
+    radius: [f64; 4],
+    /// Left, top, right and bottom of the part covered whole.
+    solid: Bounds,
+}
+
+impl RoundRect {
+    fn new(rect: Rectangle, radius: [f64; 4]) -> Self {
+        let inset = radius.iter().fold(0.5f64, |a, r| a.max(*r));
+        Self {
+            rect,
+            radius,
+            solid: [
+                f64::from(rect[0]) + inset,
+                f64::from(rect[1]) + inset,
+                f64::from(rect[0] + rect[2]) - inset,
+                f64::from(rect[1] + rect[3]) - inset,
+            ],
+        }
+    }
+
+    /// The coverage at a pixel centre, as [`coverage`] gives it.
+    #[inline]
+    fn coverage(&self, px: f64, py: f64) -> f32 {
+        let s = self.solid;
+        if px >= s[0] && py >= s[1] && px <= s[2] && py <= s[3] {
+            return 1.0;
+        }
+        coverage(px, py, self.rect, self.radius)
+    }
+
+    /// Whether every pixel of `r` (left, top, right, bottom, in whole
+    /// pixels) is covered whole.
+    fn covers(&self, r: [i64; 4]) -> bool {
+        let s = self.solid;
+        r[2] <= r[0]
+            || r[3] <= r[1]
+            || (s[0] <= r[0] as f64 + 0.5
+                && s[1] <= r[1] as f64 + 0.5
+                && s[2] >= r[2] as f64 - 0.5
+                && s[3] >= r[3] as f64 - 0.5)
+    }
+}
+
+/// The clip an ancestor imposes on a box, ready to be read per pixel.
+fn clip_of(b: &Painted) -> Option<RoundRect> {
+    b.clip.map(|(rect, radius)| RoundRect::new(rect, radius))
+}
+
+/// A clip as coverage at a pixel centre; no clip covers everything.
+#[inline]
+fn clip_at(clip: Option<&RoundRect>, px: f64, py: f64) -> f32 {
+    clip.map_or(1.0, |c| c.coverage(px, py))
 }
 
 /// The rows and columns a rectangle touches, clamped to the image.
@@ -1483,16 +1921,19 @@ fn paint_box(image: &mut Image, b: &Painted) {
         )
     });
     let (inner_rect, inner_radius) = inner(b);
+    let outer = RoundRect::new(b.rect, b.paint.radius);
+    let hole = RoundRect::new(inner_rect, inner_radius);
+    let clip = clip_of(b);
     let (x0, y0, x1, y1) = bounds(image, b.rect, 1.0);
     rows(image, i64::from(y0), i64::from(y1)).for_each(|(y, row)| {
         let py = y as f64 + 0.5;
         for x in x0..x1 {
             let px = f64::from(x) + 0.5;
-            let outer = coverage(px, py, b.rect, b.paint.radius);
+            let outer = outer.coverage(px, py);
             if outer <= 0.0 {
                 continue;
             }
-            let clip = clip_coverage(b, px, py);
+            let clip = clip_at(clip.as_ref(), px, py);
             if clip <= 0.0 {
                 continue;
             }
@@ -1502,7 +1943,7 @@ fn paint_box(image: &mut Image, b: &Painted) {
             if !has_border {
                 continue;
             }
-            let hole = coverage(px, py, inner_rect, inner_radius);
+            let hole = hole.coverage(px, py);
             if outer > hole {
                 let colour = b.paint.border_color[side(b, px, py)];
                 if colour.a > 0.0 {
@@ -1539,12 +1980,14 @@ fn paint_one_shadow(image: &mut Image, b: &Painted, shadow: &geneva_html::style:
     let grow = shadow.blur.max(0.0) + 1.0;
     let (x0, y0, x1, y1) = bounds(image, rect, grow);
     let colour = encoded(shadow.color);
+    let clip = clip_of(b);
     if shadow.blur <= 0.0 {
+        let shape = RoundRect::new(rect, b.paint.radius);
         rows(image, i64::from(y0), i64::from(y1)).for_each(|(y, row)| {
             let py = y as f64 + 0.5;
             for x in x0..x1 {
                 let px = f64::from(x) + 0.5;
-                let a = coverage(px, py, rect, b.paint.radius) * clip_coverage(b, px, py);
+                let a = shape.coverage(px, py) * clip_at(clip.as_ref(), px, py);
                 blend(row, x as usize, colour, a * b.opacity);
             }
         });
@@ -1573,7 +2016,7 @@ fn paint_one_shadow(image: &mut Image, b: &Painted, shadow: &geneva_html::style:
                     row,
                     x as usize,
                     colour,
-                    a * clip_coverage(b, px, py) * b.opacity,
+                    a * clip_at(clip.as_ref(), px, py) * b.opacity,
                 );
             }
         }
@@ -1652,11 +2095,12 @@ fn paint_image(image: &mut Image, b: &Painted, source: &Image) {
     let (x0, y0, x1, y1) = bounds(image, rect, 0.0);
     let sx = f64::from(source.width) / f64::from(rect[2]);
     let sy = f64::from(source.height) / f64::from(rect[3]);
+    let clip = clip_of(b);
     rows(image, i64::from(y0), i64::from(y1)).for_each(|(y, row)| {
         let py = y as f64 + 0.5;
         for x in x0..x1 {
             let px = f64::from(x) + 0.5;
-            let clip = clip_coverage(b, px, py);
+            let clip = clip_at(clip.as_ref(), px, py);
             if clip <= 0.0 {
                 continue;
             }
@@ -1678,11 +2122,12 @@ fn blit(image: &mut Image, b: &Painted, src: &Image, dx: f64, dy: f64, scale: f3
         src.height as f32 * scale,
     ];
     let (x0, y0, x1, y1) = bounds(image, rect, 0.0);
+    let clip = clip_of(b);
     rows(image, i64::from(y0), i64::from(y1)).for_each(|(y, row)| {
         let py = y as f64 + 0.5;
         for x in x0..x1 {
             let px = f64::from(x) + 0.5;
-            let clip = clip_coverage(b, px, py);
+            let clip = clip_at(clip.as_ref(), px, py);
             if clip <= 0.0 {
                 continue;
             }
@@ -1792,5 +2237,186 @@ mod bound_tests {
         let h = f64::from(SURFACE.1);
         let (_, clipped) = bound_group([-w, -h, 2.0 * w, 2.0 * h], SURFACE);
         assert!(!clipped, "three surfaces by three is the budget itself");
+    }
+}
+
+#[cfg(test)]
+mod shortcut_tests {
+    use super::{RoundRect, coverage, polygon_covers, polygon_reach, srgb_from_linear};
+    use geneva_color::{LinearRgba, Transfer};
+    use geneva_timeline::schema::BlendMode;
+
+    /// A wipe's polygon before it opens is a line, and an iris's is a
+    /// point: neither covers anything, so the group is not painted.
+    #[test]
+    fn a_polygon_with_no_area_reaches_nothing() {
+        let line = [(0.0, 0.0), (0.0, 0.0), (-384.0, 1080.0), (-384.0, 1080.0)];
+        assert_eq!(polygon_reach(&line), None);
+        let point = [(960.0, 540.0); 4];
+        assert_eq!(polygon_reach(&point), None);
+        let triangle = [(10.0, 20.0), (50.0, 5.0), (30.0, 60.0)];
+        assert_eq!(polygon_reach(&triangle), Some([10.0, 5.0, 50.0, 60.0]));
+    }
+
+    #[test]
+    fn a_polygon_covers_a_rectangle_only_when_it_holds_it_whole() {
+        let frame = [0, 0, 1920, 1080];
+        // A wipe once it is open, and an iris past the corners.
+        let open = [
+            (0.0, 0.0),
+            (2304.0, 0.0),
+            (1920.0, 1080.0),
+            (-384.0, 1080.0),
+        ];
+        assert!(polygon_covers(&open, frame));
+        let iris = [
+            (-1152.0, 540.0),
+            (960.0, -648.0),
+            (3072.0, 540.0),
+            (960.0, 1728.0),
+        ];
+        assert!(polygon_covers(&iris, frame));
+        // Half way across.
+        let half = [(0.0, 0.0), (1000.0, 0.0), (900.0, 1080.0), (-384.0, 1080.0)];
+        assert!(!polygon_covers(&half, frame));
+        // Repeated points and either winding are fine.
+        let backwards = [
+            (-10.0, -10.0),
+            (-10.0, 2000.0),
+            (3000.0, 2000.0),
+            (3000.0, -10.0),
+            (-10.0, -10.0),
+        ];
+        assert!(polygon_covers(&backwards, frame));
+        // A star turns the same way at every point but is not convex; its
+        // corners can sit around the rectangle without holding it.
+        let star: Vec<(f64, f64)> = (0..5)
+            .map(|i| {
+                let a = std::f64::consts::TAU * f64::from(i * 2) / 5.0;
+                (960.0 + 5000.0 * a.cos(), 540.0 + 5000.0 * a.sin())
+            })
+            .collect();
+        assert!(!polygon_covers(&star, frame));
+        // Concave: an L around the frame's corner.
+        let l = [
+            (-10.0, -10.0),
+            (3000.0, -10.0),
+            (3000.0, 500.0),
+            (500.0, 500.0),
+            (500.0, 2000.0),
+            (-10.0, 2000.0),
+        ];
+        assert!(!polygon_covers(&l, frame));
+    }
+
+    /// The shortcut inside a rounded rectangle gives what the distance
+    /// field gives, pixel for pixel.
+    #[test]
+    fn a_round_rect_reads_the_same_as_its_distance_field() {
+        for (rect, radius) in [
+            ([0.0f32, 0.0, 1920.0, 1080.0], [0.0; 4]),
+            ([10.3, 7.7, 120.0, 60.0], [12.0, 0.0, 30.0, 4.0]),
+            ([-5.0, 3.0, 40.0, 20.0], [100.0; 4]),
+            ([5.0, 5.0, 0.0, 10.0], [0.0; 4]),
+        ] {
+            let shape = RoundRect::new(rect, radius);
+            for y in -4..140 {
+                for x in -4..200 {
+                    let (px, py) = (f64::from(x) + 0.5, f64::from(y) + 0.5);
+                    assert_eq!(
+                        shape.coverage(px, py),
+                        coverage(px, py, rect, radius),
+                        "{rect:?} {radius:?} at {x},{y}"
+                    );
+                }
+            }
+        }
+        let frame = RoundRect::new([0.0, 0.0, 1920.0, 1080.0], [0.0; 4]);
+        assert!(frame.covers([0, 0, 1920, 1080]));
+        assert!(!frame.covers([0, 0, 1921, 1080]));
+        let round = RoundRect::new([0.0, 0.0, 1920.0, 1080.0], [8.0; 4]);
+        assert!(!round.covers([0, 0, 1920, 1080]));
+    }
+
+    #[test]
+    fn the_encoding_table_is_within_a_hair_of_the_curve() {
+        let mut worst = 0.0f64;
+        for i in 0..=200_000 {
+            let v = f64::from(i) / 200_000.0;
+            let got = f64::from(srgb_from_linear(v as f32));
+            worst = worst.max((got - Transfer::Srgb.from_linear(v)).abs());
+        }
+        assert!(worst < 2e-5, "{worst}");
+    }
+
+    /// Screen and multiply without dividing by alpha give the general
+    /// formula's answer.
+    #[test]
+    fn premultiplied_screen_and_multiply_match_the_general_formula() {
+        let general = |s: LinearRgba, d: LinearRgba, f: fn(f32, f32) -> f32| {
+            let straight = |c: f32, a: f32| if a > 0.0 { c / a } else { 0.0 };
+            let channel = |cs: f32, cb: f32| {
+                cs * (1.0 - d.a)
+                    + cb * (1.0 - s.a)
+                    + s.a * d.a * f(straight(cb, d.a), straight(cs, s.a))
+            };
+            LinearRgba {
+                r: channel(s.r, d.r),
+                g: channel(s.g, d.g),
+                b: channel(s.b, d.b),
+                a: s.a + d.a * (1.0 - s.a),
+            }
+        };
+        let pixels = [
+            LinearRgba {
+                r: 0.2,
+                g: 0.4,
+                b: 0.1,
+                a: 0.5,
+            },
+            LinearRgba {
+                r: 0.7,
+                g: 0.1,
+                b: 0.9,
+                a: 1.0,
+            },
+            LinearRgba {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.0,
+            },
+            LinearRgba {
+                r: 0.05,
+                g: 0.3,
+                b: 0.3,
+                a: 0.3,
+            },
+        ];
+        for s in pixels {
+            for d in pixels {
+                for (mode, f) in [
+                    (
+                        BlendMode::Screen,
+                        (|b, s| b + s - b * s) as fn(f32, f32) -> f32,
+                    ),
+                    (BlendMode::Multiply, |b, s| b * s),
+                ] {
+                    let got = crate::cpu::composite(s, d, mode);
+                    let want = general(s, d, f);
+                    for (g, w) in [
+                        (got.r, want.r),
+                        (got.g, want.g),
+                        (got.b, want.b),
+                        (got.a, want.a),
+                    ] {
+                        assert!(
+                            (g - w).abs() < 1e-6,
+                            "{mode:?} {s:?} {d:?}: {got:?} {want:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

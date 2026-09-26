@@ -19,7 +19,6 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
-use geneva_color::LinearRgba;
 use geneva_html::layout::Rectangle;
 use geneva_html::{Group, Laid, Prepared};
 use geneva_timeline::ResolvedHtml;
@@ -27,9 +26,10 @@ use geneva_timeline::motion::Transform;
 
 use super::{
     Bounds, GroupCache, Layer, affine_inverse, buffer_rect, centre_of, chain_of, composite,
-    content_of, fill_cache, group_bounds, lay_out, paint_one, polygon_coverage, shifted, taps_of,
-    to_linear,
+    content_of, fill_cache, first_seen, group_bounds, lay_out, paint_one, polygon_coverage,
+    shifted, taps_of, to_linear, transparent,
 };
+use super::{blends_inside, marks, passes_through};
 use crate::assets::Image;
 use crate::text::TextEngine;
 
@@ -223,9 +223,22 @@ pub fn render_layers<'c>(
         }
     }
     let content = content_of(&laid, &placed, (width, height));
-    let served = fill_cache(cache, &laid, &own, &natural, (width, height), text, images);
+    // Nothing under the last box that covers the surface in an opaque
+    // colour can show, so it is neither painted nor handed on.
+    let first = first_seen(&laid, &transforms, (width, height));
+    let served = fill_cache(
+        cache,
+        &laid,
+        first,
+        &own,
+        &natural,
+        (width, height),
+        text,
+        images,
+    );
     // Painted, and read from here on.
     let cache: &'c GroupCache = cache;
+    let blends = blends_inside(&laid);
     let mut root = Level::over(Some([0, 0, i64::from(width), i64::from(height)]));
     let mut stack: Vec<(usize, Level<'c>)> = Vec::new();
     // A group taken from the cache: its picture is its one run, so its
@@ -234,7 +247,7 @@ pub fn render_layers<'c>(
     // A group that would not show (no opacity, no size, nothing in it)
     // is skipped whole, boxes and inner groups alike.
     let mut skipping: Option<usize> = None;
-    for b in &laid.boxes {
+    for b in &laid.boxes[first.min(laid.boxes.len())..] {
         let chain = chain_of(&laid, b.group);
         while let Some((top, _)) = stack.last() {
             if chain.contains(top) {
@@ -248,7 +261,7 @@ pub fn render_layers<'c>(
             if serving == Some(g) {
                 serving = None;
             }
-            let parent = stack.last_mut().map_or(&mut root, |(_, l)| l);
+            let parent = holder(&mut stack, &mut root);
             close(g, level, &laid, &transforms, &placed, parent);
         }
         for g in chain {
@@ -256,7 +269,7 @@ pub fn render_layers<'c>(
                 continue;
             }
             // A group opening ends the run its parent was painting.
-            stack.last_mut().map_or(&mut root, |(_, l)| l).flush();
+            holder(&mut stack, &mut root).flush();
             let group = &laid.groups[g];
             let flat = transforms[g]
                 .as_ref()
@@ -276,6 +289,7 @@ pub fn render_layers<'c>(
                 Some((want, c)) => {
                     serving = Some(g);
                     let mut level = Level::over(Some(want));
+                    level.blurred = c.blurred > 0.0;
                     let mut hasher = std::collections::hash_map::DefaultHasher::new();
                     "markup-group".hash(&mut hasher);
                     salt.hash(&mut hasher);
@@ -294,13 +308,25 @@ pub fn render_layers<'c>(
                     }));
                     stack.push((g, level));
                 }
-                None => stack.push((g, Level::over(want))),
+                None => {
+                    // Laid down exactly as painted, the group needs no
+                    // buffer: its boxes and groups go into what holds it,
+                    // as the painter puts them.
+                    let under = holder(&mut stack, &mut root);
+                    let target = under.bounds.unwrap_or([0, 0, 0, 0]);
+                    let isolated = blends[g] && under.touched;
+                    if passes_through(group, transforms[g].as_ref(), target, isolated) {
+                        stack.push((g, Level::through()));
+                    } else {
+                        stack.push((g, Level::over(want)));
+                    }
+                }
             }
         }
         if skipping.is_some() || serving.is_some() || b.opacity <= 0.0 {
             continue;
         }
-        let level = stack.last_mut().map_or(&mut root, |(_, l)| l);
+        let level = holder(&mut stack, &mut root);
         level.paint(b, text, images);
     }
     while let Some((g, level)) = stack.pop() {
@@ -311,7 +337,7 @@ pub fn render_layers<'c>(
         if serving == Some(g) {
             serving = None;
         }
-        let parent = stack.last_mut().map_or(&mut root, |(_, l)| l);
+        let parent = holder(&mut stack, &mut root);
         close(g, level, &laid, &transforms, &placed, parent);
     }
     root.flush();
@@ -323,6 +349,20 @@ pub fn render_layers<'c>(
     })
 }
 
+/// The level things are painted into: the innermost open group that has
+/// a buffer of its own, or the surface.
+fn holder<'s, 'a>(
+    stack: &'s mut [(usize, Level<'a>)],
+    root: &'s mut Level<'a>,
+) -> &'s mut Level<'a> {
+    stack
+        .iter_mut()
+        .rev()
+        .map(|(_, l)| l)
+        .find(|l| !l.through)
+        .unwrap_or(root)
+}
+
 /// The surface, or a group's buffer, while its items are gathered.
 struct Level<'a> {
     /// Its edges on the surface, or nothing for a group that would not
@@ -332,6 +372,14 @@ struct Level<'a> {
     /// The run being painted, and where its top-left pixel sits on the
     /// surface.
     run: Option<(Image, (i64, i64))>,
+    /// Whether the group's blur is already in its picture, one kept
+    /// blurred between frames, so that it is not blurred again.
+    blurred: bool,
+    /// A group going straight into what holds it, with nothing of its
+    /// own.
+    through: bool,
+    /// Whether anything has been laid in it yet.
+    touched: bool,
 }
 
 impl Level<'_> {
@@ -340,7 +388,17 @@ impl Level<'_> {
             bounds,
             items: Vec::new(),
             run: None,
+            blurred: false,
+            through: false,
+            touched: false,
         }
+    }
+
+    /// A group going straight into what holds it.
+    fn through() -> Self {
+        let mut level = Self::over(None);
+        level.through = true;
+        level
     }
 
     /// Paints one box into the run in progress, starting one over the
@@ -367,7 +425,7 @@ impl Level<'_> {
                 Image {
                     width,
                     height,
-                    pixels: vec![LinearRgba::TRANSPARENT; width as usize * height as usize],
+                    pixels: transparent(width as usize * height as usize),
                     content: None,
                 },
                 (bounds[0], bounds[1]),
@@ -376,6 +434,7 @@ impl Level<'_> {
         let (image, origin) = self.run.as_mut().expect("started above");
         let moved = shifted(b, *origin);
         paint_one(image, &moved, text, images);
+        self.touched |= marks(b);
     }
 
     /// Ends the run in progress, keeping it as an item.
@@ -402,6 +461,9 @@ fn close<'a>(
     placed: &[Option<Bounds>],
     parent: &mut Level<'a>,
 ) {
+    if level.through {
+        return;
+    }
     level.flush();
     let Some(buffer) = level.bounds else {
         return;
@@ -410,12 +472,13 @@ fn close<'a>(
         return;
     }
     let group = &laid.groups[g];
+    parent.touched = true;
     parent.items.push(MarkupItem::Group(MarkupGroup {
         buffer,
         items: level.items,
         rect: group.rect,
         opacity: group.opacity,
-        blur: group.blur,
+        blur: if level.blurred { 0.0 } else { group.blur },
         clip: group.clip,
         clip_path: group.clip_path.clone(),
         blend: group.blend,
@@ -433,7 +496,7 @@ impl MarkupLayers<'_> {
         let mut surface = Image {
             width: self.width,
             height: self.height,
-            pixels: vec![LinearRgba::TRANSPARENT; self.width as usize * self.height as usize],
+            pixels: transparent(self.width as usize * self.height as usize),
             content: self.content,
         };
         flatten_into(&self.items, &mut surface, (0, 0));
@@ -464,6 +527,9 @@ fn flatten_into(items: &[MarkupItem<'_>], dst: &mut Image, dst_origin: (i64, i64
                         content: None,
                     },
                     origin: run.origin,
+                    blurred: false,
+                    through: false,
+                    touched: true,
                 };
                 let straight = Group {
                     node: 0,
@@ -482,7 +548,7 @@ fn flatten_into(items: &[MarkupItem<'_>], dst: &mut Image, dst_origin: (i64, i64
                 let mut buffer = Image {
                     width: w,
                     height: h,
-                    pixels: vec![LinearRgba::TRANSPARENT; w as usize * h as usize],
+                    pixels: transparent(w as usize * h as usize),
                     content: None,
                 };
                 flatten_into(&group.items, &mut buffer, group.origin());
@@ -490,6 +556,9 @@ fn flatten_into(items: &[MarkupItem<'_>], dst: &mut Image, dst_origin: (i64, i64
                     group: 0,
                     image: buffer,
                     origin: group.origin(),
+                    blurred: false,
+                    through: false,
+                    touched: true,
                 };
                 let as_group = Group {
                     node: 0,
