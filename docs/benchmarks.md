@@ -159,12 +159,12 @@ The name card over nine seconds of 720p footage in the
 
 | Job | geneva | Playwright + ffmpeg | Remotion, bundled once |
 | --- | --- | --- | --- |
-| Name card and word captions | **4.6 s** (15 s CPU) | 18.5 s (32 s) | 18.0 s (54 s) |
-| Name card alone | **3.2 s** (9 s) | 11.0 s (22 s) | 18.8 s (56 s) |
+| Name card and word captions | **4.3 s** (13 s CPU) | 16.4 s (28 s) | 14.5 s (42 s) |
+| Name card alone | **2.8 s** (8 s) | 9.9 s (19 s) | 14.8 s (43 s) |
 
 A browser tool's fixed start-up cost is part of that. Timed on one frame,
-it is 0.1 s for geneva, 0.6 s for Playwright and 2.1 s for Remotion, so
-the per-frame costs on the captioned job are about 17 ms, 66 ms and 59 ms,
+it is 0.1 s for geneva, 0.5 s for Playwright and 2.1 s for Remotion, so
+the per-frame costs on the captioned job are about 15 ms, 59 ms and 46 ms,
 and the ratios are not a start-up effect.
 
 ## Caveats
