@@ -114,19 +114,12 @@ tool was quicker.
   stretches the graphics leave alone. That copying is why the longest,
   sparsest jobs show the widest gaps: the broadcast package takes 52.2 s
   with it and 99.4 s without.
-- **Without footage, geneva is about twice as quick as Remotion.** It
-  was not at first. The first run of these jobs, with geneva before
-  `c9e6dd5`, had Remotion quicker on the intro (61.8 s against 76.2 s)
-  and on the kinetic typography (34.6 s against 64.1 s). A profile found
-  geneva's markup painter doing work that never reached the picture: a
-  panel waiting to wipe in was painted over the whole frame and masked
-  away every frame, everything under an opaque panel was painted, and a
-  large soft shape was blurred again every frame. The painter now skips
-  all of that (see the [changelog](../CHANGELOG.md)), and the pictures
-  are the same to one level in 8 bits. Those numbers are kept in
-  [`results/before-c9e6dd5`](../benchmarks/real-world/results/before-c9e6dd5/).
-  These runs used geneva's CPU renderer; its GPU renderer was not
-  measured.
+- **Without footage, geneva is about twice as quick as Remotion.** Both
+  draw every frame here, so this is painter against painter. geneva
+  paints only what can show: a panel waiting to wipe in is not painted,
+  nothing under an opaque panel is, and a large soft shape is blurred
+  once and kept rather than blurred again each frame. These runs used
+  geneva's CPU renderer; its GPU renderer was not measured.
 - **Playwright + ffmpeg is slowest on motion graphics.** It captures one
   frame at a time in one tab, so it trails wherever every frame has to be
   drawn, where Remotion's four tabs pay off. On footage it is quicker
