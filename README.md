@@ -32,7 +32,7 @@ geneva subtitles talk.mp4 -o talk-subbed.mp4 --burn talk.srt
 geneva probe talk.mp4                                       # what's actually in the file
 ```
 
-No filtergraphs and no flag order to remember. Every command is translated into a JSON document describing the edit, which geneva renders as-is. You can also add `--show-timeline` to see it. All commands and flags are here: [docs/cli.md](docs/cli.md).
+Every command is translated into a validated JSON document describing the edit, which geneva renders as-is. You can also add `--show-timeline` to see it. All commands and flags are here: [docs/cli.md](docs/cli.md).
 
 ## How it works
 
