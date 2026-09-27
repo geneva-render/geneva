@@ -1,15 +1,10 @@
 # Timeline format 1.0
 
-A timeline is a JSON document that describes a video composition: the output
-frame, a table of assets, visual layers made of clips, and audio tracks.
-This page is the reference for humans and for programs that generate
-timelines. The machine-readable schema is in
-[`schema/geneva-timeline-1.0.schema.json`](../schema/geneva-timeline-1.0.schema.json)
-and is printed by `geneva schema`.
+A timeline is a JSON document describing a video composition: the output
+frame, assets, visual layers of clips, audio tracks.
 
-Unknown fields are errors everywhere. That is deliberate: a misspelled
-property fails validation with the list of allowed names instead of being
-silently ignored.
+- Schema: [`schema/geneva-timeline-1.0.schema.json`](../schema/geneva-timeline-1.0.schema.json), also printed by `geneva schema`.
+- Unknown fields are errors everywhere; the message lists the allowed names.
 
 ## Minimal document
 
@@ -27,8 +22,6 @@ silently ignored.
 
 ### Times
 
-Times and durations accept:
-
 | Form | Example | Meaning |
 | --- | --- | --- |
 | number | `1.5` | seconds |
@@ -37,97 +30,73 @@ Times and durations accept:
 | frames | `"45f"` | frames at the output frame rate |
 | timecode | `"00:01:02.5"`, `"1:02.5"` | hours, minutes, seconds |
 
-Times are kept as exact rationals internally, so `0.1` is exactly one tenth
-of a second and a frame at 29.97 fps is exactly 1001/30000 s. Times must not
-be negative.
+- Kept as exact rationals: `0.1` is exactly a tenth; a frame at 29.97 fps is exactly 1001/30000 s.
+- Never negative.
 
 ### Frame rate
 
-`fps` is a positive number (`30`, `25`) or an exact ratio string
-(`"30000/1001"`). The decimal spellings `23.976`, `29.97` and `59.94` are
-snapped to their exact 1001-based ratios.
+- A positive number (`30`, `25`) or a ratio string (`"30000/1001"`).
+- `23.976`, `29.97`, `59.94` snap to their 1001-based ratios.
 
 ### Lengths
 
-Positions and sizes are pixels in the output frame when written as numbers
-(`120`) or as strings with a unit (`"120px"`). Percentages (`"50%"`) refer to
-the output width for horizontal values and the output height for vertical
-values. In `transform.anchor`, percentages refer to the clip's own box.
+| Form | Meaning |
+| --- | --- |
+| `120`, `"120px"` | pixels in the output frame |
+| `"50%"` | of the output width (horizontal) or height (vertical); in `transform.anchor`, of the clip's box |
 
-A field that is only ever pixels takes the same two spellings and no
-percentage: `8` and `"8px"` are the same value. That covers a text
-`size`, `letter_spacing`, `padding` and `radius`, an outline's `width`,
-a shadow's `x`, `y` and `blur`, a fill's `width`, `height`, `x` and `y`,
-a shape's `radius`, a mask's `radius` and `feather`, a blur effect's
-`radius`, and the frame and picture sizes, which must be whole
-(`1920` or `"1920px"`, not `"1920.5px"`). Keyframe values of these
-fields take either spelling too. A printed timeline writes the number.
+Pixel-only fields take `8` or `"8px"`, no percentage: text `size`,
+`letter_spacing`, `padding`, `radius`; outline `width`; shadow `x`, `y`,
+`blur`; fill `width`, `height`, `x`, `y`; shape `radius`; mask `radius`,
+`feather`; blur `radius`; frame and picture sizes (whole numbers only).
+Keyframe values take either spelling. A printed timeline writes the
+number.
 
 ### Points
 
-A point (`transform.position`, `transform.anchor`) is written as an object,
-a pair, or a string:
+`transform.position` and `transform.anchor`:
 
 ```json
 { "x": 30, "y": 36 }        [30, 36]        "30 36"        "0% 50%"
 ```
 
-A string component is a length or one of the CSS keywords `left`, `right`,
-`top`, `bottom`, `center`. A keyword names its own axis, so `"left 36"`,
-`"36 top"` and `"top 36"` all read the way CSS reads them, and a pair of
-keywords works in either order (`"bottom right"`, `"right bottom"`). One
-keyword centers the axis it says nothing about, so `"left"` is
-`{ "x": "0%", "y": "50%" }`; one length goes on both axes, so `"12"` is
-`{ "x": 12, "y": 12 }`.
+- A string component is a length or `left`, `right`, `top`, `bottom`, `center`.
+- Keywords name their axis and read as in CSS: `"left 36"`, `"36 top"`, `"top 36"`, `"bottom right"`, `"right bottom"`.
+- One keyword centres the other axis: `"left"` = `{ "x": "0%", "y": "50%" }`.
+- One length applies to both axes: `"12"` = `{ "x": 12, "y": 12 }`.
 
 ### Colors
 
-Colors are sRGB strings: `"#rgb"`, `"#rgba"`, `"#rrggbb"`, `"#rrggbbaa"`,
-`"rgb(255, 136, 0)"`, `"rgba(255, 136, 0, 0.5)"`, or one of `black`,
-`white`, `red`, `green`, `blue`, `yellow`, `cyan`, `magenta`, `gray`
-(or `grey`), `orange`, `transparent`. Animated colors are interpolated in linear light.
+- sRGB: `"#rgb"`, `"#rgba"`, `"#rrggbb"`, `"#rrggbbaa"`, `"rgb(255, 136, 0)"`, `"rgba(255, 136, 0, 0.5)"`.
+- Names: `black`, `white`, `red`, `green`, `blue`, `yellow`, `cyan`, `magenta`, `gray`/`grey`, `orange`, `transparent`.
+- Animated colors interpolate in linear light.
 
 ### Animated values
 
-Any property documented as *animatable* takes either a constant or an
-object with a `keyframes` array:
+A property marked *animatable* takes a constant or a `keyframes` object:
 
 ```json
-"opacity": { "keyframes": [
-  { "t": 0, "v": 0 },
-  { "t": "0.5s", "v": 1, "ease": "ease-out" }
-] }
-```
-
-A keyframe can also be written as its fields in order, `[t, v]` or
-`[t, v, ease]`, which is easier to read down a column:
-
-```json
+"opacity": { "keyframes": [ { "t": 0, "v": 0 }, { "t": "0.5s", "v": 1, "ease": "ease-out" } ] }
 "opacity": { "keyframes": [ [0, 0], ["0.5s", 1, "ease-out"] ] }
 ```
 
-- `t` is relative to the start of the clip.
-- Keyframes must be in strictly increasing time order.
-- Before the first keyframe the value is held at the first value; after the
-  last it is held at the last.
-- `ease` applies to the segment that starts at that keyframe. It is one of
-  the names `linear` (default), `ease`, `ease-in`, `ease-out`,
-  `ease-in-out`, `hold` (jump at the next keyframe); an object
-  `{ "cubic-bezier": [x1, y1, x2, y2] }` with CSS semantics; an object
-  `{ "steps": [n, "jump-end"] }` (a staircase of `n` equal steps, the
-  position one of `jump-start`, `jump-end`, `jump-none`, `jump-both`, as
-  CSS `steps()`); an object `{ "linear": [[0, 0], [0.3, 0.8], [1, 1]] }`
-  (straight lines through `[input, output]` points, inputs from 0 to 1 in
-  order, as CSS `linear()`); or an object
-  `{ "spring": { "stiffness": 170, "damping": 26, "mass": 1 } }`. A spring
-  is solved analytically and rescaled so it settles exactly at the next
-  keyframe; its parameters shape the overshoot and bounce, not the duration.
+- `t` is relative to the clip start; strictly increasing.
+- The first value holds before the first keyframe, the last after the last.
+- `ease` shapes the segment starting at its keyframe:
+
+| `ease` | Meaning |
+| --- | --- |
+| `linear` (default), `ease`, `ease-in`, `ease-out`, `ease-in-out` | CSS curves |
+| `hold` | jump at the next keyframe |
+| `{ "cubic-bezier": [x1, y1, x2, y2] }` | CSS `cubic-bezier()` |
+| `{ "steps": [n, "jump-end"] }` | CSS `steps()`; `jump-start`, `jump-end`, `jump-none`, `jump-both` |
+| `{ "linear": [[0, 0], [0.3, 0.8], [1, 1]] }` | CSS `linear()`: `[input, output]` points, inputs 0 to 1 in order |
+| `{ "spring": { "stiffness": 170, "damping": 26, "mass": 1 } }` | solved analytically, rescaled to settle exactly at the next keyframe; parameters shape overshoot, not duration |
 
 ### Animation
 
-Motion can also be written the way a stylesheet writes it. A top-level
-`keyframes` map holds the rules, and a clip's `animation` field plays one
-or more of them:
+Stylesheet-style motion: a top-level `keyframes` map of rules, played by a
+clip's `animation`.
 
 ```json
 "keyframes": {
@@ -139,79 +108,34 @@ or more of them:
 "animation": "slide-in 0.5s ease-out, fade-in 0.3s, fade-out 0.3s 3.7s"
 ```
 
-A rule maps an offset (`from`, `to` or a percentage) to a declaration
-block. The properties a block may set are the ones the renderer animates:
+A rule maps offsets (`from`, `to`, percentages) to declaration blocks:
 
 | Property | Effect |
 | --- | --- |
-| `transform` | A list of `translate`, `translateX`, `translateY`, `scale`, `scaleX`, `scaleY` and `rotate` functions. Functions of the same kind compose: translations add, scales multiply, rotations add. A distance is in pixels or a percentage of the box it moves (see below). |
-| `translate`, `scale`, `rotate` | The same three as separate properties, as CSS also allows: `"translate: 10px 20px"`, `"scale: 2"`, `"rotate: 45deg"`. |
-| `opacity` | A number or a percentage. |
+| `transform` | `translate`, `translateX`, `translateY`, `scale`, `scaleX`, `scaleY`, `rotate`. Same-kind functions compose: translations add, scales multiply, rotations add. |
+| `translate`, `scale`, `rotate` | The same as separate properties: `"translate: 10px 20px"`, `"scale: 2"`, `"rotate: 45deg"`. |
+| `opacity` | Number or percentage. |
 
-A percentage distance is a share of the box being moved, as in CSS:
-the element carrying the animation when a rule comes from markup, and the
-clip's own box when the clip's `animation` plays it. So
-`translateX(-100%)` slides a card in by exactly its own width, whatever
-that turns out to be. A clip whose size is only known once its file is
-open (a video, an image, a text run) has no box to take a share of, and
-a percentage there is E442.
+- **Percentage distances** are of the box being moved: the animated element (markup) or the clip's box. `translateX(-100%)` slides by exactly its own width. A clip sized only once its file is open (video, image, text) has no box: E442.
+- **Fill**: a clip's `animation` interpolates between the offsets that set a property and holds the first and last values outside them (`animation-fill-mode: both`, not configurable). An `animation` on an element inside markup is plain CSS: `fill-mode: none` by default.
+- **Position is one animated point**: `{"keyframes": [["0s", [1072, 14]], ["4s", [-7700, 14]]]}`. `x` or `y` alone takes a constant length only; keyframes under `x` are E103.
+- **Composition with the clip**: translation adds to `transform.position`, scale multiplies `transform.scale`, rotation adds to `transform.rotation`, `opacity` replaces the clip's. The clip's own value must be constant where a rule drives it (E443).
+- **One-sided properties**: a property set at only one offset is dropped; a rule left empty is W440. So `to { transform: none }` means "back where it started", not "reset scale and rotation".
+- Resolves to ordinary keyframe tracks; an animated clip composites like a hand-written one.
 
-A property interpolates between the offsets that set it, and holds its
-first and last value outside them, which is CSS's `animation-fill-mode:
-both`. That is true of the `animation` a **clip** carries, which is what
-this section describes, and there is no `fill-mode` field to change it.
-It is not true of an `animation` on an element inside a markup document:
-that one is ordinary CSS, so it defaults to `animation-fill-mode: none`
-and shows the element's own style outside the run. Write
-`animation-fill-mode: both` there if you want it held. See
-[markup](#markup) for where the line falls.
+`animation` shorthand, parts in any order:
 
-`transform.position` is one animated point, not a pair of animated
-numbers: the keyframes carry both axes together, as
-`{"keyframes": [["0s", [1072, 14]], ["4s", [-7700, 14]]]}`. An `x` or a
-`y` of its own takes a constant length and nothing else, so animating
-one axis means writing both and holding the other still. A `keyframes`
-object under `x` is `E103`, which reports the length it expected rather
-than the point it wanted.
-
-What a rule sets is laid over what the clip already has. A translation
-adds to `transform.position`, a scale multiplies `transform.scale`, a
-rotation adds to `transform.rotation`, and `opacity` replaces the clip's,
-since it is the same property either way. The clip's own value must be
-constant where a rule drives it; setting it with `keyframes` as well is
-an error (E443).
-
-The `animation` value is the CSS shorthand, in any order, with the parts
-geneva understands:
-
-| Part | Default | Notes |
+| Part | Default | Values |
 | --- | --- | --- |
-| rule name | required | A key of the document's `keyframes` (E440). |
-| duration | required | A time with its unit: `0.5s`, `500ms`. Must be more than zero. |
-| delay | `0s` | The second time in the entry. |
-| timing function | `linear` | `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, `step-end`, `cubic-bezier(x1, y1, x2, y2)`, `steps(n[, position])`, `linear(...)` with its points as CSS writes them (`linear(0, .5 30%, 1)`), or geneva's own `spring(stiffness[, damping[, mass]])`. It applies between each pair of offsets. |
-| iteration count | `1` | A number, or `infinite`, which runs until the clip ends. |
-| direction | `normal` | `normal`, `reverse`, `alternate`, `alternate-reverse`. |
+| rule name | required | a key of `keyframes` (E440) |
+| duration | required | `0.5s`, `500ms`; more than zero |
+| delay | `0s` | the second time in the entry |
+| timing function | `linear` | `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, `step-end`, `cubic-bezier(x1, y1, x2, y2)`, `steps(n[, position])`, `linear(0, .5 30%, 1)`, `spring(stiffness[, damping[, mass]])`; applies between each pair of offsets |
+| iteration count | `1` | a number, or `infinite` (until the clip ends) |
+| direction | `normal` | `normal`, `reverse`, `alternate`, `alternate-reverse` |
 
-Several animations are separated by commas. Two of them may drive one
-property as long as their times do not collide (E444), which is how a
-fade-in and a fade-out live together above. Where one run ends and the
-next begins on a different value, the value snaps rather than ramping
-back.
-
-A rule can also come from the markup a clip draws: `@keyframes` inside an
-[HTML source](#markup) is in scope for that clip, and if its outermost
-element, the one top-level element of the document, carries an
-`animation`, that is what the clip plays. A rule named
-in both places is the document's, and says so (W451).
-
-A property set at only one offset of a rule has nothing to interpolate
-with, so it is dropped; a rule where nothing is left is W440. That is what
-makes `to { transform: none }` mean "back where it started" rather than
-"and reset the scale and rotation too".
-
-Everything here resolves to ordinary keyframe tracks, so an animated clip
-is composited exactly as a hand-written one is.
+- Comma-separated animations may drive one property if their times don't collide (E444). Where one run ends and the next starts on another value, the value snaps.
+- Rules may also come from the clip's [markup](#markup): its `@keyframes` are in scope, and an `animation` on its outermost element is what the clip plays. A name in both places resolves to the document's (W451).
 
 ## Document structure
 
@@ -219,57 +143,56 @@ is composited exactly as a hand-written one is.
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `geneva` | yes | Format version, `"1.0"`. Any other version is E110. |
-| `output` | yes | Frame size, rate, duration, background, color, audio and encoding settings. |
-| `outputs` | no | Map of name to [output entry](#outputs): the files one render writes from the composition, when there is more than one. |
-| `assets` | no | Map of asset id to asset. |
-| `compositions` | no | Map of name to reusable composition. |
-| `keyframes` | no | Map of name to an [animation rule](#animation): offset to declaration block. |
-| `layers` | no | Visual layers, composited bottom to top. |
+| `geneva` | yes | `"1.0"`. Anything else is E110. |
+| `output` | yes | Frame, rate, duration, background, color, audio, encoding. |
+| `outputs` | no | Name to [output entry](#outputs): several files from one render. |
+| `assets` | no | Id to asset. |
+| `compositions` | no | Name to reusable composition. |
+| `keyframes` | no | Name to [animation rule](#animation). |
+| `layers` | no | Visual layers, bottom to top. |
 | `audio` | no | Audio-only tracks. |
-| `subtitles` | no | [Subtitle tracks](#subtitles) muxed into the output as text streams. |
+| `subtitles` | no | [Subtitle tracks](#subtitles), muxed as text streams. |
 
 ### `output`
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
-| `width`, `height` | yes | | Frame size in pixels. Odd values warn (W401). |
+| `width`, `height` | yes | | Frame size in pixels. Odd values: W401. |
 | `fps` | yes | | Frame rate. |
-| `duration` | no | end of the last clip | Total length. Clips running past it are cut (W301). |
-| `background` | no | `"black"` | Clear color. Use `"transparent"` for alpha output. |
-| `color` | no | BT.709 SDR, limited range | Color tags for the output; see [color.md](color.md). `pq` and `hlg` need a ten-bit codec, `h265`, `av1`, `vp9` or `prores` (E420). |
-| `audio.sample_rate` | no | 48000 | Output sample rate. |
-| `audio.channels` | no | 2 | 1 or 2. The source's sound is copied when these two and `encode.audio.codec` match it and no audio bitrate is set, and encoded otherwise, the picture still copied beside it where nothing else changes it. A source with more than two channels is copied as it is unless something else re-encodes the sound. |
-| `audio.loudness.target_lufs` | no | none | Integrated loudness to bring the mix to, in LUFS, measured as ITU-R BS.1770-4 (EBU R128) measures it: K-weighted and gated over the whole output. The mix is read once to measure it, then written with one gain. Platforms normalise to -14 (YouTube, TikTok, Instagram) or ask for -16 (podcasts); broadcast asks for -23 or -24. -40 to -5 (E423). A silent mix is left as it is. Reading the mix twice decodes every audio source twice. |
-| `audio.loudness.true_peak_dbtp` | no | -1 | Ceiling for the true peak (four times oversampled) in dBTP, held by a limiter after the gain: 5 ms of look-ahead, 100 ms release. -20 to 0 (E423). On material whose loudness is carried by its peaks, the limiter takes what the gain added and the output lands under the target; the render's note says by how much. |
-| `audio.hygiene` | no | `false` | Audio hygiene for speech, fixed curves: a second-order high-pass at 80 Hz (rumble, handling noise, plosive energy, DC offset), and notches 2 Hz wide on mains hum, 50 or 60 Hz and the harmonics that show, applied only when the mix has hum (the mix is read once to look for it). On music the high-pass takes the bass under 80 Hz with it. The render's note says what was found. An output with hygiene or a loudness target has its sound encoded, since no copied track can carry the change, but the picture is copied where nothing else asks it to be re-encoded. |
-| `encode.container` | no | from the output file extension | `mp4`, `mov`, `mkv`, `webm`, `mxf`; audio only: `m4a`, `ogg`, `flac`, `wav`, `mp3`; `image-sequence` (one PNG or JPEG file per frame, the output path being a pattern such as `frames/%04d.png`). Audio-only containers write no video; image sequences write no audio. |
-| `encode.video.codec` | no | `h264` (`vp9` for webm, `dnxhd` for mxf, `png` for image sequences) | `h264`, `h265`, `vp9`, `av1`, `prores`, `dnxhd`, `png`, `mjpeg`. H.265 needs a hardware encoder. ProRes is 10-bit 4:2:2 (4:4:4 for the 4444 profiles); DNxHR is 8-bit 4:2:2 except HQX (10-bit) and 444, and needs a picture of at least 256×120. See [containers and codecs](cli.md#containers-and-codecs) for what each container holds. |
-| `encode.video.profile` | no | `hq` for prores, `dnxhr-hq` for dnxhd | ProRes: `proxy`, `lt`, `standard`, `hq`, `4444`, `4444-xq`. DNxHR: `dnxhr-lb`, `dnxhr-sq`, `dnxhr-hq`, `dnxhr-hqx`, `dnxhr-444`. The profile must belong to the codec (E421). |
+| `duration` | no | end of the last clip | Clips past it are cut (W301). |
+| `background` | no | `"black"` | Clear color; `"transparent"` for alpha output. |
+| `color` | no | BT.709 SDR, limited range | Color tags; see [color.md](color.md). `pq`, `hlg` need a ten-bit codec: `h265`, `av1`, `vp9`, `prores` (E420). |
+| `audio.sample_rate` | no | 48000 | |
+| `audio.channels` | no | 2 | 1 or 2. Source sound is copied when rate, channels and `encode.audio.codec` match it and no audio bitrate is set; otherwise encoded, the picture still copied where nothing else changes it. More than two channels is copied as is unless something re-encodes the sound. |
+| `audio.loudness.target_lufs` | no | none | Integrated loudness, ITU-R BS.1770-4 / EBU R128 (K-weighted, gated, whole output). Measured in a first read, applied as one gain. -40 to -5 (E423). Silent mixes untouched. Decodes every audio source twice. Usual targets: -14 (YouTube, TikTok, Instagram), -16 (podcasts), -23/-24 (broadcast). |
+| `audio.loudness.true_peak_dbtp` | no | -1 | True-peak ceiling (4× oversampled), held by a limiter after the gain: 5 ms look-ahead, 100 ms release. -20 to 0 (E423). Peaky material can land under the target; the note says by how much. |
+| `audio.hygiene` | no | `false` | Speech cleanup: 2nd-order high-pass at 80 Hz; 2 Hz notches on 50/60 Hz mains hum and visible harmonics, only when hum is found (one extra read). Removes bass under 80 Hz on music. The note says what was found. |
+| `encode.container` | no | from the extension | Video: `mp4`, `mov`, `mkv`, `webm`, `mxf`. Audio only: `m4a`, `ogg`, `flac`, `wav`, `mp3`. `image-sequence`: one PNG/JPEG per frame, path a pattern like `frames/%04d.png`, no audio. |
+| `encode.video.codec` | no | `h264` (`vp9` webm, `dnxhd` mxf, `png` image sequence) | `h264`, `h265` (hardware encoder only), `vp9`, `av1`, `prores` (10-bit 4:2:2; 4:4:4 for 4444), `dnxhd` (8-bit 4:2:2, HQX 10-bit, 444; at least 256×120), `png`, `mjpeg`. See [containers and codecs](cli.md#containers-and-codecs). |
+| `encode.video.profile` | no | `hq` prores, `dnxhr-hq` dnxhd | ProRes: `proxy`, `lt`, `standard`, `hq`, `4444`, `4444-xq`. DNxHR: `dnxhr-lb`, `dnxhr-sq`, `dnxhr-hq`, `dnxhr-hqx`, `dnxhr-444`. Must match the codec (E421). |
 | `encode.video.crf` | no | per codec | Constant quality; lower is better. |
-| `encode.video.preset` | no | per codec | Encoder speed preset name (`ultrafast` to `veryslow`); ignored by encoders without presets. |
+| `encode.video.preset` | no | per codec | `ultrafast` … `veryslow`; ignored without presets. |
 | `encode.video.hardware` | no | `auto` | `auto`, `never`, `require`. |
-| `encode.video.keyframe_interval` | no | the encoder's own | Seconds between keyframes; 2 is usual for anything played over a network. Setting it re-encodes the picture. |
-| `encode.video.max_bitrate_kbps` | no | none | Bitrate ceiling in kb/s, held over a buffer of two seconds at that rate; quality stays constant until it bites. x264 and AV1 hold it so; VP9 takes it as the bitrate of libvpx's constrained quality mode, which holds the average; VideoToolbox takes it only together with `bitrate_kbps`, and NVENC and OpenH264 not at all, which the report says. Setting it re-encodes the picture. See [rate control](cli.md#rate-control). |
-| `encode.video.bitrate_kbps` | no | none | Average bitrate in kb/s to aim for: bitrate mode for hardware encoders, which cannot hold constant quality under a ceiling; x264 ignores it and keeps constant quality under the ceiling. `--budget` sets it. Setting it re-encodes the picture. |
-| `encode.video.level` | no | the encoder's own | H.264 or H.265 level such as `"4.1"`, for the decoders that check it. |
-| `encode.video.tune` | no | none | What the picture is like, in x264's names: `film`, `animation`, `grain`, `stillimage`, `fastdecode`, `zerolatency`. x264 applies all of them; VP9 takes `film`, AV1 `fastdecode`, NVENC, VideoToolbox and Media Foundation `zerolatency`. An encoder with no equivalent ignores it and the report says so. |
-| `encode.video.fixed_keyframes` | no | `false` | Keyframes at `keyframe_interval` only, never at scene changes, as streaming platforms and segmenters want; needs the interval (E422). x264, VP9, AV1, NVENC and VideoToolbox place them so; OpenH264 cannot and the report says so. |
-| `encode.video.chunks` | no | `auto` | How many stretches the output is encoded in at once, each on its own share of the cores, joined afterwards without re-encoding. `auto` chunks only where it has been measured to help, VP9 and OpenH264, into the machine's cores divided by two; it never chunks a hardware encoder, which is its own bottleneck; a number forces it for any encoder; `1` turns it off. Boundaries fall on clip starts or the keyframe grid when one is near, so each stretch starts at a keyframe that was due anyway. Not with `max_bitrate_kbps` or `bitrate_kbps`, a smart cut, or an image sequence. The report says how many ran. |
-| `encode.fast_start` | no | `true` | Whether MP4, MOV and M4A files carry their index at the front so playback can start before the download ends. |
-| `encode.audio.codec` | no | `aac` (`opus` for webm and ogg, `flac` for flac, `pcm` for wav, `mp3` for mp3, `pcm24` for mxf) | `aac`, `opus`, `mp3`, `vorbis`, `flac`, `alac`, `ac3`, `pcm` (16-bit), `pcm24`. |
-| `encode.audio.bitrate_kbps` | no | 160 | Audio bitrate. Setting it encodes the sound rather than copying it. |
+| `encode.video.keyframe_interval` | no | encoder's | Seconds; 2 for network playback. Re-encodes. |
+| `encode.video.max_bitrate_kbps` | no | none | Ceiling over a 2 s buffer; constant quality until it bites. x264, AV1: held. VP9: libvpx constrained-quality average. VideoToolbox: only with `bitrate_kbps`. NVENC, OpenH264: ignored, reported. Re-encodes. See [rate control](cli.md#rate-control). |
+| `encode.video.bitrate_kbps` | no | none | Average target: bitrate mode for hardware encoders; x264 ignores it. Set by `--budget`. Re-encodes. |
+| `encode.video.level` | no | encoder's | H.264/H.265 level, e.g. `"4.1"`. |
+| `encode.video.tune` | no | none | x264 names: `film`, `animation`, `grain`, `stillimage`, `fastdecode`, `zerolatency`. VP9: `film`. AV1: `fastdecode`. NVENC, VideoToolbox, Media Foundation: `zerolatency`. Others ignore it, reported. |
+| `encode.video.fixed_keyframes` | no | `false` | Keyframes on the interval only, never at scene changes (streaming, segmenters). Needs `keyframe_interval` (E422). Not OpenH264 (reported). |
+| `encode.video.chunks` | no | `auto` | Stretches encoded in parallel, joined without re-encoding. `auto`: VP9 and OpenH264 only, half the cores, never hardware encoders. A number forces it; `1` disables. Boundaries on clip starts or the keyframe grid. Not with bitrate settings, smart cut or image sequences. Reported. |
+| `encode.fast_start` | no | `true` | MP4/MOV/M4A index at the front. |
+| `encode.audio.codec` | no | `aac` (`opus` webm/ogg, `flac` flac, `pcm` wav, `mp3` mp3, `pcm24` mxf) | `aac`, `opus`, `mp3`, `vorbis`, `flac`, `alac`, `ac3`, `pcm` (16-bit), `pcm24`. |
+| `encode.audio.bitrate_kbps` | no | 160 | Encodes the sound rather than copying it. |
+
+An output with `hygiene` or a loudness target has its sound encoded; the
+picture is still copied where nothing else re-encodes it.
 
 ### `outputs`
 
-A composition is usually rendered to the one file `geneva render -o FILE`
-names. The `outputs` map instead lists every file one render should
-write from it, each made from the same composited frames in a single
-pass: renditions at several sizes, a poster, a sprite sheet for seek
-previews, the audio alone. `geneva render -o DIR` then writes them all
-into `DIR`, and the report lists each file with its size and how it was
-made. The frames are composited once and scaled per rendition; the
-source is decoded once, whatever the number of entries.
+Several files from one render, all from the same composited frames: sizes,
+a poster, seek sprites, audio alone. `geneva render -o DIR` writes them
+into `DIR`. Frames are composited once and scaled per entry; sources are
+decoded once.
 
 ```json
 "outputs": {
@@ -283,120 +206,102 @@ source is decoded once, whatever the number of entries.
 
 | Field | Kinds | Default | Description |
 | --- | --- | --- | --- |
-| `kind` | all | required | `video`, `poster` (one still), `sprites` (a sheet of thumbnails and a WebVTT file mapping times to tiles) or `audio` (the sound alone). |
-| `path` | all | the entry's name with the kind's usual extension: `.mp4`, `.jpg`, `.jpg`, `.wav` | File name inside the output directory: a plain name, no directories (E431), with an extension the kind can write: `mp4`, `mov`, `mkv`, `webm`, `mxf` for video; `jpg`, `jpeg`, `png` for pictures; `wav`, `m4a`, `mp3`, `flac`, `ogg` for audio. Two entries cannot write the same file (E432). A sprite sheet also writes `<name>.vtt` beside it. |
-| `width`, `height` | video, poster, sprites | the canvas size; sprites: tiles 90 pixels high | Picture size. Giving one of the two keeps the canvas's aspect (video sizes rounded to even, W401 when both are given odd). For sprites, the size of one tile; `height` only, the width follows. |
-| `encode` | video, audio | `output.encode` for video; the container's usual codecs for audio | Encoder settings for this file, the same block as `output.encode`. |
-| `audio` | video, audio | `output.audio` | Sample rate and channel count for this file. |
-| `at` | poster | the first clear frame | Time of the still: a [time](#times) inside the composition (E433). Without it, the poster is the first frame after the opening (5% in, at least 20 frames) that is not dark and follows some motion, so a fade-in or a black leader is skipped; failing that, the frame a tenth of the way in. |
-| `every` | sprites | about a hundred tiles over the length, at least a second apart | Time between tiles (E433 when zero or negative). |
-| `columns` | sprites | 10 | Tiles per row (E433 when zero). |
+| `kind` | all | required | `video`, `poster` (one still), `sprites` (thumbnail sheet + WebVTT map), `audio`. |
+| `path` | all | entry name + `.mp4` (video), `.jpg` (poster, sprites), `.wav` (audio) | Plain file name, no directories (E431). Video: `mp4`, `mov`, `mkv`, `webm`, `mxf`; pictures: `jpg`, `jpeg`, `png`; audio: `wav`, `m4a`, `mp3`, `flac`, `ogg`. No two entries on one file (E432). Sprites also write `<name>.vtt`. |
+| `width`, `height` | video, poster, sprites | canvas size; sprites: 90 px high tiles | One of the two keeps the aspect (video rounded to even; W401 when both odd). Sprites: one tile. |
+| `encode` | video, audio | `output.encode`; audio: container defaults | Same block as `output.encode`. |
+| `audio` | video, audio | `output.audio` | Rate and channels. |
+| `at` | poster | first clear frame | A [time](#times) inside the composition (E433). Default: first frame after the opening (5% in, at least 20 frames) that is not dark and follows motion; else 10% in. |
+| `every` | sprites | ~100 tiles, at least 1 s apart | E433 when zero or negative. |
+| `columns` | sprites | 10 | E433 when zero. |
 
-A field that does not belong to the entry's kind is an error (E430).
-
-A `video` entry at the canvas size with no encode settings of its own
-is a candidate for [stream copy](architecture.md#stream-copy) like a
-single-file render, and is copied when the composition allows it; the
-other renditions are encoded from the composited frames, each in its own
-thread. With `--crf`, `--preset` or `--exact` on the command line every
-video entry is encoded. When no entry is a video, only the frames the
-pictures need are composited.
+- A field not belonging to the kind: E430.
+- A `video` entry at canvas size with no encode settings can be [stream-copied](architecture.md#stream-copy); others are encoded, each in its own thread. `--crf`, `--preset`, `--exact` encode every video entry.
+- With no video entry, only the frames the pictures need are composited.
 
 ### `assets`
 
-Each key is an id used by clips. Assets are the only way to reach files:
-clips never contain paths.
+Clips never contain paths; files are reached only through assets.
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `src` | yes | Path relative to the asset root (the timeline's directory, or `--assets`). Absolute paths and `..` are rejected (E202). |
-| `kind` | no | `video`, `image`, `audio`, `font`, `subtitle`, `captions` (a word file or a cue file read for a `captions` source) or `html` (markup). Inferred from the extension; set it when inference fails (E203). |
-| `color` | no | Color tag overrides for files that are untagged or mistagged. |
+| `src` | yes | Relative to the asset root (the timeline's directory, or `--assets`). Absolute paths and `..`: E202. |
+| `kind` | no | `video`, `image`, `audio`, `font`, `subtitle`, `captions` (word or cue file), `html`. Inferred from the extension (E203 when it can't be). |
+| `color` | no | Color tag overrides for untagged or mistagged files. |
 
 ### `compositions`
 
-A composition is a small timeline of its own: a frame size, an optional
-background (default transparent), and layers. A clip shows it with a source
-of kind `composition`, and the same composition can be placed any number
-of times with different transforms and timing.
+A nested timeline, shown by a `composition` source; place it any number of
+times.
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
-| `width`, `height` | yes | | Frame size in pixels. Percentages inside the composition refer to this frame. |
-| `background` | no | `transparent` | Clear color. |
-| `layers` | yes | | Layers, as at the top level. Audio tracks are top-level only. |
+| `width`, `height` | yes | | Frame size; percentages inside refer to it. |
+| `background` | no | `transparent` | |
+| `layers` | yes | | As at the top level. Audio tracks are top-level only. |
 
-Times inside a composition are relative to the clip that shows it. The
-clip's length is the composition's natural length (the end of its last
-fixed-length clip) unless the clip sets `duration`; if the composition
-contains open-ended clips, they run for the clip's length. Compositions may
-contain other compositions up to 8 levels deep, and never themselves (E207).
+- Times inside are relative to the clip showing it.
+- Length: the end of its last fixed-length clip, unless the clip sets `duration`; open-ended clips inside run for the clip's length.
+- Nesting up to 8 levels; never itself (E207).
 
 ### `layers[]`
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
-| `id` | no | positional | Name used in diagnostics. |
+| `id` | no | positional | Name in diagnostics. |
 | `enabled` | no | `true` | `false` skips the layer. |
-| `clips` | yes | | Clips in time order. |
+| `clips` | yes | | In time order. |
 
 ### `layers[].clips[]`
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
-| `id` | no | positional | Name used in diagnostics. |
-| `source` | yes | | What to show; see below. |
-| `start` | no | end of the previous clip | Timeline time the clip appears. |
-| `duration` | no | see timing rules | How long it lasts. |
-| `transition` | no | | How this clip arrives from the one before it. See [Transitions](#transitions). |
-| `transition_out` | no | | How the last clip of a layer leaves. See [Transitions](#transitions). |
-| `crop` | no | the whole source | A rectangle of the source that becomes the clip's box; see below. |
-| `fit` | no | `contain` for video, `none` otherwise | `none`, `contain`, `cover`, `fill`: how the source box is sized to the frame before the transform. The defaults suit what each source is usually for: a video is shown whole, and a picture, a text box or a markup box is drawn at the size it has, which is what placing one means. W404 names the cases where that turns out badly, a picture larger than the frame or a video left in a corner of it. |
-| `effects` | no | `[]` | Effects on the placed picture, in order; see below. |
-| `mask` | no | | A shape cut from the clip's box, or a luma image over it; see below. |
-| `speed` | no | `1` | How fast the source plays: `2` is twice as fast, `0.5` half speed. The clip lasts its source range divided by it; a video's audio is resampled, so the pitch follows; the clip's own keyframes stay in output time. A clip with a speed is always composited. |
-| `animation` | no | | [Animation](#animation) from the document's `keyframes`, spelled like the CSS shorthand. |
-| `transform` | no | centered | Position, anchor, scale, rotation. |
+| `id` | no | positional | Name in diagnostics. |
+| `source` | yes | | See [Sources](#sources). |
+| `start` | no | end of the previous clip | |
+| `duration` | no | see [timing rules](#timing-rules) | |
+| `transition` | no | | Arrival from the previous clip; see [Transitions](#transitions). |
+| `transition_out` | no | | Exit of a layer's last clip. |
+| `crop` | no | whole source | See [`crop`](#crop). |
+| `fit` | no | `contain` for video, `none` otherwise | `none`, `contain`, `cover`, `fill`: sizing to the frame before the transform. W404 flags a picture larger than the frame or a video left in a corner. |
+| `effects` | no | `[]` | See [`effects`](#effects). |
+| `mask` | no | | See [`mask`](#mask). |
+| `speed` | no | `1` | `2` twice as fast, `0.5` half. Length is the source range divided by the speed; audio resampled (pitch follows); clip keyframes stay in output time. Always composited. |
+| `animation` | no | | See [Animation](#animation). |
+| `transform` | no | centred | See [`transform`](#transform). |
 | `opacity` | no | `1` | Animatable, 0 to 1. |
-| `blend` | no | `normal` | `normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `difference`, `soft-light`, `add`. Computed in linear light. |
+| `blend` | no | `normal` | `normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `difference`, `soft-light`, `add`. Linear light. |
 
 ### `crop`
 
-A rectangle of the source that becomes the clip's box: the rest is
-discarded before `fit` and the transform see the picture, so a 1920×1080
-video with `"crop": { "x": 420, "width": 1080 }` is a 1080×1080 clip.
+A source rectangle that becomes the clip's box, applied before `fit` and
+the transform. `"crop": { "x": 420, "width": 1080 }` on 1920×1080 gives a
+1080×1080 clip.
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `x`, `y` | `0` | Top-left corner, in source pixels or percentages of the source's own size. |
-| `width`, `height` | the rest of the source | Size, in the same units. |
+| `x`, `y` | `0` | Top left, in source pixels or percentages of the source. |
+| `width`, `height` | rest of the source | |
 
-Values must lie inside the source as written (E402); a rectangle that
-reaches past the source's actual size is clamped to it, and one that
-leaves nothing paints nothing. The anchor's percentages refer to the
-cropped box. A video shown as it is with a crop still takes the direct
-path: the region is scaled straight from the decoder.
+- Must lie inside the source as written (E402); clamped to the real size; an empty rectangle paints nothing.
+- Anchor percentages refer to the cropped box.
+- A plain cropped video keeps the direct path (scaled straight from the decoder).
 
 ### `effects`
 
-A list of effects applied to the picture after the transform, so their
-sizes are in output pixels, and before opacity and blending. Each has a
-`kind`.
+Applied after the transform (sizes in output pixels), before opacity and
+blending. Each has a `kind`. A clip with effects is always composited.
 
 `blur`
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `radius` | | Standard deviation of a Gaussian blur in output pixels, as CSS's `blur()`; animatable; 0 leaves the picture as it is. |
+| `radius` | | Gaussian standard deviation in output pixels, as CSS `blur()`. Animatable; 0 = none. |
 
-The blur spreads past the picture's edges into transparency, so a
-blurred clip fades out at its border rather than stopping. A wide blur
-is computed on a smaller layer and brought back, which looks the same
-and keeps the cost flat. A clip with effects is always composited; the
-copy, smart-cut and direct paths do not apply.
+- Spreads past the edges into transparency.
+- Wide blurs are computed on a smaller layer; same look, flat cost.
 
-The idiom for a portrait canvas is the picture whole over a blurred,
-scaled-up copy of itself:
+Portrait idiom (`--fill blur` builds this):
 
 ```json
 "layers": [
@@ -406,26 +311,21 @@ scaled-up copy of itself:
 ]
 ```
 
-`--fill blur` on the verbs builds exactly this.
-
 ### `mask`
 
-A mask limits what the clip shows. It is defined in the clip's box (the
-source after the crop, before `fit` and the transform), so it moves,
-scales and rotates with the clip: pixels of the box, or percentages of
-its size.
+Defined in the clip's box (after the crop, before `fit` and the transform),
+so it moves with the clip. Box pixels or percentages. A masked clip is
+always composited.
 
 | Field | Default | Description |
 | --- | --- | --- |
 | `shape` | `rect` | `rect` or `ellipse`, inscribed in the box below. |
-| `x`, `y` | `0` | Top-left corner of the shape's box. |
-| `width`, `height` | the clip's box | Size of the shape's box. |
-| `radius` | `0` | Corner radius of a rectangle, in box pixels. |
-| `feather` | `0` | Width of the soft edge in box pixels; 0 is a hard edge. |
-| `asset` | | Id of an image asset whose luma (times alpha) is the coverage, stretched over the clip's box: white shows, black or transparent hides. The shape fields are ignored. |
-| `invert` | `false` | Show what the mask hides and hide what it shows. |
-
-Rounded corners on a picture-in-picture, for instance:
+| `x`, `y` | `0` | Top left of the shape's box. |
+| `width`, `height` | the clip's box | |
+| `radius` | `0` | Rectangle corner radius. |
+| `feather` | `0` | Soft edge width; 0 is hard. |
+| `asset` | | Image asset whose luma × alpha is the coverage, stretched over the box: white shows, black or transparent hides. Shape fields ignored. |
+| `invert` | `false` | |
 
 ```json
 { "source": { "kind": "video", "asset": "cam" }, "fit": "none",
@@ -433,20 +333,17 @@ Rounded corners on a picture-in-picture, for instance:
   "transform": { "position": { "x": "85%", "y": "85%" }, "scale": 0.25 } }
 ```
 
-A masked clip is always composited; the copy, smart-cut and direct
-paths do not apply.
-
 ### `transform`
 
-The anchor is a point on the clip's box. It is placed at `position` in the
-output frame; `scale` and `rotation` act around it.
+The anchor (a point on the clip's box) is placed at `position`; scale and
+rotation act around it.
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `position` | `"center"` | Animatable [point](#points) in the output frame. |
-| `anchor` | `"center"` | [Point](#points) on the clip's box; percentages refer to the box. |
-| `scale` | `1` | Animatable; a number or `{ "x": ..., "y": ... }`. |
-| `rotation` | `0` | Animatable; degrees, clockwise. |
+| `position` | `"center"` | Animatable [point](#points) in the frame. |
+| `anchor` | `"center"` | [Point](#points) on the box; percentages of the box. |
+| `scale` | `1` | Animatable; number or `{ "x", "y" }`. |
+| `rotation` | `0` | Animatable; degrees clockwise. |
 
 ### Sources
 
@@ -456,135 +353,85 @@ Every source has a `kind`.
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
-| `asset` | yes | | Id of a `video` asset. |
-| `in` | no | `0` | Source time at the clip start. Time 0 of a file is its first video frame; an audio track that starts later keeps its offset. |
-| `out` | no | end of file | Source time to stop at. Must be after `in` (E301). |
-| `audio` | no | `true` | Mix the file's audio into the output. |
+| `asset` | yes | | A `video` asset. |
+| `in` | no | `0` | Source time at clip start. 0 = first video frame; later-starting audio keeps its offset. |
+| `out` | no | end of file | After `in` (E301). |
+| `audio` | no | `true` | Mix the file's audio. |
 
-`image`
+`image`: `asset` (required), an `image` asset. Box = the image's pixel size.
 
-| Field | Required | Description |
-| --- | --- | --- |
-| `asset` | yes | Id of an `image` asset. The box is the image's pixel size. |
-
-`solid`
-
-| Field | Required | Description |
-| --- | --- | --- |
-| `color` | yes | Animatable color. The box is the output frame. |
+`solid`: `color` (required, animatable). Box = the frame.
 
 `shape`
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
 | `shape` | yes | | `rect` or `ellipse`. |
-| `width`, `height` | yes | | Box size (lengths). |
+| `width`, `height` | yes | | Box size. |
 | `fill` | no | `white` | Animatable color. |
-| `stroke` | no | | `{ "color": ..., "width": px }`, drawn inside the edge. |
-| `radius` | no | `0` | Corner radius for `rect`. |
+| `stroke` | no | | `{ "color", "width" }`, inside the edge. |
+| `radius` | no | `0` | `rect` corner radius. |
 
-`composition`
+`composition`: `composition` (required), a key of `compositions`. Box = its frame.
 
-| Field | Required | Description |
-| --- | --- | --- |
-| `composition` | yes | Name of an entry under `compositions`. The box is the composition's frame. |
-
-`html`. See [Markup](#markup).
+`html` (see [Markup](#markup))
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
-| `html` | unless `asset` | | The markup, written in the document. |
-| `asset` | unless `html` | | Id of an asset of kind `html`, read as the markup. Give one of `html` and `asset`, not both (E450). |
-| `css` | no | | A stylesheet applied after any `<style>` in the markup, so it wins ties. |
-| `width` | no | the frame width | Box width: a length, a percentage of the frame, or `"auto"` to fit the content. |
-| `height` | no | the frame height | Box height, same forms. `"auto"` fits the content, so a card sizes itself to its text. |
+| `html` | unless `asset` | | Markup inline. |
+| `asset` | unless `html` | | An `html` asset. Not both (E450). |
+| `css` | no | | Applied after the markup's `<style>`; wins ties. |
+| `width` | no | frame width | Length, frame percentage, or `"auto"` (fit content). |
+| `height` | no | frame height | Same; `"auto"` sizes a card to its text. |
 
 `text`
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
-| `text` | unless `words` | | The text. |
-| `words` | no | | Timed words, in order and non-overlapping (E411). Each is `{ "text", "start", "end" }` or its fields in order, `["word", start, end]` or `["word", start]`. Times are clip-relative. Without an `end` a word is current until the next one starts; the last word needs its own (E102). |
-| `highlight` | no | | Style overrides for the word whose range contains the current time. |
-| `font` | no | system sans-serif | Id of a `font` asset, a family name, or the CSS `font` shorthand (`"600 40px/1.2 Inter"`), whose parts fill in `size`, `weight`, `italic` and `line_height` unless those are set. A font asset also supplies its weight and style unless set here. |
-| `size` | no | `48` | Font size in pixels. |
+| `text` | unless `words` | | |
+| `words` | no | | Timed words, ordered, non-overlapping (E411): `{ "text", "start", "end" }`, `["word", start, end]` or `["word", start]`. Clip-relative. Without `end`, current until the next; the last needs one (E102). |
+| `highlight` | no | | Style overrides for the current word. |
+| `font` | no | system sans-serif | `font` asset id, family name, or CSS `font` shorthand (`"600 40px/1.2 Inter"`) filling unset `size`, `weight`, `italic`, `line_height`. A font asset supplies its weight and style unless set. |
+| `size` | no | `48` | Pixels. |
 | `weight` | no | `400` | 100 to 900. |
 | `italic` | no | `false` | |
 | `color` | no | `white` | Animatable. |
-| `fill` | no | | A gradient over the glyphs in place of `color`: `"linear-gradient(90deg, #7A51CF, #C28072)"` or `"radial-gradient(...)"` as CSS writes them (see [Gradients](#gradients)), or `{ "gradient", "width", "height", "x", "y" }`. The gradient is drawn on a tile the size of the text's box unless `width` and `height` say otherwise, and the tile repeats. `x` and `y` are where the tile starts, in pixels from the box's top left, and are animatable: a tile twice the text's width with `x` keyframed from `0` to minus the text's width sweeps the gradient across. A `highlight` keeps the base fill unless it sets a `color` or a `fill` of its own. An outline or shadow keeps its own colour. |
+| `fill` | no | | Gradient over the glyphs instead of `color`: `"linear-gradient(90deg, #7A51CF, #C28072)"`, `"radial-gradient(...)"` ([Gradients](#gradients)), or `{ "gradient", "width", "height", "x", "y" }`. Tile = the text's box unless sized; it repeats. `x`, `y`: tile start from the box's top left, animatable (sweep: tile 2× the text width, `x` keyframed from 0 to minus the width). `highlight` keeps the base fill unless it sets `color` or `fill`. Outlines and shadows keep their colour. |
 | `letter_spacing` | no | `0` | Pixels. |
 | `max_width` | no | output width | Wrap width. |
 | `align` | no | `center` | `left`, `center`, `right`. |
-| `line_height` | no | `1.2` | Multiple of the font size. |
-| `padding` | no | `0` | Space between text and background box, as a number or `"8px"`. |
+| `line_height` | no | `1.2` | × font size. |
+| `padding` | no | `0` | Text to background box. |
 | `background` | no | none | Background box color. |
 | `radius` | no | `0` | Background box corner radius. |
-| `outline` | no | | `{ "color", "width" }`, or the shorthand `"2px black"` (width and color in either order). |
-| `shadow` | no | | `{ "color", "x", "y", "blur" }`, the `text-shadow` shorthand `"0 2px 8px #0008"` (x, y, optional blur, optional color), or a list of either, front to back as CSS lists them; a string may list several with commas. Each of the four is animatable in the object form; the shorthand is a constant. The image is sized for the furthest reach of any shadow over the clip, so a shadow that grows or moves does not shift the text. |
+| `outline` | no | | `{ "color", "width" }` or `"2px black"`. |
+| `shadow` | no | | `{ "color", "x", "y", "blur" }`, `"0 2px 8px #0008"`, or a list (commas in a string), front to back. Object fields animatable; the shorthand is constant. The image is sized for the furthest reach over the clip, so a moving shadow doesn't shift the text. |
 
-`captions`
-
-One clip that becomes one clip per cue on the timeline, so the frames
-between cues can still be copied rather than composited.
+`captions`: one clip that expands to one clip per cue, so frames between
+cues can still be copied.
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
-| `asset` | yes | | Id of an asset of kind `captions` or `subtitle`: a `.srt`, a `.vtt`, or the `.json` a speech recogniser writes. Unreadable, missing or wordless files are an `E453`. |
-| `position` | no | `bottom` | `bottom`, `top` or `center`. |
-| `margin` | no | the title-safe inset | Distance from the top or bottom edge; a length or a percentage of the frame height. |
-| `safe` | no | `5` | Title-safe inset as a percentage of the frame height, used as the default margin and checked against it (`N453`). `0` turns the check off. |
-| `follow_file` | no | `true` | Take `line`, `position`, `align` and `size` from a WebVTT cue that sets them. `false` places every cue the same way. |
-| `max_lines` | no | `2` | Lines per cue, when the cues are grouped from a word file. |
-| `max_chars` | no | `42` | Characters per line, when the cues are grouped from a word file. With `max_lines`, the whole of the grouping budget. Under 8 is `E402`. |
-| `min_duration` | no | `1.2s` | How long a cue stays up at least, when grouping. |
-| `merge_gap` | no | `0.1s` | Gaps up to this are closed rather than left blank, when grouping. |
-| `style` | no | | A `text` source's fields, minus `text` and `words`: `font`, `color`, `highlight`, `outline`, `shadow`, `background`, `max_width`, `align` and the rest. |
+| `asset` | yes | | A `captions` or `subtitle` asset: `.srt`, `.vtt`, or speech-recogniser `.json`. Unreadable, missing or wordless: E453. |
+| `position` | no | `bottom` | `bottom`, `top`, `center`. |
+| `margin` | no | title-safe inset | From the top/bottom edge; length or % of frame height. |
+| `safe` | no | `5` | Title-safe inset, % of frame height; default margin and N453 check. `0` disables. |
+| `follow_file` | no | `true` | Use a WebVTT cue's `line`, `position`, `align`, `size`. |
+| `max_lines` | no | `2` | Lines per cue (word files). |
+| `max_chars` | no | `42` | Characters per line (word files). Under 8: E402. |
+| `min_duration` | no | `1.2s` | Minimum cue length (word files). |
+| `merge_gap` | no | `0.1s` | Gaps closed up to this (word files). |
+| `style` | no | | `text` fields minus `text` and `words`. |
 
-Cue times are read from the file and placed relative to the clip's
-`start`, like every other time in a document (timing rule 6). A word
-file is timed from the start of the media it was made from, so a clip
-playing that media from `"4.4s"` carries its cues there with it; the
-file does not need shifting.
-
-Grouping a word file into cues happens before any of `style` is applied,
-and measures in characters, not pixels: a cue is closed when it would
-take more than `max_lines` lines of `max_chars`. Nothing here is
-measured in a font, because the cues are settled before one is loaded,
-which is what keeps a document grouping the same way on every machine.
-
-So `style.max_width` is how wide the text is drawn and changes no cue
-boundary, and the two can disagree: a cue grouped for 42 characters can
-draw on three lines in a narrow `max_width` without a warning, since the
-box still fits the frame. Set `max_chars` to what the width holds.
-`max_width / (0.5 * font.size)` is a usable starting point and errs
-narrow: 700px of 32px Liberation Sans works out at 44 by that sum and
-holds 47 of a lowercase line or 48 of ordinary mixed-case caption text,
-so the estimate leaves a margin rather than overflowing. It is an
-average glyph width and nothing more, so a condensed face, a line of
-capitals or a font at a different weight will land somewhere else. Check
-a frame. `validate --probe` reports the cue count with the budget that
-produced it, which is the quickest way to see a change land.
-
-A word file gives every cue its `words`, so `style.highlight` picks out
-the word being said. SubRip and WebVTT time whole cues, so a `highlight`
-on one is a `W453` rather than a silent difference.
-
-Word files are read forgivingly: whisper's `{"segments": [{"words": [...]}]}`,
-a bare `{"words": [...]}` or a bare list all work, `word` and `text` are
-both read as the word, and every other key (`probability`, `seek`,
-`tokens`, WhisperX's `score`) is ignored. Times are seconds; times that
-are plainly milliseconds are an `E453` rather than a caption track that
-starts twenty minutes in.
-
-The same file can instead be muxed as a stream rather than drawn into the
-picture: see [`subtitles[]`](#subtitles).
+- Cue times are relative to the clip's `start`; a word file timed from its media follows a clip that starts that media at `"4.4s"`.
+- Grouping counts characters, not pixels, before any font is loaded, so it is identical on every machine. `style.max_width` never moves a cue boundary; set `max_chars` to what the width holds. Starting point: `max_width / (0.5 × size)`, which errs narrow (700 px of 32 px Liberation Sans: 44 by the formula, 47 to 48 in practice). `validate --probe` reports the cue count and budget.
+- Word files give each cue its `words`, so `style.highlight` works. On SubRip/WebVTT a `highlight` is W453.
+- Word files accepted: whisper's `{"segments": [{"words": [...]}]}`, `{"words": [...]}`, a bare list. `word` or `text` is the word; other keys are ignored. Times in seconds; millisecond-looking times are E453.
+- The same file can be muxed as a stream instead: [`subtitles[]`](#subtitles).
 
 #### CSS shorthands
 
-Where an author would write CSS, the timeline takes the same strings, for
-the values that map one to one:
-
-| CSS | Timeline field | Example |
+| CSS | Field | Example |
 | --- | --- | --- |
 | `text-shadow` | `shadow` | `"0 2px 8px #0008"`, `"0 0 4px #fff8, 0 0 12px #0ff8"` |
 | `outline` (`-webkit-text-stroke`) | `outline` | `"2px black"` |
@@ -593,47 +440,31 @@ the values that map one to one:
 | `font-size`, `letter-spacing`, `border-radius` | `size`, `letter_spacing`, `radius` | `"34px"`, `"1.5px"`, `"3px"` |
 | `color`, `background-color` | `color`, `background` | `"#ffdd00"`, `"rgba(0, 0, 0, 0.5)"` |
 
-The object form stays canonical: a printed timeline (`--show-timeline`)
-writes `shadow` and `outline` as objects, and a `font` shorthand is
-expanded into its fields when the document is resolved. There is no
-cascade, box model or selector; each value belongs to one text source.
-A string that does not parse is an `E103` with the form expected. It
-points at the field, except in a text source, where it points at the
-source: the style fields are read as one object with the rest of it.
+- The object form is canonical: `--show-timeline` prints `shadow` and `outline` as objects and expands `font`.
+- No cascade or selectors; each value belongs to one text source.
+- A bad string is E103 with the expected form, pointing at the field (at the source, for a text source's style fields).
 
 ### Transitions
 
-A `transition` on a clip says how it arrives; a `transition_out` says how
-it leaves. Between two clips on a layer they overlap for `duration`, and a
-clip with no explicit `start` is moved that much earlier to make the
-overlap, so the previous clip must be long enough to cover it (E306).
+`transition` is how a clip arrives, `transition_out` how a layer's last
+clip leaves.
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
 | `kind` | yes | | `crossfade` or `fade`. |
-| `duration` | yes | | The overlap between a pair of clips, or the ramp at the head or tail of a layer. |
-| `color` | no | `black` | The color a `fade` dips through. On a `crossfade` it is a W304, since nothing would show it. |
-| `ease` | no | `linear` | Shape of the ramp, taking the same values a keyframe's easing takes. `ease-in-out` is the usual choice for a slow dissolve. |
+| `duration` | yes | | Overlap between two clips, or the ramp at a layer's head or tail. |
+| `color` | no | `black` | Colour a `fade` dips through. W304 on a `crossfade`. |
+| `ease` | no | `linear` | Any keyframe easing; `ease-in-out` for slow dissolves. |
 
-`crossfade` brings the arriving clip up over the one leaving, which stays
-at full opacity underneath. Both are on screen at once, so the picture
-dissolves. The sound crosses at constant power (each gain is the square
-root of its linear ramp), which holds the level across the overlap; a
-linear pair would dip about 3 dB in the middle on material that is not
-correlated.
+| Kind | Between clips | At a layer's head or tail |
+| --- | --- | --- |
+| `crossfade` | Arriving clip fades up over the leaving one. Sound crosses at constant power (square-root gains), no mid-point dip. | Fades against what is behind: lower layers or `output.background`. |
+| `fade` | Leaving clip fades out over the first half, arriving one in over the second, the colour covering the frame between. Sound dips to silence at the midpoint. | Fades up from, or out to, the colour over the whole duration. |
 
-`fade` dips through a color instead. The leaving clip fades out over the
-first half of the overlap, the arriving one fades in over the second, and
-the color covers the frame in between, strongest at the midpoint. Only
-one clip is ever visible. The sound follows the picture: it reaches
-silence at the midpoint and comes back.
-
-At the head or tail of a layer there is no second clip, so the ramp runs
-the whole `duration` rather than handing over in the middle. A `fade`
-opening a layer comes up out of its color and one closing a layer goes
-out to it, which is how a piece fades up from black and fades out again.
-A `crossfade` there has no colour to use, so it fades against whatever is
-behind: the layers below, or `output.background`.
+- Clips overlap by `duration`; a clip without `start` moves earlier to make the overlap. The previous clip must cover it (E306).
+- `transition_out` where a next clip exists: E307.
+- A `fade`'s colour covers the whole frame, layers below included.
+- A fade on any layer above the first sends the whole composition to the compositing path; no frames are copied.
 
 ```json
 { "source": { "kind": "video", "asset": "a" },
@@ -641,51 +472,41 @@ behind: the layers below, or `output.background`.
   "transition_out": { "kind": "fade", "duration": "1s", "ease": "ease-in-out" } }
 ```
 
-Where another clip follows, that clip's `transition` already covers the
-join, and setting `transition_out` as well is an E307. Keep one.
-
-Two things to know. The dip color covers the whole frame for the length
-of the transition, including layers below the one it is on, because it is
-the picture that dips and not one layer of it. And a fade on a layer
-above the first makes the whole composition take the compositing path
-rather than the overlay path, so none of its frames are copied.
-
 ### `audio[]` and `audio[].clips[]`
 
-Tracks have `id`, `enabled` and `clips` like layers. Audio clips:
+Tracks have `id`, `enabled`, `clips`, as layers do.
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
-| `asset` | yes | | Id of an `audio` or `video` asset. |
+| `asset` | yes | | An `audio` or `video` asset. |
 | `in`, `out` | no | `0`, end of file | Source range. |
-| `start` | no | end of previous clip | Timeline start. |
-| `duration` | no | source range | Length. |
-| `gain_db` | no | `0` | Animatable gain in decibels. |
+| `start` | no | end of previous clip | |
+| `duration` | no | source range | |
+| `gain_db` | no | `0` | Animatable. |
 | `fade_in`, `fade_out` | no | `0` | Fade lengths. |
-| `speed` | no | `1` | How fast the source plays; the clip lasts its range divided by it and the pitch follows. |
+| `speed` | no | `1` | Length is the range divided by the speed; pitch follows. |
 
 ### `subtitles[]`
 
-Subtitle tracks are written to the output as text streams that players
-can show or hide. That is the whole distinction the format draws between
-the two words: a *subtitle* travels alongside the picture as a stream, a
-*caption* is drawn into it. The same `.srt` or `.vtt` can do either: here
-as a track, or as a [`captions` source](#sources) on a clip. Each track is
-one subtitle asset, a SubRip `.srt` or WebVTT `.vtt` file.
+Text streams players can show or hide. A *subtitle* travels beside the
+picture; a *caption* is drawn into it ([`captions` source](#sources)). The
+same `.srt` or `.vtt` serves either.
 
-| Field | Required | Meaning |
+| Field | Required | Description |
 | --- | --- | --- |
-| `id` | no | Name used in diagnostics. |
-| `enabled` | no | `false` leaves the track out. |
-| `asset` | yes | A `subtitle` asset. |
-| `language` | no | Language code, for example `"en"` or `"pt-BR"`; stored as the three-letter code containers use. |
-| `title` | no | Track title shown by players. |
-| `offset` | no | Shifts every cue on the output timeline; negative values move cues earlier and cues that end before zero are dropped. |
+| `id` | no | Name in diagnostics. |
+| `enabled` | no | `false` leaves it out. |
+| `asset` | yes | A `subtitle` asset (`.srt`, `.vtt`). |
+| `language` | no | `"en"`, `"pt-BR"`; stored as the container's three-letter code. |
+| `title` | no | Shown by players. |
+| `offset` | no | Shifts every cue; negative moves earlier; cues ending before zero are dropped. |
 
-MP4 and MOV store the text as 3GPP timed text (`mov_text`), Matroska as
-SubRip, WebM as WebVTT; simple tags such as `<i>` survive in Matroska and
-WebM and are stripped for MP4 and MOV. Other containers cannot hold
-subtitle streams.
+| Container | Stored as | Tags like `<i>` |
+| --- | --- | --- |
+| MP4, MOV | 3GPP timed text (`mov_text`) | stripped |
+| Matroska | SubRip | kept |
+| WebM | WebVTT | kept |
+| others | not supported | |
 
 ```json
 "assets": { "en": { "src": "captions.srt" } },
@@ -694,12 +515,9 @@ subtitle streams.
 
 ## Markup
 
-A clip with a source of kind `html` draws a box of HTML and CSS. It is not
-a browser: there is a strict HTML parser, a CSS subset, and flexbox and
-block layout from
-[taffy](https://github.com/DioxusLabs/taffy). Everything it cannot do it
-refuses by name, so a document that would look different in a browser says
-so rather than drawing something else.
+An `html` source draws a box of HTML and CSS: strict HTML parser, CSS
+subset, flexbox and block layout ([taffy](https://github.com/DioxusLabs/taffy)).
+Anything unsupported is refused or warned about by name.
 
 ```json
 { "kind": "html", "asset": "card", "width": 560 }
@@ -724,143 +542,65 @@ so rather than drawing something else.
 </div>
 ```
 
-The box the markup is drawn into is the drawing surface, the way `<body>`
-is the page: block layout, and by default the size of the frame, so CSS
-places things in the picture the way it places them on a page and the
-clip needs no `transform`. Set either side to `"auto"` to fit the content
-instead.
-
-A surface the size of the frame costs no more than a small one to
-composite: the painter reports the rectangle it actually marked, and the
-compositor reads that rather than the whole surface.
+- The clip's box is the page (`<body>`): block layout, the frame's size by default, so CSS positions things in the picture and the clip needs no `transform`. `"auto"` on either side fits the content.
+- Only the marked rectangle is composited, so a frame-sized box costs no more than a small one.
 
 ### Files it points at
 
-`<img src="logo.png">` and `<link rel="stylesheet" href="house.css">`
-take paths, relative to the markup itself, as they are on a page. A card
-kept in `cards/lower-third.html` finds `cards/logo.png` with
-`src="logo.png"`, and opening that file in a browser shows the same
-picture.
-
-The rule every asset path follows applies here too: no leading `/`, no
-`..`, no drive letter, no URL. Anything that would leave the asset root
-is E452, and so is a file that is not there. Both are checked while the
-document is validated, so a missing picture is an error before anything
-is drawn rather than a hole in the frame. `--assets DIR` moves the root,
-and the paths move with it.
-
-`<link>`, `<meta>`, `<base>` and `<title>` belong in the head and draw
-nothing; they never become boxes, so they cannot take a slot in a flex
-row.
+- `<img src>` and `<link rel="stylesheet" href>` are relative to the markup file, as on a page.
+- Asset path rules apply: no leading `/`, no `..`, no drive letter, no URL. Outside the root or missing: E452, at validation. `--assets DIR` moves the root.
+- `<link>`, `<meta>`, `<base>`, `<title>` draw nothing and take no layout slot.
 
 ### What it parses
 
-Markup must be well formed: every element that is not void
-(`br`, `hr`, `img`, `input`, `link`, `meta` and the rest) is closed, or
-closes itself with `/>`. There is no tag inference and no error recovery;
-a mismatch is E451 with a line and column. `<style>` is collected, a stylesheet
-`<link>` is read, comments and doctypes are skipped, `<script>` is an
-error. Named entities
-cover the common set (`&amp;`, `&nbsp;`, `&middot;`, `&mdash;`, …) along
-with `&#39;` and `&#x41;`.
-
-Selectors are type, class, id and `*`, joined by the descendant and child
-(`>`) combinators, in a comma-separated list. There are no pseudo-classes,
-no attribute selectors, no sibling combinators and no at-rules; each is
-E451 by name. The cascade is the usual one: specificity as
-(ids, classes, types), source order to break ties, `!important` above
-both, a `style` attribute above every selector, and the text properties
-inherited by children. A handful of tags carry a user-agent style that an
-author overrides freely: `h1`, `h2`, `h3`, `b`, `strong`, `i`, `em`,
-`small`.
+- Well-formed only: non-void elements closed or self-closed (`/>`). No tag inference or recovery; a mismatch is E451 with line and column. Void: `br`, `hr`, `img`, `input`, `link`, `meta`, …
+- `<style>` collected, stylesheet `<link>` read, comments and doctypes skipped, `<script>` is an error.
+- Entities: the common named set (`&amp;`, `&nbsp;`, `&middot;`, `&mdash;`, …), `&#39;`, `&#x41;`.
+- Selectors: type, class, id, `*`, descendant and child (`>`) combinators, comma lists. Pseudo-classes, attribute selectors, sibling combinators, at-rules: E451.
+- Cascade: specificity (ids, classes, types), then source order; `!important` above both; `style` attribute above every selector; text properties inherit.
+- User-agent styles (overridable): `h1`, `h2`, `h3`, `b`, `strong`, `i`, `em`, `small`.
 
 ### What it draws
 
 | Group | Properties |
 | --- | --- |
 | Box | `display` (`flex`, `block`, `none`), `position` (`relative`, `absolute`), `top`, `right`, `bottom`, `left`, `inset`, `width`, `height`, `min-width`, `min-height`, `max-width`, `max-height`, `aspect-ratio`, `box-sizing`, `overflow` (and `-x`, `-y`) |
-| Spacing | `margin`, `padding` and their per-side forms and one-to-four-value shorthands |
+| Spacing | `margin`, `padding`, per-side forms, one-to-four-value shorthands |
 | Flex | `flex-direction`, `flex-wrap`, `justify-content`, `align-items`, `align-self`, `align-content`, `gap`, `row-gap`, `column-gap`, `flex-grow`, `flex-shrink`, `flex-basis`, `flex` |
 | Border | `border`, `border-top`, `border-right`, `border-bottom`, `border-left`, `border-width`, `border-color`, `border-style` (`solid`, `none`), `border-radius` |
-| Paint | `background`, `background-color` (a colour or a gradient), `background-size`, `background-position`, `background-clip` (`text` or `border-box`, with or without `-webkit-`), `opacity`, `mix-blend-mode` (`normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `difference`, `soft-light`), `filter` (`blur()` only), `clip-path` (`polygon()` only, or `none`), `box-shadow` (a list; `inset` is not drawn) |
-| Text | `color`, `-webkit-text-fill-color` (read as `color`), `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space`, `text-shadow` (a list) |
-| Motion | `animation` and its longhands `animation-name`, `-duration`, `-delay`, `-timing-function`, `-iteration-count`, `-direction`, `-fill-mode` |
+| Paint | `background`, `background-color` (colour or gradient), `background-size`, `background-position`, `background-clip` (`text`, `border-box`, `-webkit-` too), `opacity`, `mix-blend-mode` (`normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `difference`, `soft-light`), `filter` (`blur()`), `clip-path` (`polygon()`, `none`), `box-shadow` (list; no `inset`) |
+| Text | `color`, `-webkit-text-fill-color` (as `color`), `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space`, `text-shadow` (list) |
+| Motion | `animation`, `animation-name`, `-duration`, `-delay`, `-timing-function`, `-iteration-count`, `-direction`, `-fill-mode` |
 
-A sentence with a word in bold, `<p>Go for <b>launch</b> at nine</p>`,
-is set as one run of text, as a browser sets it: it wraps as a whole,
-spaces are collapsed across the pieces, and each piece keeps its own
-colour, weight, style, size, family and letter-spacing. `<br>` breaks
-the line. The tags that sit in a line this way are `a`, `abbr`, `b`,
-`br`, `cite`, `code`, `em`, `i`, `kbd`, `mark`, `q`, `s`, `small`,
-`span`, `strong`, `sub`, `sup`, `time`, `u` and `var`; `mark`, `u`, `s`,
-`sub` and `sup` are drawn as plain text, with no highlight, line or
-raised baseline. An inline element that needs a box of its own (a
-background, a border, padding or margin, a shadow, an effect, an
-animation or a position) keeps one, and so do the pieces of an element
-that asked for `display: flex`, which are flex items as they are in a
-browser. A row of spans with no text of its own is still a row.
+Anything else is W450: skipped, with the element and property named; the
+rest draws. A `<style>` rule matching nothing is W452.
 
-A group's buffer is bounded. Its area may be nine times the frame's,
-which is what a rectangle three frames wide and three tall came to, and
-a group asking for more is cut back to that rectangle and `W455` says
-so. The shape is free within the area, so an element far wider than the
-frame and only a few hundred pixels tall, a news crawl being the usual
-one, is drawn whole and stays drawn however far its animation carries
-it. A composition has no such bound, so that is still where a very
-large moving picture belongs.
+**Lengths**
 
-There is no static `transform`. The table has no row for it because a
-transform only comes from an `animation`, which is where motion lives;
-`transform` written in a rule is W450 like any other property that is
-not drawn. An element that should sit rotated or scaled and stay there
-needs a one-keyframe animation that holds it.
+- `px`, `em`, `rem`, `%`. `em` = the element's own font size; a percentage `font-size` or `line-height` is of the inherited one.
+- Percentages only on widths, heights, margins, padding, gaps and insets (against the containing block). Elsewhere absolute only: `border-radius: 50%` is W450.
+- `box-sizing: content-box` by default, as in CSS.
 
-Painting follows CSS. `z-index` orders positioned boxes and flex items,
-negative numbers under everything in flow, and set anywhere else is
-W454. A box with `opacity` below one, a `filter`, a `clip-path`, a
-`mix-blend-mode` or an animation is painted as a group: a buffer of its
-own, with its children, laid onto the picture whole, so it opens a
-stacking context and overlapping children do not show through each
-other. `body` and `html` select the clip's own box; left unstyled it
-marks no pixels. A rule in the markup's `<style>` that matches no
-element is W452.
+**Inline text**
 
-Lengths are `px`, `em`, `rem` and `%`; `em` is the element's own font
-size, settled before anything else uses it, and a percentage `font-size`
-or `line-height` is of the inherited one. Percentage widths, heights,
-margins, padding, gaps and insets resolve against the containing block,
-as in CSS. Those are the properties a percentage is taken on, and the
-list is exhaustive: elsewhere a length has to be absolute, so
-`border-radius: 50%` is W450 and a circle is drawn with a radius half
-the box's own size in `px`. `box-sizing` is `content-box` by default, as
-in CSS, so padding and border are added to a width rather than taken out
-of it. Colours are the ones the rest of the format takes. Anything else
-is W450: the declaration is skipped, and the message names the element
-and the property it came from, so the rest of the document still draws.
+- Text with inline elements inside (`<p>Go for <b>launch</b> at nine</p>`) is set as one run: wraps as a whole, whitespace collapsed across pieces, each piece keeps colour, weight, style, size, family, letter-spacing. `<br>` breaks the line.
+- Inline tags: `a`, `abbr`, `b`, `br`, `cite`, `code`, `em`, `i`, `kbd`, `mark`, `q`, `s`, `small`, `span`, `strong`, `sub`, `sup`, `time`, `u`, `var`. `mark`, `u`, `s`, `sub`, `sup` draw as plain text.
+- An inline element with a background, border, padding, margin, shadow, effect, animation or position gets a box of its own, as do the children of an element with `display: flex`.
 
-A family a document ships replaces the machine's copy of it: once a
-`font` asset declares a family, the installed faces of that family are
-dropped, so the document draws in the version it carries rather than in
-whichever version the machine has. This holds wherever the family is
-named, in markup and in a `text` source alike, and whether it is named
-by the asset id or by the family the file itself declares. Families the document does not ship
-are untouched and still serve as the fallback for characters its own
-fonts lack.
+**Painting**
 
-Within a family, an attribute no face of it has is settled against the
-faces it does have. A `font-weight` is matched by the CSS rule: above
-500 the next heavier face, below 400 the next lighter, and between the
-two a heavier one up to 500 before a lighter one. So a family shipped in
-regular and bold draws `font-weight: 600` in its bold face. A family
-with no italic face is drawn upright, since there is no synthetic
-oblique. Both are decided from the family alone, so a document draws the
-same on every machine rather than borrowing a face from whatever else is
-installed.
+- `z-index` orders positioned boxes and flex items (negative under the flow); elsewhere W454.
+- A box with `opacity` < 1, `filter`, `clip-path`, `mix-blend-mode` or an animation is a group: its subtree is painted into its own buffer and composited whole (a stacking context).
+- A group's buffer is capped at nine times the frame's area, any shape (a news crawl fits); larger is cut back with W455.
+- No static `transform`: transforms come from animations (W450 otherwise). Hold a pose with a one-keyframe animation.
+- `body` and `html` select the clip's box; unstyled, it marks nothing.
+
+**Fonts**
+
+- A family shipped as a `font` asset replaces the installed one of that name, in markup and text sources, by asset id or declared family. Other installed families remain as fallback.
+- A missing weight resolves by the CSS rule (above 500: next heavier; below 400: next lighter; 400 to 500: heavier up to 500, then lighter). A family with no italic face is drawn upright. Decided from the family alone, so identical on every machine.
 
 ### Gradients
-
-`background` takes `linear-gradient()` and `radial-gradient()` as well as
-a colour.
 
 ```css
 background: linear-gradient(160deg, #07100C, #123a2c);
@@ -868,58 +608,21 @@ background: linear-gradient(to bottom right, #00EEE1, #FFD233 70%);
 background: radial-gradient(circle at 30% 40%, #00EEE1, #00EEE100);
 ```
 
-A linear gradient takes an angle (`deg`, `turn` or `rad`), or `to` and a
-side or corner, and runs down the box when it says neither. A corner's
-angle depends on the box's proportions, as in CSS, so a wide box points
-the ramp more sideways. A radial gradient is a circle or an ellipse, `at`
-a position given in percentages or keywords, centred when it says
-neither.
+- Linear: an angle (`deg`, `turn`, `rad`) or `to` a side or corner; default top to bottom. Corner angles follow the box's proportions.
+- Radial: circle or ellipse, `at` a position (percentages or keywords); default centred; always sized to the farthest corner.
+- Stops: colour and optional position. Missing positions are spread evenly; a backwards one is pulled up to its predecessor; two positions make a flat band.
+- Tiles: `background-size` (one or two lengths, percentages or `auto`) and `background-position` (lengths, percentages, side keywords); the tile repeats. Clipped to the tile, so an unfinished radial shows an edge.
+- `background-clip: text` (`-webkit-` too) fills the glyphs of the element and its descendants; the tile is sized per text run. The markup form of a text clip's `fill`.
+- Not drawn, named: `conic-gradient`, `repeating-*`, size keywords (`closest-side`, …), colour hints, `url()`, `cover`, `contain`, multiple layers.
 
-Stops are a colour and an optional position. Positions left out are
-spread evenly, the first at the start and the last at the end, and one
-that runs backwards is pulled up to the one before it so the ramp never
-reverses. A colour may carry two positions, which is a band of flat
-colour between them.
-
-Inside a markup box, colours blend the way a browser blends them: a
-gradient's stops, a translucent box over another, a shadow, a blur and
-the edges of text are worked out on sRGB-encoded values with alpha
-premultiplied, so a 30% teal over a dark ground comes out as it does on
-a page, and a ramp from black to white has a browser's midpoint. The
-finished box is converted to linear light once and composited onto the
-frame like every other clip, so the clip's own transform, opacity, blend
-mode and transitions stay in the linear light the rest of geneva works
-in (see [color.md](color.md)). One thing is still done in linear light:
-the glyphs of a text are drawn by the same engine as a `text` clip, so
-a gradient `fill` on text mixes its stops in linear light before the
-text joins the page.
-
-A background is drawn on a tile that repeats across the box, as in CSS:
-`background-size` is the tile, one or two of a length, a percentage or
-`auto`, and `background-position` is where it starts, lengths,
-percentages or the side keywords. `cover`, `contain` and more than one
-layer are named as undrawn.
-
-`background-clip: text` (and `-webkit-background-clip: text`) fills the
-element's glyphs, and its descendants', with the background instead of
-the box, the way a browser does with `-webkit-text-fill-color:
-transparent`. The tile is sized against each text run's own box rather
-than the element's, which is the same box for an element that holds one
-line of text and differs for one whose text wraps. This is the markup
-form of a text clip's `fill`.
-
-What is not drawn, each named rather than skipped: `conic-gradient`, any
-`repeating-` gradient, the size keywords (`closest-side` and the rest; a
-radial gradient is always sized to the farthest corner), colour hints,
-and `url()` background images. A gradient is clipped to its own tile, as
-in CSS, so a radial that has not reached its last stop by the edge stops
-there with a visible edge.
+**Colour space**: inside the box, blending (stops, translucent boxes,
+shadows, blur, text edges) is on sRGB-encoded premultiplied values, as in a
+browser. The finished box is converted to linear light once, so clip
+transform, opacity, blend and transitions stay linear
+([color.md](color.md)). Exception: glyphs use the text engine, so a text
+gradient mixes its stops in linear light.
 
 ### Motion
-
-`@keyframes` in the markup's stylesheet are in scope for the clip that
-draws it, and an `animation` on the **outermost element** is what that
-clip plays, so a file that moves in a browser moves here too:
 
 ```html
 <style>
@@ -929,142 +632,55 @@ clip plays, so a file that moves in a browser moves here too:
 <div class="card">...</div>
 ```
 
-The outermost element is the document's one top-level element, the box
-that is the whole picture. A document whose top level holds several
-elements has none, since the clip moves the picture and that would move
-every one of them: there each `animation` is played inside, as below.
-Wrapping the boxes in a single element makes the wrapper outermost and
-gives the clip something to play again.
+**Outermost element** (the document's single top-level element)
 
-The clip's own `animation` replaces it, since only the document knows
-where the clip sits in time; when both are set, W451 says which one won.
-The clip plays `transform` and `opacity`; a rule it is given that sets
-anything else is E442, and it holds the animation's start and end
-outside its runs whatever `animation-fill-mode` says.
+- Its `animation` is played by the clip: `transform` and `opacity` only (anything else E442), held before and after whatever `animation-fill-mode` says.
+- A clip `animation` replaces it (W451 says which won).
+- A document with several top-level elements has no outermost element; wrap them to get one.
 
-An `animation` anywhere the clip does not play, which is any element
-**inside** the outermost one and every animated element of a document
-that has no outermost element, is played there, the way a browser plays
-it. The element is composited as a group:
-its subtree is painted into a buffer of its own and laid onto the
-picture with the transform, opacity and blur the animation gives it at
-that moment. Several animations on one element stack in the order they
-are written, and a rule that sets only `to` starts from whatever the
-rules under it, or the style, leave the element at; `animation-delay`,
-`-duration`, `-iteration-count`, `-direction` and `-fill-mode` are read
-as longhands too, comma lists and all. A keyframe inside sets
-`transform`, `opacity`, `filter: blur()`, `color`, `text-shadow`,
-`letter-spacing`, `width`, `height`, `max-width`, `min-width`,
-`background-position` or `clip-path`; anything else is E442. `color` and
-`text-shadow` reach the element's text and the descendants that
-inherited them. A keyframe's `letter-spacing` takes `px` or `em`, the
-`em` being the element's own font size, as in a static rule. Two polygons with the same number of points mix point by
-point; any other pair, as in CSS, is a step at the halfway mark. A length
-and a percentage do not mix either (a browser folds them into a `calc()`;
-here the change is a step), except that a zero mixes with either.
+**Any other animated element** is played in place, as a browser does, as a
+group composited with the transform, opacity and blur of the moment.
 
-A markup box whose elements do not move is laid out and painted once per
-clip and reused for every frame. One with an animation inside is painted
-at each frame, and laid out again at each frame when the animation sets
-`width`, `height`, `max-width`, `min-width` or `letter-spacing`, since
-those move the boxes around it. That is what a typing effect that grows
-a character's box costs; a card on screen for a minute with a fade
-inside it costs a paint per frame and one layout.
+- Several animations stack in written order; a `to`-only rule starts from what the rules under it, or the style, leave.
+- Longhands read, comma lists included: `animation-delay`, `-duration`, `-iteration-count`, `-direction`, `-fill-mode`.
+- Keyframe properties: `transform`, `opacity`, `filter: blur()`, `color`, `text-shadow`, `letter-spacing` (`px` or `em`), `width`, `height`, `max-width`, `min-width`, `background-position`, `clip-path`; anything else E442. `color` and `text-shadow` reach inheriting descendants.
+- Polygons with the same point count mix point by point; otherwise a step at halfway. A length and a percentage don't mix (step), except zero.
+
+**Cost**
+
+- No animation inside: laid out and painted once per clip.
+- Animation inside: painted each frame; laid out each frame only when an animation sets `width`, `height`, `max-width`, `min-width` or `letter-spacing`.
 
 ## Known limitations
 
-The main ones. Anything else in markup that geneva doesn't draw gets a
-warning naming it (W450), and the render's notes say when an encoder
-couldn't do something.
-
-- **Markup is a subset of HTML and CSS**, aimed at titles and graphics:
-  flexbox and block layout, absolute positioning, gradients, shadows,
-  `blur()`, `polygon()` clip paths, most blend modes and keyframe
-  animations. No JavaScript, grid, float, CSS transitions or media
-  queries. Selectors are type, class, id and `*`, with descendant and
-  child combinators.
-- **Inline elements are text, not boxes.** A `<b>` or `<span>` inside a
-  sentence is set with it, in its own colour and weight, but one that
-  needs a box of its own (a background, a border or padding) splits the
-  sentence into pieces that no longer wrap together.
-- **Transforms come from animations.** For a box that stays rotated, use
-  an animation with one keyframe.
-- **`text-shadow` takes up no space**, so near the edge of the clip's box
-  it can be cut off.
-- **A few blend modes are missing:** `color-dodge`, `color-burn`,
-  `hard-light`, `exclusion` and the non-separable ones.
-- **Very large moving groups are cut down.** A group's buffer is capped
-  at nine times the frame's area (W455); something that big is better as
-  its own composition.
-- **Markup is local.** Nothing is fetched over the network, and
-  `<iframe>`, `<svg>`, `<canvas>` and `<video>` aren't drawn.
-- **No synthetic italic.** A family without an italic face is drawn
-  upright.
-- **Audio is mono or stereo.** Sources with more channels are downmixed.
-- **No fixed average bitrate.** Video is encoded at a constant quality,
-  optionally under a ceiling; see [rate control](cli.md#rate-control).
-  H.265 needs a hardware encoder.
+- **Markup is a subset of HTML and CSS**, for titles and graphics: no JavaScript, grid, float, CSS transitions or media queries. Anything else it doesn't draw is named (W450).
+- **Markup is local**: nothing is fetched over the network; `<iframe>`, `<svg>`, `<canvas>`, `<video>` aren't drawn.
+- **Audio is mono or stereo**; more channels are downmixed.
+- **No fixed average bitrate**: constant quality, optionally under a ceiling ([rate control](cli.md#rate-control)). H.265 needs a hardware encoder.
 
 ## Timing rules
 
-1. A clip without `start` begins where the previous clip in the same layer
-   ends; the first clip begins at 0.
-2. Video and audio clips last `duration` if given, otherwise `out - in`.
-   With neither, they play to the end of the file. `render` and
-   `validate --probe` read that length from the file; plain `validate`
-   opens no files, so there such a clip is open-ended (rule 3).
-3. Images, solids, shapes and text are open-ended: without `duration` they
-   last until `output.duration`. If that is not set either, validation fails
-   with E305.
-4. Clips in one layer must not overlap (E302), except for the overlap a
-   `transition` declares. A clip with a transition and no explicit `start`
-   is moved earlier by the transition duration. The previous clip must cover
-   the whole overlap (E306).
-5. `output.duration` defaults to the latest end across all layers and audio
-   tracks. Clips extending past it are cut with W301.
-6. All keyframe and word times are relative to the clip start.
+1. A clip without `start` begins where the previous clip in its layer ends; the first at 0.
+2. Video and audio clips last `duration`, else `out - in`, else to the end of the file. `render` and `validate --probe` read that length; plain `validate` opens no files and treats such a clip as open-ended (rule 3).
+3. Images, solids, shapes and text are open-ended: without `duration` they run to `output.duration`; if that is unset too, E305.
+4. Clips in a layer don't overlap (E302), except by a `transition`'s overlap; a clip with a transition and no `start` moves earlier by it, and the previous clip must cover it (E306).
+5. `output.duration` defaults to the latest end across layers and audio; clips past it are cut (W301).
+6. Keyframe and word times are relative to the clip start.
 
 ## Determinism
 
-Rendering is a pure function of the timeline, the assets and the requested
-time. Nothing reads a clock. The same inputs produce the same frame on the
-same platform, and perceptually identical frames across platforms; the
-golden-frame tests in `tests/golden/` compare with tolerance for that
-reason.
+- A frame is a pure function of timeline, assets and time; nothing reads a clock.
+- Same platform: identical frames. Across platforms: perceptually identical; golden tests (`tests/golden/`) compare with tolerance.
 
 ## Validation
 
-`geneva validate timeline.json` reports every problem it can find, each
-with a code, a JSON pointer, the offending value and a suggested fix. See
-[errors.md](errors.md) for the codes. `--format json` prints the same
-information as one JSON document.
+- `geneva validate timeline.json` reports every problem: code, JSON pointer, value, suggested fix. Codes: [errors.md](errors.md).
+- `--format json` prints the same as one JSON document.
 
 ## Renderers and encoders
 
-`geneva render` copies the source streams instead of rendering when the
-composition is a plain cut or join of video at natural size and nothing
-asks for a re-encode (see [architecture.md](architecture.md#stream-copy));
-`--exact` forces frame-accurate rendering. With an `outputs` map, `-o`
-names a directory and every entry is written from one pass.
-
-Two renderers draw every source kind, with every transform, opacity,
-blend mode, mask, effect and transition: the CPU reference renderer and
-the GPU one, chosen with `--renderer`. Markup is painted on the CPU in
-both and composited by the renderer. They agree to the golden tests'
-tolerance, not byte for byte.
-
-`encode.video.hardware` picks the encoder: `auto` uses VideoToolbox,
-NVENC or Media Foundation (Windows, 8-bit, a GPU encoder only) where one
-is present and works, `never` always uses software,
-`require` fails without one. The notes of a render name the encoder
-used.
-
-Text uses fonts from `font` assets first and falls back to fonts installed
-on the system. Output that depends on system fonts can differ between
-machines; ship the fonts as assets when the result must be identical. A
-machine with no fonts installed at all (a bare container, say) draws in
-Liberation Sans, which is built in for that case only.
-Markup is the same: `font-family` may name a `font` asset by its id or
-by the family the file carries, and every font asset of the document is
-registered before a markup box is drawn, so a family that is both an
-asset and installed comes from the asset on every machine.
+- `render` stream-copies when the composition is a plain cut or join at natural size and nothing asks for a re-encode ([architecture.md](architecture.md#stream-copy)); `--exact` forces frame-accurate rendering.
+- With `outputs`, `-o` names a directory; every entry is written from one pass.
+- Two renderers draw everything (every source, transform, opacity, blend, mask, effect, transition): CPU reference and GPU, `--renderer`. Markup is painted on the CPU in both. They agree to the golden tolerance, not byte for byte.
+- `encode.video.hardware`: `auto` uses VideoToolbox, NVENC or Media Foundation (Windows, 8-bit, GPU encoder only) when present and working; `never` software only; `require` fails without one. Notes name the encoder used.
+- Fonts: `font` assets first, then installed fonts; ship fonts as assets for identical output across machines. With no fonts installed at all, Liberation Sans is built in. Markup `font-family` may name an asset by id or declared family; all font assets are registered before markup is drawn.
