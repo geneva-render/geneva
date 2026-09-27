@@ -105,12 +105,12 @@ ffmpeg -i iss.mp4 -filter_complex "
 
 This kinda works, eh. But `drawbox` can't read the width `drawtext` measured, so every size in there is a pixel a human (or an AI) had to measure. There are no rounded corners, no letter-spacing and no blurred shadow on the box, so the card above has to be made in another tool first. Word-by-word captions need a script to turn the transcript into an ASS file, and ASS still can't round the box or keep it even behind the lit word. And all 300 frames get re-encoded, including the 180 with nothing on them.
 
-## Not a wrapper
+## Why not just use an ffmpeg wrapper, or a browser?
 
-Wrappers like ffmpeg-python or fluent-ffmpeg give you a nicer way to write the same filtergraph, so they inherit what the filtergraph can't do. geneva never writes an ffmpeg command. It reads the whole edit first and decides how to carry it out, and that's what makes the rest possible:
+Wrappers like ffmpeg-python or fluent-ffmpeg only give you a nicer way to write the same filtergraph, so they can't do anything the filtergraph can't. geneva never writes an ffmpeg command. It reads the whole edit first, then decides how to do it:
 
-- **It does less work.** Streams that can be copied are copied. A frame-accurate cut re-encodes only the frames between the cut and the next keyframe (when your system has x264; see below). Frames with nothing drawn on them skip the compositor, or with x264 are copied as they are. Changing only the sound leaves the picture alone. ffmpeg can do much of this if you know the flags; geneva does it without being asked.
-- **It catches mistakes before the render, not after.** The whole edit is checked up front, and a problem comes back with a code, its place in the document and usually a hint:
+- **It does less work.** Anything that can be copied is copied. A frame-accurate cut only re-encodes the frames up to the next keyframe (with x264 on your system), frames with nothing drawn on them skip the compositor, and changing only the sound leaves the picture alone. ffmpeg can do most of this if you know the flags. geneva just does it.
+- **It catches mistakes before rendering.** The whole edit is checked first, and every problem comes back with a code, where it is in the document, and usually a hint:
 
   ```text
   error[E200]: unknown asset "crad"
@@ -118,11 +118,17 @@ Wrappers like ffmpeg-python or fluent-ffmpeg give you a nicer way to write the s
      = help: did you mean "card"? assets are declared under "assets"
   ```
 
-  ffmpeg is happy to hand you a broken file and exit 0. In a small test I ran (20 editing tasks answered blind by one model, twice; I wrote the tasks, so it's a hint, not a benchmark), the ffmpeg answers produced 8 files that exited 0 and were quietly wrong: shifted colours, cuts tens of milliseconds off, sound drifting out of sync. The geneva answers got all 20 right in both runs, once I'd fixed the one bug the test turned up.
-- **It has an actual compositor.** Layers, keyframes, masks, blend modes and transitions on exact frame times, blended in linear light, with colour metadata kept and HDR tone-mapped when needed. Animations are worked out from each frame's timestamp, so frame 1234 is the same picture every time. GPU when you have one, CPU when you don't.
-- **It tells you what it did.** Every run ends with a few notes: the encoder it picked, what it copied, what it had to guess about your source. `--format json` makes all of it machine-readable.
+  ffmpeg will happily hand you a broken file and exit 0. In a small test I ran (20 editing tasks, one model, twice; I wrote the tasks, so take it as a hint), 8 of the ffmpeg files exited 0 and were quietly wrong: shifted colours, cuts a few tens of milliseconds off, sound drifting out of sync. The geneva ones were all right both times, after I fixed the one bug the test found.
+- **It has a real compositor.** Layers, keyframes, masks, blend modes and transitions, frame-exact and blended in linear light, with colour metadata kept and HDR tone-mapped when needed. Every frame is computed from its timestamp, so frame 1234 always looks the same. GPU if you have one, CPU if you don't.
+- **It tells you what it did.** Each run ends with a few notes: which encoder it picked, what it copied, what it had to guess about your source. `--format json` gives you the same, machine-readable.
 
-**"Couldn't I use Playwright and ffmpeg, or Remotion?"** You could, and people do: screenshot the HTML frame by frame in a headless browser, then have ffmpeg lay the shots over the footage. Everything apart from the overlay is still ffmpeg flags. The browser's animations run on the wall clock, so its clock has to be faked for every frame, and it's a second full encode, with Chromium, Node and ffmpeg to install first. Remotion packages the same approach and its docs say not to use CSS `@keyframes` or transitions, since frames render out of order; geneva plays them as written. On the same 4-core machine with the same x264 settings, the name card and captions above took 4.3 seconds, against 16.4 for Playwright plus ffmpeg and 14.5 for Remotion at its quickest, and the Popeye video at the top took 74 seconds against 131 for Playwright plus ffmpeg. Across [seven real-world jobs](docs/benchmarks.md), from a vertical social clip to a four-minute subtitle burn, geneva was quicker than both on every one: 2 to 6 times quicker wherever there was footage, and about twice as quick as Remotion on full-screen motion graphics with no footage. What the browser does better: any CSS and any JavaScript, where geneva handles [a subset of CSS](docs/timeline.md#markup) (flexbox, gradients, shadows, clip paths, blend modes, keyframes) and no JavaScript.
+### What about Playwright or Remotion?
+
+You can screenshot the HTML frame by frame in a headless browser and have ffmpeg lay the shots over the footage, and people do. But you have to fake the browser's clock for every frame, it's a second full encode, and you need Chromium, Node and ffmpeg installed first. Remotion packages the same idea, and its docs tell you not to use CSS `@keyframes`, since frames render out of order. geneva plays them as written.
+
+It's also slower. The name card and captions above took geneva 4.3 seconds, Playwright + ffmpeg 16.4 and Remotion 14.5. The Popeye video at the top took 74 seconds against 131. Across [seven real-world jobs](docs/benchmarks.md) geneva was quicker than both every time: 2 to 6 times with footage, and about twice as quick as Remotion on motion graphics alone.
+
+What the browser does better: the rest of CSS, and JavaScript. geneva covers what titles and graphics actually use ([flexbox, gradients, shadows, clip paths, blend modes, keyframes](docs/timeline.md#markup)), but not grid, inline spans or transitions. And no JavaScript, which you don't really need for nice graphics anyway.
 
 ## Made to be driven by agents
 
