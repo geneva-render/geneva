@@ -1,12 +1,17 @@
 # Timeline format 1.0
 
 A timeline is a JSON document describing a video composition: the output
-frame, assets, visual layers of clips, audio tracks.
+frame, assets, visual layers of clips, audio tracks. Every editing
+command geneva has turns into one of these, and you can write one by hand
+when a command isn't enough. This page is the reference, for people and
+for programs that generate timelines.
 
 - Schema: [`schema/geneva-timeline-1.0.schema.json`](../schema/geneva-timeline-1.0.schema.json), also printed by `geneva schema`.
-- Unknown fields are errors everywhere; the message lists the allowed names.
+- Unknown fields are errors everywhere; the message lists the allowed names. A typo fails loudly instead of being quietly ignored.
 
 ## Minimal document
+
+The smallest thing that renders: three seconds of a flat colour.
 
 ```json
 {
@@ -22,6 +27,8 @@ frame, assets, visual layers of clips, audio tracks.
 
 ### Times
 
+Anywhere a time goes, write it however is handiest:
+
 | Form | Example | Meaning |
 | --- | --- | --- |
 | number | `1.5` | seconds |
@@ -30,7 +37,7 @@ frame, assets, visual layers of clips, audio tracks.
 | frames | `"45f"` | frames at the output frame rate |
 | timecode | `"00:01:02.5"`, `"1:02.5"` | hours, minutes, seconds |
 
-- Kept as exact rationals: `0.1` is exactly a tenth; a frame at 29.97 fps is exactly 1001/30000 s.
+- Kept as exact rationals, so there's no float drift: `0.1` is exactly a tenth, and a frame at 29.97 fps is exactly 1001/30000 s.
 - Never negative.
 
 ### Frame rate
@@ -54,7 +61,8 @@ number.
 
 ### Points
 
-`transform.position` and `transform.anchor`:
+`transform.position` and `transform.anchor` take a point, in whichever
+form reads best:
 
 ```json
 { "x": 30, "y": 36 }        [30, 36]        "30 36"        "0% 50%"
@@ -73,7 +81,9 @@ number.
 
 ### Animated values
 
-A property marked *animatable* takes a constant or a `keyframes` object:
+A property marked *animatable* takes either a plain value or a list of
+keyframes. The two keyframe spellings below mean the same thing; the
+array one is easier to scan down a column.
 
 ```json
 "opacity": { "keyframes": [ { "t": 0, "v": 0 }, { "t": "0.5s", "v": 1, "ease": "ease-out" } ] }
@@ -95,8 +105,8 @@ A property marked *animatable* takes a constant or a `keyframes` object:
 
 ### Animation
 
-Stylesheet-style motion: a top-level `keyframes` map of rules, played by a
-clip's `animation`.
+If you'd rather write motion the way you would in CSS, you can: put rules
+in a top-level `keyframes` map and play them with a clip's `animation`.
 
 ```json
 "keyframes": {
@@ -123,7 +133,7 @@ A rule maps offsets (`from`, `to`, percentages) to declaration blocks:
 - **One-sided properties**: a property set at only one offset is dropped; a rule left empty is W440. So `to { transform: none }` means "back where it started", not "reset scale and rotation".
 - Resolves to ordinary keyframe tracks; an animated clip composites like a hand-written one.
 
-`animation` shorthand, parts in any order:
+The `animation` value is the CSS shorthand, parts in any order:
 
 | Part | Default | Values |
 | --- | --- | --- |
@@ -189,8 +199,9 @@ picture is still copied where nothing else re-encodes it.
 
 ### `outputs`
 
-Several files from one render, all from the same composited frames: sizes,
-a poster, seek sprites, audio alone. `geneva render -o DIR` writes them
+Most renders write one file. When you need several (a few sizes, a
+poster, seek sprites, the audio on its own), list them here and they all
+come out of one render, from the same composited frames. `geneva render -o DIR` writes them
 into `DIR`. Frames are composited once and scaled per entry; sources are
 decoded once.
 
@@ -221,7 +232,8 @@ decoded once.
 
 ### `assets`
 
-Clips never contain paths; files are reached only through assets.
+Every file the timeline uses is declared here once and referred to by id.
+Clips never contain paths.
 
 | Field | Required | Description |
 | --- | --- | --- |
@@ -231,8 +243,9 @@ Clips never contain paths; files are reached only through assets.
 
 ### `compositions`
 
-A nested timeline, shown by a `composition` source; place it any number of
-times.
+A small timeline of its own, handy for anything you want to reuse: build
+it once, then place it with a `composition` source as many times as you
+like, each with its own timing and transform.
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
@@ -274,8 +287,8 @@ times.
 
 ### `crop`
 
-A source rectangle that becomes the clip's box, applied before `fit` and
-the transform. `"crop": { "x": 420, "width": 1080 }` on 1920×1080 gives a
+Cuts a rectangle out of the source, and that rectangle becomes the clip's
+box before `fit` and the transform see it. `"crop": { "x": 420, "width": 1080 }` on 1920×1080 gives a
 1080×1080 clip.
 
 | Field | Default | Description |
@@ -289,8 +302,9 @@ the transform. `"crop": { "x": 420, "width": 1080 }` on 1920×1080 gives a
 
 ### `effects`
 
-Applied after the transform (sizes in output pixels), before opacity and
-blending. Each has a `kind`. A clip with effects is always composited.
+Effects run on the placed picture: after the transform (so sizes are in
+output pixels) and before opacity and blending. For now there's one, a
+blur. A clip with effects is always composited.
 
 `blur`
 
@@ -301,7 +315,9 @@ blending. Each has a `kind`. A clip with effects is always composited.
 - Spreads past the edges into transparency.
 - Wide blurs are computed on a smaller layer; same look, flat cost.
 
-Portrait idiom (`--fill blur` builds this):
+The classic use is a vertical video made from a horizontal one: the
+picture whole, over a blurred, scaled-up copy of itself. `--fill blur`
+builds exactly this:
 
 ```json
 "layers": [
@@ -313,9 +329,10 @@ Portrait idiom (`--fill blur` builds this):
 
 ### `mask`
 
-Defined in the clip's box (after the crop, before `fit` and the transform),
-so it moves with the clip. Box pixels or percentages. A masked clip is
-always composited.
+Limits what a clip shows: a shape, or the brightness of an image. It's
+defined in the clip's own box, so it moves, scales and turns with the
+clip. Sizes are box pixels or percentages. A masked clip is always
+composited.
 
 | Field | Default | Description |
 | --- | --- | --- |
@@ -326,6 +343,8 @@ always composited.
 | `feather` | `0` | Soft edge width; 0 is hard. |
 | `asset` | | Image asset whose luma × alpha is the coverage, stretched over the box: white shows, black or transparent hides. Shape fields ignored. |
 | `invert` | `false` | |
+
+Rounded corners on a picture-in-picture, for example:
 
 ```json
 { "source": { "kind": "video", "asset": "cam" }, "fit": "none",
@@ -347,7 +366,8 @@ rotation act around it.
 
 ### Sources
 
-Every source has a `kind`.
+A clip's `source` says what it shows. Every source has a `kind`; the rest
+depends on it.
 
 `video`
 
@@ -407,8 +427,10 @@ Every source has a `kind`.
 | `outline` | no | | `{ "color", "width" }` or `"2px black"`. |
 | `shadow` | no | | `{ "color", "x", "y", "blur" }`, `"0 2px 8px #0008"`, or a list (commas in a string), front to back. Object fields animatable; the shorthand is constant. The image is sized for the furthest reach over the clip, so a moving shadow doesn't shift the text. |
 
-`captions`: one clip that expands to one clip per cue, so frames between
-cues can still be copied.
+`captions`: point it at a subtitle file or a speech recogniser's word
+file and it draws the captions. Under the hood it becomes one clip per
+cue, so the frames between cues can still be copied rather than
+re-encoded.
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
@@ -431,6 +453,9 @@ cues can still be copied.
 
 #### CSS shorthands
 
+If you know CSS, you can write text styles the way you're used to. These
+strings are taken as they are:
+
 | CSS | Field | Example |
 | --- | --- | --- |
 | `text-shadow` | `shadow` | `"0 2px 8px #0008"`, `"0 0 4px #fff8, 0 0 12px #0ff8"` |
@@ -447,7 +472,8 @@ cues can still be copied.
 ### Transitions
 
 `transition` is how a clip arrives, `transition_out` how a layer's last
-clip leaves.
+clip leaves. There are two: a crossfade, and a fade that dips through a
+colour (black by default, which is how most pieces open and close).
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
@@ -488,7 +514,8 @@ Tracks have `id`, `enabled`, `clips`, as layers do.
 
 ### `subtitles[]`
 
-Text streams players can show or hide. A *subtitle* travels beside the
+Subtitle tracks that travel with the video as text streams, which players
+can switch on and off. A *subtitle* travels beside the
 picture; a *caption* is drawn into it ([`captions` source](#sources)). The
 same `.srt` or `.vtt` serves either.
 
@@ -515,9 +542,12 @@ same `.srt` or `.vtt` serves either.
 
 ## Markup
 
-An `html` source draws a box of HTML and CSS: strict HTML parser, CSS
-subset, flexbox and block layout ([taffy](https://github.com/DioxusLabs/taffy)).
-Anything unsupported is refused or warned about by name.
+An `html` source draws a box of HTML and CSS, so titles, cards and
+graphics can be written the way you'd write them for a page. It isn't a
+browser: a strict HTML parser, a CSS subset aimed at graphics, and
+flexbox and block layout ([taffy](https://github.com/DioxusLabs/taffy)).
+Whatever it doesn't support, it tells you by name rather than drawing
+something different.
 
 ```json
 { "kind": "html", "asset": "card", "width": 560 }
@@ -572,8 +602,8 @@ Anything unsupported is refused or warned about by name.
 | Text | `color`, `-webkit-text-fill-color` (as `color`), `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space`, `text-shadow` (list) |
 | Motion | `animation`, `animation-name`, `-duration`, `-delay`, `-timing-function`, `-iteration-count`, `-direction`, `-fill-mode` |
 
-Anything else is W450: skipped, with the element and property named; the
-rest draws. A `<style>` rule matching nothing is W452.
+Anything else is W450: that declaration is skipped, with the element and
+property named, and the rest of the document still draws. A `<style>` rule matching nothing is W452.
 
 **Lengths**
 
@@ -624,6 +654,9 @@ gradient mixes its stops in linear light.
 
 ### Motion
 
+Animations written in the markup play as they would in a browser, so a
+card that moves when you open the file moves the same in the video.
+
 ```html
 <style>
   @keyframes slide-in { from { transform: translateX(-656px) } to { transform: none } }
@@ -653,12 +686,16 @@ group composited with the transform, opacity and blur of the moment.
 
 ## Known limitations
 
+The ones worth knowing about:
+
 - **Markup is a subset of HTML and CSS**, for titles and graphics: no JavaScript, grid, float, CSS transitions or media queries. Anything else it doesn't draw is named (W450).
 - **Markup is local**: nothing is fetched over the network; `<iframe>`, `<svg>`, `<canvas>`, `<video>` aren't drawn.
 - **Audio is mono or stereo**; more channels are downmixed.
 - **No fixed average bitrate**: constant quality, optionally under a ceiling ([rate control](cli.md#rate-control)). H.265 needs a hardware encoder.
 
 ## Timing rules
+
+How clips find their place in time when you don't spell it out:
 
 1. A clip without `start` begins where the previous clip in its layer ends; the first at 0.
 2. Video and audio clips last `duration`, else `out - in`, else to the end of the file. `render` and `validate --probe` read that length; plain `validate` opens no files and treats such a clip as open-ended (rule 3).
