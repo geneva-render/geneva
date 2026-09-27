@@ -34,25 +34,9 @@ geneva probe talk.mp4                                       # what's actually in
 
 No filtergraphs and no flag order to remember. Every command is translated into a JSON document describing the edit, which geneva renders as-is. You can also add `--show-timeline` to see it. All commands and flags are here: [docs/cli.md](docs/cli.md).
 
-## The same lower third, twice
+## How it works
 
-A name card that slides in over ten seconds of footage at 2 seconds and fades out 4 seconds later. In ffmpeg:
-
-```sh
-ffmpeg -i iss.mp4 -filter_complex "
-  color=c=0x0a0f14@0.8:s=422x82:d=4,format=rgba,
-  drawbox=w=5:h=ih:c=0xc4362f:t=fill,
-  drawtext=fontfile=LiberationSans-Bold.ttf:text='Dragon CRS-17':fontsize=29:fontcolor=0xf2f5f7:x=29:y=14,
-  drawtext=fontfile=LiberationSans-Regular.ttf:text='BERTHING AT THE ISS  ·  NASA':fontsize=13:fontcolor=0x94a6b6:x=29:y=56,
-  fade=t=in:d=0.3:alpha=1,fade=t=out:st=3.7:d=0.3:alpha=1,
-  setpts=PTS+2/TB[card];
-  [0:v][card]overlay=x='56-422*pow(1-min((t-2)/0.5\,1)\,3)':y=54:eof_action=pass
-" dragon.mp4
-```
-
-It works, but every number in it is a pixel someone measured. Change the title and the box doesn't grow. Change the output size and nothing scales. There's no letter-spacing and no shadow, because `drawtext` has neither. And all 300 frames are decoded and re-encoded, including the 180 with nothing on them.
-
-In geneva the card is an HTML file, which looks and moves the same when you open it in a browser:
+A name card slides in at 2 seconds and fades out 4 seconds later, over ten seconds of footage. The card is an HTML file, and it looks and moves the same in a browser:
 
 ```html
 <style>
@@ -78,7 +62,7 @@ In geneva the card is an HTML file, which looks and moves the same when you open
 </div>
 ```
 
-and a document says when it appears:
+A JSON document says when it appears:
 
 ```json
 {
@@ -99,9 +83,27 @@ note[N600]: H.264 runs encoded with the system's x264 (build 164) at CRF 18
 wrote dragon.mp4 (300 frames, 10s of video)
 ```
 
-The box grows to fit its text, and percentages are of the frame, so the same card works at any output size. With an H.264 source and x264 on the system, the frames with nothing on them are copied from the source rather than re-encoded; without x264 they still skip the compositor and go straight from the decoder to the encoder. [examples/lower-third.json](examples/lower-third.json) adds word-by-word captions, one more layer that reads the Whisper transcript as it is. In ffmpeg that takes a script to turn the transcript into an ASS subtitle file with one event per word, then a `subtitles=` filter, and ASS still can't round the box or keep it even behind the highlighted word:
+The box grows to fit its text. Percentages are relative to the frame, so the same card works at any output size. Frames with nothing on them aren't re-encoded: with an H.264 source and x264 installed they're copied straight from the source; otherwise they go from decoder to encoder without touching the compositor.
+
+Word-by-word captions are one more layer, which reads the Whisper transcript as it is ([examples/lower-third.json](examples/lower-third.json)):
 
 <img src="docs/demo.webp" alt="A name card sliding in at the top left over footage of a Dragon capsule at the space station, with captions below" width="640" height="360">
+
+### The same card in ffmpeg
+
+```sh
+ffmpeg -i iss.mp4 -filter_complex "
+  color=c=0x0a0f14@0.8:s=422x82:d=4,format=rgba,
+  drawbox=w=5:h=ih:c=0xc4362f:t=fill,
+  drawtext=fontfile=LiberationSans-Bold.ttf:text='Dragon CRS-17':fontsize=29:fontcolor=0xf2f5f7:x=29:y=14,
+  drawtext=fontfile=LiberationSans-Regular.ttf:text='BERTHING AT THE ISS  ·  NASA':fontsize=13:fontcolor=0x94a6b6:x=29:y=56,
+  fade=t=in:d=0.3:alpha=1,fade=t=out:st=3.7:d=0.3:alpha=1,
+  setpts=PTS+2/TB[card];
+  [0:v][card]overlay=x='56-422*pow(1-min((t-2)/0.5\,1)\,3)':y=54:eof_action=pass
+" dragon.mp4
+```
+
+This kinda works, eh. But `drawbox` can't read the width `drawtext` measured, so every size in there is a pixel a human (or an AI) had to measure. There are no rounded corners, no letter-spacing and no blurred shadow on the box, so the card above has to be made in another tool first. Word-by-word captions need a script to turn the transcript into an ASS file, and ASS still can't round the box or keep it even behind the lit word. And all 300 frames get re-encoded, including the 180 with nothing on them.
 
 ## Not a wrapper
 
