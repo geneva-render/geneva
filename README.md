@@ -128,7 +128,7 @@ You can screenshot the HTML frame by frame in a headless browser and have ffmpeg
 
 It's also slower. The name card and captions above took geneva 4.3 seconds, Playwright + ffmpeg 16.4 and Remotion 14.5. The Popeye video at the top took 74 seconds against 131. Across [seven real-world jobs](docs/benchmarks.md) geneva was quicker than both every time: 2 to 6 times with footage, and about twice as quick as Remotion on motion graphics alone.
 
-What the browser does better: the rest of CSS, and JavaScript. geneva covers what titles and graphics actually use ([flexbox, gradients, shadows, clip paths, blend modes, keyframes](docs/timeline.md#markup)), but not grid, inline spans or transitions. And no JavaScript, which you don't really need for nice graphics anyway.
+What the browser does better: the rest of CSS, and JavaScript. geneva covers what titles and graphics actually use ([flexbox, gradients, shadows, clip paths, blend modes, keyframes](docs/timeline.md#markup)), but not grid or inline spans. And no JavaScript, which you don't really need for nice graphics anyway.
 
 ## Made to be driven by agents
 
