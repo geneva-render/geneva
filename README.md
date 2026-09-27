@@ -2,7 +2,7 @@
 
 **Video edits as JSON, overlays as HTML+CSS, rendered without a browser.**
 
-This started as a rewrite of ffmpeg's CLI in Rust. The core codecs still come from libav*, but everything on top of them is new: a planner that works out the cheapest way to produce an edit, a proper compositor with layers, keyframes, masks, transitions etc., and a layout engine that draws titles and graphics written in plain HTML and CSS. All in a single binary with no dependencies.
+This started as a rewrite of ffmpeg's CLI in Rust. The core codecs still come from libav*, but everything on top of them is new: a planner that works out the cheapest way to produce an edit, a proper compositor with layers, keyframes, masks, transitions etc., and a layout engine that draws titles and graphics written in plain HTML and CSS, natively and quickly, without wasting resources. No filtergraphs, no Playwright, no headless browsers. All in a single binary, without dependencies.
 
 https://github.com/user-attachments/assets/6d8566dd-7270-49bc-ac66-dab1585817a3
 
