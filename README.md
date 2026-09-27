@@ -6,7 +6,7 @@ This started as a rewrite of ffmpeg's CLI in Rust. The core codecs still come fr
 
 https://github.com/user-attachments/assets/6d8566dd-7270-49bc-ac66-dab1585817a3
 
-<sub>An AI agent made this on its first try, from one prompt, with nothing but geneva and whisper-cli. [The prompt is below.](#made-to-be-driven-by-agents)</sub>
+<sub>An AI agent made this on its first try, from one prompt, with nothing but whisper-cli and a single geneva command. [The prompt is below.](#made-to-be-driven-by-agents)</sub>
 
 ## Install
 
