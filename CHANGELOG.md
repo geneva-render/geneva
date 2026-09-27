@@ -40,7 +40,7 @@ versions changed the format freely.
   with it: a group whose boxes changed every frame was repainted over its
   whole reach every frame instead of being given up on, and a picture no
   longer shown was never let go, so it could keep a new one out of the
-  budget. On this machine a 16 s kinetic typography piece at 1080p
+  budget. On a 4-vCPU Xeon VM (2.1 GHz, no GPU) a 16 s kinetic typography piece at 1080p
   takes 14.3 s where it took 59.3, and a 14 s intro with blurred shapes
   in `screen` 29.9 s where it took 74.3. The picture is the same to one
   level in 8 bits, except that a glyph running past the edge of a group

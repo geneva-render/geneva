@@ -13,6 +13,9 @@ quicker than Remotion, on 3 to 7 times less CPU than Remotion. On the
 three pieces of motion graphics with no footage it is about twice as
 quick as Remotion and 4 to 6 times quicker than Playwright + ffmpeg.
 
+All of it was measured on one machine: a cloud VM (KVM) with 4 vCPUs of
+an Intel Xeon at 2.1 GHz, 16 GB of RAM, Ubuntu 24.04 and no GPU.
+
 Contents: [the jobs](#the-jobs), [results](#results),
 [what it says](#what-it-says), [how it was run](#how-it-was-run),
 [the smaller test](#the-smaller-test), [caveats](#caveats),
@@ -71,7 +74,8 @@ before anything was timed, so each tool was timed drawing the same video.
 ## Results
 
 Wall time and the CPU time the whole machine spent, median of three
-rounds. Every tool encodes x264 at CRF 23, preset `medium`, 4:2:0.
+rounds, on the 4-vCPU Xeon VM described above. Every tool encodes x264 at
+CRF 23, preset `medium`, 4:2:0.
 
 | Job | geneva | Playwright + ffmpeg | Remotion |
 | --- | --- | --- | --- |
@@ -147,7 +151,8 @@ tool was quicker.
   every CSS animation was paused and set to the frame's time before each
   frame was taken, which gives the same picture whatever order frames are
   rendered in.
-- **The machine**: one shared 4-core Linux container, CPU only, nothing
+- **The machine**: a cloud VM (KVM) with 4 vCPUs of an Intel Xeon at
+  2.1 GHz and 16 GB of RAM, Ubuntu 24.04, CPU only, nothing
   else running. Three rounds, the tools taking turns within each round.
   CPU is the machine's busy time over each run, read from `/proc/stat`,
   because the shell's own timer misses processes Chromium starts.
@@ -155,7 +160,7 @@ tool was quicker.
 ## The smaller test
 
 The name card over nine seconds of 720p footage in the
-[README](../README.md), timed the same way:
+[README](../README.md), timed the same way on the same machine:
 
 | Job | geneva | Playwright + ffmpeg | Remotion, bundled once |
 | --- | --- | --- | --- |

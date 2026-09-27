@@ -20,7 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/geneva-render/geneva/main/scripts/i
 irm https://raw.githubusercontent.com/geneva-render/geneva/main/scripts/install.ps1 | iex
 ```
 
-Or download an archive from [Releases](https://github.com/geneva-render/geneva/releases). Runs on Linux (x64, arm64), macOS on Apple silicon and Windows x64. Everything it needs is inside the binary.
+Or download an archive from [Releases](https://github.com/geneva-render/geneva/releases). It runs on Linux (x64, arm64), macOS on Apple silicon and Windows x64, and everything it needs is inside the binary.
 
 ## The everyday things
 
@@ -36,7 +36,7 @@ Every command is translated into a validated JSON document describing the edit, 
 
 ## How it works
 
-A name card slides in at 2 seconds and fades out 4 seconds later, over ten seconds of footage. The card is an HTML file, and it looks and moves the same in a browser:
+This is an example of a name card that slides in two seconds into ten seconds of footage and fades out four seconds later. The card is an HTML file, so it looks and moves the same when you open it in a browser:
 
 ```html
 <style>
@@ -62,7 +62,7 @@ A name card slides in at 2 seconds and fades out 4 seconds later, over ten secon
 </div>
 ```
 
-A JSON document says when it appears:
+Then a JSON document says when it appears:
 
 ```json
 {
@@ -85,7 +85,7 @@ wrote dragon.mp4 (300 frames, 10s of video)
 
 The box grows to fit its text. Percentages are relative to the frame, so the same card works at any output size. Frames with nothing on them aren't re-encoded: with an H.264 source and x264 installed they're copied straight from the source; otherwise they go from decoder to encoder without touching the compositor.
 
-Word-by-word captions are one more layer, which reads the Whisper transcript as it is ([examples/lower-third.json](examples/lower-third.json)):
+The full example, [examples/lower-third.json](examples/lower-third.json), also adds word-by-word captions: one more layer that reads the Whisper transcript as it is.
 
 <img src="docs/demo.webp" alt="A name card sliding in at the top left over footage of a Dragon capsule at the space station, with captions below" width="640" height="360">
 
@@ -119,14 +119,14 @@ Wrappers like ffmpeg-python or fluent-ffmpeg only give you a nicer way to write 
   ```
 
   ffmpeg will happily hand you a broken file and exit 0. In a small test I ran (20 editing tasks, one model, twice; I wrote the tasks, so take it as a hint), 8 of the ffmpeg files exited 0 and were quietly wrong: shifted colours, cuts a few tens of milliseconds off, sound drifting out of sync. The geneva ones were all right both times, after I fixed the one bug the test found.
-- **It has a real compositor.** Layers, keyframes, masks, blend modes and transitions, frame-exact and blended in linear light, with colour metadata kept and HDR tone-mapped when needed. Every frame is computed from its timestamp, so frame 1234 always looks the same. GPU if you have one, CPU if you don't.
+- **It has a real compositor.** It handles layers, keyframes, masks, blend modes and transitions, all frame-exact and blended in linear light, keeps the colour metadata and tone-maps HDR when needed. Every frame is computed from its timestamp, so frame 1234 always looks the same. It uses the GPU if you have one, and the CPU if you don't.
 - **It tells you what it did.** Each run ends with a few notes: which encoder it picked, what it copied, what it had to guess about your source. `--format json` gives you the same, machine-readable.
 
 ### What about Playwright or Remotion?
 
 You can screenshot the HTML frame by frame in a headless browser and have ffmpeg lay the shots over the footage, and people do. But you have to fake the browser's clock for every frame, it's a second full encode, and you need Chromium, Node and ffmpeg installed first. Remotion packages the same idea, and its docs tell you not to use CSS `@keyframes`, since frames render out of order. geneva plays them as written.
 
-It's also slower. The name card and captions above took geneva 4.3 seconds, Playwright + ffmpeg 16.4 and Remotion 14.5. The Popeye video at the top took 74 seconds against 131. Across [seven real-world jobs](docs/benchmarks.md) geneva was quicker than both every time: 2 to 6 times with footage, and about twice as quick as Remotion on motion graphics alone.
+It's also slower. I timed all three on the same machine, a cloud VM with 4 vCPUs of an Intel Xeon at 2.1 GHz, 16 GB of RAM and no GPU, each encoding with x264 at the same settings. The name card and captions above took geneva 4.3 seconds, Playwright + ffmpeg 16.4 and Remotion 14.5, and the Popeye video at the top took 74 seconds against 131 for Playwright + ffmpeg. Across [seven real-world jobs](docs/benchmarks.md) geneva was quicker than both every time: 2 to 6 times with footage, and about twice as quick as Remotion on motion graphics alone.
 
 What the browser does better: the rest of CSS, and JavaScript. geneva covers what titles and graphics actually use ([flexbox, gradients, shadows, clip paths, blend modes, keyframes](docs/timeline.md#markup)), but not grid or inline spans. And no JavaScript, which you don't really need for nice graphics anyway.
 
