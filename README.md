@@ -157,7 +157,7 @@ On Windows, drop `libx264-<build>.dll` next to `geneva.exe` (MSYS2's `mingw-w64-
 - [Error codes](docs/errors.md)
 - [Colour and HDR](docs/color.md)
 - [Benchmarks](docs/benchmarks.md)
-- [How it's built](docs/architecture.md)
+- [Architecture](docs/architecture.md)
 - [Changelog](CHANGELOG.md)
 
 ## How this was built
