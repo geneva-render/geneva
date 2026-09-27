@@ -380,6 +380,12 @@ pub struct Computed {
     pub positioned: bool,
     /// `z-index`, when it is an integer rather than `auto`.
     pub z_index: Option<i32>,
+    /// Whether `display: flex` was written. A box that did not ask for it
+    /// is still laid out as a flex container (taffy has no inline
+    /// layout), but text with an inline element inside it is set as one
+    /// line of text, as a browser sets a paragraph; asked for, the text
+    /// and the element are flex items of their own, as they are there.
+    pub flex_written: bool,
 }
 
 /// The user-agent style for the handful of tags that carry one, so a
@@ -439,6 +445,7 @@ pub fn cascade(doc: &Document, sheet: &Stylesheet) -> (Vec<Computed>, Vec<String
             animation: None,
             positioned: false,
             z_index: None,
+            flex_written: false,
         };
         if let Some(el) = doc.nodes[id].element() {
             // CSS's default is content-box; taffy's is border-box, so it
@@ -664,6 +671,7 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
     let l = lower.as_str();
     match property {
         "display" => {
+            c.flex_written = l == "flex";
             c.layout.display = match l {
                 "flex" => Display::Flex,
                 "block" => Display::Block,

@@ -663,3 +663,35 @@ fn a_blur_kept_between_frames_draws_what_a_fresh_one_does() {
         assert!(d < 1e-4, "at {t} tenths: {d}");
     }
 }
+
+#[test]
+fn a_sentence_with_a_bold_word_wraps_as_one() {
+    // A paragraph 120 px wide with a word in another colour inside it.
+    // It wraps onto several lines and stays inside its box, and the word
+    // keeps its colour. Set as separate pieces, it ran off to the right
+    // on one line.
+    let f = markup_at(
+        "<p>a sentence long enough to wrap, with <b>one word</b> in green and more after it</p>",
+        "p { position: absolute; left: 10px; top: 10px; width: 120px; margin: 0; \
+             font: 16px Liberation Sans; color: #ffffff } \
+         b { color: #00ff00 }",
+        0,
+    );
+    let (mut top, mut bottom, mut right, mut green) = (u32::MAX, 0, 0, 0);
+    for y in 0..f.height() {
+        for x in 0..f.width() {
+            let p = at(&f, x, y);
+            if p.a > 0.5 {
+                top = top.min(y);
+                bottom = bottom.max(y);
+                right = right.max(x);
+                if p.g > 0.5 && p.r < 0.3 {
+                    green += 1;
+                }
+            }
+        }
+    }
+    assert!(bottom - top > 40, "several lines: {top}..{bottom}");
+    assert!(right < 135, "inside the box: {right}");
+    assert!(green > 20, "the word in green: {green}");
+}

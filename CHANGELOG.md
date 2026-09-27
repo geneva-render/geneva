@@ -10,6 +10,18 @@ versions changed the format freely.
 
 ### Fixed
 
+- **A word in bold inside a sentence broke the sentence.** In markup,
+  `<p>Go for <b>launch</b> at nine</p>` was laid out as three boxes in a
+  row: the paragraph stopped wrapping and ran off the edge of its box,
+  the space after the bold word was lost, and nothing said so. Text with
+  inline elements inside it (`b`, `strong`, `i`, `em`, `span`, `small`,
+  `code`, `a` and the other inline tags) is now set as one run, as a
+  browser sets it: it wraps as a whole, spaces are collapsed across the
+  pieces, each piece keeps its own colour, weight, style, size, family
+  and letter-spacing, and `<br>` breaks the line. An inline element that
+  needs a box of its own (a background, a border, padding) still gets
+  one, and an element that asks for `display: flex` still makes its text
+  and elements flex items, as a browser does.
 - **Full-screen motion graphics in markup render two to four times
   faster.** A benchmark against Remotion found geneva slower on pure
   markup pieces, and a profile found work that changed nothing in the

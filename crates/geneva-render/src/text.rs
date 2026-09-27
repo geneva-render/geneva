@@ -147,6 +147,30 @@ impl TextEngine {
     /// Renders a text source at clip-local time `t` seconds into an image
     /// whose size is the text's box (text bounds plus padding).
     pub fn render(&mut self, text: &ResolvedText, t: f64) -> Image {
+        self.draw(text, t, None)
+    }
+
+    /// Renders text set in several styles as one run that wraps as a
+    /// whole: markup's sentence with a `<b>` inside. `text` gives what the
+    /// whole run shares (alignment, line height, wrap width, shadows,
+    /// fill) and its text is ignored; `runs` are the pieces in order, each
+    /// with its style block and colour, a piece's unset fields taken from
+    /// `text`'s style.
+    pub fn render_runs(
+        &mut self,
+        text: &ResolvedText,
+        runs: &[(String, TextStyle, LinearRgba)],
+        t: f64,
+    ) -> Image {
+        self.draw(text, t, Some(runs))
+    }
+
+    fn draw(
+        &mut self,
+        text: &ResolvedText,
+        t: f64,
+        runs: Option<&[(String, TextStyle, LinearRgba)]>,
+    ) -> Image {
         let spec = &text.spec;
         let base_color = text.color.sample(t);
         let base = self.style(&spec.style, None, base_color);
@@ -174,6 +198,11 @@ impl TextEngine {
         // Spans: metadata indexes into `styles` so glyph colors are looked
         // up here rather than carried through the layout engine.
         let mut styles: Vec<Resolved> = vec![base.clone()];
+        if let Some(runs) = runs {
+            for (_, style, color) in runs {
+                styles.push(self.style(style, Some(&spec.style), *color));
+            }
+        }
         let mut buffer = Buffer::new(
             &mut self.fonts,
             Metrics::new(base.size, base.size * line_height),
@@ -183,7 +212,19 @@ impl TextEngine {
         buffer.set_wrap(Wrap::WordOrGlyph);
         buffer.set_size(Some(wrap_width), None);
         let default_attrs = attrs_for(&base, 0);
-        if text.words.is_empty() {
+        if let Some(runs) = runs {
+            // A piece in another size carries its own metrics, so a
+            // `<small>` is smaller and its line no taller than it needs.
+            let rich = runs.iter().enumerate().map(|(i, (piece, _, _))| {
+                let style = &styles[i + 1];
+                let mut attrs = attrs_for(style, i + 1);
+                if style.size != base.size {
+                    attrs = attrs.metrics(Metrics::new(style.size, style.size * line_height));
+                }
+                (piece.as_str(), attrs)
+            });
+            buffer.set_rich_text(rich, &default_attrs, Shaping::Advanced, Some(align));
+        } else if text.words.is_empty() {
             buffer.set_text(&text.text, &default_attrs, Shaping::Advanced, Some(align));
         } else {
             let mut spans: Vec<(String, usize)> = Vec::new();
@@ -292,10 +333,12 @@ impl TextEngine {
                 ),
             )
         };
-        // One per entry in `styles`: the base, then the highlight's.
+        // One per entry in `styles`: the base, then the highlight's. The
+        // pieces of a run share the base's, which comes from an ancestor
+        // that clips its background to all the text inside it.
         let fills: Vec<Option<Fill>> = (0..styles.len())
             .map(|i| {
-                if i == 0 {
+                if i == 0 || runs.is_some() {
                     text.fill.as_ref().map(fill_now)
                 } else {
                     text.highlight_fill.as_ref().map(fill_now)

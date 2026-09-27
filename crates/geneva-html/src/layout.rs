@@ -4,6 +4,8 @@
 //! leaf whose size the renderer measures. What comes back is a flat list
 //! of boxes with absolute coordinates, in the order they are painted.
 
+use std::collections::HashMap;
+
 use taffy::prelude::*;
 use taffy::style::Overflow;
 use taffy::{AvailableSpace, TaffyTree};
@@ -15,6 +17,15 @@ use crate::style::{Computed, Paint, Text};
 pub trait Measure {
     /// The size a run of text takes, wrapped to `width` when there is one.
     fn text(&mut self, text: &str, style: &Text, width: Option<f32>) -> (f32, f32);
+
+    /// The size text in several styles takes when it is set as one run,
+    /// wrapped to `width` when there is one. `style` is the element's own,
+    /// which carries the alignment and line height. By default the runs
+    /// are measured as one text in that style.
+    fn rich(&mut self, runs: &[(String, Text)], style: &Text, width: Option<f32>) -> (f32, f32) {
+        let text: String = runs.iter().map(|(t, _)| t.as_str()).collect();
+        self.text(&text, style, width)
+    }
 
     /// The natural size of an image, if it can be opened.
     fn image(&mut self, src: &str) -> Option<(f32, f32)>;
@@ -30,6 +41,16 @@ pub enum Content {
         /// The text, with whitespace already collapsed unless `pre`.
         text: String,
         /// How to draw it.
+        style: Text,
+    },
+    /// Text with inline elements inside it (`<b>`, `<em>`, `<span>` and
+    /// the like), set as one run that wraps as a whole, each piece in its
+    /// own style.
+    Rich {
+        /// The pieces in order, whitespace collapsed across them, each
+        /// with its style. A `<br>` is a piece holding a line break.
+        runs: Vec<(String, Text)>,
+        /// The element's own style: alignment, line height and shadows.
         style: Text,
     },
     /// An image, drawn to fill the content box.
@@ -110,6 +131,8 @@ pub struct Laid {
 enum Leaf {
     Text(DomId),
     Image(DomId),
+    /// An element whose text and inline elements are set as one run.
+    Rich(DomId),
 }
 
 /// Lays the document out. A dimension that is `None` is sized to the
@@ -138,7 +161,8 @@ pub fn layout<M: Measure>(
     let mut styles = styles.to_vec();
     styles[doc.root].layout = root_style;
     let styles = &styles[..];
-    let root = build(doc, styles, doc.root, &mut tree, &mut map)?;
+    let mut rich: HashMap<DomId, Vec<(String, Text)>> = HashMap::new();
+    let root = build(doc, styles, doc.root, &mut tree, &mut map, &mut rich)?;
 
     tree.compute_layout_with_measure(
         root,
@@ -160,6 +184,19 @@ pub fn layout<M: Measure>(
                         AvailableSpace::MaxContent => None,
                     });
                     let (w, h) = measure.text(text, style, limit);
+                    Size {
+                        width: known.width.unwrap_or(w),
+                        height: known.height.unwrap_or(h),
+                    }
+                }
+                Leaf::Rich(dom) => {
+                    let limit = known.width.or(match available.width {
+                        AvailableSpace::Definite(w) => Some(w),
+                        AvailableSpace::MinContent => Some(0.0),
+                        AvailableSpace::MaxContent => None,
+                    });
+                    let runs = rich.get(dom).map_or(&[][..], Vec::as_slice);
+                    let (w, h) = measure.rich(runs, &styles[*dom].text, limit);
                     Size {
                         width: known.width.unwrap_or(w),
                         height: known.height.unwrap_or(h),
@@ -204,6 +241,7 @@ pub fn layout<M: Measure>(
         styles,
         tree: &tree,
         map: &map,
+        rich: &rich,
         played_by_clip,
         groups: &mut groups,
     };
@@ -222,6 +260,8 @@ struct Walk<'a> {
     styles: &'a [Computed],
     tree: &'a TaffyTree<Leaf>,
     map: &'a [Option<NodeId>],
+    /// The runs of each element set as one run of text.
+    rich: &'a HashMap<DomId, Vec<(String, Text)>>,
     played_by_clip: Option<DomId>,
     groups: &'a mut Vec<Group>,
 }
@@ -291,6 +331,7 @@ fn build(
     dom: DomId,
     tree: &mut TaffyTree<Leaf>,
     map: &mut [Option<NodeId>],
+    rich: &mut HashMap<DomId, Vec<(String, Text)>>,
 ) -> Result<NodeId, String> {
     let node = &doc.nodes[dom];
     if node.text().is_some() {
@@ -310,18 +351,157 @@ fn build(
         map[dom] = Some(id);
         return Ok(id);
     }
+    // Text with inline elements inside is one leaf, set as one run. Its
+    // pieces get no nodes of their own, so nothing paints them twice.
+    if let Some(runs) = inline_runs(doc, styles, dom) {
+        let id = tree
+            .new_leaf_with_context(styles[dom].layout.clone(), Leaf::Rich(dom))
+            .map_err(|e| e.to_string())?;
+        map[dom] = Some(id);
+        rich.insert(dom, runs);
+        return Ok(id);
+    }
     let mut children = Vec::new();
     for child in doc.children(dom) {
         if styles[*child].layout.display == Display::None {
             continue;
         }
-        children.push(build(doc, styles, *child, tree, map)?);
+        children.push(build(doc, styles, *child, tree, map, rich)?);
     }
     let id = tree
         .new_with_children(styles[dom].layout.clone(), &children)
         .map_err(|e| e.to_string())?;
     map[dom] = Some(id);
     Ok(id)
+}
+
+/// Tags that sit inside a line of text rather than making a box.
+const INLINE: &[&str] = &[
+    "a", "abbr", "b", "br", "cite", "code", "em", "i", "kbd", "mark", "q", "s", "small", "span",
+    "strong", "sub", "sup", "time", "u", "var",
+];
+
+/// Whether an element can be set as part of the line it sits in: an
+/// inline tag with nothing that needs a box of its own (a background, a
+/// border, padding or margin, a shadow, an effect, an animation or a
+/// position), and only text and such elements inside it.
+fn plain_inline(doc: &Document, styles: &[Computed], dom: DomId) -> bool {
+    let Some(el) = doc.nodes[dom].element() else {
+        return false;
+    };
+    let s = &styles[dom];
+    let none: Style = Style::DEFAULT;
+    INLINE.contains(&el.tag.as_str())
+        && s.animation.is_none()
+        && !s.positioned
+        && !s.flex_written
+        && s.paint.background.is_none()
+        && s.paint.shadow.is_empty()
+        && s.paint.opacity >= 1.0
+        && s.paint.blur <= 0.0
+        && s.paint.clip_path.is_none()
+        && s.paint.blend == crate::style::Blend::Normal
+        && s.layout.border == none.border
+        && s.layout.padding == none.padding
+        && s.layout.margin == none.margin
+        && doc
+            .children(dom)
+            .iter()
+            .all(|c| doc.nodes[*c].text().is_some() || plain_inline(doc, styles, *c))
+}
+
+/// The pieces of an element to set as one run of text: one whose own
+/// text sits beside inline elements, as a sentence with a word in bold
+/// does. `None` for anything else, which keeps the box it had: an
+/// element with no text of its own (a row of spans is a row), one with
+/// a child that needs a box, and one that asked for `display: flex`,
+/// whose text and elements are flex items as they are in a browser.
+fn inline_runs(doc: &Document, styles: &[Computed], dom: DomId) -> Option<Vec<(String, Text)>> {
+    let el = doc.nodes[dom].element()?;
+    if el.tag == "img" || styles[dom].flex_written {
+        return None;
+    }
+    let kids = doc.children(dom);
+    let shown = |c: &DomId| styles[*c].layout.display != Display::None;
+    let text_of_its_own = kids
+        .iter()
+        .any(|c| doc.nodes[*c].text().is_some_and(|t| !t.trim().is_empty()));
+    let an_element = kids
+        .iter()
+        .any(|c| doc.nodes[*c].element().is_some() && shown(c));
+    let all_inline = kids
+        .iter()
+        .all(|c| doc.nodes[*c].text().is_some() || !shown(c) || plain_inline(doc, styles, *c));
+    if !(text_of_its_own && an_element && all_inline) {
+        return None;
+    }
+    let mut raw = Vec::new();
+    gather(doc, styles, dom, &mut raw);
+    Some(collapse_runs(raw))
+}
+
+/// The text of an element's inline content in order, each piece with its
+/// style, as written; a `<br>` is `None`.
+fn gather(doc: &Document, styles: &[Computed], dom: DomId, out: &mut Vec<(Option<String>, Text)>) {
+    for c in doc.children(dom) {
+        if styles[*c].layout.display == Display::None {
+            continue;
+        }
+        match &doc.nodes[*c].kind {
+            crate::dom::NodeKind::Text(t) => out.push((Some(t.clone()), styles[*c].text.clone())),
+            crate::dom::NodeKind::Element(e) if e.tag == "br" => {
+                out.push((None, styles[*c].text.clone()));
+            }
+            crate::dom::NodeKind::Element(_) => gather(doc, styles, *c, out),
+        }
+    }
+}
+
+/// CSS whitespace collapsing across the pieces of one run: a run of
+/// spaces is one space, kept in the piece it was first written in, and
+/// none is left at the start or the end of a line.
+fn collapse_runs(raw: Vec<(Option<String>, Text)>) -> Vec<(String, Text)> {
+    let mut out: Vec<(String, Text)> = Vec::new();
+    // Whether the text so far ends in a space or at the start of a line,
+    // where another space would not show.
+    let mut quiet = true;
+    // A space written last, dropped if the line ends there.
+    let trim_end = |out: &mut Vec<(String, Text)>| {
+        if let Some(last) = out.iter_mut().rev().find(|(t, _)| !t.is_empty()) {
+            if last.0.ends_with(' ') && !last.1.pre {
+                last.0.pop();
+            }
+        }
+    };
+    for (text, style) in raw {
+        let Some(text) = text else {
+            trim_end(&mut out);
+            out.push(("\n".to_owned(), style));
+            quiet = true;
+            continue;
+        };
+        if style.pre {
+            quiet = text.ends_with(char::is_whitespace);
+            out.push((text, style));
+            continue;
+        }
+        let mut piece = String::with_capacity(text.len());
+        for c in text.chars() {
+            if c.is_whitespace() && c != '\u{a0}' {
+                if !quiet {
+                    piece.push(' ');
+                    quiet = true;
+                }
+                continue;
+            }
+            quiet = false;
+            piece.push(c);
+        }
+        out.push((piece, style));
+    }
+    trim_end(&mut out);
+    out.retain(|(t, _)| !t.is_empty());
+    out
 }
 
 /// The three piles CSS paints a stacking context from, in this order:
@@ -409,6 +589,10 @@ impl Walk<'_> {
         ];
 
         let content = match &doc.nodes[dom].kind {
+            crate::dom::NodeKind::Element(_) if self.rich.contains_key(&dom) => Content::Rich {
+                runs: self.rich[&dom].clone(),
+                style: style.text.clone(),
+            },
             crate::dom::NodeKind::Text(text) => Content::Text {
                 text: collapse(text, style.text.pre),
                 style: style.text.clone(),
@@ -867,5 +1051,84 @@ mod tests {
     fn whitespace_collapses() {
         assert_eq!(collapse("  a \n b  ", false), "a b");
         assert_eq!(collapse("  a \n b  ", true), "  a \n b  ");
+    }
+
+    /// The runs of the one box that holds them, as (text, weight) pairs.
+    fn runs_of(laid: &Laid) -> Vec<(String, u16)> {
+        let rich: Vec<_> = laid
+            .boxes
+            .iter()
+            .filter_map(|b| match &b.content {
+                Content::Rich { runs, .. } => Some(runs),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rich.len(), 1, "one box set as one run");
+        rich[0]
+            .iter()
+            .map(|(t, s)| (t.clone(), s.text_weight()))
+            .collect()
+    }
+
+    trait Weight {
+        fn text_weight(&self) -> u16;
+    }
+    impl Weight for Text {
+        fn text_weight(&self) -> u16 {
+            self.weight
+        }
+    }
+
+    /// A word in bold inside a sentence is part of the sentence: one box,
+    /// its text in pieces, with the spaces kept whichever piece they are
+    /// written in and none at the ends. No box is made for the pieces.
+    #[test]
+    fn a_bold_word_stays_in_its_sentence() {
+        let (_, laid) = lay("<p> one <b>two</b> three </p>", 400.0, 100.0);
+        assert_eq!(
+            runs_of(&laid),
+            vec![
+                ("one ".to_owned(), 400),
+                ("two".to_owned(), 700),
+                (" three".to_owned(), 400)
+            ]
+        );
+        assert!(
+            !laid
+                .boxes
+                .iter()
+                .any(|b| matches!(b.content, Content::Text { .. })),
+            "the pieces are not boxes of their own"
+        );
+    }
+
+    #[test]
+    fn a_line_break_starts_a_line_without_a_leading_space() {
+        let (_, laid) = lay("<p>one<br> two</p>", 400.0, 100.0);
+        let runs = runs_of(&laid);
+        let text: String = runs.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(text, "one\ntwo");
+    }
+
+    /// Only text with inline elements beside it is set as one run. A row
+    /// of spans with no text of its own stays a row, an element that asked
+    /// for flex keeps its flex items, and a span that needs a box of its
+    /// own (here a background) keeps one.
+    #[test]
+    fn a_row_a_flex_box_and_a_boxed_span_keep_their_boxes() {
+        for html in [
+            "<p><span>one</span> <span>two</span></p>",
+            "<style>p { display: flex }</style><p>one <b>two</b></p>",
+            "<style>span { background: red }</style><p>one <span>two</span></p>",
+        ] {
+            let (_, laid) = lay(html, 400.0, 100.0);
+            assert!(
+                !laid
+                    .boxes
+                    .iter()
+                    .any(|b| matches!(b.content, Content::Rich { .. })),
+                "{html}"
+            );
+        }
     }
 }

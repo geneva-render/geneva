@@ -44,15 +44,7 @@ fn as_text_source(text: &str, style: &Text, max_width: f64) -> ResolvedText {
             text: Some(text.to_owned()),
             words: None,
             highlight: None,
-            style: TextStyle {
-                font: style.family.clone(),
-                size: Some(style.size),
-                weight: Some(style.weight),
-                italic: Some(style.italic),
-                color: Some(Animated::Constant(style.color.into())),
-                fill: None,
-                letter_spacing: Some(style.letter_spacing),
-            },
+            style: text_style_of(style),
             max_width: None,
             align: Some(match style.align {
                 geneva_html::TextAlign::Left => TextAlign::Left,
@@ -81,6 +73,26 @@ fn as_text_source(text: &str, style: &Text, max_width: f64) -> ResolvedText {
         },
         max_width,
     )
+}
+
+/// An HTML text style as the style block a text source carries.
+fn text_style_of(style: &Text) -> TextStyle {
+    TextStyle {
+        font: style.family.clone(),
+        size: Some(style.size),
+        weight: Some(style.weight),
+        italic: Some(style.italic),
+        color: Some(Animated::Constant(style.color.into())),
+        fill: None,
+        letter_spacing: Some(style.letter_spacing),
+    }
+}
+
+/// The pieces of a run of text as the engine takes them.
+fn engine_runs(runs: &[(String, Text)]) -> Vec<(String, TextStyle, LinearRgba)> {
+    runs.iter()
+        .map(|(piece, style)| (piece.clone(), text_style_of(style), style.color.to_linear()))
+        .collect()
 }
 
 /// A key that distinguishes two runs with different styles.
@@ -116,6 +128,32 @@ impl Measure for Context<'_> {
         plain.shadow.clear();
         let source = as_text_source(text, &plain, f64::from(limit));
         let image = self.text.render(&source, 0.0);
+        let size = (image.width as f32, image.height as f32);
+        self.memo.insert(key, size);
+        size
+    }
+
+    fn rich(&mut self, runs: &[(String, Text)], style: &Text, width: Option<f32>) -> (f32, f32) {
+        if runs.iter().all(|(piece, _)| piece.trim().is_empty()) {
+            return (0.0, 0.0);
+        }
+        let limit = width.filter(|w| *w > 0.0).unwrap_or(1.0e5);
+        let mut text = String::new();
+        let mut styles = style_key(style);
+        for (piece, s) in runs {
+            text.push_str(piece);
+            text.push('\u{1f}');
+            styles.push('/');
+            styles.push_str(&style_key(s));
+        }
+        let key = (text, styles, limit.to_bits());
+        if let Some(size) = self.memo.get(&key) {
+            return *size;
+        }
+        let mut plain = style.clone();
+        plain.shadow.clear();
+        let source = as_text_source("", &plain, f64::from(limit));
+        let image = self.text.render_runs(&source, &engine_runs(runs), 0.0);
         let size = (image.width as f32, image.height as f32);
         self.memo.insert(key, size);
         size
@@ -298,7 +336,7 @@ fn reach_of(painted: &Painted) -> Bounds {
     let furthest = |list: &[geneva_html::style::Shadow]| list.iter().map(reach).fold(0.0, f64::max);
     let box_shadow = furthest(&painted.paint.shadow);
     let text_shadow = match &painted.content {
-        Content::Text { style, .. } => furthest(&style.shadow),
+        Content::Text { style, .. } | Content::Rich { style, .. } => furthest(&style.shadow),
         _ => 0.0,
     };
     let grow = box_shadow.max(text_shadow);
@@ -1352,7 +1390,11 @@ fn paint_one(
     paint_box(image, b);
     match &b.content {
         Content::Empty => {}
-        Content::Text { text: run, style } => paint_text(image, b, run, style, text),
+        Content::Text { text: run, style } => paint_text(image, b, run, style, text, None),
+        Content::Rich { runs, style } => {
+            let joined: String = runs.iter().map(|(piece, _)| piece.as_str()).collect();
+            paint_text(image, b, &joined, style, text, Some(runs));
+        }
         Content::Image { src } => {
             if let Some(source) = images.get(src) {
                 paint_image(image, b, source);
@@ -2035,12 +2077,27 @@ fn erf(x: f64) -> f64 {
     sign * (1.0 - poly * (-x * x).exp())
 }
 
-fn paint_text(image: &mut Image, b: &Painted, run: &str, style: &Text, engine: &mut TextEngine) {
+/// Draws a box's text. `pieces`, when there are some, are the run in
+/// several styles; `run` is then their text joined, and `style` the
+/// element's, which the whole run shares.
+fn paint_text(
+    image: &mut Image,
+    b: &Painted,
+    run: &str,
+    style: &Text,
+    engine: &mut TextEngine,
+    pieces: Option<&[(String, Text)]>,
+) {
     if run.trim().is_empty() {
         return;
     }
     let box_width = f64::from(b.content_rect[2]).max(1.0);
     let mut source = as_text_source(run, style, box_width);
+    let pieces = pieces.map(engine_runs);
+    let draw = |engine: &mut TextEngine, source: &ResolvedText| match &pieces {
+        Some(runs) => engine.render_runs(source, runs, 0.0),
+        None => engine.render(source, 0.0),
+    };
     let inset = crate::text::inset_for(&source);
     // Where the glyphs sit in the run's box: aligned text that is
     // narrower than its box is shifted along it by a share of the slack.
@@ -2058,12 +2115,12 @@ fn paint_text(image: &mut Image, b: &Painted, run: &str, style: &Text, engine: &
         // the other. A left-aligned run has no slack to measure.
         let along = match style.align {
             geneva_html::TextAlign::Left => 0.0,
-            _ => shift(f64::from(engine.render(&source, 0.0).width)),
+            _ => shift(f64::from(draw(engine, &source).width)),
         };
         source.fill = Some(fill_track(fill, b.content_rect, along));
     }
     // The engine draws in linear light; the page it lands on is not.
-    let drawn = to_encoded(engine.render(&source, 0.0));
+    let drawn = to_encoded(draw(engine, &source));
     // The engine leaves room around the glyphs for a stroke and a
     // shadow. Layout did not count it, so painting takes it back off:
     // the glyphs land where they would have with no shadow, and the
