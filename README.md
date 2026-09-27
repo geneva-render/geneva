@@ -85,7 +85,22 @@ wrote dragon.mp4 (300 frames, 10s of video)
 
 The box grows to fit its text. Percentages are relative to the frame, so the same card works at any output size. Frames with nothing on them aren't re-encoded: with an H.264 source and x264 installed they're copied straight from the source; otherwise they go from decoder to encoder without touching the compositor.
 
-Word-by-word captions are one more layer, which reads the Whisper transcript as it is ([examples/lower-third.json](examples/lower-third.json)):
+Word-by-word captions are one more layer, which reads the Whisper transcript as it is (the asset `words`, pointing at `commentary.json`; the whole document is [examples/lower-third.json](examples/lower-third.json)):
+
+```json
+{ "id": "captions", "clips": [ {
+    "source": {
+      "kind": "captions", "asset": "words", "margin": "9%",
+      "style": {
+        "font": "500 34px/1.35 Liberation Sans",
+        "color": "#b6c2cd",
+        "highlight": { "color": "#ffffff" },
+        "background": "#0a0f14cc",
+        "padding": "14px",
+        "radius": "3px",
+        "max_width": "66%"
+      } } } ] }
+```
 
 <img src="docs/demo.webp" alt="A name card sliding in at the top left over footage of a Dragon capsule at the space station, with captions below" width="640" height="360">
 
