@@ -786,6 +786,20 @@ author overrides freely: `h1`, `h2`, `h3`, `b`, `strong`, `i`, `em`,
 | Text | `color`, `-webkit-text-fill-color` (read as `color`), `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space`, `text-shadow` (a list) |
 | Motion | `animation` and its longhands `animation-name`, `-duration`, `-delay`, `-timing-function`, `-iteration-count`, `-direction`, `-fill-mode` |
 
+A sentence with a word in bold, `<p>Go for <b>launch</b> at nine</p>`,
+is set as one run of text, as a browser sets it: it wraps as a whole,
+spaces are collapsed across the pieces, and each piece keeps its own
+colour, weight, style, size, family and letter-spacing. `<br>` breaks
+the line. The tags that sit in a line this way are `a`, `abbr`, `b`,
+`br`, `cite`, `code`, `em`, `i`, `kbd`, `mark`, `q`, `s`, `small`,
+`span`, `strong`, `sub`, `sup`, `time`, `u` and `var`; `mark`, `u`, `s`,
+`sub` and `sup` are drawn as plain text, with no highlight, line or
+raised baseline. An inline element that needs a box of its own (a
+background, a border, padding or margin, a shadow, an effect, an
+animation or a position) keeps one, and so do the pieces of an element
+that asked for `display: flex`, which are flex items as they are in a
+browser. A row of spans with no text of its own is still a row.
+
 A group's buffer is bounded. Its area may be nine times the frame's,
 which is what a rectangle three frames wide and three tall came to, and
 a group asking for more is cut back to that rectangle and `W455` says
@@ -959,30 +973,37 @@ inside it costs a paint per frame and one layout.
 
 ## Known limitations
 
-The ones most likely to matter. Markup names the rest as it meets them
-(W450), and the render's notes say what an encoder could not do.
+The main ones. Anything else in markup that geneva doesn't draw gets a
+warning naming it (W450), and the render's notes say when an encoder
+couldn't do something.
 
-- **Markup is not a browser.** No JavaScript, no inline layout (a
-  `<span>` inside a sentence becomes a block of its own), no grid, no
-  float, no transitions, no media queries. Selectors are type, class, id
-  and `*` with descendant and child combinators only.
-- **No static `transform` in markup.** A transform comes only from an
-  `animation`; a box that should stay rotated needs a one-keyframe one.
-  `filter` is `blur()` only and `clip-path` is `polygon()` only.
-- **`text-shadow` is outside layout**, and is clipped at the edge of the
-  clip's box.
-- **`mix-blend-mode`** lacks `color-dodge`, `color-burn`, `hard-light`,
-  `exclusion` and the non-separable modes.
-- **A markup group's buffer is bounded** at nine times the frame's area
-  (W455). A larger moving picture belongs in a composition.
-- **Nothing is fetched over the network**, and `<iframe>`, `<svg>`,
-  `<canvas>` and `<video>` inside markup are not drawn.
-- **No synthetic italic**: a family with no italic face is drawn upright.
-- **Audio is mono or stereo.** A source with more channels is downmixed
-  when its sound is encoded.
-- **No fixed average bitrate.** Video is constant quality under an
-  optional ceiling; see [rate control](cli.md#rate-control). H.265 needs a
-  hardware encoder.
+- **Markup is a subset of HTML and CSS**, aimed at titles and graphics:
+  flexbox and block layout, absolute positioning, gradients, shadows,
+  `blur()`, `polygon()` clip paths, most blend modes and keyframe
+  animations. No JavaScript, grid, float, CSS transitions or media
+  queries. Selectors are type, class, id and `*`, with descendant and
+  child combinators.
+- **Inline elements are text, not boxes.** A `<b>` or `<span>` inside a
+  sentence is set with it, in its own colour and weight, but one that
+  needs a box of its own (a background, a border or padding) splits the
+  sentence into pieces that no longer wrap together.
+- **Transforms come from animations.** For a box that stays rotated, use
+  an animation with one keyframe.
+- **`text-shadow` takes up no space**, so near the edge of the clip's box
+  it can be cut off.
+- **A few blend modes are missing:** `color-dodge`, `color-burn`,
+  `hard-light`, `exclusion` and the non-separable ones.
+- **Very large moving groups are cut down.** A group's buffer is capped
+  at nine times the frame's area (W455); something that big is better as
+  its own composition.
+- **Markup is local.** Nothing is fetched over the network, and
+  `<iframe>`, `<svg>`, `<canvas>` and `<video>` aren't drawn.
+- **No synthetic italic.** A family without an italic face is drawn
+  upright.
+- **Audio is mono or stereo.** Sources with more channels are downmixed.
+- **No fixed average bitrate.** Video is encoded at a constant quality,
+  optionally under a ceiling; see [rate control](cli.md#rate-control).
+  H.265 needs a hardware encoder.
 
 ## Timing rules
 
