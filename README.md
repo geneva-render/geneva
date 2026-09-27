@@ -1,8 +1,8 @@
 <img src="docs/wordmark-any.png" alt="Geneva" width="240" height="77">
 
-**A Rust rewrite of ffmpeg's command line, with real composition.**
+**Video edits as JSON, overlays as HTML+CSS, rendered without a browser.**
 
-The decoding and encoding are still FFmpeg's libraries. Everything above them is new: a planner that works out the cheapest way to produce your edit, a compositor with layers, keyframes, masks and transitions, and a layout engine that draws titles and graphics written in HTML and CSS, without a browser. It all ships as one binary with no dependencies.
+This started as a rewrite of ffmpeg's CLI in Rust. The core codecs still come from libav*, but everything on top of them is new: a planner that works out the cheapest way to produce an edit, a proper compositor with layers, keyframes, masks, transitions etc., and a layout engine that draws titles and graphics written in plain HTML and CSS. All in a single binary with no dependencies.
 
 https://github.com/user-attachments/assets/6d8566dd-7270-49bc-ac66-dab1585817a3
 
