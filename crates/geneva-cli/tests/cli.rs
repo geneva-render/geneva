@@ -826,6 +826,46 @@ fn subtitles_attach_as_streams_and_extract_again() {
 
 #[test]
 #[cfg(feature = "media")]
+fn a_subtitle_stream_stops_where_the_output_does() {
+    // Three cues, the last after the 1s output ends: it is left out, the
+    // one that runs past the end is cut there, and the file is 1s long.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("en.srt"),
+        "1\n00:00:00,200 --> 00:00:00,600\nOne\n\n\
+         2\n00:00:00,800 --> 00:00:01,500\nTwo\n\n\
+         3\n00:00:05,000 --> 00:00:06,000\nThree\n",
+    )
+    .unwrap();
+    let doc = dir.path().join("subs.json");
+    std::fs::write(
+        &doc,
+        r##"{"geneva":"1.1","output":{"width":64,"height":64,"fps":10,"duration":"1s"},
+          "assets":{"en":{"src":"en.srt"}},
+          "layers":[{"clips":[{"source":{"kind":"solid","color":"#123"}}]}],
+          "subtitles":[{"asset":"en","language":"en","title":"English"}]}"##,
+    )
+    .unwrap();
+    let out = dir.path().join("subs.mp4");
+    let report = run_json(
+        &["render"],
+        &[doc.as_path(), std::path::Path::new("-o"), &out],
+    );
+    assert_eq!(report["ok"], true, "{report}");
+    let info = run_json(&["probe"], &[&out]);
+    assert!(info["duration"].as_f64().unwrap() < 1.1, "{info}");
+    let vtt = dir.path().join("back.vtt");
+    let back = run_json(&["subtitles", "--extract", "-o"], &[&vtt, &out]);
+    assert_eq!(back["cues"], 2);
+    let text = std::fs::read_to_string(&vtt).unwrap();
+    assert!(
+        text.contains("00:00:00.800 --> 00:00:01.000\nTwo"),
+        "{text}"
+    );
+}
+
+#[test]
+#[cfg(feature = "media")]
 fn subtitles_burn_compiles_cues_to_text_clips_and_checks_the_frame() {
     let dir = tempfile::tempdir().unwrap();
     let srt = dir.path().join("en.srt");
@@ -1477,6 +1517,7 @@ fn render_writes_every_output_of_a_document_in_one_pass() {
             "full": { "kind": "video" },
             "small": { "kind": "video", "width": 80, "encode": { "video": { "preset": "ultrafast" } } },
             "poster": { "kind": "poster", "at": "1s", "path": "cover.png" },
+            "thumb": { "kind": "poster", "at": "2s", "path": "thumb.png" },
             "seek": { "kind": "sprites", "every": "1s", "columns": 2 },
             "sound": { "kind": "audio", "audio": { "sample_rate": 16000, "channels": 1 } }
           }
@@ -1511,6 +1552,7 @@ fn render_writes_every_output_of_a_document_in_one_pass() {
         "full.mp4",
         "small.mp4",
         "cover.png",
+        "thumb.png",
         "seek.jpg",
         "seek.vtt",
         "sound.wav",

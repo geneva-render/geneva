@@ -59,6 +59,11 @@ pub struct Node {
     pub parent: Option<NodeId>,
     /// Children in document order.
     pub children: Vec<NodeId>,
+    /// Whether only whitespace was written between this node and its
+    /// next sibling. Such whitespace is not a node of its own, but it is
+    /// the space between two words set in one line, as in
+    /// `<i>one</i> <b>two</b>`.
+    pub space_after: bool,
 }
 
 impl Node {
@@ -343,6 +348,7 @@ impl Parser<'_> {
             kind,
             parent,
             children: Vec::new(),
+            space_after: false,
         });
         if let Some(p) = parent {
             self.nodes[p].children.push(id);
@@ -392,6 +398,8 @@ impl Parser<'_> {
             if !raw.trim().is_empty() {
                 let text = entities(raw);
                 self.push(NodeKind::Text(text), Some(parent));
+            } else if let Some(&last) = self.nodes[parent].children.last() {
+                self.nodes[last].space_after = true;
             }
         }
     }

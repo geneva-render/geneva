@@ -266,3 +266,69 @@ fn the_cue_count_says_what_budget_grouped_it() {
         .expect("a cue count");
     assert!(!note.message.contains("grouped at"), "{}", note.message);
 }
+
+#[test]
+fn in_and_out_take_part_of_the_file() {
+    // A clip that shows 3s to 6s of the media shows the cues from that
+    // stretch of the file, moved so 3s in the file is the clip's start.
+    let l = load(
+        "w.json",
+        r#"{"kind":"captions","asset":"c","in":"3s","out":"6s"}"#,
+        vec![("w.json", WHISPER)],
+    );
+    assert!(l.is_ok(), "{:?}", l.diagnostics);
+    let layer = &l.composition.unwrap().layers[0];
+    assert_eq!(layer.clips.len(), 1, "only the cue inside the range");
+    assert_eq!(layer.clips[0].start, Ratio::from_int(1));
+    let ResolvedSource::Text(t) = &layer.clips[0].source else {
+        panic!("expected text");
+    };
+    assert_eq!(t.text, "captured");
+
+    let l = load(
+        "w.json",
+        r#"{"kind":"captions","asset":"c","in":"3s","out":"2s"}"#,
+        vec![("w.json", WHISPER)],
+    );
+    assert!(codes(&l).contains(&"E301"), "{:?}", l.diagnostics);
+}
+
+#[test]
+fn a_pause_ends_a_cue() {
+    // One segment with six seconds of silence in it: the words after the
+    // pause are not on screen before they are said.
+    const PAUSED: &str = r#"{"words": [
+      {"word": "Robot", "start": 0.5, "end": 0.9},
+      {"word": "hand?", "start": 0.9, "end": 1.3},
+      {"word": "Listen", "start": 7.0, "end": 7.4}]}"#;
+    let l = load(
+        "w.json",
+        r#"{"kind":"captions","asset":"c"}"#,
+        vec![("w.json", PAUSED)],
+    );
+    assert!(l.is_ok(), "{:?}", l.diagnostics);
+    let layer = &l.composition.unwrap().layers[0];
+    assert_eq!(layer.clips.len(), 2, "split at the pause");
+    assert_eq!(layer.clips[1].start, Ratio::from_int(7));
+}
+
+#[test]
+fn cues_after_the_output_ends_are_left_out() {
+    // Placed at 6s in an 8s output, the file's cues land at 7s and 10s.
+    // The second never shows, so it is not a clip, and says nothing.
+    let text = r#"{"geneva":"1.0","output":{"width":1280,"height":720,"fps":30,"duration":"8s"},
+        "assets":{"c":{"src":"w.json"}},
+        "layers":[{"id":"captions","clips":[
+            {"source":{"kind":"captions","asset":"c"},"start":"6s"}]}]}"#;
+    let timeline = geneva_timeline::parse(text).unwrap();
+    let (composition, diagnostics) = resolve_with(&timeline, &Files(vec![("w.json", WHISPER)]));
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|d| d.code.starts_with('W') || d.code.starts_with('E')),
+        "{diagnostics:?}"
+    );
+    let layer = &composition.unwrap().layers[0];
+    assert_eq!(layer.clips.len(), 1);
+    assert_eq!(layer.clips[0].end, Ratio::from_int(8), "cut at the end");
+}

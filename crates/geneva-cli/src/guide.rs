@@ -80,10 +80,9 @@ pub fn topic(name: &str) -> Result<&'static Topic> {
 /// One row of a table in `docs/errors.md`: what one code means in one
 /// situation.
 ///
-/// A code can have more than one row. `W304` covers both a transition
-/// with a colour that never shows and an audio clip whose fades are
-/// longer than it is, so [`explain`] answers with every row that
-/// carries the code rather than the first.
+/// Each code has one meaning, so a program can act on it; the page
+/// could still give one several rows, and [`explain`] answers with every
+/// row that carries the code rather than the first.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Entry {
     /// The code itself, upper case.
@@ -149,9 +148,14 @@ fn parse(page: &str) -> Vec<Entry> {
         if !is_code(code) {
             continue;
         }
+        // A few W codes are reported as notes, and the table says so.
+        let (severity, meaning) = match meaning.strip_prefix("(note) ") {
+            Some(rest) => ("note", rest),
+            None => (severity(code).expect("checked by is_code"), meaning),
+        };
         out.push(Entry {
             code: code.to_string(),
-            severity: severity(code).expect("checked by is_code"),
+            severity,
             section: section.clone(),
             meaning: meaning.to_string(),
         });
@@ -233,12 +237,19 @@ mod tests {
     }
 
     #[test]
-    fn a_code_with_two_meanings_answers_with_both() {
-        // W304 covers a transition colour that never shows and an
-        // audio clip whose fades are longer than the clip.
-        let rows = explain("w304");
-        assert_eq!(rows.len(), 2, "{rows:#?}");
-        assert!(rows.iter().all(|e| e.severity == "warning"));
+    fn every_code_has_one_meaning() {
+        let all = entries();
+        let mut seen = std::collections::BTreeSet::new();
+        for e in &all {
+            assert!(seen.insert(&e.code), "{} has two rows", e.code);
+        }
+    }
+
+    #[test]
+    fn a_warning_the_page_marks_as_a_note_is_explained_as_one() {
+        let rows = explain("w201");
+        assert_eq!(rows[0].severity, "note");
+        assert!(!rows[0].meaning.starts_with("(note)"));
     }
 
     #[test]

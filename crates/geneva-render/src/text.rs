@@ -213,14 +213,13 @@ impl TextEngine {
         buffer.set_size(Some(wrap_width), None);
         let default_attrs = attrs_for(&base, 0);
         if let Some(runs) = runs {
-            // A piece in another size carries its own metrics, so a
-            // `<small>` is smaller and its line no taller than it needs.
+            // Every piece carries its own metrics: a line is as tall as
+            // the tallest piece on it, but only pieces with metrics count,
+            // so one `<small>` alone would shrink the line under the rest.
             let rich = runs.iter().enumerate().map(|(i, (piece, _, _))| {
                 let style = &styles[i + 1];
-                let mut attrs = attrs_for(style, i + 1);
-                if style.size != base.size {
-                    attrs = attrs.metrics(Metrics::new(style.size, style.size * line_height));
-                }
+                let attrs = attrs_for(style, i + 1)
+                    .metrics(Metrics::new(style.size, style.size * line_height));
                 (piece.as_str(), attrs)
             });
             buffer.set_rich_text(rich, &default_attrs, Shaping::Advanced, Some(align));

@@ -101,6 +101,11 @@ impl SubtitleWriter {
             }
             if let Some(title) = &track.title {
                 metadata.set("title", title);
+                // MP4 and MOV keep no stream title; players show the
+                // handler name in its place.
+                if codec == TextCodec::MovText {
+                    metadata.set("handler_name", title);
+                }
             }
             stream.set_metadata(metadata);
             let mut cues: Vec<Cue> = track.cues.clone();

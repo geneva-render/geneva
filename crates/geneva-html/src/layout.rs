@@ -376,7 +376,7 @@ fn build(
 }
 
 /// Tags that sit inside a line of text rather than making a box.
-const INLINE: &[&str] = &[
+pub(crate) const INLINE: &[&str] = &[
     "a", "abbr", "b", "br", "cite", "code", "em", "i", "kbd", "mark", "q", "s", "small", "span",
     "strong", "sub", "sup", "time", "u", "var",
 ];
@@ -444,15 +444,19 @@ fn inline_runs(doc: &Document, styles: &[Computed], dom: DomId) -> Option<Vec<(S
 /// style, as written; a `<br>` is `None`.
 fn gather(doc: &Document, styles: &[Computed], dom: DomId, out: &mut Vec<(Option<String>, Text)>) {
     for c in doc.children(dom) {
-        if styles[*c].layout.display == Display::None {
-            continue;
-        }
-        match &doc.nodes[*c].kind {
-            crate::dom::NodeKind::Text(t) => out.push((Some(t.clone()), styles[*c].text.clone())),
-            crate::dom::NodeKind::Element(e) if e.tag == "br" => {
-                out.push((None, styles[*c].text.clone()));
+        if styles[*c].layout.display != Display::None {
+            match &doc.nodes[*c].kind {
+                crate::dom::NodeKind::Text(t) => {
+                    out.push((Some(t.clone()), styles[*c].text.clone()));
+                }
+                crate::dom::NodeKind::Element(e) if e.tag == "br" => {
+                    out.push((None, styles[*c].text.clone()));
+                }
+                crate::dom::NodeKind::Element(_) => gather(doc, styles, *c, out),
             }
-            crate::dom::NodeKind::Element(_) => gather(doc, styles, *c, out),
+        }
+        if doc.nodes[*c].space_after {
+            out.push((Some(" ".to_owned()), styles[dom].text.clone()));
         }
     }
 }
@@ -1103,6 +1107,13 @@ mod tests {
     }
 
     #[test]
+    fn a_space_between_two_inline_elements_is_kept() {
+        let (_, laid) = lay("<p>A <i>one</i> <b>two</b>\n<i>three</i></p>", 400.0, 100.0);
+        let text: String = runs_of(&laid).iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(text, "A one two three");
+    }
+
+    #[test]
     fn a_line_break_starts_a_line_without_a_leading_space() {
         let (_, laid) = lay("<p>one<br> two</p>", 400.0, 100.0);
         let runs = runs_of(&laid);
@@ -1114,6 +1125,30 @@ mod tests {
     /// of spans with no text of its own stays a row, an element that asked
     /// for flex keeps its flex items, and a span that needs a box of its
     /// own (here a background) keeps one.
+    #[test]
+    fn a_div_with_no_display_stacks_its_paragraphs() {
+        let (doc, laid) = lay(
+            "<style>p { margin: 0 }</style><div><p class=a>A</p><p class=b>B</p></div>",
+            400.0,
+            100.0,
+        );
+        let rect = |class: &str| {
+            laid.boxes
+                .iter()
+                .find(|b| {
+                    doc.nodes[b.node]
+                        .element()
+                        .is_some_and(|e| e.classes.iter().any(|c| c == class))
+                })
+                .map(|b| b.rect)
+                .unwrap()
+        };
+        let (a, b) = (rect("a"), rect("b"));
+        assert_eq!(a[0], b[0], "one above the other: {a:?} {b:?}");
+        assert!(b[1] >= a[1] + a[3], "B under A: {a:?} {b:?}");
+        assert_eq!(a[2], 400.0, "as wide as the page");
+    }
+
     #[test]
     fn a_row_a_flex_box_and_a_boxed_span_keep_their_boxes() {
         for html in [

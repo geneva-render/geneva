@@ -1,5 +1,5 @@
 {
-  "geneva": "1.0",
+  "geneva": "1.1",
   "output": { "width": 640, "height": 360, "fps": 30, "duration": "2s" },
   "layers": [
     { "id": "background", "clips": [ { "source": { "kind": "solid", "color": "#1d2230" } } ] }

@@ -695,3 +695,37 @@ fn a_sentence_with_a_bold_word_wraps_as_one() {
     assert!(right < 135, "inside the box: {right}");
     assert!(green > 20, "the word in green: {green}");
 }
+
+#[test]
+fn a_smaller_word_leaves_its_line_as_tall_as_the_rest() {
+    // Two lines of 40 px text with a 12 px word in the first. The line
+    // took its height from the small word alone, so the big glyphs were
+    // cut at the top and the second line was drawn over the first.
+    let f = markup_at(
+        "<p>BIG <small>SMALL</small> BIG<br>BIG BIG</p>",
+        "p { position: absolute; left: 10px; top: 10px; width: 300px; margin: 0; \
+             font: 40px Liberation Sans; color: #ffffff } \
+         small { font-size: 12px }",
+        0,
+    );
+    let inked: Vec<bool> = (0..f.height())
+        .map(|y| (0..f.width()).any(|x| at(&f, x, y).a > 0.5))
+        .collect();
+    let mut bands = Vec::new();
+    let mut start = None;
+    for (y, ink) in inked.iter().enumerate() {
+        match (ink, start) {
+            (true, None) => start = Some(y),
+            (false, Some(s)) => {
+                bands.push((s, y));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(bands.len(), 2, "two lines apart: {bands:?}");
+    assert!(
+        bands[0].1 - bands[0].0 > 26,
+        "the first line whole: {bands:?}"
+    );
+}

@@ -75,7 +75,8 @@ transition logic and the painter are shared Rust.
 - Blend modes read a copy of the target taken before the blending draw.
 - Held to the CPU by the golden cases: within one 8-bit code, except the
   blur (up to three codes on 0.12% of pixels, the same on Metal and
-  Vulkan, none on lavapipe).
+  Vulkan, none on lavapipe, Mesa's software Vulkan driver, which reports
+  itself as llvmpipe).
 - Not on the device: 16-bit and HDR sources (converted by the decoder
   and uploaded as pictures), and markup painting (below).
 

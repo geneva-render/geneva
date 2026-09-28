@@ -19,7 +19,7 @@ Contents: [the contract](#the-contract), [report shape](#report-shape),
   prints one report. It never needs a network.
 - **The manual is in the binary.** `geneva guide` prints this page,
   `geneva guide --list` names the others (`timeline`, `cli`, `errors`,
-  `color`), and `geneva explain E302` says what one code means. So a
+  `color`, `architecture`), and `geneva explain E302` says what one code means. So a
   machine with `geneva` on its path has the reference for the version
   it is running, without a checkout and without fetching anything.
 - **`--format json` everywhere.** Put it before the subcommand. Stdout
@@ -106,8 +106,9 @@ it as a manifest.
 
 1. **Write the timeline** as JSON. Start from `geneva guide timeline`
    for the fields in prose, `geneva schema` for the machine-readable
-   form, or the examples in `examples/`; every field has a description
-   in the schema.
+   form, or the examples in the repository's `examples/` directory,
+   which the binary does not carry; every field has a description in
+   the schema.
 2. **Validate with probing** before rendering anything expensive:
 
    ```sh
@@ -195,10 +196,12 @@ the same layer. `transition_out` closes a layer the same way.
 
 The pair overlaps by `duration` and a clip with no `start` is moved
 earlier to make room. On the first clip of a layer there is nothing to
-come from, so the transition opens the piece over its whole duration.
-E306 if the previous clip does not cover the overlap, E307 for a
-`transition_out` where another clip follows, W304 for a `color` on a
-crossfade. Details in [timeline.md](timeline.md#transitions).
+come from, so the transition fades the clip in over the transition's
+`duration`. A `fade` covers every layer, above ones too; to dip a cut
+under overlays that stay, put the cut in a composition. E306 if the
+previous clip does not cover the overlap, E307 for a `transition_out`
+where another clip follows, W304 for a `color` on a crossfade. Details
+in [timeline.md](timeline.md#transitions).
 
 ## Markup
 
@@ -206,8 +209,9 @@ A clip can draw a box of markup: a source of kind `html`, with the
 markup inline in `html` or in an asset of kind `html`, plus optional
 `css`, a `width` (default: the frame) and a `height` (default: fits the
 content). It is a strict HTML parser with a CSS subset and block and
-flexbox layout, so a file that looks and moves right in a browser looks
-and moves right here.
+flexbox layout: markup inside that subset looks and moves the same here
+and in a browser, and what falls outside it is named rather than drawn
+differently. Check a card with `geneva frame` before rendering it.
 
 Pictures and stylesheets take paths relative to the markup, as on a
 page (`<img src="logo.png">`). A path that leaves the asset root, or a
@@ -237,6 +241,11 @@ Word files go in as they came: whisper's `segments[].words[]`, a bare
 `{"words": [...]}`, or a bare list. `word` or `text` names the word and
 every other key is ignored. Word times are what let `style.highlight`
 pick out the word being said.
+
+Cue times are the file's, counted from the clip's `start`. Captions for
+a video clip that uses part of its media take the same `in`, `out` and
+`start` as that clip, so three shots from one film are three captions
+clips on one file. A pause of a second or more ends a cue.
 
 An empty caption track is never drawn quietly. A file with no words in
 it, or with times in milliseconds, is E453; a `highlight` on a file

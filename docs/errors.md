@@ -57,19 +57,19 @@ result is not what was intended. Notes are informational.
 | Code | Meaning |
 | --- | --- |
 | E300 | A time is negative. |
-| E301 | An empty or inverted range: `out` not after `in`, `duration` of zero, or a duration longer than the source range. |
+| E301 | An empty or inverted range: `out` not after `in` (on a clip, an audio clip or a captions source), `duration` of zero, or a duration longer than the source range. |
 | E302 | Clips in the same layer or audio track overlap without a transition. |
 | E303 | Keyframes are not in strictly increasing time order. |
 | E305 | A length cannot be determined: an open-ended clip with no `duration` and no `output.duration`. |
 | E306 | A transition is longer than the overlap the previous clip provides. |
+| E307 | A clip sets `transition_out` while the clip after it sets `transition`. Both describe the same join; keep one. |
+| E308 | A transition's `ease` is malformed. The message says what is wrong. |
 | W300 | A keyframe lies after the end of its clip and will never be reached. |
 | W301 | A clip starts after or runs past the output duration; it is cut. |
 | W302 | A layer or track has no clips. |
-| E307 | A clip sets `transition_out` while the clip after it sets `transition`. Both describe the same join; keep one. |
-| E308 | A transition's `ease` is malformed. The message says what is wrong. |
 | W304 | A transition has a `color` but its kind never shows one. Only `fade` dips through a color. |
-| W304 | An audio clip's fades add up to more than its length. |
 | W305 | `out` is past the end of the file; the clip ends where the file ends. |
+| W306 | An audio clip's fades add up to more than its length. |
 | N310 | (note, `validate --probe`) What an asset's audio measures: integrated loudness, true peak, noise floor and how far under the signal it sits, rate and channels; and, where the document sets `output.audio.loudness`, how far from the target it is. Measuring decodes the track once. |
 | W311 | (`validate --probe`) An asset's audio is clipped: runs of three or more samples at full scale. The message counts them and gives the longest and the first; a loudness target does not undo the distortion. |
 | W312 | (`validate --probe`) An asset's audio carries a DC offset over 1% of full scale. `output.audio.hygiene` takes it out. |
@@ -94,6 +94,7 @@ result is not what was intended. Notes are informational.
 | E431 | An `outputs` entry's `path` is not a plain file name inside the output directory, or its extension is not one the kind can write. |
 | E432 | Two `outputs` entries would write the same file. |
 | E433 | An `outputs` value is out of range: a poster `at` outside the composition, a sprite `every` that is not positive, or `columns` of 0. |
+| E434 | A second `sprites` entry. A document writes one sprite sheet; posters can be several. |
 | E440 | A clip's `animation` names a rule that is not in the document's `keyframes`. |
 | E441 | An `animation` value is malformed: no rule name, no duration, a duration of zero, two timing functions, or three times. |
 | E442 | A `keyframes` rule is malformed: an offset that is not `from`, `to` or a percentage in 0% to 100%, two offsets at the same place, a property that cannot be animated, an unknown transform function, a percentage distance on a clip whose box is not known until its file is opened, or a property a clip cannot play (anything past `transform` and `opacity`) in a rule the clip is given rather than an element inside markup. |
@@ -118,6 +119,7 @@ result is not what was intended. Notes are informational.
 | N404 | (note) A burned-in subtitle cue lies outside the title-safe area (`--safe`, 5% in from each edge by default). |
 | N405 | (note) A burned-in subtitle cue was shrunk to fit (`--fit`); the message gives the sizes. |
 | W405 | A document names a font family this machine has no face of, in the `font` of a text or captions source or in a markup `font-family`. The text still draws, in whatever the shaper falls back to, which is a different picture on a machine with different fonts; add the file as an asset of kind `font`, which a text source names by its asset id and markup by the family the file declares. A family a font asset of the document declares counts as present, so carrying the font is enough to silence it. |
+| W406 | An `outputs` entry gives both `width` and `height` in a shape other than the canvas's. The whole canvas is stretched into it; give one of the two to keep the shape. |
 | N410 | (note) What `--for TARGET` chose and why: size, codec and level, quality, caps, keyframes, audio. |
 | W411 | The video is longer than the `--for` target allows. Geneva never shortens a video on its own. |
 | W412 | The written file is larger than the `--for` target or `--budget` allows. |

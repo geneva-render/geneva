@@ -402,6 +402,15 @@ fn user_agent(tag: &str) -> &'static str {
     }
 }
 
+/// Elements that are never laid out.
+const UNSEEN: &[&str] = &["head", "link", "meta", "script", "style", "title"];
+
+/// Whether an element sits in a line of text, as an image or an inline
+/// tag does, rather than making a block.
+fn inline_level(tag: &str) -> bool {
+    tag == "img" || crate::layout::INLINE.contains(&tag)
+}
+
 /// An element that a browser would render with something of its own and
 /// geneva does not draw, named so that the difference is visible. A
 /// `<link rel="stylesheet">` is not here: those are read.
@@ -538,6 +547,23 @@ pub fn cascade(doc: &Document, sheet: &Stylesheet) -> (Vec<Computed>, Vec<String
                 }
             }
             computed.text.size = em;
+            // Taffy's default display is flex, CSS's is block (or inline).
+            // An element that says nothing and holds block-level elements
+            // is a block, so they stack as in a browser rather than stand
+            // in a row. One holding only text and inline elements keeps
+            // the row, which is how its pieces sit side by side.
+            let written = declarations.iter().any(|(_, d)| d.property == "display");
+            if !written
+                && id != doc.root
+                && !inline_level(&el.tag)
+                && doc.children(id).iter().any(|c| {
+                    doc.nodes[*c]
+                        .element()
+                        .is_some_and(|e| !inline_level(&e.tag) && !UNSEEN.contains(&e.tag.as_str()))
+                })
+            {
+                computed.layout.display = Display::Block;
+            }
             // `background-clip: text` fills the glyphs, this element's
             // and its descendants', with what would have filled the
             // box. The text properties are what come down to them.

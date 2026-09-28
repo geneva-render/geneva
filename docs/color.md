@@ -144,7 +144,7 @@ it. HLG needs none. The verbs take `--keep-hdr` to keep HDR sources HDR.
 `geneva-color` carries numeric tests for every conversion: reference points
 on each curve, round trips, matrix anchors (white has zero chroma, primaries
 hit the chroma extremes), 8- and 10-bit range anchors, and the linear-light
-blending result above. The golden-frame tests in `tests/golden/` then check
+blending result above. The golden-frame tests in the repository's `tests/golden/` then check
 the assembled pipeline on rendered scenes, on either renderer: the GPU
 renderer is compared with the CPU one pixel by pixel as well as with the
 references. On an Apple M1, no pixel of any case differs by more than one

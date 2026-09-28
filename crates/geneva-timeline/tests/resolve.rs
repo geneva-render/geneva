@@ -108,7 +108,7 @@ fn unsupported_version() {
     };
     assert!(help("2.0").contains(r#"reads "1.0""#));
     // A document from before the first public format is told what to do.
-    assert!(help("0.5").contains(r#"set "geneva" to "1.0""#));
+    assert!(help("0.5").contains(r#"set "geneva" to "1.1""#));
 }
 
 #[test]
@@ -740,6 +740,29 @@ fn outputs_reject_stray_fields_bad_paths_clashes_and_bad_values() {
     assert!(has("E433", "/outputs/f/at"), "{errs:?}");
     assert!(has("E433", "/outputs/g/every"), "{errs:?}");
     assert!(has("E433", "/outputs/g/columns"), "{errs:?}");
+}
+
+#[test]
+fn a_second_sprite_sheet_is_an_error_and_a_new_shape_a_warning() {
+    let text = doc3(
+        r##""layers":[{"clips":[{"source":{"kind":"solid","color":"#fff"}}]}],
+        "outputs":{
+          "a":{"kind":"sprites"},
+          "b":{"kind":"sprites"},
+          "c":{"kind":"poster","width":100,"height":100},
+          "d":{"kind":"poster","path":"d.png","width":320}
+        }"##,
+    );
+    let all = codes(&load(&text).diagnostics);
+    assert!(
+        all.contains(&("E434", "/outputs/b/kind".to_owned())),
+        "{all:?}"
+    );
+    assert!(all.contains(&("W406", "/outputs/c".to_owned())), "{all:?}");
+    assert!(
+        !all.iter().any(|(_, p)| p.starts_with("/outputs/d")),
+        "{all:?}"
+    );
 }
 
 #[test]

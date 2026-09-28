@@ -978,6 +978,56 @@ fn thinned(steps: &[(f64, AnimValues)]) -> Vec<(f64, AnimValues)> {
 /// Deepest allowed nesting of compositions inside compositions.
 const MAX_COMPOSITION_DEPTH: usize = 8;
 
+/// The cues of a file between `from` and `to`, moved so `from` is 0, and
+/// cut at `end` on that clock. A cue that straddles an edge keeps the
+/// part inside, and the words it keeps.
+fn window_cues(
+    cues: Vec<crate::captions::Cue>,
+    from: Ratio,
+    to: Option<Ratio>,
+    end: Option<Ratio>,
+) -> Vec<crate::captions::Cue> {
+    let stop = match (to.map(|t| t - from), end) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
+    cues.into_iter()
+        .filter_map(|mut cue| {
+            let start = (cue.start - from).max(Ratio::ZERO);
+            let mut finish = cue.end - from;
+            if let Some(stop) = stop {
+                finish = finish.min(stop);
+            }
+            if finish <= start {
+                return None;
+            }
+            // Only a cue the window cuts loses words; one inside it keeps
+            // them all, a word with no length included.
+            let cut = cue.start < from || finish < cue.end - from;
+            if cut && !cue.words.is_empty() {
+                cue.words
+                    .retain(|w| w.end - from > start && w.start - from < finish);
+                if cue.words.is_empty() {
+                    return None;
+                }
+                cue.text = cue
+                    .words
+                    .iter()
+                    .map(|w| w.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+            }
+            for w in &mut cue.words {
+                w.start = (w.start - from).max(start);
+                w.end = (w.end - from).min(finish);
+            }
+            cue.start = start;
+            cue.end = finish;
+            Some(cue)
+        })
+        .collect()
+}
+
 /// Fewest characters a caption line can be asked to hold. Below this a
 /// line cannot fit an ordinary word, so the budget stops meaning what
 /// `max_chars` says it means.
@@ -1375,9 +1425,23 @@ impl Resolver<'_> {
         let out = &tl.output;
         let mut resolved = Vec::new();
         let mut paths: BTreeMap<String, String> = BTreeMap::new();
+        let mut sheet: Option<&String> = None;
         for (name, spec) in &tl.outputs {
             let path = Path::root().key("outputs").key(name);
             let kind = spec.kind;
+            if kind == OutputKind::Sprites {
+                if let Some(first) = sheet {
+                    self.push(
+                        Diagnostic::error(
+                            "E434",
+                            path.key("kind"),
+                            format!("outputs \"{first}\" and \"{name}\" are both sprite sheets; a document writes one"),
+                        )
+                        .with_help("keep one sprites entry"),
+                    );
+                }
+                sheet = Some(name);
+            }
             // Fields that belong to other kinds.
             let stray: &[(&str, bool)] = &[
                 ("at", spec.at.is_some() && kind != OutputKind::Poster),
@@ -1507,6 +1571,25 @@ impl Resolver<'_> {
                                     .with_value(v),
                                 );
                             }
+                        }
+                        // The whole canvas is scaled into the size given,
+                        // so a different shape stretches it.
+                        let wanted = f64::from(w) / f64::from(h.max(1));
+                        let canvas = f64::from(out.width) / f64::from(out.height.max(1));
+                        if w > 0 && h > 0 && (wanted / canvas - 1.0).abs() > 0.01 {
+                            self.push(
+                                Diagnostic::warning(
+                                    "W406",
+                                    path.clone(),
+                                    format!(
+                                        "{w}x{h} is not the shape of the {}x{} canvas; the picture is stretched to fill it",
+                                        out.width, out.height
+                                    ),
+                                )
+                                .with_help(
+                                    "give only width or height to keep the shape; a different framing needs a document with a canvas of that shape",
+                                ),
+                            );
                         }
                         (w, h)
                     }
@@ -1929,7 +2012,11 @@ impl Resolver<'_> {
         self.push(Diagnostic::note(
             "N453",
             spath.clone(),
-            format!("{} cues read from {src:?}{how}", cues.len()),
+            format!(
+                "{} cue{} read from {src:?}{how}",
+                cues.len(),
+                if cues.len() == 1 { "" } else { "s" }
+            ),
         ));
         Some(cues)
     }
@@ -1944,11 +2031,14 @@ impl Resolver<'_> {
         path: &Path,
         assets: &BTreeMap<String, ResolvedAsset>,
         frame: FrameSize,
+        output_end: Option<Ratio>,
     ) -> Vec<(Clip, usize)> {
         let mut out: Vec<(Clip, usize)> = Vec::new();
         for (i, clip) in layer.clips.iter().enumerate() {
             let Source::Captions {
                 asset,
+                in_,
+                out: file_out,
                 position,
                 margin,
                 safe,
@@ -1974,6 +2064,27 @@ impl Resolver<'_> {
                 Some(t) => self.time(t, &cpath.key("start"), "start"),
                 None => Ratio::ZERO,
             };
+            let from = in_.map_or(Ratio::ZERO, |t| self.time(t, &spath.key("in"), "in"));
+            let to = file_out.map(|t| self.time(t, &spath.key("out"), "out"));
+            if let Some(to) = to.filter(|to| *to <= from) {
+                self.push(
+                    Diagnostic::error(
+                        "E301",
+                        spath.key("out"),
+                        format!("out ({to}s) must be after in ({from}s)"),
+                    )
+                    .with_value(json!(file_out.map(|t| t.to_string()))),
+                );
+                continue;
+            }
+            // Cues past the clip's duration, or the end of the output, would
+            // each be a clip that never shows.
+            let clip_end = clip
+                .duration
+                .map(|d| d.resolve(self.fps))
+                .into_iter()
+                .chain(output_end.map(|e| e - offset))
+                .min();
             let style = style.as_deref().cloned().unwrap_or_default();
             let Some(cues) = self.read_cues(
                 asset,
@@ -1987,6 +2098,20 @@ impl Resolver<'_> {
             ) else {
                 continue;
             };
+            // A negative start was reported once above; its cues would
+            // report it again, each with a time nobody wrote.
+            if offset < Ratio::ZERO {
+                continue;
+            }
+            if let (Some(end), Some(_)) = (output_end, clip_end.filter(|e| *e <= Ratio::ZERO)) {
+                self.push(Diagnostic::warning(
+                    "W301",
+                    cpath.key("start"),
+                    format!("captions clip {i} starts at {offset}s, at or after the output's end at {end}s"),
+                ));
+                continue;
+            }
+            let cues = window_cues(cues, from, to, clip_end);
 
             let height = f64::from(frame.height);
             let safe = safe.unwrap_or(5.0).clamp(0.0, 49.0);
@@ -2126,7 +2251,7 @@ inset of {safe_px}px"
         // on the timeline, one per cue, so the copy planner can copy the
         // gaps between them. Each carries the index of the clip it came
         // from, so diagnostics still point at what someone wrote.
-        let source_clips = self.expand_captions(layer, path, assets, frame);
+        let source_clips = self.expand_captions(layer, path, assets, frame, output_duration);
 
         let mut clips: Vec<ResolvedClip> = Vec::new();
         let mut cursor = Ratio::ZERO;
@@ -3313,36 +3438,51 @@ fills the frame",
     fn parse_keyframe_rules(&mut self) {
         let root = Path::root().key("keyframes");
         for (name, rule) in &self.tl.keyframes {
-            let steps = self.parse_keyframe_rule(name, rule, &root.key(name));
+            let steps = self.parse_keyframe_rule(name, rule, &root.key(name), true);
             self.rules.insert(name.clone(), steps);
         }
     }
 
     /// Parses one rule's offsets and declaration blocks. `rpath` is what
     /// its diagnostics point at, which is the document for a `keyframes`
-    /// entry and the source for an `@keyframes` inside markup.
+    /// entry and the source for an `@keyframes` inside markup. Only the
+    /// document's offsets are JSON keys; inside markup the message names
+    /// the rule and the offset instead.
     fn parse_keyframe_rule(
         &mut self,
         name: &str,
         rule: &BTreeMap<String, String>,
         rpath: &Path,
+        in_document: bool,
     ) -> Vec<(f64, AnimValues)> {
         {
             let rpath = rpath.clone();
             let mut steps: Vec<(f64, AnimValues)> = Vec::new();
             for (key, block) in rule {
-                let kpath = rpath.key(key);
+                let kpath = if in_document {
+                    rpath.key(key)
+                } else {
+                    rpath.clone()
+                };
+                let named = |e: String| {
+                    if in_document {
+                        e
+                    } else {
+                        format!("@keyframes {name}, {key}: {e}")
+                    }
+                };
                 let offset = match crate::animation::parse_offset(key) {
                     Ok(o) => o,
                     Err(e) => {
-                        self.diags
-                            .push(Diagnostic::error("E442", kpath, e).with_value(json!(key)));
+                        self.diags.push(
+                            Diagnostic::error("E442", kpath, named(e)).with_value(json!(key)),
+                        );
                         continue;
                     }
                 };
                 match crate::animation::parse_declarations(block) {
                     Ok(v) if v.is_empty() => self.diags.push(
-                        Diagnostic::warning("W440", kpath, format!("{key} sets nothing"))
+                        Diagnostic::warning("W440", kpath, named(format!("{key} sets nothing")))
                             .with_help(
                                 "a keyframe sets transform, opacity, filter, color, text-shadow, \
 letter-spacing, a size or background-position",
@@ -3351,7 +3491,7 @@ letter-spacing, a size or background-position",
                     Ok(v) => steps.push((offset, v)),
                     Err(e) => self
                         .diags
-                        .push(Diagnostic::error("E442", kpath, e).with_value(json!(block))),
+                        .push(Diagnostic::error("E442", kpath, named(e)).with_value(json!(block))),
                 }
             }
             steps.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -3731,7 +3871,7 @@ be; write the distance in pixels, or give the source a size",
                 // so a file that moves in a browser moves here too.
                 let mut rules = BTreeMap::new();
                 for (name, rule) in &p.keyframes {
-                    let steps = self.parse_keyframe_rule(name, rule, spath);
+                    let steps = self.parse_keyframe_rule(name, rule, spath, false);
                     rules.insert(name.clone(), steps);
                 }
                 let (bw, bh) = p.animated_box(
@@ -4153,7 +4293,7 @@ or a URL; pass --assets to choose the root",
             if fade_in + fade_out > length && length > Ratio::ZERO {
                 self.push(
                     Diagnostic::warning(
-                        "W304",
+                        "W306",
                         cpath.key("fade_in"),
                         format!(
                             "fades on {clip_id} add up to {}s, longer than the clip ({length}s)",

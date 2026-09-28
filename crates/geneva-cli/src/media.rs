@@ -784,6 +784,12 @@ mod imp {
                     reason: e.to_string(),
                 })?;
             geneva_media::subtitles::shift(&mut cues, track.offset);
+            // A cue after the output ends would outlast the picture and
+            // make the file report the subtitles' length as its own.
+            cues.retain_mut(|c| {
+                c.end = c.end.min(comp.duration);
+                c.start < c.end
+            });
             subtitles.push(geneva_media::SubtitleSettings {
                 language: track.language.clone(),
                 title: track.title.clone(),
@@ -906,13 +912,13 @@ mod imp {
 
         let mut video_sinks: Vec<VideoSink> = Vec::new();
         let mut audio_sinks: Vec<AudioSink> = Vec::new();
-        let mut poster: Option<(&geneva_timeline::ResolvedOutput, std::path::PathBuf)> = None;
+        let mut posters: Vec<(&geneva_timeline::ResolvedOutput, std::path::PathBuf)> = Vec::new();
         let mut sprites: Option<(&geneva_timeline::ResolvedOutput, std::path::PathBuf)> = None;
 
         for o in &comp.outputs {
             let path = dir.join(&o.path);
             match o.kind {
-                OutputKind::Poster => poster = Some((o, path)),
+                OutputKind::Poster => posters.push((o, path)),
                 OutputKind::Sprites => sprites = Some((o, path)),
                 OutputKind::Audio => {
                     let container = geneva_media::container_for(
@@ -1178,7 +1184,7 @@ mod imp {
         }
 
         let total = comp.frame_count();
-        let needs_frames = !video_sinks.is_empty() || poster.is_some() || sprites.is_some();
+        let needs_frames = !video_sinks.is_empty() || !posters.is_empty() || sprites.is_some();
         // The sprite grid.
         let sprite_plan = sprites.as_ref().map(|(o, _)| {
             let duration = comp.duration.to_f64();
@@ -1195,10 +1201,16 @@ mod imp {
             image::RgbaImage::new(cols * o.width, rows * o.height)
         });
         let mut next_tile = 0u32;
-        // The poster: an explicit frame, or the first clear one.
-        let poster_at: Option<u64> = poster.as_ref().and_then(|(o, _)| {
-            o.at.map(|t| ((t * comp.fps).floor().max(0) as u64).min(total.saturating_sub(1)))
-        });
+        // Each poster: an explicit frame, or the first clear one, which
+        // every poster that names no time shares.
+        let poster_ats: Vec<Option<u64>> = posters
+            .iter()
+            .map(|(o, _)| {
+                o.at.map(|t| ((t * comp.fps).floor().max(0) as u64).min(total.saturating_sub(1)))
+            })
+            .collect();
+        let mut picks: Vec<Option<Vec<u8>>> = vec![None; posters.len()];
+        let picking = poster_ats.iter().any(Option::is_none);
         let poster_earliest = (total / 20).max(20).min(total.saturating_sub(1));
         let mut poster_pick: Option<Vec<u8>> = None;
         let mut poster_fallback: Option<Vec<u8>> = None;
@@ -1296,13 +1308,18 @@ mod imp {
                 // A poster that names its time wants one frame; one that
                 // does not is still looking until it has picked, and the
                 // sheet wants a frame whenever a tile falls due.
-                let poster_done = poster.is_none() || poster_pick.is_some();
+                let picked = !picking || poster_pick.is_some();
+                let timed = poster_ats
+                    .iter()
+                    .zip(&picks)
+                    .any(|(at, pick)| pick.is_none() && *at == Some(n));
+                let poster_done = picked
+                    && poster_ats
+                        .iter()
+                        .zip(&picks)
+                        .all(|(at, pick)| at.is_none() || pick.is_some());
                 let tiles_done = sprite_plan.is_none_or(|(_, count, _, _)| next_tile >= count);
-                let poster_wants = !poster_done
-                    && match poster_at {
-                        Some(at) => at == n,
-                        None => true,
-                    };
+                let poster_wants = timed || !picked;
                 let tile_wants = !tiles_done
                     && sprite_plan.is_some_and(|(every, _, _, _)| {
                         t.to_f64() + 1e-9 >= f64::from(next_tile) * every
@@ -1311,9 +1328,11 @@ mod imp {
                     if poster_done && tiles_done {
                         break;
                     }
-                    let looking = poster_wants
-                        && poster_at.is_none()
-                        && !(n + 1 >= poster_earliest || n == total / 10 || n + 1 == total);
+                    let looking = !timed
+                        && !picked
+                        && n + 1 < poster_earliest
+                        && n != total / 10
+                        && n + 1 != total;
                     if (!poster_wants || looking) && !tile_wants {
                         continue;
                     }
@@ -1392,22 +1411,23 @@ mod imp {
                     }
                 }
                 // Pictures from the composited frame.
-                if poster.is_some() && composited {
-                    match poster_at {
-                        Some(at) if at == n => poster_pick = Some(frame.to_rgba8()),
-                        None if poster_pick.is_none() => {
-                            let (gist, mean, motion) = frame_gist(&frame, previous_gist.as_deref());
-                            if n == total / 10 {
-                                poster_fallback = Some(frame.to_rgba8());
-                            }
-                            if n >= poster_earliest && mean > 0.05 && motion > 0.02 {
-                                poster_pick = Some(frame.to_rgba8());
-                            } else if n + 1 == total && poster_fallback.is_none() {
-                                poster_fallback = Some(frame.to_rgba8());
-                            }
-                            previous_gist = Some(gist);
+                if composited {
+                    for (at, pick) in poster_ats.iter().zip(picks.iter_mut()) {
+                        if *at == Some(n) && pick.is_none() {
+                            *pick = Some(frame.to_rgba8());
                         }
-                        Some(_) | None => {}
+                    }
+                    if !picked {
+                        let (gist, mean, motion) = frame_gist(&frame, previous_gist.as_deref());
+                        if n == total / 10 {
+                            poster_fallback = Some(frame.to_rgba8());
+                        }
+                        if n >= poster_earliest && mean > 0.05 && motion > 0.02 {
+                            poster_pick = Some(frame.to_rgba8());
+                        } else if n + 1 == total && poster_fallback.is_none() {
+                            poster_fallback = Some(frame.to_rgba8());
+                        }
+                        previous_gist = Some(gist);
                     }
                 }
                 if let (Some((o, _)), Some((every, count, cols, _)), Some(sheet)) =
@@ -1506,9 +1526,10 @@ mod imp {
                 height: None,
             });
         }
-        if let Some((o, path)) = poster {
-            let rgba = poster_pick
-                .or(poster_fallback)
+        for ((o, path), pick) in posters.into_iter().zip(picks) {
+            let rgba = pick
+                .or_else(|| poster_pick.clone())
+                .or_else(|| poster_fallback.clone())
                 .unwrap_or_else(|| frame.to_rgba8());
             let scaled = super::scale_picture(&rgba, comp.width, comp.height, (o.width, o.height));
             super::write_picture(&scaled, o.width, o.height, &path)?;
@@ -2326,28 +2347,7 @@ mod imp {
                 reason: "an audio-only output with audio disabled has nothing to write".to_owned(),
             });
         }
-        let mut subtitles = Vec::new();
-        for track in &comp.subtitles {
-            let Some(asset) = comp.assets.get(&track.asset) else {
-                continue;
-            };
-            let path = root.join(&asset.src);
-            let text = std::fs::read_to_string(&path).map_err(|e| RenderError::Asset {
-                id: track.asset.clone(),
-                reason: format!("{}: {e}", path.display()),
-            })?;
-            let mut cues =
-                geneva_media::subtitles::parse(&text).map_err(|e| RenderError::Asset {
-                    id: track.asset.clone(),
-                    reason: e.to_string(),
-                })?;
-            geneva_media::subtitles::shift(&mut cues, track.offset);
-            subtitles.push(geneva_media::SubtitleSettings {
-                language: track.language.clone(),
-                title: track.title.clone(),
-                cues,
-            });
-        }
+        let subtitles = subtitle_settings(comp, root)?;
         let mut settings = EncodeSettings {
             video: video_settings,
             container: Some(container),

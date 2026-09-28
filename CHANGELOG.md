@@ -8,7 +8,66 @@ versions changed the format freely.
 
 ## Unreleased
 
+Timeline format 1.1: a `"1.0"` document is read as it is.
+
+### Added
+
+- **Captions from part of a file.** The `captions` source takes `in` and
+  `out`, as a video clip does: cues outside the range are left out, one
+  crossing an edge is cut, and `in` becomes the clip's start. Captions
+  for three shots cut from one film are three captions clips on the same
+  file with the shots' own `in`, `out` and `start`. Before, a word file
+  or a subtitle file could only be used whole from its first second, and
+  two agents building a social clip and a news package from the middle
+  of a film both had to rewrite the file's times by hand.
+- **Several posters in one document.** Each `poster` entry in `outputs`
+  is written, at its own `at`. Before, only the last one by name was
+  written and the others were skipped without a word. A second `sprites`
+  entry is now E434, since a document writes one sheet.
+
+### Changed
+
+- **A pause ends a caption.** Words from a speech recogniser were
+  grouped by segment and by length only, so a cue could hold the words
+  on both sides of a six-second silence and show the second half
+  seconds before it was said. A pause of a second or more between two
+  words now starts a new cue.
+- **`geneva frame --at` draws the frame a render shows at that time**,
+  from the time it starts, as the render draws it. It drew the exact
+  time asked for, which between two frames is a picture the video never
+  holds.
+- **An audio clip's fades longer than the clip are W306**, not W304,
+  which kept only its other meaning: a `color` on a crossfade. Every
+  code now has one meaning.
+
 ### Fixed
+
+- **A `<div>` with paragraphs in it set them side by side.** An element
+  that set no `display` was a flex row, taffy's default, rather than a
+  block, CSS's, so `<div><p>A</p><p>B</p></div>` drew "AB" on one line
+  and a heading after them ran off the edge instead of wrapping. An
+  element with no `display` that holds block elements is now a block
+  and they stack. One that holds only text and inline elements keeps
+  the row, which is how a line of spans stays a line. Markup that sets
+  `display` is laid out as before; every golden case and benchmark
+  piece renders the same to the bit.
+- **Subtitle streams ran past the end of the video.** A cue after the
+  output's end was kept, so a 3 s video with a subtitle file offset
+  into it reported itself as 20 s long. Cues are now cut at the end.
+  A subtitle `title` was dropped in MP4 and MOV, which have no stream
+  title; it is now written as the stream's handler name, which is what
+  players there show.
+- **An `outputs` entry with both `width` and `height` in another shape**
+  stretched the whole picture into it without a word. It still does,
+  with W406, and the reference says a different framing needs its own
+  document.
+- **Diagnostics pointed at the wrong place or said the same thing
+  twice.** An error in an `@keyframes` inside markup pointed at a JSON
+  field named after the CSS offset (`/source/from`); it now points at
+  the source and names the rule and the offset in the message. A
+  captions clip with a negative `start` gave one E300 per cue, with
+  times nobody wrote; it gives one. `geneva explain W201` called a note
+  a warning.
 
 - **A word in bold inside a sentence broke the sentence.** In markup,
   `<p>Go for <b>launch</b> at nine</p>` was laid out as three boxes in a
@@ -18,7 +77,8 @@ versions changed the format freely.
   `code`, `a` and the other inline tags) is now set as one run, as a
   browser sets it: it wraps as a whole, spaces are collapsed across the
   pieces, each piece keeps its own colour, weight, style, size, family
-  and letter-spacing, and `<br>` breaks the line. An inline element that
+  and letter-spacing, a line is as tall as its tallest piece, and `<br>`
+  breaks the line. An inline element that
   needs a box of its own (a background, a border, padding) still gets
   one, and an element that asks for `display: flex` still makes its text
   and elements flex items, as a browser does.

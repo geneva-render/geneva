@@ -1,5 +1,5 @@
 {
-  "geneva": "1.0",
+  "geneva": "1.1",
   "output": { "width": 960, "height": 540, "fps": 30, "duration": "13s", "background": "black" },
 
   "assets": {

@@ -66,7 +66,7 @@ Then a JSON document says when it appears:
 
 ```json
 {
-  "geneva": "1.0",
+  "geneva": "1.1",
   "output": { "width": 1280, "height": 720, "fps": 30 },
   "assets": { "iss": { "src": "iss.mp4" }, "card": { "src": "card.html" } },
   "layers": [

@@ -1,11 +1,12 @@
-# Timeline format 1.0
+# Timeline format 1.1
 
 A timeline is a JSON document that describes a video composition: the
 output frame, the assets, the visual layers and the audio tracks. The
 editing commands compile to timelines, and a timeline can also be written
 directly. This page is the format reference.
 
-- Schema: [`schema/geneva-timeline-1.0.schema.json`](../schema/geneva-timeline-1.0.schema.json), also printed by `geneva schema`.
+- Schema: [`schema/geneva-timeline-1.1.schema.json`](../schema/geneva-timeline-1.1.schema.json), also printed by `geneva schema`.
+- Version 1.1 adds `in` and `out` to the [`captions`](#sources) source. A `"1.0"` document is read as it is: within 1.x the format only gains optional fields.
 - Unknown fields are errors everywhere; the message lists the allowed names.
 
 ## Minimal document
@@ -14,7 +15,7 @@ The smallest valid document: three seconds of a solid colour.
 
 ```json
 {
-  "geneva": "1.0",
+  "geneva": "1.1",
   "output": { "width": 1280, "height": 720, "fps": 30, "duration": "3s" },
   "layers": [
     { "clips": [ { "source": { "kind": "solid", "color": "#1d2230" } } ] }
@@ -151,7 +152,7 @@ The `animation` value is the CSS shorthand, parts in any order:
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `geneva` | yes | `"1.0"`. Anything else is E110. |
+| `geneva` | yes | `"1.1"`, or `"1.0"`. Anything else is E110. |
 | `output` | yes | Frame, rate, duration, background, color, audio, encoding. |
 | `outputs` | no | Name to [output entry](#outputs): several files from one render. |
 | `assets` | no | Id to asset. |
@@ -214,9 +215,9 @@ decoded once.
 
 | Field | Kinds | Default | Description |
 | --- | --- | --- | --- |
-| `kind` | all | required | `video`, `poster` (one still), `sprites` (thumbnail sheet + WebVTT map), `audio`. |
+| `kind` | all | required | `video`, `poster` (one still; several entries for several stills), `sprites` (thumbnail sheet + WebVTT map; one per document, E434), `audio`. |
 | `path` | all | entry name + `.mp4` (video), `.jpg` (poster, sprites), `.wav` (audio) | Plain file name, no directories (E431). Video: `mp4`, `mov`, `mkv`, `webm`, `mxf`; pictures: `jpg`, `jpeg`, `png`; audio: `wav`, `m4a`, `mp3`, `flac`, `ogg`. No two entries on one file (E432). Sprites also write `<name>.vtt`. |
-| `width`, `height` | video, poster, sprites | canvas size; sprites: 90 px high tiles | One of the two keeps the aspect (video rounded to even; W401 when both odd). Sprites: one tile. |
+| `width`, `height` | video, poster, sprites | canvas size; sprites: 90 px high tiles | One of the two keeps the aspect (video rounded to even; W401 when odd). Both in another shape stretch the whole canvas into it (W406); a different framing, such as a square cut of a vertical video, needs a document with a canvas of that shape. Sprites: one tile. |
 | `encode` | video, audio | `output.encode`; audio: container defaults | Same block as `output.encode`. |
 | `audio` | video, audio | `output.audio` | Rate and channels. |
 | `at` | poster | first clear frame | A [time](#times) inside the composition (E433). Default: first frame after the opening (5% in, at least 20 frames) that is not dark and follows motion; else 10% in. |
@@ -428,6 +429,7 @@ still be copied rather than re-encoded.
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
 | `asset` | yes | | A `captions` or `subtitle` asset: `.srt`, `.vtt`, or speech-recogniser `.json`. Unreadable, missing or wordless: E453. |
+| `in`, `out` | no | `0`, end of file | Part of the file to use (1.1). Cues outside it are left out, one crossing an edge is cut, and `in` becomes the clip's start. `out` not after `in`: E301. |
 | `position` | no | `bottom` | `bottom`, `top`, `center`. |
 | `margin` | no | title-safe inset | From the top/bottom edge; length or % of frame height. |
 | `safe` | no | `5` | Title-safe inset, % of frame height; default margin and N453 check. `0` disables. |
@@ -439,6 +441,9 @@ still be copied rather than re-encoded.
 | `style` | no | | `text` fields minus `text` and `words`. |
 
 - Cue times are relative to the clip's `start`; a word file timed from its media follows a clip that starts that media at `"4.4s"`.
+- A video clip that uses part of its media takes captions with the same `in` and `out`, at the same `start`. Three shots from one film are three captions clips on the same file.
+- Cues past the clip's `duration`, or past the end of the output, are left out.
+- Grouping (word files): each recogniser segment starts a cue, and so does a pause of 1 s or more between two words; a cue is filled up to `max_lines` × `max_chars` characters.
 - Grouping counts characters, not pixels, before any font is loaded, so it is identical on every machine. `style.max_width` never moves a cue boundary; set `max_chars` to what the width holds. Starting point: `max_width / (0.5 × size)`, which errs narrow (700 px of 32 px Liberation Sans: 44 by the formula, 47 to 48 in practice). `validate --probe` reports the cue count and budget.
 - Word files give each cue its `words`, so `style.highlight` works. On SubRip/WebVTT a `highlight` is W453.
 - Word files accepted: whisper's `{"segments": [{"words": [...]}]}`, `{"words": [...]}`, a bare list. `word` or `text` is the word; other keys are ignored. Times in seconds; millisecond-looking times are E453.
@@ -477,11 +482,11 @@ colour (black by default).
 | Kind | Between clips | At a layer's head or tail |
 | --- | --- | --- |
 | `crossfade` | Arriving clip fades up over the leaving one. Sound crosses at constant power (square-root gains), no mid-point dip. | Fades against what is behind: lower layers or `output.background`. |
-| `fade` | Leaving clip fades out over the first half, arriving one in over the second, the colour covering the frame between. Sound dips to silence at the midpoint. | Fades up from, or out to, the colour over the whole duration. |
+| `fade` | Leaving clip fades out over the first half, arriving one in over the second, the colour covering the frame between. Sound dips to silence at the midpoint. | Fades up from, or out to, the colour over the transition's `duration`. |
 
 - Clips overlap by `duration`; a clip without `start` moves earlier to make the overlap. The previous clip must cover it (E306).
 - `transition_out` where a next clip exists: E307.
-- A `fade`'s colour covers the whole frame, layers below included.
+- A `fade`'s colour covers the whole frame: every layer, above and below. To dip the picture under overlays that stay (a ticker, a logo), put the cut in a [composition](#compositions) and the overlays on layers above it; the dip then stays inside the composition.
 - A fade on any layer above the first sends the whole composition to the compositing path; no frames are copied.
 
 ```json
@@ -502,6 +507,9 @@ Tracks have `id`, `enabled`, `clips`, as layers do.
 | `duration` | no | source range | |
 | `gain_db` | no | `0` | Animatable. |
 | `fade_in`, `fade_out` | no | `0` | Fade lengths. |
+
+- A video clip's own sound has no fades of its own beyond its transitions. To shape it, set the video source's `audio` to `false` and add an audio clip of the same asset with the same `in`, `out` and `start`.
+- A video clip's sound is heard wherever the clip is, inside a composition too.
 | `speed` | no | `1` | Length is the range divided by the speed; pitch follows. |
 
 ### `subtitles[]`
@@ -517,8 +525,8 @@ same `.srt` or `.vtt` serves either.
 | `enabled` | no | `false` leaves it out. |
 | `asset` | yes | A `subtitle` asset (`.srt`, `.vtt`). |
 | `language` | no | `"en"`, `"pt-BR"`; stored as the container's three-letter code. |
-| `title` | no | Shown by players. |
-| `offset` | no | Shifts every cue; negative moves earlier; cues ending before zero are dropped. |
+| `title` | no | Shown by players. In MP4 and MOV it is written as the stream's handler name, which is what players show there. |
+| `offset` | no | Shifts every cue; negative moves earlier. Cues ending before zero or starting after the output ends are dropped, and one running past the end is cut. |
 
 | Container | Stored as | Tags like `<i>` |
 | --- | --- | --- |
@@ -564,6 +572,7 @@ reported by name rather than drawn differently.
 ```
 
 - The clip's box is the page (`<body>`): block layout, the frame's size by default, so CSS positions things in the picture and the clip needs no `transform`. `"auto"` on either side fits the content.
+- An element with no `display` that holds block elements (`div`, `p`, `h1`, …) is a block, and they stack. One that holds only text and inline elements sets them in a row.
 - Only the marked rectangle is composited, so a frame-sized box costs no more than a small one.
 
 ### Files it points at
@@ -593,6 +602,8 @@ reported by name rather than drawn differently.
 | Text | `color`, `-webkit-text-fill-color` (as `color`), `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space`, `text-shadow` (list) |
 | Motion | `animation`, `animation-name`, `-duration`, `-delay`, `-timing-function`, `-iteration-count`, `-direction`, `-fill-mode` |
 
+`align-items: baseline` and `align-self: baseline` line up the bottoms of the boxes, not their text baselines.
+
 Anything else is W450: the declaration is skipped, the element and
 property are named, and the rest of the document is drawn. A `<style>` rule matching nothing is W452.
 
@@ -606,7 +617,7 @@ property are named, and the rest of the document is drawn. A `<style>` rule matc
 
 - Text with inline elements inside (`<p>Go for <b>launch</b> at nine</p>`) is set as one run: wraps as a whole, whitespace collapsed across pieces, each piece keeps colour, weight, style, size, family, letter-spacing. `<br>` breaks the line.
 - Inline tags: `a`, `abbr`, `b`, `br`, `cite`, `code`, `em`, `i`, `kbd`, `mark`, `q`, `s`, `small`, `span`, `strong`, `sub`, `sup`, `time`, `u`, `var`. `mark`, `u`, `s`, `sub`, `sup` draw as plain text.
-- An inline element with a background, border, padding, margin, shadow, effect, animation or position gets a box of its own, as do the children of an element with `display: flex`.
+- An inline element with a background, border, padding, margin, shadow, effect, animation or position gets a box of its own, as do the children of an element with `display: flex`. The sentence around it is then set as boxes, not as one line: a word with a background goes on a line of its own. Colour, weight and size change a word inside the line.
 
 **Painting**
 
@@ -697,7 +708,7 @@ How clip times are resolved when they are not given explicitly:
 ## Determinism
 
 - A frame is a pure function of timeline, assets and time; nothing reads a clock.
-- Same platform: identical frames. Across platforms: perceptually identical; golden tests (`tests/golden/`) compare with tolerance.
+- Same platform: identical frames. Across platforms: perceptually identical; the repository's golden tests (`tests/golden/`) compare with tolerance.
 
 ## Validation
 

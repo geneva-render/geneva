@@ -327,13 +327,18 @@ impl Default for Grouping {
     }
 }
 
+/// A silence between two words that always ends a cue.
+pub const PAUSE: Ratio = Ratio::ONE;
+
 /// Gathers words into cues.
 ///
 /// A recogniser's own segments are the best phrase boundaries there are,
 /// so when the file has them each one starts a new cue; `segment` is the
-/// index the word came from. Inside a segment, a cue is filled until it
-/// would take more than `max_lines` lines and then started again, so a
-/// long segment becomes several cues rather than one wall of words.
+/// index the word came from. A pause of [`PAUSE`] or more starts one too,
+/// so a cue never shows words through a silence before they are said.
+/// Inside a segment, a cue is filled until it would take more than
+/// `max_lines` lines and then started again, so a long segment becomes
+/// several cues rather than one wall of words.
 pub fn cues_from_words(words: &[(Word, usize)], rules: Grouping) -> Vec<Cue> {
     let budget = rules.max_lines.max(1) * rules.max_chars.max(8);
     let mut cues: Vec<Cue> = Vec::new();
@@ -362,7 +367,10 @@ pub fn cues_from_words(words: &[(Word, usize)], rules: Grouping) -> Vec<Cue> {
 
     for (word, seg) in words {
         let length: usize = current.iter().map(|w| w.text.chars().count() + 1).sum();
-        let starts_a_phrase = *seg != segment;
+        let starts_a_phrase = *seg != segment
+            || current
+                .last()
+                .is_some_and(|last| word.start - last.end >= PAUSE);
         let would_overflow = length + word.text.chars().count() > budget;
         if starts_a_phrase || would_overflow {
             flush(&mut cues, &mut current);

@@ -54,7 +54,7 @@ One picture, `.png` or `.jpg`.
 | Option | Default | Effect |
 | --- | --- | --- |
 | `-o FILE` | `frame.png` | Output picture. |
-| `--at TIME` | timeline: `0`; video: chosen | Time of the frame. The chosen frame of a video is the first past the opening (20 frames or 5% in) that is not dark and follows motion, else the one a tenth in. |
+| `--at TIME` | timeline: `0`; video: chosen | Time of the frame: the frame a render shows then, drawn as the render draws it. The chosen frame of a video is the first past the opening (20 frames or 5% in) that is not dark and follows motion, else the one a tenth in. |
 | `--frame N` | | Frame number instead of a time. |
 | `--width W`, `--height H` | the frame's | Picture size; one keeps the aspect. |
 | `--assets DIR` | | Asset root, for a timeline. |
@@ -81,7 +81,7 @@ for pictures and video. A sprite sheet's `.vtt` is its own row (`kind`
 | `--preset NAME` | Encoder preset, `ultrafast` to `veryslow`. Forces a re-encode. |
 | `--for TARGET`, `--quality`, `--budget` | Encode for a destination; see [targets](#targets). The timeline's size is kept. |
 | `--no-audio` | No audio track. |
-| `--renderer auto\|cpu\|gpu` | `auto`: a hardware GPU if present, else the CPU. `gpu`: any device, software ones included, else the CPU with a note. `cpu`: the reference. `GENEVA_GPU=software` forces the software device. The note names the device. `frame` and overlays on a direct-path picture always use the CPU. |
+| `--renderer auto\|cpu\|gpu` | `auto`: a hardware GPU if present, else the CPU. `gpu`: any device, software ones included, else the CPU with a note. A software device (llvmpipe, WARP) is for testing and is several times slower than the CPU renderer: `auto` never picks one. `cpu`: the reference. `GENEVA_GPU=software` forces the software device. The note names the device. `frame` and overlays on a direct-path picture always use the CPU. |
 | `--exact` | Frame-accurate cuts; a [smart cut](#smart-cut) where possible. |
 | `--assets DIR` | Asset root. |
 
@@ -136,7 +136,7 @@ every input agrees, else 48 kHz stereo.
 
 Needs: H.264 4:2:0 shown as it is at the output size and rate; MP4, MOV
 or Matroska out; no `--crf`, `--preset` or `--for`; at least a fifth of
-the frames copyable; the system's x264 (see the README).
+the frames copyable; x264 installed on the system (`libx264-164` on Debian 12 and Ubuntu 24.04, `brew install x264` on macOS, `libx264-<build>.dll` beside `geneva.exe` or named by `GENEVA_X264` on Windows).
 
 - With `--exact`, each cut re-encodes up to the source's next keyframe;
   an overlay re-encodes the frames it touches, to the next keyframe. A

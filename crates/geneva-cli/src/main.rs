@@ -522,10 +522,15 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 report(&loaded.diagnostics, cli.format, None)?;
                 return Ok(ExitCode::from(EXIT_INVALID));
             };
+            // The frame a render shows at that time, drawn at the time it
+            // starts, so what is checked here is what the video holds.
             let time = match (&args.at, args.frame) {
-                (Some(text), _) => Time::parse(text)
-                    .map_err(|e| anyhow::anyhow!("--at: {e}"))?
-                    .resolve(comp.fps),
+                (Some(text), _) => {
+                    let t = Time::parse(text)
+                        .map_err(|e| anyhow::anyhow!("--at: {e}"))?
+                        .resolve(comp.fps);
+                    comp.frame_time((t * comp.fps).floor().max(0) as u64)
+                }
                 (None, Some(n)) => comp.frame_time(n),
                 (None, None) => Ratio::ZERO,
             };

@@ -17,7 +17,7 @@ use crate::length::{Length, Point, Scale};
 use crate::time::{Fps, Time};
 
 /// The timeline format version this crate writes.
-pub const FORMAT_VERSION: &str = "1.0";
+pub const FORMAT_VERSION: &str = "1.1";
 
 /// The format versions this crate reads.
 ///
@@ -27,7 +27,7 @@ pub const FORMAT_VERSION: &str = "1.0";
 /// written document means is a 2.0. Change the format and this constant
 /// moves, which publishes a new file beside the old ones rather than
 /// editing what an older binary was built against.
-pub const ACCEPTED_VERSIONS: &[&str] = &["1.0"];
+pub const ACCEPTED_VERSIONS: &[&str] = &["1.0", "1.1"];
 
 /// A complete composition: output settings, assets and layers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -979,6 +979,16 @@ pub enum Source {
     Captions {
         /// Id of an asset of kind "captions".
         asset: String,
+        /// Where in the file to start. Cues that end before it are left
+        /// out and the rest move earlier by it, so a captions clip with
+        /// the `in` of the video clip it captions stays in step with it.
+        /// Defaults to 0.
+        #[serde(rename = "in", default, skip_serializing_if = "Option::is_none")]
+        in_: Option<Time>,
+        /// Where in the file to stop. Cues from it on are left out and one
+        /// running past it is cut there. Defaults to the end of the file.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        out: Option<Time>,
         /// Where cues sit. Defaults to the bottom.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         position: Option<CaptionPosition>,
