@@ -6,6 +6,18 @@ version it was written for; within 1.x the format only gains optional
 fields, so a document keeps meaning what it meant. Before 1.0, minor
 versions changed the format freely.
 
+## Unreleased
+
+### Fixed
+
+- **The install scripts failed for anyone with a `GITHUB_TOKEN` set.** A
+  token in the environment sent them down the path meant for a private
+  repository, whose parsing expected the API's JSON on one line and
+  found it pretty-printed, so `install.sh` said the release had no
+  archive for the machine. Both scripts now download from the public
+  release first and try a token only if that fails, and the fallback
+  reads the JSON as it comes.
+
 ## 1.1.0 (2026-09-28)
 
 Timeline format 1.1: a `"1.0"` document is read as it is.

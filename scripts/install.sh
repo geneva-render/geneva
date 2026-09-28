@@ -14,8 +14,8 @@
 #   GENEVA_VERSION   release tag to download, for example v0.1.1 (default: latest)
 #   GENEVA_PREFIX    directory to install into (default: /usr/local/bin when
 #                    writable, otherwise ~/.local/bin)
-#   GITHUB_TOKEN     token with access to the repository, needed to download
-#                    while the repository is private
+#   GITHUB_TOKEN     used only when the public download fails, for a fork or
+#                    mirror kept private; never needed for this repository
 set -eu
 
 repo=geneva-render/geneva
@@ -70,10 +70,19 @@ if [ -n "${GITHUB_TOKEN:-}" ]; then
   auth="Authorization: Bearer $GITHUB_TOKEN"
 fi
 
+# The repository is public, so nothing here needs a token; one found in the
+# environment is only tried after the public route fails, since a stale
+# token would otherwise turn a download anyone can make into an error.
+latest() {
+  curl -fsSL "$@" "$api/releases/latest" | tr -d '\n' | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1
+}
 version=${GENEVA_VERSION:-}
 if [ -z "$version" ]; then
-  version=$(curl -fsSL ${auth:+-H "$auth"} "$api/releases/latest" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
-  [ -n "$version" ] || { echo "install.sh: could not find the latest release (set GITHUB_TOKEN for a private repository)" >&2; exit 1; }
+  version=$(latest) || version=""
+  if [ -z "$version" ] && [ -n "$auth" ]; then
+    version=$(latest -H "$auth") || version=""
+  fi
+  [ -n "$version" ] || { echo "install.sh: could not find the latest release" >&2; exit 1; }
 fi
 name=geneva-$version-$target
 archive=$name.tar.gz
@@ -82,15 +91,14 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 echo "downloading $archive"
-if [ -n "$auth" ]; then
-  # Private repositories serve assets through the API only; pick the
-  # asset whose name matches.
+if ! curl -fsSL -o "$tmp/$archive" "https://github.com/$repo/releases/download/$version/$archive"; then
+  [ -n "$auth" ] || { echo "install.sh: could not download $archive from release $version" >&2; exit 1; }
+  # A private copy serves assets through the API only; pick the asset
+  # whose name matches. The API pretty-prints, so join the lines first.
   asset_url=$(curl -fsSL -H "$auth" "$api/releases/tags/$version" \
-    | tr '{' '\n' | grep "\"name\": *\"$archive\"" | sed -n 's/.*"url": *"\([^"]*\/assets\/[0-9]*\)".*/\1/p' | head -1)
+    | tr -d '\n' | tr '{' '\n' | grep "\"name\": *\"$archive\"" | sed -n 's/.*"url": *"\([^"]*\/assets\/[0-9]*\)".*/\1/p' | head -1)
   [ -n "$asset_url" ] || { echo "install.sh: no $archive in release $version" >&2; exit 1; }
   curl -fsSL -H "$auth" -H "Accept: application/octet-stream" -o "$tmp/$archive" "$asset_url"
-else
-  curl -fsSL -o "$tmp/$archive" "https://github.com/$repo/releases/download/$version/$archive"
 fi
 tar xzf "$tmp/$archive" -C "$tmp"
 

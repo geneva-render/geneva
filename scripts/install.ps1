@@ -13,8 +13,8 @@
 #   GENEVA_VERSION   release tag to download, for example v1.0.0 (default: latest)
 #   GENEVA_PREFIX    folder to install into (default: %LOCALAPPDATA%\Programs\geneva),
 #                    added to the user's PATH when it is not on it
-#   GITHUB_TOKEN     token with access to the repository, needed to download
-#                    while the repository is private
+#   GITHUB_TOKEN     used only when the public download fails, for a fork or
+#                    mirror kept private; never needed for this repository
 $ErrorActionPreference = 'Stop'
 # Windows PowerShell 5.1 does not offer TLS 1.2 by default.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
@@ -46,12 +46,17 @@ if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'geneva.exe'))) {
   return
 }
 
+# The repository is public, so nothing here needs a token; one found in the
+# environment is only tried after the public route fails, since a stale
+# token would otherwise turn a download anyone can make into an error.
 $headers = @{ 'User-Agent' = 'geneva-install' }
-if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $env:GITHUB_TOKEN" }
+$authed = $headers.Clone()
+if ($env:GITHUB_TOKEN) { $authed['Authorization'] = "Bearer $env:GITHUB_TOKEN" }
 $version = $env:GENEVA_VERSION
 if (-not $version) {
-  $version = (Invoke-RestMethod -UseBasicParsing -Headers $headers "$api/releases/latest").tag_name
-  if (-not $version) { throw 'install.ps1: could not find the latest release (set GITHUB_TOKEN for a private repository)' }
+  try { $version = (Invoke-RestMethod -UseBasicParsing -Headers $headers "$api/releases/latest").tag_name }
+  catch { if ($env:GITHUB_TOKEN) { $version = (Invoke-RestMethod -UseBasicParsing -Headers $authed "$api/releases/latest").tag_name } }
+  if (-not $version) { throw 'install.ps1: could not find the latest release' }
 }
 $name = "geneva-$version-$target"
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid())
@@ -59,14 +64,15 @@ New-Item -ItemType Directory -Path $tmp | Out-Null
 try {
   $zip = Join-Path $tmp "$name.zip"
   Write-Host "downloading $name.zip"
-  if ($env:GITHUB_TOKEN) {
-    # Private repositories serve assets through the API only.
-    $release = Invoke-RestMethod -UseBasicParsing -Headers $headers "$api/releases/tags/$version"
+  try {
+    Invoke-WebRequest -UseBasicParsing -Headers $headers "https://github.com/$repo/releases/download/$version/$name.zip" -OutFile $zip
+  } catch {
+    if (-not $env:GITHUB_TOKEN) { throw "install.ps1: could not download $name.zip from release $version" }
+    # A private copy serves assets through the API only.
+    $release = Invoke-RestMethod -UseBasicParsing -Headers $authed "$api/releases/tags/$version"
     $asset = $release.assets | Where-Object { $_.name -eq "$name.zip" } | Select-Object -First 1
     if (-not $asset) { throw "install.ps1: no $name.zip in release $version" }
-    Invoke-WebRequest -UseBasicParsing -Headers ($headers + @{ Accept = 'application/octet-stream' }) $asset.url -OutFile $zip
-  } else {
-    Invoke-WebRequest -UseBasicParsing -Headers $headers "https://github.com/$repo/releases/download/$version/$name.zip" -OutFile $zip
+    Invoke-WebRequest -UseBasicParsing -Headers ($authed + @{ Accept = 'application/octet-stream' }) $asset.url -OutFile $zip
   }
   Expand-Archive $zip -DestinationPath $tmp
   Install-Binary (Join-Path $tmp "$name\geneva.exe")
