@@ -4,7 +4,7 @@
 
 This started as a rewrite of ffmpeg's CLI in Rust. The core codecs still come from libav*, but everything on top of them is new: a planner that works out the cheapest way to produce an edit, a proper compositor with layers, keyframes, masks, transitions etc., and a layout engine that draws titles and graphics written in plain HTML and CSS, natively and [quickly](docs/benchmarks.md). No filtergraphs, no Playwright, no headless browsers. All in a single binary, without dependencies.
 
-https://github.com/user-attachments/assets/4645a086-7dc8-4e81-a0b5-4b5827bc991e
+https://github.com/user-attachments/assets/3bdb1f64-1c44-439a-a0d8-b9b43022dcab
 
 <sub>An AI agent made this on its first try, from one prompt, with nothing but whisper-cli and a single geneva command. [The prompt is below.](#made-to-be-driven-by-agents)</sub>
 
