@@ -241,10 +241,9 @@ fn tokens(text: &str) -> Vec<&str> {
 fn time(token: &str) -> Option<f64> {
     let (body, factor) = if let Some(b) = token.strip_suffix("ms") {
         (b, 0.001)
-    } else if let Some(b) = token.strip_suffix('s') {
-        (b, 1.0)
     } else {
-        return None;
+        let b = token.strip_suffix('s')?;
+        (b, 1.0)
     };
     let v: f64 = body.parse().ok()?;
     v.is_finite().then_some(v * factor)

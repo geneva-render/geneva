@@ -287,7 +287,7 @@ fn meter_push(meter: &mut Meter, block: &[f32], channels: usize) {
     if channels == 1 {
         let mono: Vec<f32> = block
             .chunks_exact(2)
-            .map(|lr| (lr[0] + lr[1]) * 0.5)
+            .map(|lr| f32::midpoint(lr[0], lr[1]))
             .collect();
         meter.push(&mono);
     } else {

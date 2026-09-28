@@ -286,7 +286,7 @@ pub fn yuv420p8_into(
                     chroma[cx]
                 } else {
                     let (a, b) = (chroma[cx], chroma[(cx + 1).min(cw - 1)]);
-                    (0.5 * (a.0 + b.0), 0.5 * (a.1 + b.1))
+                    (f32::midpoint(a.0, b.0), f32::midpoint(a.1, b.1))
                 };
                 let yn = (f32::from(y_row[x]) - y_off) * y_scale;
                 let r = yn + cr_r * crn;

@@ -318,7 +318,7 @@ fn cubic_bezier_fn([x1, y1, x2, y2]: [f64; 4], u: f64) -> f64 {
         } else {
             hi = t;
         }
-        t = 0.5 * (lo + hi);
+        t = f64::midpoint(lo, hi);
     }
     bezier(y1, y2, t)
 }

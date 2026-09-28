@@ -1096,7 +1096,7 @@ mod imp {
                                 stats.push(super::OutputStats {
                                     name: o.name.clone(),
                                     kind: "video",
-                                    bytes: std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+                                    bytes: std::fs::metadata(&path).map_or(0, |m| m.len()),
                                     content_type: super::content_type_for(&path),
                                     path,
                                     mode: if mix_audio.is_some() {
@@ -1506,7 +1506,7 @@ mod imp {
             stats.push(super::OutputStats {
                 name: sink.name,
                 kind: "video",
-                bytes: std::fs::metadata(&sink.path).map(|m| m.len()).unwrap_or(0),
+                bytes: std::fs::metadata(&sink.path).map_or(0, |m| m.len()),
                 content_type: super::content_type_for(&sink.path),
                 path: sink.path,
                 mode: "render",
@@ -1518,7 +1518,7 @@ mod imp {
             stats.push(super::OutputStats {
                 name: sink.name,
                 kind: "audio",
-                bytes: std::fs::metadata(&sink.path).map(|m| m.len()).unwrap_or(0),
+                bytes: std::fs::metadata(&sink.path).map_or(0, |m| m.len()),
                 content_type: super::content_type_for(&sink.path),
                 path: sink.path,
                 mode: "render",
@@ -1536,7 +1536,7 @@ mod imp {
             stats.push(super::OutputStats {
                 name: o.name.clone(),
                 kind: "poster",
-                bytes: std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+                bytes: std::fs::metadata(&path).map_or(0, |m| m.len()),
                 content_type: super::content_type_for(&path),
                 path,
                 mode: "render",
@@ -1575,7 +1575,7 @@ mod imp {
             stats.push(super::OutputStats {
                 name: o.name.clone(),
                 kind: "sprites",
-                bytes: std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+                bytes: std::fs::metadata(&path).map_or(0, |m| m.len()),
                 content_type: super::content_type_for(&path),
                 path,
                 mode: "render",
@@ -1585,7 +1585,7 @@ mod imp {
             stats.push(super::OutputStats {
                 name: o.name.clone(),
                 kind: "sprites-map",
-                bytes: std::fs::metadata(&vtt_path).map(|m| m.len()).unwrap_or(0),
+                bytes: std::fs::metadata(&vtt_path).map_or(0, |m| m.len()),
                 content_type: "text/vtt",
                 path: vtt_path,
                 mode: "render",

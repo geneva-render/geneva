@@ -485,7 +485,7 @@ Divide them by 1000; geneva reads seconds, as whisper and whisperx write them"
                 .to_owned(),
         ));
     }
-    out.sort_by(|a, b| a.0.start.cmp(&b.0.start));
+    out.sort_by_key(|a| a.0.start);
     Ok(out)
 }
 

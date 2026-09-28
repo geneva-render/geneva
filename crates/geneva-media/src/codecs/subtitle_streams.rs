@@ -109,7 +109,7 @@ impl SubtitleWriter {
             }
             stream.set_metadata(metadata);
             let mut cues: Vec<Cue> = track.cues.clone();
-            cues.sort_by(|a, b| a.start.cmp(&b.start));
+            cues.sort_by_key(|a| a.start);
             streams.push(SubtitleStream {
                 index: stream.index(),
                 codec,

@@ -1422,7 +1422,7 @@ pub struct TargetFit {
 /// bitrate cap for that size.
 pub fn fits_target(input: &Path, target: &crate::targets::Target) -> Result<TargetFit> {
     let src = Input::probe(input)?;
-    let bytes = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+    let bytes = std::fs::metadata(input).map_or(0, |m| m.len());
     let ext = input
         .extension()
         .and_then(|e| e.to_str())

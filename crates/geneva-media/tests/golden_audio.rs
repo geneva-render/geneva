@@ -29,7 +29,7 @@ fn mix(comp: &Composition, root: &Path) -> Result<Samples, String> {
     let mut data = Vec::new();
     while let Some(block) = mixer.next_block(rate as usize).map_err(|e| e.to_string())? {
         if channels == 1 {
-            data.extend(block.chunks_exact(2).map(|lr| (lr[0] + lr[1]) * 0.5));
+            data.extend(block.chunks_exact(2).map(|lr| f32::midpoint(lr[0], lr[1])));
         } else {
             data.extend(block);
         }

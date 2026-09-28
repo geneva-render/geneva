@@ -996,7 +996,7 @@ fn render_to(
                 diagnostics.push(Diagnostic::warning("W455", "", warning.clone()));
             }
             if let Some((target, max)) = size_limit {
-                let written = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
+                let written = std::fs::metadata(output).map_or(0, |m| m.len());
                 if written > *max {
                     diagnostics.push(
                         Diagnostic::warning(

@@ -28,7 +28,7 @@ fn schema_rejects_what_the_parser_rejects() {
         "layers": [ { "clips": [ { "source": { "kind": "solid", "color": "#fff" }, "opacty": 1 } ] } ]
     });
     assert!(!validator.is_valid(&bad));
-    assert!(load(&bad.to_string()).diagnostics[0].code == "E101");
+    assert_eq!(load(&bad.to_string()).diagnostics[0].code, "E101");
 }
 
 #[test]

@@ -763,7 +763,7 @@ fn overlays_laid_onto_direct_frames_match_the_compositor() {
         inside / n_inside
     );
     // The caption did land: something in the box differs from the plain frame.
-    assert!(fast != was);
+    assert_ne!(fast, was);
 }
 
 #[test]
