@@ -90,14 +90,21 @@ else
   openh264_make=""
 fi
 
-fetch() { # name url [strip-components, default 1]
+fetch() { # name url [strip-components, default 1] [fallback-url fallback-strip]
   local name=$1 url=$2 strip=${3:-1} dir=$src/$1
   # A source tree counts only when its marker says the unpack finished;
   # a directory alone may be the remains of an interrupted or pruned one.
   if [ -f "$dir/.fetched" ]; then return; fi
   echo "==> fetching $name"
   rm -rf "$dir"
-  curl -sSL --retry 5 --retry-all-errors --retry-delay 3 -o "$src/$name.tar" "$url"
+  # -f: an error page (a 503 from a busy mirror) is a failure, not a
+  # file that tar then cannot read.
+  if ! curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o "$src/$name.tar" "$url"; then
+    [ $# -ge 5 ] || { echo "error: could not fetch $name from $url" >&2; exit 1; }
+    echo "==> $url failed; fetching $name from $4"
+    url=$4 strip=$5
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o "$src/$name.tar" "$url"
+  fi
   mkdir -p "$dir"
   tar xf "$src/$name.tar" --strip-components="$strip" -C "$dir"
   rm -f "$src/$name.tar"
@@ -162,7 +169,10 @@ fi
 
 # --- libvpx (BSD-3), VP8/VP9 ----------------------------------------------
 if ! done_marker libvpx; then
-  fetch libvpx "https://chromium.googlesource.com/webm/libvpx/+archive/refs/tags/v$LIBVPX_VERSION.tar.gz" 0
+  # googlesource answers archive requests with 503 when busy; GitHub's
+  # mirror of the same tag is the fallback (it has a top-level directory).
+  fetch libvpx "https://chromium.googlesource.com/webm/libvpx/+archive/refs/tags/v$LIBVPX_VERSION.tar.gz" 0 \
+    "https://github.com/webmproject/libvpx/archive/refs/tags/v$LIBVPX_VERSION.tar.gz" 1
   echo "==> building libvpx"
   # libvpx's configure only recognizes Darwin up to 23 (macOS 14); on a
   # newer host it silently falls back to a generic build without NEON or
