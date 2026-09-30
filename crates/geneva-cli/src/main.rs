@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+mod farm;
 mod guide;
 mod media;
 mod targets;
@@ -70,6 +71,11 @@ enum Command {
     /// Put parts written by `render --frames` and `render --audio-only`
     /// together into the output, without re-encoding.
     Join(JoinArgs),
+    /// Render a timeline on several machines: hand its parts out to
+    /// `geneva worker` processes, here and elsewhere, and join them.
+    Farm(FarmArgs),
+    /// Render parts for a `geneva farm` until it has none left.
+    Worker(WorkerArgs),
     /// Show what a media file contains.
     Probe(ProbeArgs),
     /// Print the JSON Schema of the timeline format.
@@ -265,6 +271,74 @@ struct PlanArgs {
     /// least 2 seconds, so a short output gets fewer.
     #[arg(long, value_name = "N")]
     parts: u32,
+}
+
+#[derive(Args)]
+struct FarmArgs {
+    #[command(flatten)]
+    timeline: TimelineArgs,
+    /// Output file.
+    #[arg(short, long, value_name = "FILE")]
+    output: PathBuf,
+    /// How many picture parts; one per 10 seconds of output by default.
+    /// Each is at least 2 seconds.
+    #[arg(long, value_name = "N")]
+    parts: Option<u32>,
+    /// Address to listen on for workers. A random free port on every
+    /// interface by default; the command for starting a worker is
+    /// printed with the address to use.
+    #[arg(long, value_name = "HOST:PORT", default_value = "0.0.0.0:0")]
+    listen: String,
+    /// The secret workers must present. Random by default, and printed.
+    #[arg(long, value_name = "TOKEN", env = "GENEVA_FARM_TOKEN")]
+    token: Option<String>,
+    /// Workers to start on this machine. Each renders one part at a time
+    /// on all the cores, so more than one here rarely helps. 0 renders
+    /// only on workers that connect.
+    #[arg(long, value_name = "N", default_value_t = 1)]
+    local: u32,
+    /// A shell command that starts one worker somewhere, run
+    /// --launch-count times with GENEVA_FARM_URL, GENEVA_FARM_TOKEN and
+    /// GENEVA_FARM_WORKER (0, 1, ...) in its environment, for example
+    /// "ssh box2 geneva worker" or "docker run ... geneva worker".
+    #[arg(long, value_name = "COMMAND")]
+    launch: Option<String>,
+    /// How many times to run --launch; once per part by default.
+    #[arg(long, value_name = "N", requires = "launch")]
+    launch_count: Option<u32>,
+    /// Seconds a part may take before it is given to another worker as
+    /// well, in case its worker has gone.
+    #[arg(long, value_name = "SECONDS", default_value_t = 600)]
+    part_timeout: u64,
+    /// Constant-quality level, overriding the timeline.
+    #[arg(long)]
+    crf: Option<u8>,
+    /// Encoder preset, overriding the timeline.
+    #[arg(long)]
+    preset: Option<String>,
+    /// Write no audio track.
+    #[arg(long)]
+    no_audio: bool,
+}
+
+#[derive(Args)]
+struct WorkerArgs {
+    /// The farm's address, http://host:port, as `geneva farm` prints it.
+    #[arg(long, value_name = "URL", env = "GENEVA_FARM_URL")]
+    connect: String,
+    /// The farm's token.
+    #[arg(long, value_name = "TOKEN", env = "GENEVA_FARM_TOKEN")]
+    token: String,
+    /// A name for this worker in the farm's report; the host name by
+    /// default.
+    #[arg(long)]
+    name: Option<String>,
+    /// Where to keep the timeline's files and the parts while working. A
+    /// new directory under the system's temporary one by default,
+    /// removed at the end; a directory given here is kept, so a second
+    /// job with the same files does not fetch them again.
+    #[arg(long, value_name = "DIR")]
+    dir: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -702,6 +776,48 @@ fn run(cli: Cli) -> Result<ExitCode> {
             )
         }
         Command::Plan(args) => plan_parts(&args, cli.format),
+        Command::Farm(args) => {
+            let text = std::fs::read_to_string(&args.timeline.timeline)
+                .with_context(|| format!("reading {}", args.timeline.timeline.display()))?;
+            let root = args.timeline.root();
+            let (loaded, files) = load_text_listing_files(&text, &root);
+            let parts = args.parts.unwrap_or_else(|| {
+                loaded
+                    .composition
+                    .as_ref()
+                    .map_or(1, |c| (c.duration.to_f64() / 10.0).ceil().max(1.0) as u32)
+            });
+            let options = farm::FarmOptions {
+                parts,
+                listen: args.listen.clone(),
+                token: args.token.clone(),
+                local: args.local,
+                launch: args.launch.clone(),
+                launch_count: args.launch_count,
+                part_timeout: std::time::Duration::from_secs(args.part_timeout),
+                files,
+                timeline: text,
+                diagnostics: farm::diagnostic_keys(&loaded.diagnostics),
+            };
+            let overrides = media::RenderOverrides {
+                renderer: media::RendererChoice::Cpu,
+                crf: args.crf,
+                preset: args.preset.clone(),
+                no_audio: args.no_audio,
+                exact: false,
+                picture_as_is: false,
+            };
+            render_to(
+                &loaded,
+                &root,
+                &args.output,
+                &overrides,
+                cli.format,
+                None,
+                &RenderJob::Farm(&options),
+            )
+        }
+        Command::Worker(args) => run_worker(&args, cli.format),
         Command::Join(args) => {
             let loaded = load_timeline(&args.timeline, true, false)?;
             let overrides = media::RenderOverrides {
@@ -1233,6 +1349,68 @@ fn shell_word(word: &str) -> String {
     }
 }
 
+/// Runs `geneva worker`: renders parts for a farm until it has none
+/// left, and reports what it did.
+fn run_worker(args: &WorkerArgs, format: Format) -> Result<ExitCode> {
+    let name = args.name.clone().unwrap_or_else(|| {
+        std::env::var("HOSTNAME")
+            .or_else(|_| std::env::var("COMPUTERNAME"))
+            .unwrap_or_else(|_| "worker".to_owned())
+    });
+    let load = |text: &str, root: &Path| load_text(text, root, true, false);
+    let result = farm::work(
+        &args.connect,
+        &args.token,
+        &name,
+        args.dir.as_deref(),
+        &load,
+        format.progress(),
+        format == Format::Human,
+    );
+    match result {
+        Ok(report) => {
+            let parts: Vec<serde_json::Value> = report
+                .parts
+                .iter()
+                .map(|(i, what, secs)| serde_json::json!({ "part": i, "what": what, "seconds": secs }))
+                .collect();
+            if let Some(reason) = &report.refused {
+                let diagnostics = vec![Diagnostic::error("E505", "", reason.clone())];
+                report_diagnostics_or_json(
+                    &diagnostics,
+                    format,
+                    serde_json::json!({ "ok": false, "parts": parts }),
+                )?;
+                return Ok(ExitCode::from(EXIT_RENDER));
+            }
+            if format == Format::Human {
+                println!("rendered {} parts; the farm has no more", parts.len());
+            } else {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &serde_json::json!({ "ok": true, "parts": parts })
+                    )?
+                );
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(reason) => {
+            let diagnostics = vec![Diagnostic::error("E505", "", reason)];
+            report_diagnostics_or_json(&diagnostics, format, serde_json::json!({ "ok": false }))?;
+            Ok(ExitCode::from(EXIT_RENDER))
+        }
+    }
+}
+
+fn report_diagnostics_or_json(
+    diagnostics: &[Diagnostic],
+    format: Format,
+    result: serde_json::Value,
+) -> Result<()> {
+    report(diagnostics, format, Some(result))
+}
+
 /// What `render_to` writes: the whole output, one part of it for a
 /// render split across machines, or the parts put together.
 enum RenderJob<'a> {
@@ -1242,6 +1420,7 @@ enum RenderJob<'a> {
         parts: &'a [PathBuf],
         audio: Option<&'a Path>,
     },
+    Farm(&'a farm::FarmOptions),
 }
 
 fn render_to(
@@ -1268,6 +1447,14 @@ fn render_to(
         RenderJob::Join { parts, audio } => {
             media::join_parts(comp, root, output, overrides, parts, *audio)
         }
+        RenderJob::Farm(options) => farm::run(
+            comp,
+            root,
+            output,
+            overrides,
+            options,
+            format == Format::Human,
+        ),
     };
     match rendered {
         Ok(stats) => {
@@ -1576,6 +1763,24 @@ fn load_compiled(text: &str, root: &Path) -> Loaded {
 /// `measure` also decodes the audio of every asset for its report.
 fn load_text(text: &str, root: &Path, probe: bool, measure: bool) -> Loaded {
     load_text_with(text, root, probe, measure, false)
+}
+
+/// Loads a timeline as `render` does, and names every file under the
+/// root the load read or looked for: the assets' `src` and the files
+/// markup points at. These are what another machine needs to render it.
+#[cfg_attr(not(feature = "media"), allow(dead_code))]
+fn load_text_listing_files(text: &str, root: &Path) -> (Loaded, Vec<String>) {
+    let info = media::probe_assets(text, root, false);
+    let mut loaded = geneva_timeline::load_with(text, &info);
+    loaded.diagnostics.extend(info.diagnostics());
+    if loaded.diagnostics.iter().any(Diagnostic::is_error) {
+        loaded.composition = None;
+    }
+    let mut files: std::collections::BTreeSet<String> = info.touched().into_iter().collect();
+    if let Ok(timeline) = geneva_timeline::parse(text) {
+        files.extend(timeline.assets.values().map(|a| a.src.clone()));
+    }
+    (loaded, files.into_iter().collect())
 }
 
 fn load_text_with(

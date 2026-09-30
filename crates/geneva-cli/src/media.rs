@@ -440,9 +440,20 @@ pub struct ProbedAssets {
     /// family. Scanning the font directories costs more than most
     /// documents need, and one without text should not pay it.
     fonts: std::cell::OnceCell<geneva_render::TextEngine>,
+    /// Files under the root the resolver read or looked for beyond the
+    /// assets themselves: linked stylesheets and pictures in markup. A
+    /// farm sends these to its workers along with the assets.
+    touched: std::cell::RefCell<std::collections::BTreeSet<String>>,
 }
 
 impl ProbedAssets {
+    /// The files under the root the resolver read or looked for, beyond
+    /// the assets' own `src`.
+    #[cfg_attr(not(feature = "media"), allow(dead_code))]
+    pub fn touched(&self) -> Vec<String> {
+        self.touched.borrow().iter().cloned().collect()
+    }
+
     /// Accepts absolute asset paths, for a timeline a verb compiled from
     /// inputs that share no folder.
     pub fn with_absolute_paths(mut self, allowed: bool) -> Self {
@@ -470,6 +481,7 @@ impl ProbedAssets {
             asset_families: std::collections::HashMap::new(),
             problems: Vec::new(),
             fonts: std::cell::OnceCell::new(),
+            touched: std::cell::RefCell::default(),
         }
     }
 }
@@ -503,10 +515,12 @@ impl AssetInfo for ProbedAssets {
     }
 
     fn read(&self, path: &str) -> Option<String> {
+        self.touched.borrow_mut().insert(path.to_owned());
         std::fs::read_to_string(self.root.join(path)).ok()
     }
 
     fn exists(&self, path: &str) -> Option<bool> {
+        self.touched.borrow_mut().insert(path.to_owned());
         Some(self.root.join(path).is_file())
     }
 }

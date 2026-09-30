@@ -576,3 +576,179 @@ fn join_refuses_a_missing_part_and_plan_refuses_what_cannot_split() {
     assert!(!planned.status.success());
     assert!(said(&planned).contains("E504"), "{}", said(&planned));
 }
+
+/// The timeline the farm tests render: a scaled video with its sound, so
+/// the picture is composited and the output has both tracks.
+fn farm_timeline(dir: &Path) -> PathBuf {
+    let text = r#"{"geneva":"1.0",
+        "output":{"width":160,"height":90,"fps":24,"duration":"3s",
+                  "encode":{"video":{"crf":10,"preset":"ultrafast"}}},
+        "assets":{"clip":{"src":"cfr.mp4"}},
+        "layers":[{"clips":[{"source":{"kind":"video","asset":"clip"},
+                             "transform":{"scale":0.75}}]}]}"#;
+    // The farm sends the files the timeline reads, so the clip sits
+    // beside it rather than under --assets.
+    std::fs::copy(corpus().join("cfr.mp4"), dir.join("cfr.mp4")).unwrap();
+    let timeline = dir.join("farm.json");
+    std::fs::write(&timeline, text).unwrap();
+    timeline
+}
+
+/// 72 frames with sound, within 40 dB of a single run at the frames
+/// around each part's edges.
+fn assert_like_single(single: &Path, other: &Path) {
+    let info = probe(other).unwrap();
+    assert_eq!(info.video.as_ref().unwrap().frames, Some(72));
+    assert!(info.audio.is_some());
+    let mut a = VideoReader::open(single, ColorTags::default()).unwrap();
+    let mut b = VideoReader::open(other, ColorTags::default()).unwrap();
+    for n in [0u64, 23, 24, 25, 47, 48, 49, 71] {
+        let t = Ratio::from_int(n as i64) / Ratio::from_int(24);
+        let x = a.frame_at(t).unwrap().pixels.clone();
+        let y = b.frame_at(t).unwrap().pixels.clone();
+        let mse: f64 = x
+            .iter()
+            .zip(&y)
+            .map(|(p, q)| {
+                let d = |u: f32, v: f32| f64::from(u - v).powi(2);
+                (d(p.r, q.r) + d(p.g, q.g) + d(p.b, q.b)) / 3.0
+            })
+            .sum::<f64>()
+            / x.len() as f64;
+        let psnr = 10.0 * (1.0 / mse.max(1e-12)).log10();
+        assert!(psnr > 40.0, "frame {n}: {psnr:.1} dB");
+    }
+}
+
+#[test]
+fn a_farm_with_local_and_launched_workers_matches_a_single_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let timeline = farm_timeline(dir.path());
+    let t = timeline.to_str().unwrap();
+    let single = dir.path().join("single.mp4");
+    run(&["render", t, "-o", single.to_str().unwrap()]);
+    let local = dir.path().join("local.mp4");
+    run(&[
+        "farm",
+        t,
+        "-o",
+        local.to_str().unwrap(),
+        "--parts",
+        "3",
+        "--local",
+        "2",
+        "--listen",
+        "127.0.0.1:0",
+    ]);
+    assert_like_single(&single, &local);
+    // Workers started by a command, as ssh or docker would, and none
+    // here: they find the farm through the environment.
+    let exe = assert_cmd::cargo::cargo_bin("geneva");
+    let launched = dir.path().join("launched.mp4");
+    run(&[
+        "farm",
+        t,
+        "-o",
+        launched.to_str().unwrap(),
+        "--parts",
+        "3",
+        "--local",
+        "0",
+        "--listen",
+        "127.0.0.1:0",
+        "--launch",
+        &format!("'{}' worker --name launched", exe.display()),
+        "--launch-count",
+        "2",
+    ]);
+    assert_like_single(&single, &launched);
+}
+
+/// One HTTP request to the farm, as a worker would send it.
+fn farm_call(port: u16, method: &str, path: &str, body: &str) -> (u16, serde_json::Value) {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(
+        s,
+        "{method} {path} HTTP/1.1\r\nAuthorization: Bearer secret\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut answer = String::new();
+    s.read_to_string(&mut answer).unwrap();
+    let status = answer.split_whitespace().nth(1).unwrap().parse().unwrap();
+    let json = answer
+        .split_once("\r\n\r\n")
+        .and_then(|(_, b)| serde_json::from_str(b).ok())
+        .unwrap_or(serde_json::Value::Null);
+    (status, json)
+}
+
+#[test]
+fn a_farm_gives_a_lost_part_to_another_worker_and_refuses_another_build() {
+    let dir = tempfile::tempdir().unwrap();
+    let timeline = farm_timeline(dir.path());
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let out = dir.path().join("out.mp4");
+    let mut farm = std::process::Command::new(assert_cmd::cargo::cargo_bin("geneva"))
+        .args([
+            "farm",
+            timeline.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .args(["--parts", "3", "--local", "0", "--token", "secret"])
+        .args([
+            "--listen",
+            &format!("127.0.0.1:{port}"),
+            "--part-timeout",
+            "2",
+        ])
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let (_, status) = farm_call(port, "GET", "/status", "");
+    let fingerprint = status["fingerprint"].as_str().unwrap().to_owned();
+    // Another build is turned away before it is given anything.
+    let (code, answer) = farm_call(
+        port,
+        "POST",
+        "/hello",
+        r#"{"fingerprint":"geneva 0.0.1; x264 none"}"#,
+    );
+    assert_eq!(code, 409);
+    assert!(
+        answer["reason"]
+            .as_str()
+            .unwrap()
+            .contains("would not join")
+    );
+    // A worker that takes a part and is never heard from again.
+    let hello = serde_json::json!({ "fingerprint": fingerprint, "name": "lost" }).to_string();
+    let (code, job) = farm_call(port, "POST", "/hello", &hello);
+    assert_eq!(code, 200);
+    let claim = serde_json::json!({ "worker": job["worker"] }).to_string();
+    let (code, part) = farm_call(port, "POST", "/claim", &claim);
+    assert_eq!(code, 200);
+    assert_eq!(part["part"], 0);
+    // A real worker finishes everything, the lost part included once its
+    // two seconds are up.
+    run(&[
+        "worker",
+        "--connect",
+        &format!("http://127.0.0.1:{port}"),
+        "--token",
+        "secret",
+    ]);
+    assert!(farm.wait().unwrap().success());
+    let info = probe(&out).unwrap();
+    assert_eq!(info.video.unwrap().frames, Some(72));
+    assert!(info.audio.is_some());
+}

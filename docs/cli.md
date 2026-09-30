@@ -128,7 +128,68 @@ parameters differ are refused, and the message names the difference.
 Without `--audio` the output has no sound, with a warning when the
 timeline has some.
 
-What is different from one `render`:
+### `geneva farm <timeline> -o FILE`
+
+Renders the timeline on several machines at once: the parts `plan`
+describes are handed to `geneva worker` processes as they ask for them,
+and joined when all are back. With no other workers it renders on this
+machine alone (one local worker by default), so the same command serves
+one machine and many.
+
+```text
+$ geneva farm talk.json -o out.mp4 --parts 12
+farm: 13 parts at http://192.168.1.20:41237; start workers with
+  geneva worker --connect http://192.168.1.20:41237 --token 3b8b6d76...
+```
+
+Workers pull parts: a faster machine asks more often and renders more,
+a worker can connect at any time, and a part whose worker has not sent
+it back within `--part-timeout` is given to another as well; the first
+copy to arrive is kept. Near the end, a part running more than twice as
+long as the median part is given to a second worker too. A part that
+fails three times fails the render. The notes say how many parts each
+worker rendered.
+
+| Option | Effect |
+| --- | --- |
+| `--parts N` | Picture parts; one per 10 seconds of output by default, each at least 2 seconds. The sound is one more part. |
+| `--local N` | Workers started on this machine, 1 by default. Each uses every core, so more rarely helps. `0` for only the workers that connect. |
+| `--launch COMMAND` | A shell command that starts one worker elsewhere, run `--launch-count` times (once per part by default) with `GENEVA_FARM_URL`, `GENEVA_FARM_TOKEN` and `GENEVA_FARM_WORKER` (0, 1, ...) set, which `geneva worker` reads. For example `ssh box2 geneva worker` or `docker run -e GENEVA_FARM_URL -e GENEVA_FARM_TOKEN image geneva worker`. |
+| `--listen HOST:PORT` | Where workers connect. A free port on every interface by default; the printed address is the one the route out of this machine uses. |
+| `--token TOKEN` | The secret workers present (`GENEVA_FARM_TOKEN`). Random by default. |
+| `--part-timeout SECONDS` | How long a part may take before another worker gets it too; 600 by default. |
+| `--crf`, `--preset`, `--no-audio` | As for `render`; the workers use them. |
+
+The farm sends each worker the timeline and every file it reads: the
+assets, and the pictures and stylesheets its markup points at, at the
+same paths relative to the root. Files outside the asset root are
+refused. Fonts the machine provides are not sent; a worker whose own
+load reports something the farm's did not (a missing font family, a
+file it cannot decode) says so and renders nothing, since its parts
+would differ. A worker running another geneva version, or with x264
+where the farm has none or the other way round, is refused when it
+connects.
+
+`GET /status` (JSON) and `GET /metrics` (Prometheus text: parts pending,
+running and done, and workers) need no token, so an autoscaler can add
+workers while parts are waiting. Everything else needs the token.
+Nothing is encrypted: across a network you do not trust, use a tunnel
+or a proxy that adds TLS. Each worker downloads each file whole before
+it starts, so footage that is far from the workers costs its transfer
+time on every one of them.
+
+### `geneva worker --connect URL --token TOKEN`
+
+Connects to a farm, fetches the timeline and its files, renders parts
+until the farm has none left, and exits. `--connect` and `--token`
+default to `GENEVA_FARM_URL` and `GENEVA_FARM_TOKEN`. `--name` labels it
+in the farm's notes (the host name by default). `--dir DIR` keeps the
+files there between jobs instead of in a temporary directory removed at
+the end. A worker waits up to 30 seconds for a farm that is not
+answering yet, and stops when a farm it was working for stops
+answering. Exit 3 (E505) when it could not take part at all.
+
+What is different from one `render`, for `join` and `farm` alike:
 
 - Every part is encoded by the CPU renderer's path (or the direct path
   where the picture is a source's own). The `copy`, `copy-picture` and

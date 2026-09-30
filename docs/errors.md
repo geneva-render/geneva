@@ -136,7 +136,8 @@ These are produced when rendering, not by `validate`.
 | E501 | An asset file could not be opened, read or decoded. With `--probe` this is reported at validation time, at `/assets/<id>/src`. |
 | E502 | The requested time is outside the composition. |
 | E503 | The renderer's device failed or cannot do what the frame needs (a GPU lost or out of memory). The CPU renderer never reports it. |
-| E504 | `plan` cannot split this output into parts: it has `outputs`, a bitrate target or ceiling, no picture, or is an image sequence. The message says which. |
+| E504 | `plan` or `farm` cannot split this output into parts: it has `outputs`, a bitrate target or ceiling, no picture, or is an image sequence. The message says which. |
+| E505 | A `geneva worker` could not take part: the farm could not be reached, refused its token, runs another geneva build or encoder, or this machine reads the timeline differently (a font or a file it lacks). The message says which. |
 
 ## Notes from rendering
 

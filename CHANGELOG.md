@@ -20,6 +20,15 @@ versions changed the format freely.
   smart cut are not used; bitrate targets, image sequences and
   documents with `outputs` are refused. See
   [docs/cli.md](docs/cli.md).
+- **`geneva farm` and `geneva worker`.** A farm hands a render's parts
+  to workers on any machines that connect (over SSH, in containers, on
+  serverless functions), joins them, and renders on this machine too.
+  Workers pull parts, so faster machines take more; a part whose worker
+  goes quiet, or that runs far longer than the others, is given to
+  another. Workers receive the timeline and every file it reads, and
+  one with another geneva build or encoder, or that reads the timeline
+  differently, is turned away. `/status` and `/metrics` report
+  progress. Plain HTTP with a shared token, no encryption.
 
 ### Fixed
 
