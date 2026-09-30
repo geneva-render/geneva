@@ -666,53 +666,77 @@ fn a_farm_with_local_and_launched_workers_matches_a_single_run() {
 
 #[test]
 #[cfg(unix)]
-fn a_farm_gives_workers_the_url_it_is_told_and_a_worker_stops_at_its_time() {
+fn a_farm_gives_launched_workers_the_url_it_is_told() {
+    // The launch command only writes down the address it was given; the
+    // local worker renders everything.
     let dir = tempfile::tempdir().unwrap();
     let timeline = farm_timeline(dir.path());
     let t = timeline.to_str().unwrap();
-    let single = dir.path().join("single.mp4");
-    run(&["render", t, "-o", single.to_str().unwrap()]);
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    // The first launched worker has no time left and takes nothing; the
-    // second renders every part. Both find the farm at the --url given,
-    // with its trailing slash dropped.
-    let exe = assert_cmd::cargo::cargo_bin("geneva");
-    let first = dir.path().join("first.json");
-    let launch = format!(
-        "if [ \"$GENEVA_FARM_WORKER\" = 0 ]; then '{exe}' --format json worker --stop-after 0 > '{first}'; else '{exe}' worker; fi",
-        exe = exe.display(),
-        first = first.display(),
-    );
+    let got = dir.path().join("url.txt");
     let out = dir.path().join("out.mp4");
-    let listen = format!("127.0.0.1:{port}");
-    let url = format!("http://127.0.0.1:{port}/");
-    run(&[
-        "farm",
-        t,
-        "-o",
-        out.to_str().unwrap(),
-        "--parts",
-        "3",
-        "--local",
-        "0",
-        "--listen",
-        &listen,
-        "--url",
-        &url,
-        "--launch",
-        &launch,
-        "--launch-count",
-        "2",
-    ]);
-    assert_like_single(&single, &out);
-    let report: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&first).unwrap()).unwrap();
-    assert_eq!(report["stopped"], true, "{report}");
-    assert_eq!(report["parts"].as_array().unwrap().len(), 0, "{report}");
+    let farm = geneva()
+        .args(["farm", t, "-o", out.to_str().unwrap(), "--parts", "3"])
+        .args(["--listen", "127.0.0.1:0", "--url", "http://farm.invalid:9/"])
+        .args(["--launch-count", "1", "--launch"])
+        .arg(format!("echo \"$GENEVA_FARM_URL\" > '{}'", got.display()))
+        .output()
+        .unwrap();
+    assert!(
+        farm.status.success(),
+        "{}",
+        String::from_utf8_lossy(&farm.stderr)
+    );
+    // The trailing slash is dropped, and the printed command uses it too.
+    assert_eq!(
+        std::fs::read_to_string(&got).unwrap().trim(),
+        "http://farm.invalid:9"
+    );
+    let stderr = String::from_utf8_lossy(&farm.stderr);
+    assert!(
+        stderr.contains("--connect http://farm.invalid:9 "),
+        "{stderr}"
+    );
+    assert_eq!(probe(&out).unwrap().video.unwrap().frames, Some(72));
+}
+
+/// A farm running in the background, stopped when it goes out of scope
+/// so that a failed test leaves no process behind.
+struct Farm(std::process::Child);
+
+impl Drop for Farm {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Starts `geneva farm` with `args` and returns it with the port it
+/// listens on, read from the line it prints once it is listening. Asking
+/// the system for a free port first and passing it would leave a moment
+/// in which another test's farm can take that port.
+fn start_farm(args: &[&str]) -> (Farm, u16) {
+    use std::io::BufRead;
+    let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("geneva"))
+        .arg("farm")
+        .args(args)
+        .args(["--listen", "127.0.0.1:0"])
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut lines = std::io::BufReader::new(child.stderr.take().unwrap()).lines();
+    let mut seen = String::new();
+    let port = loop {
+        let Some(Ok(line)) = lines.next() else {
+            panic!("the farm stopped before listening:\n{seen}");
+        };
+        if let Some(rest) = line.split(" at http://127.0.0.1:").nth(1) {
+            break rest.split(';').next().unwrap().parse().unwrap();
+        }
+        seen.push_str(&line);
+        seen.push('\n');
+    };
+    std::thread::spawn(move || lines.for_each(drop));
+    (Farm(child), port)
 }
 
 /// One HTTP request to the farm, as a worker would send it.
@@ -739,32 +763,20 @@ fn farm_call(port: u16, method: &str, path: &str, body: &str) -> (u16, serde_jso
 fn a_farm_gives_a_lost_part_to_another_worker_and_refuses_another_build() {
     let dir = tempfile::tempdir().unwrap();
     let timeline = farm_timeline(dir.path());
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
     let out = dir.path().join("out.mp4");
-    let mut farm = std::process::Command::new(assert_cmd::cargo::cargo_bin("geneva"))
-        .args([
-            "farm",
-            timeline.to_str().unwrap(),
-            "-o",
-            out.to_str().unwrap(),
-        ])
-        .args(["--parts", "3", "--local", "0", "--token", "secret"])
-        .args([
-            "--listen",
-            &format!("127.0.0.1:{port}"),
-            "--part-timeout",
-            "2",
-        ])
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
-    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
+    let (mut farm, port) = start_farm(&[
+        timeline.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--parts",
+        "3",
+        "--local",
+        "0",
+        "--token",
+        "secret",
+        "--part-timeout",
+        "2",
+    ]);
     let (_, status) = farm_call(port, "GET", "/status", "");
     let fingerprint = status["fingerprint"].as_str().unwrap().to_owned();
     // Another build is turned away before it is given anything.
@@ -789,16 +801,21 @@ fn a_farm_gives_a_lost_part_to_another_worker_and_refuses_another_build() {
     let (code, part) = farm_call(port, "POST", "/claim", &claim);
     assert_eq!(code, 200);
     assert_eq!(part["part"], 0);
+    // A worker whose --stop-after time has passed takes nothing.
+    let url = format!("http://127.0.0.1:{port}");
+    let stopped = geneva()
+        .args(["--format", "json", "worker", "--connect", &url])
+        .args(["--token", "secret", "--stop-after", "0"])
+        .output()
+        .unwrap();
+    assert!(stopped.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert_eq!(report["stopped"], true, "{report}");
+    assert_eq!(report["parts"].as_array().unwrap().len(), 0, "{report}");
     // A real worker finishes everything, the lost part included once its
     // two seconds are up.
-    run(&[
-        "worker",
-        "--connect",
-        &format!("http://127.0.0.1:{port}"),
-        "--token",
-        "secret",
-    ]);
-    assert!(farm.wait().unwrap().success());
+    run(&["worker", "--connect", &url, "--token", "secret"]);
+    assert!(farm.0.wait().unwrap().success());
     let info = probe(&out).unwrap();
     assert_eq!(info.video.unwrap().frames, Some(72));
     assert!(info.audio.is_some());
