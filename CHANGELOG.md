@@ -32,6 +32,14 @@ versions changed the format freely.
   fetch only the byte ranges of MP4 and MOV sources that their parts
   read; other files, and those inside nested compositions or used as
   masks, go whole.
+- **A `Dockerfile` for workers, and ways to start them.** The image
+  runs `geneva worker` by default and answers AWS Lambda invocations
+  when run as a function. `geneva farm --url` gives workers an address
+  other than the listening one (a forwarded port, a tunnel), and
+  `geneva worker --stop-after` stops taking parts at a set time.
+  [docs/farm.md](docs/farm.md) has launch commands for SSH, Docker,
+  Kubernetes, ECS and Lambda; only Docker and a Lambda emulator have
+  been tried.
 
 ### Fixed
 

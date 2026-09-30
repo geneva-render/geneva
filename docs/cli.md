@@ -156,6 +156,7 @@ worker rendered.
 | `--local N` | Workers started on this machine, 1 by default. Each uses every core, so more rarely helps. `0` for only the workers that connect. |
 | `--launch COMMAND` | A shell command that starts one worker elsewhere, run `--launch-count` times (once per part by default) with `GENEVA_FARM_URL`, `GENEVA_FARM_TOKEN` and `GENEVA_FARM_WORKER` (0, 1, ...) set, which `geneva worker` reads. For example `ssh box2 geneva worker` or `docker run -e GENEVA_FARM_URL -e GENEVA_FARM_TOKEN image geneva worker`. |
 | `--listen HOST:PORT` | Where workers connect. A free port on every interface by default; the printed address is the one the route out of this machine uses. |
+| `--url URL` | The address workers are given, printed and passed to `--launch`, when they reach this machine another way than at the listening address: a forwarded port, a tunnel, a load balancer. |
 | `--token TOKEN` | The secret workers present (`GENEVA_FARM_TOKEN`). Random by default. |
 | `--part-timeout SECONDS` | How long a part may take before another worker gets it too; 600 by default. |
 | `--crf`, `--preset`, `--no-audio` | As for `render`; the workers use them. |
@@ -196,9 +197,15 @@ until the farm has none left, and exits. `--connect` and `--token`
 default to `GENEVA_FARM_URL` and `GENEVA_FARM_TOKEN`. `--name` labels it
 in the farm's notes (the host name by default). `--dir DIR` keeps the
 files there between jobs instead of in a temporary directory removed at
-the end. A worker waits up to 30 seconds for a farm that is not
-answering yet, and stops when a farm it was working for stops
-answering. Exit 3 (E505) when it could not take part at all.
+the end. `--stop-after SECONDS` (`GENEVA_WORKER_STOP_AFTER`) takes no
+new part once that long has passed, for a worker that is stopped at a
+known time; the part it has is finished. A worker waits up to 30
+seconds for a farm that is not answering yet, and stops when a farm it
+was working for stops answering. Exit 3 (E505) when it could not take
+part at all.
+
+Starting workers over SSH, in Docker, on Kubernetes, ECS and AWS
+Lambda, and the image for the last three: [farm.md](farm.md).
 
 What is different from one `render`, for `join` and `farm` alike:
 
@@ -233,7 +240,7 @@ The `--for` table below, with each platform number's source and date.
 
 A page of this manual, carried in the binary. No topic: the agent
 guide. Topics: `agents`, `timeline`, `cli`, `errors`, `color`,
-`architecture`. JSON: `{"topic", "about", "text"}`.
+`architecture`, `farm`. JSON: `{"topic", "about", "text"}`.
 
 ### `geneva explain <CODE> [--list]`
 

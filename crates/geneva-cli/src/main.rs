@@ -289,6 +289,11 @@ struct FarmArgs {
     /// printed with the address to use.
     #[arg(long, value_name = "HOST:PORT", default_value = "0.0.0.0:0")]
     listen: String,
+    /// The address workers are given, when they reach this machine some
+    /// other way than at the listening address: through a forwarded
+    /// port, a tunnel or a load balancer.
+    #[arg(long, value_name = "URL")]
+    url: Option<String>,
     /// The secret workers must present. Random by default, and printed.
     #[arg(long, value_name = "TOKEN", env = "GENEVA_FARM_TOKEN")]
     token: Option<String>,
@@ -339,6 +344,11 @@ struct WorkerArgs {
     /// job with the same files does not fetch them again.
     #[arg(long, value_name = "DIR")]
     dir: Option<PathBuf>,
+    /// Take no new part once this many seconds have passed, for a worker
+    /// that will be stopped at a known time, such as a serverless
+    /// function with a time limit. A part already taken is finished.
+    #[arg(long, value_name = "SECONDS", env = "GENEVA_WORKER_STOP_AFTER")]
+    stop_after: Option<u64>,
 }
 
 #[derive(Args)]
@@ -790,6 +800,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let options = farm::FarmOptions {
                 parts,
                 listen: args.listen.clone(),
+                url: args.url.clone(),
                 token: args.token.clone(),
                 local: args.local,
                 launch: args.launch.clone(),
@@ -1363,6 +1374,7 @@ fn run_worker(args: &WorkerArgs, format: Format) -> Result<ExitCode> {
         &args.token,
         &name,
         args.dir.as_deref(),
+        args.stop_after.map(std::time::Duration::from_secs),
         &load,
         format.progress(),
         format == Format::Human,
@@ -1384,13 +1396,20 @@ fn run_worker(args: &WorkerArgs, format: Format) -> Result<ExitCode> {
                 return Ok(ExitCode::from(EXIT_RENDER));
             }
             if format == Format::Human {
-                println!("rendered {} parts; the farm has no more", parts.len());
+                let why = if report.stopped {
+                    "the --stop-after time has passed"
+                } else {
+                    "the farm has no more"
+                };
+                println!("rendered {} parts; {why}", parts.len());
             } else {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(
-                        &serde_json::json!({ "ok": true, "parts": parts })
-                    )?
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "parts": parts,
+                        "stopped": report.stopped,
+                    }))?
                 );
             }
             Ok(ExitCode::SUCCESS)

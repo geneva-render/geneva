@@ -64,6 +64,11 @@ pub const TOPICS: &[Topic] = &[
         about: "How the engine is put together: the crates, the passes, the renderers",
         text: include_str!("../../../docs/architecture.md"),
     },
+    Topic {
+        name: "farm",
+        about: "Starting farm workers over SSH, in Docker, Kubernetes, ECS and Lambda",
+        text: include_str!("../../../docs/farm.md"),
+    },
 ];
 
 /// The page called `name`.

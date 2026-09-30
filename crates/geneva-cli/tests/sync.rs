@@ -664,6 +664,57 @@ fn a_farm_with_local_and_launched_workers_matches_a_single_run() {
     assert_like_single(&single, &launched);
 }
 
+#[test]
+#[cfg(unix)]
+fn a_farm_gives_workers_the_url_it_is_told_and_a_worker_stops_at_its_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let timeline = farm_timeline(dir.path());
+    let t = timeline.to_str().unwrap();
+    let single = dir.path().join("single.mp4");
+    run(&["render", t, "-o", single.to_str().unwrap()]);
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    // The first launched worker has no time left and takes nothing; the
+    // second renders every part. Both find the farm at the --url given,
+    // with its trailing slash dropped.
+    let exe = assert_cmd::cargo::cargo_bin("geneva");
+    let first = dir.path().join("first.json");
+    let launch = format!(
+        "if [ \"$GENEVA_FARM_WORKER\" = 0 ]; then '{exe}' --format json worker --stop-after 0 > '{first}'; else '{exe}' worker; fi",
+        exe = exe.display(),
+        first = first.display(),
+    );
+    let out = dir.path().join("out.mp4");
+    let listen = format!("127.0.0.1:{port}");
+    let url = format!("http://127.0.0.1:{port}/");
+    run(&[
+        "farm",
+        t,
+        "-o",
+        out.to_str().unwrap(),
+        "--parts",
+        "3",
+        "--local",
+        "0",
+        "--listen",
+        &listen,
+        "--url",
+        &url,
+        "--launch",
+        &launch,
+        "--launch-count",
+        "2",
+    ]);
+    assert_like_single(&single, &out);
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&first).unwrap()).unwrap();
+    assert_eq!(report["stopped"], true, "{report}");
+    assert_eq!(report["parts"].as_array().unwrap().len(), 0, "{report}");
+}
+
 /// One HTTP request to the farm, as a worker would send it.
 fn farm_call(port: u16, method: &str, path: &str, body: &str) -> (u16, serde_json::Value) {
     use std::io::{Read, Write};

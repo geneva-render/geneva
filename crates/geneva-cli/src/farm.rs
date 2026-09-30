@@ -63,6 +63,8 @@ pub struct FarmOptions {
     pub parts: u32,
     /// The address to listen on.
     pub listen: String,
+    /// The address workers are given, when it is not the listening one.
+    pub url: Option<String>,
     /// The shared secret, or `None` for a random one.
     pub token: Option<String>,
     /// Workers started on this machine.
@@ -901,7 +903,10 @@ pub fn run(
     let listener = TcpListener::bind(&opts.listen)
         .map_err(|e| refuse(format!("cannot listen on {}: {e}", opts.listen)))?;
     let bound = listener.local_addr().map_err(io)?;
-    let url = format!("http://{}", reachable_address(bound));
+    let url = opts.url.as_ref().map_or_else(
+        || format!("http://{}", reachable_address(bound)),
+        |u| u.trim_end_matches('/').to_owned(),
+    );
     let local_url = format!("http://127.0.0.1:{}", bound.port());
     {
         let farm = Arc::clone(&farm);
@@ -1243,6 +1248,8 @@ pub struct WorkerReport {
     pub parts: Vec<(usize, String, f64)>,
     /// Why it stopped early, if it did.
     pub refused: Option<String>,
+    /// Whether it stopped taking parts at its `--stop-after` time.
+    pub stopped: bool,
 }
 
 /// How long a worker keeps trying to reach a coordinator that is not
@@ -1252,15 +1259,18 @@ const CONNECT_PATIENCE: Duration = Duration::from_secs(30);
 /// Connects to the farm at `url`, fetches the job, renders parts until
 /// there are none left, and cleans up after itself. `load` loads the
 /// timeline as `render` would; `quiet` keeps the frame progress off.
+#[allow(clippy::too_many_arguments)]
 pub fn work(
     url: &str,
     token: &str,
     name: &str,
     dir: Option<&Path>,
+    stop_after: Option<Duration>,
     load: &dyn Fn(&str, &Path) -> geneva_timeline::Loaded,
     progress_format: media::ProgressFormat,
     human: bool,
 ) -> Result<WorkerReport, String> {
+    let begun = Instant::now();
     let client = Client::new(url, token)?;
     let hello = serde_json::json!({ "fingerprint": fingerprint(), "name": name });
     let first_try = Instant::now();
@@ -1280,6 +1290,7 @@ pub fn work(
             return Ok(WorkerReport {
                 parts: Vec::new(),
                 refused: None,
+                stopped: false,
             });
         }
         401 => return Err("the farm refused the token".to_owned()),
@@ -1297,18 +1308,30 @@ pub fn work(
         || std::env::temp_dir().join(format!("geneva-worker-{}-{id}", std::process::id())),
         Path::to_path_buf,
     );
-    let result = work_in(&client, &job, id, &dir, load, progress_format, human);
+    let stop_at = stop_after.map(|d| begun + d);
+    let result = work_in(
+        &client,
+        &job,
+        id,
+        &dir,
+        stop_at,
+        load,
+        progress_format,
+        human,
+    );
     if own_dir {
         let _ = std::fs::remove_dir_all(&dir);
     }
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 fn work_in(
     client: &Client,
     job: &serde_json::Value,
     id: u64,
     dir: &Path,
+    stop_at: Option<Instant>,
     load: &dyn Fn(&str, &Path) -> geneva_timeline::Loaded,
     progress_format: media::ProgressFormat,
     human: bool,
@@ -1385,6 +1408,7 @@ fn work_in(
         return Ok(WorkerReport {
             parts: Vec::new(),
             refused: Some(reason),
+            stopped: false,
         });
     };
     let overrides = RenderOverrides {
@@ -1398,7 +1422,12 @@ fn work_in(
     let ext = job["ext"].as_str().unwrap_or("mkv");
     let mut done = Vec::new();
     let mut quiet_since: Option<Instant> = None;
+    let mut stopped = false;
     loop {
+        if stop_at.is_some_and(|t| Instant::now() >= t) {
+            stopped = true;
+            break;
+        }
         let answer = client.call(
             "POST",
             "/claim",
@@ -1497,6 +1526,7 @@ fn work_in(
     Ok(WorkerReport {
         parts: done,
         refused: None,
+        stopped,
     })
 }
 
