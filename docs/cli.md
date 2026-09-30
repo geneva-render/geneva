@@ -174,9 +174,20 @@ connects.
 running and done, and workers) need no token, so an autoscaler can add
 workers while parts are waiting. Everything else needs the token.
 Nothing is encrypted: across a network you do not trust, use a tunnel
-or a proxy that adds TLS. Each worker downloads each file whole before
-it starts, so footage that is far from the workers costs its transfer
-time on every one of them.
+or a proxy that adds TLS.
+
+Workers fetch MP4 and MOV sources in byte ranges: the container's
+header and index, the opening second of each track, all of the sound,
+and the picture packets from the keyframe before each part's stretch to
+its end. The rest of the file stays a hole in a sparse file on the
+worker, and a worker that takes another part fetches only what it does
+not have yet. To find the ranges, the farm reads every packet header of
+each such source once before it starts. Other containers, images,
+fonts, and any file used inside a nested composition or as a mask are
+fetched whole. The farm's closing note gives the bytes workers fetched
+next to what whole copies would have cost; on an 80 s, 37 MB source cut
+into 8 parts for 4 workers it was 62.5 MB against 149 MB. Footage far
+from the workers still costs its transfer time, on less of it.
 
 ### `geneva worker --connect URL --token TOKEN`
 

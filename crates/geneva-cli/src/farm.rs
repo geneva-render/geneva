@@ -119,6 +119,8 @@ struct Request {
     query: BTreeMap<String, String>,
     token: Option<String>,
     length: u64,
+    /// A `Range: bytes=a-b` header, as the byte range `a..b + 1`.
+    range: Option<std::ops::Range<u64>>,
     body: BufReader<TcpStream>,
 }
 
@@ -138,6 +140,7 @@ impl Request {
             .collect();
         let mut length = 0;
         let mut token = None;
+        let mut range = None;
         loop {
             line.clear();
             if body.read_line(&mut line)? == 0 || line.trim().is_empty() {
@@ -150,6 +153,14 @@ impl Request {
                     "authorization" => {
                         token = value.strip_prefix("Bearer ").map(str::to_owned);
                     }
+                    "range" => {
+                        range = value
+                            .strip_prefix("bytes=")
+                            .and_then(|r| r.split_once('-'))
+                            .and_then(|(a, b)| {
+                                Some(a.parse::<u64>().ok()?..b.parse::<u64>().ok()? + 1)
+                            });
+                    }
                     _ => {}
                 }
             }
@@ -160,6 +171,7 @@ impl Request {
             query,
             token,
             length,
+            range,
             body,
         })
     }
@@ -185,6 +197,7 @@ impl Request {
             401 => "Unauthorized",
             404 => "Not Found",
             409 => "Conflict",
+            416 => "Range Not Satisfiable",
             _ => "Error",
         };
         let stream = self.body.get_mut();
@@ -201,19 +214,36 @@ impl Request {
         self.respond(status, "application/json", body.to_string().as_bytes());
     }
 
-    fn respond_file(&mut self, path: &Path) {
+    /// Sends the file, or the part of it the request's range names.
+    /// Returns the bytes sent.
+    fn respond_file(&mut self, path: &Path) -> u64 {
+        use std::io::Seek;
         let Ok(mut file) = std::fs::File::open(path) else {
             self.respond(404, "text/plain", b"not found");
-            return;
+            return 0;
         };
-        let length = file.metadata().map_or(0, |m| m.len());
+        let size = file.metadata().map_or(0, |m| m.len());
+        let (status, range) = match self.range.clone() {
+            Some(r) if r.start < r.end && r.end <= size => ("206 Partial Content", r),
+            Some(_) => {
+                self.respond(416, "text/plain", b"the range is outside the file");
+                return 0;
+            }
+            None => ("200 OK", 0..size),
+        };
+        if file.seek(std::io::SeekFrom::Start(range.start)).is_err() {
+            self.respond(404, "text/plain", b"not readable");
+            return 0;
+        }
+        let length = range.end - range.start;
         let stream = self.body.get_mut();
         let _ = write!(
             stream,
-            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n"
+            "HTTP/1.1 {status}\r\nContent-Type: application/octet-stream\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n"
         );
-        let _ = std::io::copy(&mut file, stream);
+        let sent = std::io::copy(&mut file.take(length), stream).unwrap_or(0);
         let _ = stream.flush();
+        sent
     }
 }
 
@@ -254,6 +284,16 @@ impl Client {
         path: &str,
         body: &Body<'_>,
     ) -> std::io::Result<(u16, u64, BufReader<TcpStream>)> {
+        self.send_range(method, path, body, None)
+    }
+
+    fn send_range(
+        &self,
+        method: &str,
+        path: &str,
+        body: &Body<'_>,
+        range: Option<&std::ops::Range<u64>>,
+    ) -> std::io::Result<(u16, u64, BufReader<TcpStream>)> {
         let mut stream = TcpStream::connect(&self.address)?;
         let (length, json) = match body {
             Body::Empty => (0, None),
@@ -263,9 +303,12 @@ impl Client {
             }
             Body::File(p) => (std::fs::metadata(p)?.len(), None),
         };
+        let range = range.map_or_else(String::new, |r| {
+            format!("Range: bytes={}-{}\r\n", r.start, r.end - 1)
+        });
         write!(
             stream,
-            "{method} {path} HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n",
+            "{method} {path} HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\n{range}Content-Length: {length}\r\nConnection: close\r\n\r\n",
             self.address, self.token
         )?;
         match body {
@@ -333,6 +376,35 @@ impl Client {
     }
 }
 
+impl Client {
+    /// Fetches bytes `range` of `path` into the same place of the file
+    /// `to`, which already has its full size.
+    fn download_range(
+        &self,
+        path: &str,
+        to: &Path,
+        range: &std::ops::Range<u64>,
+    ) -> std::io::Result<()> {
+        use std::io::Seek;
+        let (status, length, reader) = self.send_range("GET", path, &Body::Empty, Some(range))?;
+        if status != 206 || length != range.end - range.start {
+            return Err(std::io::Error::other(format!(
+                "{path}: status {status} for bytes {}..{}",
+                range.start, range.end
+            )));
+        }
+        let mut file = std::fs::OpenOptions::new().write(true).open(to)?;
+        file.seek(std::io::SeekFrom::Start(range.start))?;
+        let copied = std::io::copy(&mut reader.take(length), &mut file)?;
+        if copied != length {
+            return Err(std::io::Error::other(format!(
+                "{path}: {copied} of {length} bytes arrived"
+            )));
+        }
+        Ok(())
+    }
+}
+
 // ---------------------------------------------------------------------
 // The coordinator.
 
@@ -345,6 +417,9 @@ enum Status {
 
 struct PartState {
     part: Part,
+    /// The bytes of each file fetched in ranges that this part needs
+    /// beyond each file's base, by file index.
+    ranges: Vec<(usize, Vec<std::ops::Range<u64>>)>,
     file: PathBuf,
     status: Status,
     /// When it was last handed out.
@@ -385,6 +460,8 @@ struct Farm {
     part_timeout: Duration,
     state: Mutex<State>,
     changed: Condvar,
+    /// Bytes of files sent to workers.
+    sent: std::sync::atomic::AtomicU64,
 }
 
 impl Farm {
@@ -407,7 +484,10 @@ impl Farm {
         match (req.method.as_str(), segments[0].as_str()) {
             ("POST", "hello") => self.hello(&mut req),
             ("GET", "file") => match index.and_then(|i| self.files.get(i)) {
-                Some(path) => req.respond_file(path),
+                Some(path) => {
+                    let n = req.respond_file(path);
+                    self.sent.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+                }
                 None => req.respond(404, "text/plain", b"no such file"),
             },
             ("POST", "claim") => self.claim(&mut req),
@@ -549,10 +629,20 @@ impl Farm {
         p.status = Status::Running;
         p.started = Some(now);
         p.holders.push(id);
-        let body = match &p.part {
+        let mut body = match &p.part {
             Part::Frames(r) => serde_json::json!({ "part": i, "frames": [r.start, r.end] }),
             Part::Audio => serde_json::json!({ "part": i, "audio": true }),
         };
+        body["ranges"] = p
+            .ranges
+            .iter()
+            .map(|(file, ranges)| {
+                serde_json::json!({
+                    "file": file,
+                    "ranges": ranges.iter().map(|r| [r.start, r.end]).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
         drop(state);
         req.respond_json(200, &body);
     }
@@ -716,6 +806,22 @@ pub fn run(
             files.push((f.clone(), path));
         }
     }
+    // Video and sound files whose index says where every packet is are
+    // sent in ranges: each worker fetches the bytes its parts read.
+    let maps: Vec<Option<geneva_media::ranges::PacketMap>> = files
+        .iter()
+        .map(|(f, p)| packet_map_of(comp, f, p))
+        .collect();
+    let assets_by_file: Vec<Vec<String>> = files
+        .iter()
+        .map(|(f, _)| {
+            comp.assets
+                .iter()
+                .filter(|(_, a)| &a.src == f)
+                .map(|(id, _)| id.clone())
+                .collect()
+        })
+        .collect();
     let keyframe_interval = comp
         .encode
         .as_ref()
@@ -737,6 +843,7 @@ pub fn run(
     let io = |e: std::io::Error| refuse(e.to_string());
     let mut parts: Vec<PartState> = Vec::new();
     let new_part = |part: Part, file: PathBuf| PartState {
+        ranges: part_ranges(comp, &part, &assets_by_file, &maps),
         part,
         file,
         status: Status::Pending,
@@ -759,10 +866,16 @@ pub fn run(
     let token = opts.token.clone().unwrap_or_else(random_token);
     let job = serde_json::json!({
         "timeline": opts.timeline,
-        "files": files.iter().map(|(f, p)| serde_json::json!({
-            "path": f,
-            "size": std::fs::metadata(p).map_or(0, |m| m.len()),
-        })).collect::<Vec<_>>(),
+        "files": files.iter().zip(&maps).map(|((f, p), map)| {
+            let mut entry = serde_json::json!({
+                "path": f,
+                "size": std::fs::metadata(p).map_or(0, |m| m.len()),
+            });
+            if let Some(map) = map {
+                entry["ranges"] = map.base().iter().map(|r| [r.start, r.end]).collect();
+            }
+            entry
+        }).collect::<Vec<_>>(),
         "ext": ext,
         "crf": overrides.crf,
         "preset": overrides.preset,
@@ -779,7 +892,12 @@ pub fn run(
             ..State::default()
         }),
         changed: Condvar::new(),
+        sent: std::sync::atomic::AtomicU64::new(0),
     });
+    let whole: u64 = files
+        .iter()
+        .map(|(_, p)| std::fs::metadata(p).map_or(0, |m| m.len()))
+        .sum();
     let listener = TcpListener::bind(&opts.listen)
         .map_err(|e| refuse(format!("cannot listen on {}: {e}", opts.listen)))?;
     let bound = listener.local_addr().map_err(io)?;
@@ -948,13 +1066,153 @@ pub fn run(
     stop(&farm, &mut children);
     let _ = std::fs::remove_dir_all(&dir);
     let mut stats = joined?;
-    stats.notes = vec![format!(
-        "rendered in {total_parts} parts in {render_secs:.1}s (parts by worker: {summary}), joined without re-encoding"
-    )];
+    let sent = farm.sent.load(std::sync::atomic::Ordering::Relaxed);
+    let workers = farm.state.lock().expect("state").workers.len().max(1) as u64;
+    stats.notes = vec![
+        format!(
+            "rendered in {total_parts} parts in {render_secs:.1}s (parts by worker: {summary}), joined without re-encoding"
+        ),
+        format!(
+            "workers fetched {} of files; each whole copy is {}, so {workers} whole copies would have been {}",
+            human_bytes(sent),
+            human_bytes(whole),
+            human_bytes(whole * workers)
+        ),
+    ];
     stats.frames = comp.frame_count();
     stats.mode = RenderMode::Render;
     stats.seconds = started.elapsed().as_secs_f64();
     Ok(stats)
+}
+
+fn human_bytes(n: u64) -> String {
+    if n >= 1 << 30 {
+        format!("{:.1} GB", n as f64 / f64::from(1u32 << 30))
+    } else if n >= 1 << 20 {
+        format!("{:.1} MB", n as f64 / f64::from(1u32 << 20))
+    } else {
+        format!("{:.0} kB", n as f64 / 1024.0)
+    }
+}
+
+/// Where every packet of the file `f` is, when it is a video or sound
+/// asset in a container that can be fetched in ranges.
+fn packet_map_of(
+    comp: &Composition,
+    f: &str,
+    path: &Path,
+) -> Option<geneva_media::ranges::PacketMap> {
+    use geneva_timeline::schema::AssetKind;
+    let media = comp
+        .assets
+        .values()
+        .any(|a| a.src == f && matches!(a.kind, AssetKind::Video | AssetKind::Audio));
+    if !media {
+        return None;
+    }
+    #[cfg(feature = "media")]
+    return geneva_media::packet_map(path).ok().flatten();
+    #[cfg(not(feature = "media"))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// The seconds of each video asset that output frames `range` show, by
+/// asset id: `None` for an asset used where the mapping is not a plain
+/// offset (inside a nested composition, or as a mask), which a part
+/// then fetches whole.
+fn source_windows(
+    comp: &Composition,
+    range: &std::ops::Range<u64>,
+) -> BTreeMap<String, Option<(f64, f64)>> {
+    use geneva_timeline::ResolvedSource;
+    fn videos_in(layers: &[geneva_timeline::ResolvedLayer], ids: &mut Vec<String>) {
+        for clip in layers.iter().flat_map(|l| &l.clips) {
+            match &clip.source {
+                ResolvedSource::Video { asset, .. } => ids.push(asset.clone()),
+                ResolvedSource::Composition(c) => videos_in(&c.layers, ids),
+                _ => {}
+            }
+            if let Some(asset) = clip.mask.as_ref().and_then(|m| m.asset.as_ref()) {
+                ids.push(asset.clone());
+            }
+        }
+    }
+    let t0 = comp.frame_time(range.start);
+    let t1 = comp.frame_time(range.end);
+    let mut out: BTreeMap<String, Option<(f64, f64)>> = BTreeMap::new();
+    let mut widen = |id: &str, w: Option<(f64, f64)>| {
+        let entry = out.entry(id.to_owned()).or_insert(w);
+        *entry = match (*entry, w) {
+            (Some(a), Some(b)) => Some((a.0.min(b.0), a.1.max(b.1))),
+            _ => None,
+        };
+    };
+    for clip in comp.layers.iter().flat_map(|l| &l.clips) {
+        if let Some(asset) = clip.mask.as_ref().and_then(|m| m.asset.as_ref()) {
+            widen(asset, None);
+        }
+        let from = if clip.start > t0 { clip.start } else { t0 };
+        let to = if clip.end < t1 { clip.end } else { t1 };
+        if from >= to {
+            continue;
+        }
+        match &clip.source {
+            ResolvedSource::Video { asset, in_, .. } => {
+                let a = (*in_ + (from - clip.start) * clip.speed).to_f64();
+                let b = (*in_ + (to - clip.start) * clip.speed).to_f64();
+                widen(asset, Some((a.min(b), a.max(b))));
+            }
+            ResolvedSource::Composition(c) => {
+                let mut ids = Vec::new();
+                videos_in(&c.layers, &mut ids);
+                for id in ids {
+                    widen(&id, None);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The ranges of each file a part fetches beyond the file's base.
+fn part_ranges(
+    comp: &Composition,
+    part: &Part,
+    assets_by_file: &[Vec<String>],
+    maps: &[Option<geneva_media::ranges::PacketMap>],
+) -> Vec<(usize, Vec<std::ops::Range<u64>>)> {
+    // A little either side of the stretch, for timestamps that round.
+    const MARGIN: f64 = 0.1;
+    let windows = match part {
+        Part::Frames(r) => Some(source_windows(comp, r)),
+        Part::Audio => None,
+    };
+    let mut out = Vec::new();
+    for (i, map) in maps.iter().enumerate() {
+        let Some(map) = map else { continue };
+        let ranges = match &windows {
+            None => map.sound(),
+            Some(w) => {
+                let mut ranges = Vec::new();
+                for id in &assets_by_file[i] {
+                    match w.get(id) {
+                        Some(Some((a, b))) => ranges.extend(map.picture(a - MARGIN, b + MARGIN)),
+                        Some(None) => ranges.push(0..map.size),
+                        None => {}
+                    }
+                }
+                geneva_media::ranges::merge(ranges)
+            }
+        };
+        if !ranges.is_empty() {
+            out.push((i, ranges));
+        }
+    }
+    out
 }
 
 /// Tells late workers there is nothing more, and gives this farm's own
@@ -1057,6 +1315,14 @@ fn work_in(
 ) -> Result<WorkerReport, String> {
     let root = dir.join("root");
     std::fs::create_dir_all(&root).map_err(|e| format!("{}: {e}", root.display()))?;
+    // The ranges of each ranged file already here, by file index.
+    let mut fetched: BTreeMap<usize, Vec<std::ops::Range<u64>>> = BTreeMap::new();
+    let paths: Vec<PathBuf> = job["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|f| root.join(f["path"].as_str().unwrap_or_default()))
+        .collect();
     // The files the timeline reads, at the same paths under this root.
     for (n, f) in job["files"].as_array().into_iter().flatten().enumerate() {
         let path = f["path"].as_str().unwrap_or_default();
@@ -1065,6 +1331,19 @@ fn work_in(
         }
         let to = root.join(path);
         let size = f["size"].as_u64().unwrap_or(u64::MAX);
+        if let Some(base) = f["ranges"].as_array() {
+            // Fetched in ranges: a file of the full size with holes, then
+            // the headers and the index, and each part's bytes later.
+            if let Some(dir) = to.parent() {
+                std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            }
+            let file = std::fs::File::create(&to).map_err(|e| format!("{}: {e}", to.display()))?;
+            file.set_len(size)
+                .map_err(|e| format!("{}: {e}", to.display()))?;
+            let base = json_ranges(base);
+            fetch_ranges(client, n, &to, &base, &mut fetched)?;
+            continue;
+        }
         if std::fs::metadata(&to).is_ok_and(|m| m.len() == size) {
             continue;
         }
@@ -1159,6 +1438,24 @@ fn work_in(
         };
         let file = dir.join(format!("part-{index:03}.{ext}"));
         let started = Instant::now();
+        let mut fetch_failed = None;
+        for entry in claim["ranges"].as_array().into_iter().flatten() {
+            let n = entry["file"].as_u64().unwrap_or(u64::MAX) as usize;
+            let Some(to) = paths.get(n) else { continue };
+            let want = json_ranges(entry["ranges"].as_array().map_or(&[][..], Vec::as_slice));
+            if let Err(e) = fetch_ranges(client, n, to, &want, &mut fetched) {
+                fetch_failed = Some(e);
+                break;
+            }
+        }
+        if let Some(reason) = fetch_failed {
+            let _ = client.call(
+                "POST",
+                &format!("/failed/{index}"),
+                &Body::Json(&serde_json::json!({ "worker": id, "reason": reason })),
+            );
+            continue;
+        }
         let progress = media::Progress::new(progress_format);
         match media::render_part(comp, &root, &file, &overrides, &part, &progress) {
             Ok(_) => {
@@ -1201,6 +1498,34 @@ fn work_in(
         parts: done,
         refused: None,
     })
+}
+
+/// `[[a, b], ...]` as byte ranges.
+fn json_ranges(values: &[serde_json::Value]) -> Vec<std::ops::Range<u64>> {
+    values
+        .iter()
+        .filter_map(|r| Some(r[0].as_u64()?..r[1].as_u64()?))
+        .collect()
+}
+
+/// Fetches the parts of `want` of file `n` not yet in `fetched`.
+fn fetch_ranges(
+    client: &Client,
+    n: usize,
+    to: &Path,
+    want: &[std::ops::Range<u64>],
+    fetched: &mut BTreeMap<usize, Vec<std::ops::Range<u64>>>,
+) -> Result<(), String> {
+    use geneva_media::ranges::{merge, missing, union};
+    let have = fetched.entry(n).or_default();
+    for r in missing(&merge(want.to_vec()), have) {
+        client
+            .download_range(&format!("/file/{n}"), to, &r)
+            .map_err(|e| format!("fetching {}: {e}", to.display()))?;
+        have.push(r);
+    }
+    *have = union(std::mem::take(have));
+    Ok(())
 }
 
 fn severity_word(s: Severity) -> &'static str {

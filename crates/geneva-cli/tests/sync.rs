@@ -752,3 +752,132 @@ fn a_farm_gives_a_lost_part_to_another_worker_and_refuses_another_build() {
     assert_eq!(info.video.unwrap().frames, Some(72));
     assert!(info.audio.is_some());
 }
+
+#[test]
+fn a_farm_keeps_the_marks_in_place_with_sources_fetched_in_ranges() {
+    // MP4 and QuickTime sources reach the workers as the byte ranges
+    // their parts read, with holes elsewhere; the rest go whole. Either
+    // way the flash and the tone land where a single run puts them.
+    let dir = tempfile::tempdir().unwrap();
+    let mut problems = Vec::new();
+    for (name, want) in corpus_files() {
+        let info = probe(&corpus().join(name)).unwrap();
+        let fps = info.video.unwrap().fps;
+        let text = format!(
+            r#"{{"geneva":"1.0",
+                "output":{{"width":160,"height":90,"fps":"{}/{}","duration":"3s",
+                           "encode":{{"video":{{"crf":16,"preset":"ultrafast"}}}}}},
+                "assets":{{"clip":{{"src":"{name}"}}}},
+                "layers":[{{"clips":[{{"source":{{"kind":"video","asset":"clip"}}}}]}}]}}"#,
+            fps.numer(),
+            fps.denom(),
+        );
+        std::fs::copy(corpus().join(name), dir.path().join(name)).unwrap();
+        let timeline = dir.path().join(format!("{name}.farm.json"));
+        std::fs::write(&timeline, text).unwrap();
+        let out = dir.path().join(format!("farm-{name}.mp4"));
+        run(&[
+            "farm",
+            timeline.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--parts",
+            "3",
+            "--local",
+            "2",
+            "--listen",
+            "127.0.0.1:0",
+        ]);
+        problems.extend(check("farm", name, &out, &want));
+    }
+    assert!(problems.is_empty(), "\n{}", problems.join("\n"));
+}
+
+#[test]
+fn a_farm_fetches_part_of_a_long_source_and_renders_it_as_a_single_run_does() {
+    // 48 s of the corpus clip, so each of twelve parts leaves most of
+    // the file as a hole on its worker.
+    let dir = tempfile::tempdir().unwrap();
+    let clip = corpus().join("cfr.mp4");
+    let c = clip.to_str().unwrap();
+    let long = dir.path().join("long.mp4");
+    let mut args = vec!["concat"];
+    args.extend([c; 16]);
+    args.extend(["-o", long.to_str().unwrap()]);
+    run(&args);
+    let text = r#"{"geneva":"1.0",
+        "output":{"width":160,"height":90,"fps":24,
+                  "encode":{"video":{"crf":10,"preset":"ultrafast"}}},
+        "assets":{"clip":{"src":"long.mp4"}},
+        "layers":[{"clips":[{"source":{"kind":"video","asset":"clip"},
+                             "transform":{"scale":0.75}}]}]}"#;
+    let timeline = dir.path().join("long.json");
+    std::fs::write(&timeline, text).unwrap();
+    let t = timeline.to_str().unwrap();
+    let single = dir.path().join("single.mp4");
+    run(&["render", t, "-o", single.to_str().unwrap()]);
+    let farmed = dir.path().join("farmed.mp4");
+    let out = geneva()
+        .args([
+            "--format",
+            "json",
+            "farm",
+            t,
+            "-o",
+            farmed.to_str().unwrap(),
+        ])
+        .args(["--parts", "12", "--local", "2", "--listen", "127.0.0.1:0"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let fetched = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|d| d["message"].as_str())
+        .find(|m| m.starts_with("workers fetched"))
+        .unwrap()
+        .to_owned();
+    // "workers fetched A of files; each whole copy is B, so N whole
+    // copies would have been C": A is under C.
+    let size = |s: &str| -> f64 {
+        let (n, unit) = s.trim().split_once(' ').unwrap();
+        let n: f64 = n.parse().unwrap();
+        n * match unit.trim_end_matches(|c: char| !c.is_ascii_alphabetic()) {
+            "kB" => 1e3,
+            "MB" => 1e6,
+            _ => 1e9,
+        }
+    };
+    let a = fetched["workers fetched ".len()..]
+        .split(" of files")
+        .next()
+        .unwrap();
+    let c = fetched.rsplit("would have been ").next().unwrap();
+    assert!(size(a) < 0.8 * size(c), "{fetched}");
+    let frames = probe(&single).unwrap().video.unwrap().frames.unwrap();
+    assert_eq!(probe(&farmed).unwrap().video.unwrap().frames, Some(frames));
+    let mut x = VideoReader::open(&single, ColorTags::default()).unwrap();
+    let mut y = VideoReader::open(&farmed, ColorTags::default()).unwrap();
+    for n in (0..frames).step_by(23) {
+        let t = Ratio::from_int(n as i64) / Ratio::from_int(24);
+        let p = x.frame_at(t).unwrap().pixels.clone();
+        let q = y.frame_at(t).unwrap().pixels.clone();
+        let mse: f64 = p
+            .iter()
+            .zip(&q)
+            .map(|(p, q)| {
+                let d = |u: f32, v: f32| f64::from(u - v).powi(2);
+                (d(p.r, q.r) + d(p.g, q.g) + d(p.b, q.b)) / 3.0
+            })
+            .sum::<f64>()
+            / p.len() as f64;
+        let psnr = 10.0 * (1.0 / mse.max(1e-12)).log10();
+        assert!(psnr > 40.0, "frame {n}: {psnr:.1} dB");
+    }
+}

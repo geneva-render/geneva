@@ -28,7 +28,10 @@ versions changed the format freely.
   another. Workers receive the timeline and every file it reads, and
   one with another geneva build or encoder, or that reads the timeline
   differently, is turned away. `/status` and `/metrics` report
-  progress. Plain HTTP with a shared token, no encryption.
+  progress. Plain HTTP with a shared token, no encryption. Workers
+  fetch only the byte ranges of MP4 and MOV sources that their parts
+  read; other files, and those inside nested compositions or used as
+  masks, go whole.
 
 ### Fixed
 
