@@ -136,12 +136,13 @@ These are produced when rendering, not by `validate`.
 | E501 | An asset file could not be opened, read or decoded. With `--probe` this is reported at validation time, at `/assets/<id>/src`. |
 | E502 | The requested time is outside the composition. |
 | E503 | The renderer's device failed or cannot do what the frame needs (a GPU lost or out of memory). The CPU renderer never reports it. |
+| E504 | `plan` cannot split this output into parts: it has `outputs`, a bitrate target or ceiling, no picture, or is an image sequence. The message says which. |
 
 ## Notes from rendering
 
 | Code | Meaning |
 | --- | --- |
-| N600 | What `render` did that you may want to know: streams were copied instead of re-encoded, or a cut moved to a keyframe. |
+| N600 | What `render`, `plan` or `join` did that you may want to know: streams were copied instead of re-encoded, a cut moved to a keyframe, or fewer parts than asked for. |
 
 ## Exit codes
 

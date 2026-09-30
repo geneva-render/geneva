@@ -83,7 +83,65 @@ for pictures and video. A sprite sheet's `.vtt` is its own row (`kind`
 | `--no-audio` | No audio track. |
 | `--renderer auto\|cpu\|gpu` | `auto`: a hardware GPU if present, else the CPU. `gpu`: any device, software ones included, else the CPU with a note. A software device (llvmpipe, WARP) is for testing and is several times slower than the CPU renderer: `auto` never picks one. `cpu`: the reference. `GENEVA_GPU=software` forces the software device. The note names the device. `frame` and overlays on a direct-path picture always use the CPU. |
 | `--exact` | Frame-accurate cuts; a [smart cut](#smart-cut) where possible. |
+| `--frames START..END` | Only output frames `START` to `END` (not included), picture only: one part for `geneva join`. Not with `--for`. |
+| `--audio-only` | Only the sound, as the sound part for `join`. Not with `--for` or `--no-audio`. |
 | `--assets DIR` | Asset root. |
+
+### `geneva plan <timeline> -o FILE --parts N`
+
+Cuts a render into `N` picture parts and one sound part that separate
+processes or machines can render at the same time, and prints the
+command for each and the `join` that puts them together. The
+boundaries come from the planner behind `encode.video.chunks`: clip
+starts when one is within a quarter of a part, else the keyframe grid,
+else an even split. A part is at least 2 seconds, so a short output
+gets fewer than `N` (reported as N600). The parts are named after `-o`
+and take its container: `out.part-000.mp4` and so on, and
+`out.audio.mp4`. JSON: `parts[]` with `frames` (`[start, end]`),
+`start` and `end` in seconds, `output` and `command`; `audio` with
+`output` and `command`, or `null` for a container without sound; and
+`join`.
+
+```text
+$ geneva plan talk.json -o out.mp4 --parts 3
+3 parts of 5400 frames in all; run each of these, on any machine with the same geneva and the assets:
+  geneva render talk.json --frames 0..1800 -o out.part-000.mp4
+  geneva render talk.json --frames 1800..3600 -o out.part-001.mp4
+  geneva render talk.json --frames 3600..5400 -o out.part-002.mp4
+  geneva render talk.json --audio-only -o out.audio.mp4
+then put them together:
+  geneva join talk.json out.part-000.mp4 out.part-001.mp4 out.part-002.mp4 --audio out.audio.mp4 -o out.mp4
+```
+
+Refused (E504, exit 3) for a document with `outputs`, a bitrate target
+or ceiling (it holds over the whole file and each part would restart
+it), an image sequence, or an output with no picture.
+
+### `geneva join <timeline> <part>... [--audio FILE] -o FILE`
+
+Puts the parts together without re-encoding: the picture parts in
+order, the sound part beside them, and the timeline's subtitle tracks
+and fast start as `render` would write them. Parts that do not add up
+to the timeline's frame count are refused, so a missing or repeated
+part is an error rather than a shorter file. Parts whose encoder
+parameters differ are refused, and the message names the difference.
+Without `--audio` the output has no sound, with a warning when the
+timeline has some.
+
+What is different from one `render`:
+
+- Every part is encoded by the CPU renderer's path (or the direct path
+  where the picture is a source's own). The `copy`, `copy-picture` and
+  `smart` [modes](#output-modes) are not used, so a timeline that one
+  render would copy is slower and larger in parts.
+- Each part restarts the encoder's rate control, so the bits differ
+  from a single run; the pixels barely do (above 40 dB PSNR in the
+  tests).
+- Every machine needs the same geneva and the same encoder: a part
+  from a machine with x264 and one from a machine without are refused
+  at the join. Give every part the same `--crf` and `--preset`.
+- The assets must be on every machine, at the same paths relative to
+  the timeline (or `--assets`).
 
 ### `geneva probe <file>`
 

@@ -8,6 +8,19 @@ versions changed the format freely.
 
 ## Unreleased
 
+### Added
+
+- **Rendering in parts, on several processes or machines.** `geneva
+  plan` cuts a render into picture parts and one sound part and prints
+  the command for each; `render --frames START..END` and `render
+  --audio-only` write one part; `geneva join` puts them together
+  without re-encoding, with the subtitle tracks and fast start of a
+  single render, and refuses parts that are missing or were encoded
+  with other settings. Parts always re-encode the picture, so copy and
+  smart cut are not used; bitrate targets, image sequences and
+  documents with `outputs` are refused. See
+  [docs/cli.md](docs/cli.md).
+
 ### Fixed
 
 - **The install scripts failed for anyone with a `GITHUB_TOKEN` set.** A

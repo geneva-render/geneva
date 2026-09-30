@@ -97,8 +97,34 @@ pub fn plan_chunks(
         }
     };
     let count = count.min(most.max(1));
-    if count <= 1 || frames == 0 {
+    let ranges = split_frames(comp, keyframe_interval, count);
+    if ranges.len() <= 1 {
         return ChunkPlan::single(frames);
+    }
+    ChunkPlan {
+        threads_each: (cores / ranges.len() as u32).max(1),
+        ranges,
+    }
+}
+
+/// Cuts the output of `comp` into `count` stretches of about equal
+/// length, in output frames, each at least [`MIN_CHUNK_SECS`] long, so
+/// fewer than `count` when the output is short. Boundaries fall on the
+/// composition's own cuts (clip starts) when one is within a quarter of
+/// a stretch, else on the keyframe grid when there is one, else where
+/// the even split puts them. With no cap on the count, this is also the
+/// plan for rendering the stretches on separate machines.
+pub fn split_frames(
+    comp: &Composition,
+    keyframe_interval: Option<f64>,
+    count: u32,
+) -> Vec<Range<u64>> {
+    let frames = comp.frame_count();
+    let fps = comp.fps.to_f64();
+    let min_frames = (MIN_CHUNK_SECS * fps).ceil().max(1.0) as u64;
+    let count = u64::from(count.max(1)).min((frames / min_frames).max(1)) as u32;
+    if count <= 1 || frames == 0 {
+        return std::iter::once(0..frames).collect();
     }
     // Where a boundary may fall for free: clip starts, and the keyframe
     // grid.
@@ -132,14 +158,7 @@ pub fn plan_chunks(
         }
     }
     bounds.push(frames);
-    let ranges: Vec<Range<u64>> = bounds.windows(2).map(|w| w[0]..w[1]).collect();
-    if ranges.len() <= 1 {
-        return ChunkPlan::single(frames);
-    }
-    ChunkPlan {
-        threads_each: (cores / ranges.len() as u32).max(1),
-        ranges,
-    }
+    bounds.windows(2).map(|w| w[0]..w[1]).collect()
 }
 
 #[cfg(test)]
@@ -231,6 +250,20 @@ mod tests {
         assert_eq!(n(VideoCodec::Av1, 32), 1);
         assert_eq!(n(VideoCodec::H265, 8), 1);
         assert_eq!(n(VideoCodec::Prores, 64), 1);
+    }
+
+    #[test]
+    fn split_frames_has_no_cap_but_the_two_second_minimum() {
+        // A 10-minute output in 200 parts: more than chunked encoding's
+        // 16, each 3 s.
+        let c = comp("600s", SOLID);
+        let ranges = split_frames(&c, None, 200);
+        assert_eq!(ranges.len(), 200);
+        assert!(ranges.iter().all(|r| r.end - r.start == 72));
+        assert_eq!(ranges.last().unwrap().end, 600 * 24);
+        // A 5 s output holds two parts of at least 2 s, whatever is asked.
+        let c = comp("5s", SOLID);
+        assert_eq!(split_frames(&c, None, 50), vec![0..60, 60..120]);
     }
 
     #[test]

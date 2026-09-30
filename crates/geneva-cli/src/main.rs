@@ -64,6 +64,12 @@ enum Command {
     Frame(FrameArgs),
     /// Render a whole timeline to a video file.
     Render(RenderArgs),
+    /// Split a render into parts that separate processes or machines can
+    /// render at the same time, and print the commands for each.
+    Plan(PlanArgs),
+    /// Put parts written by `render --frames` and `render --audio-only`
+    /// together into the output, without re-encoding.
+    Join(JoinArgs),
     /// Show what a media file contains.
     Probe(ProbeArgs),
     /// Print the JSON Schema of the timeline format.
@@ -213,6 +219,67 @@ struct RenderArgs {
     /// cut); otherwise everything is re-encoded.
     #[arg(long)]
     exact: bool,
+    /// Render only output frames START..END (END not included), picture
+    /// only, as one part for `geneva join`. `geneva plan` says which
+    /// ranges to use.
+    #[arg(long, value_name = "START..END", conflicts_with_all = ["audio_only", "for_"])]
+    frames: Option<FrameRange>,
+    /// Render only the sound, as the sound part for `geneva join`.
+    #[arg(long, conflicts_with_all = ["no_audio", "for_"])]
+    audio_only: bool,
+}
+
+/// A range of output frames, written START..END.
+#[derive(Clone)]
+struct FrameRange(std::ops::Range<u64>);
+
+impl std::str::FromStr for FrameRange {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (a, b) = s
+            .split_once("..")
+            .ok_or_else(|| format!("{s:?} is not START..END, such as 0..240"))?;
+        let parse = |t: &str| {
+            t.trim()
+                .parse::<u64>()
+                .map_err(|_| format!("{t:?} is not a frame number"))
+        };
+        let (start, end) = (parse(a)?, parse(b)?);
+        if start >= end {
+            return Err(format!("{s:?} is empty: the end must be past the start"));
+        }
+        Ok(Self(start..end))
+    }
+}
+
+#[derive(Args)]
+struct PlanArgs {
+    #[command(flatten)]
+    timeline: TimelineArgs,
+    /// The final output file. The parts take its container and are named
+    /// after it.
+    #[arg(short, long, value_name = "FILE")]
+    output: PathBuf,
+    /// How many picture parts to cut the output into. Each part is at
+    /// least 2 seconds, so a short output gets fewer.
+    #[arg(long, value_name = "N")]
+    parts: u32,
+}
+
+#[derive(Args)]
+struct JoinArgs {
+    #[command(flatten)]
+    timeline: TimelineArgs,
+    /// The picture parts, in order.
+    #[arg(required = true, value_name = "PART")]
+    parts: Vec<PathBuf>,
+    /// The sound part, from `render --audio-only`.
+    #[arg(long, value_name = "FILE")]
+    audio: Option<PathBuf>,
+    /// Output file.
+    #[arg(short, long, value_name = "FILE")]
+    output: PathBuf,
 }
 
 #[derive(Args)]
@@ -618,6 +685,12 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 exact: args.exact,
                 picture_as_is: false,
             };
+            let part = match (&args.frames, args.audio_only) {
+                (Some(range), _) => Some(media::Part::Frames(range.0.clone())),
+                (None, true) => Some(media::Part::Audio),
+                (None, false) => None,
+            };
+            let job = part.as_ref().map_or(RenderJob::Whole, RenderJob::Part);
             render_to(
                 &loaded,
                 &args.timeline.root(),
@@ -625,6 +698,31 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 &overrides,
                 cli.format,
                 size_limit.as_ref(),
+                &job,
+            )
+        }
+        Command::Plan(args) => plan_parts(&args, cli.format),
+        Command::Join(args) => {
+            let loaded = load_timeline(&args.timeline, true, false)?;
+            let overrides = media::RenderOverrides {
+                renderer: media::RendererChoice::Cpu,
+                crf: None,
+                preset: None,
+                no_audio: false,
+                exact: false,
+                picture_as_is: false,
+            };
+            render_to(
+                &loaded,
+                &args.timeline.root(),
+                &args.output,
+                &overrides,
+                cli.format,
+                None,
+                &RenderJob::Join {
+                    parts: &args.parts,
+                    audio: args.audio.as_deref(),
+                },
             )
         }
         Command::Convert(args) => {
@@ -898,6 +996,7 @@ fn run_verb(
         &overrides,
         format,
         size_limit.as_ref(),
+        &RenderJob::Whole,
     )
 }
 
@@ -970,6 +1069,181 @@ fn apply_target(
 }
 
 /// Renders a loaded timeline to `output` and reports the outcome.
+/// Plans a render in parts: the frame ranges, the file each part is
+/// written to and the command that writes it, and the command that joins
+/// them. The ranges come from the same planner as chunked encoding.
+fn plan_parts(args: &PlanArgs, format: Format) -> Result<ExitCode> {
+    let loaded = load_timeline(&args.timeline, true, false)?;
+    let Some(comp) = &loaded.composition else {
+        report(&loaded.diagnostics, format, None)?;
+        return Ok(ExitCode::from(EXIT_INVALID));
+    };
+    let mut diagnostics = loaded.diagnostics.clone();
+    let has_sound = match media::can_split(comp, &args.output) {
+        Ok(sound) => sound,
+        Err(reason) => {
+            diagnostics.push(
+                Diagnostic::error("E504", "", format!("cannot render in parts: {reason}"))
+                    .with_help("render it in one run with `geneva render`"),
+            );
+            report(
+                &diagnostics,
+                format,
+                Some(serde_json::json!({ "ok": false, "reason": reason })),
+            )?;
+            return Ok(ExitCode::from(EXIT_RENDER));
+        }
+    };
+    let keyframe_interval = comp
+        .encode
+        .as_ref()
+        .and_then(|e| e.video.as_ref())
+        .and_then(|v| v.keyframe_interval);
+    let ranges = geneva_media::chunks::split_frames(comp, keyframe_interval, args.parts.max(1));
+    let dir = args
+        .output
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    let stem = args
+        .output
+        .file_stem()
+        .map_or_else(|| "output".to_owned(), |s| s.to_string_lossy().into_owned());
+    let ext = args
+        .output
+        .extension()
+        .map_or_else(|| "mkv".to_owned(), |e| e.to_string_lossy().into_owned());
+    let mut base = vec![
+        "geneva".to_owned(),
+        "render".to_owned(),
+        args.timeline.timeline.display().to_string(),
+    ];
+    if let Some(assets) = &args.timeline.assets {
+        base.extend(["--assets".to_owned(), assets.display().to_string()]);
+    }
+    let command = |extra: &[String]| {
+        base.iter()
+            .chain(extra)
+            .map(|w| shell_word(w))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let seconds = |f: u64| (Ratio::from_int(f as i64) / comp.fps).to_f64();
+    let mut part_files = Vec::new();
+    let parts: Vec<serde_json::Value> = ranges
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let file = dir.join(format!("{stem}.part-{i:03}.{ext}"));
+            part_files.push(file.display().to_string());
+            serde_json::json!({
+                "frames": [r.start, r.end],
+                "start": seconds(r.start),
+                "end": seconds(r.end),
+                "output": file,
+                "command": command(&[
+                    "--frames".to_owned(),
+                    format!("{}..{}", r.start, r.end),
+                    "-o".to_owned(),
+                    file.display().to_string(),
+                ]),
+            })
+        })
+        .collect();
+    let audio_file = has_sound.then(|| dir.join(format!("{stem}.audio.{ext}")));
+    let audio = audio_file.as_ref().map(|file| {
+        serde_json::json!({
+            "output": file,
+            "command": command(&[
+                "--audio-only".to_owned(),
+                "-o".to_owned(),
+                file.display().to_string(),
+            ]),
+        })
+    });
+    let mut join = vec![
+        "geneva".to_owned(),
+        "join".to_owned(),
+        args.timeline.timeline.display().to_string(),
+    ];
+    if let Some(assets) = &args.timeline.assets {
+        join.extend(["--assets".to_owned(), assets.display().to_string()]);
+    }
+    join.extend(part_files);
+    if let Some(file) = &audio_file {
+        join.extend(["--audio".to_owned(), file.display().to_string()]);
+    }
+    join.extend(["-o".to_owned(), args.output.display().to_string()]);
+    let join = join
+        .iter()
+        .map(|w| shell_word(w))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if ranges.len() < args.parts as usize {
+        diagnostics.push(Diagnostic::note(
+            "N600",
+            "",
+            format!(
+                "{} parts rather than {}: each part is at least 2 seconds",
+                ranges.len(),
+                args.parts
+            ),
+        ));
+    }
+    let result = serde_json::json!({
+        "ok": true,
+        "output": args.output,
+        "frames": comp.frame_count(),
+        "duration": comp.duration,
+        "parts": parts,
+        "audio": audio,
+        "join": join,
+    });
+    if format == Format::Human {
+        report(&diagnostics, format, None)?;
+        println!(
+            "{} parts of {} frames in all; run each of these, on any machine with the same geneva and the assets:",
+            ranges.len(),
+            comp.frame_count()
+        );
+        for p in &parts {
+            println!("  {}", p["command"].as_str().unwrap_or_default());
+        }
+        if let Some(a) = &audio {
+            println!("  {}", a["command"].as_str().unwrap_or_default());
+        }
+        println!("then put them together:\n  {join}");
+    } else {
+        report(&diagnostics, format, Some(result))?;
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `word` as one word for a POSIX shell: as it is when it has nothing
+/// the shell reads, otherwise in single quotes.
+fn shell_word(word: &str) -> String {
+    let plain = !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./=:,+@%".contains(c));
+    if plain {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', r"'\''"))
+    }
+}
+
+/// What `render_to` writes: the whole output, one part of it for a
+/// render split across machines, or the parts put together.
+enum RenderJob<'a> {
+    Whole,
+    Part(&'a media::Part),
+    Join {
+        parts: &'a [PathBuf],
+        audio: Option<&'a Path>,
+    },
+}
+
 fn render_to(
     loaded: &Loaded,
     root: &Path,
@@ -977,17 +1251,25 @@ fn render_to(
     overrides: &media::RenderOverrides,
     format: Format,
     size_limit: Option<&(String, u64)>,
+    job: &RenderJob<'_>,
 ) -> Result<ExitCode> {
     let Some(comp) = &loaded.composition else {
         report(&loaded.diagnostics, format, None)?;
         return Ok(ExitCode::from(EXIT_INVALID));
     };
-    if !comp.outputs.is_empty() {
+    if !comp.outputs.is_empty() && matches!(job, RenderJob::Whole) {
         return render_outputs_to(loaded, comp, root, output, overrides, format, size_limit);
     }
     let mut diagnostics = loaded.diagnostics.clone();
     let progress = media::Progress::new(format.progress());
-    match media::render(comp, root, output, overrides, &progress) {
+    let rendered = match job {
+        RenderJob::Whole => media::render(comp, root, output, overrides, &progress),
+        RenderJob::Part(part) => media::render_part(comp, root, output, overrides, part, &progress),
+        RenderJob::Join { parts, audio } => {
+            media::join_parts(comp, root, output, overrides, parts, *audio)
+        }
+    };
+    match rendered {
         Ok(stats) => {
             for note in &stats.notes {
                 diagnostics.push(Diagnostic::note("N600", "", note.clone()));

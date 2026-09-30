@@ -370,3 +370,209 @@ fn chunked_and_single_runs_give_the_same_frames() {
         );
     }
 }
+
+/// Renders `timeline` the way separate machines would: `plan` into
+/// `parts` parts, each part and the sound as their own run, then
+/// `join`. Returns the joined file.
+fn render_in_parts(timeline: &Path, assets: &Path, output: &Path, parts: u32) -> PathBuf {
+    let planned = geneva()
+        .args([
+            "--format",
+            "json",
+            "plan",
+            timeline.to_str().unwrap(),
+            "--assets",
+            assets.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+            "--parts",
+            &parts.to_string(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        planned.status.success(),
+        "plan: {}",
+        String::from_utf8_lossy(&planned.stdout)
+    );
+    let plan: serde_json::Value = serde_json::from_slice(&planned.stdout).unwrap();
+    let mut files = Vec::new();
+    for part in plan["parts"].as_array().unwrap() {
+        let range = format!("{}..{}", part["frames"][0], part["frames"][1]);
+        let file = part["output"].as_str().unwrap().to_owned();
+        run(&[
+            "render",
+            timeline.to_str().unwrap(),
+            "--assets",
+            assets.to_str().unwrap(),
+            "--frames",
+            &range,
+            "-o",
+            &file,
+        ]);
+        files.push(file);
+    }
+    let sound = plan["audio"]["output"].as_str().unwrap().to_owned();
+    run(&[
+        "render",
+        timeline.to_str().unwrap(),
+        "--assets",
+        assets.to_str().unwrap(),
+        "--audio-only",
+        "-o",
+        &sound,
+    ]);
+    let mut join = vec![
+        "join",
+        timeline.to_str().unwrap(),
+        "--assets",
+        assets.to_str().unwrap(),
+    ];
+    join.extend(files.iter().map(String::as_str));
+    join.extend(["--audio", &sound, "-o", output.to_str().unwrap()]);
+    run(&join);
+    output.to_path_buf()
+}
+
+#[test]
+fn parts_keep_the_marks_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut problems = Vec::new();
+    for (name, want) in corpus_files() {
+        let info = probe(&corpus().join(name)).unwrap();
+        let fps = info.video.unwrap().fps;
+        // Three parts of a 3 s output, each rendered by its own process,
+        // so the flash at 1 s is the first frame of the second part.
+        let text = format!(
+            r#"{{"geneva":"1.0",
+                "output":{{"width":160,"height":90,"fps":"{}/{}","duration":"3s",
+                           "encode":{{"video":{{"crf":16,"preset":"ultrafast"}}}}}},
+                "assets":{{"clip":{{"src":"{name}"}}}},
+                "layers":[{{"clips":[{{"source":{{"kind":"video","asset":"clip"}}}}]}}]}}"#,
+            fps.numer(),
+            fps.denom(),
+        );
+        let timeline = dir.path().join(format!("{name}.parts.json"));
+        std::fs::write(&timeline, text).unwrap();
+        let out = dir.path().join(format!("parts-{name}.mp4"));
+        let out = render_in_parts(&timeline, &corpus(), &out, 3);
+        problems.extend(check("parts", name, &out, &want));
+    }
+    assert!(problems.is_empty(), "\n{}", problems.join("\n"));
+}
+
+#[test]
+fn parts_and_single_runs_give_the_same_frames() {
+    let dir = tempfile::tempdir().unwrap();
+    let text = r#"{"geneva":"1.0",
+        "output":{"width":160,"height":90,"fps":24,"duration":"3s",
+                  "encode":{"video":{"crf":10,"preset":"ultrafast"}}},
+        "assets":{"clip":{"src":"cfr.mp4"}},
+        "layers":[{"clips":[{"source":{"kind":"video","asset":"clip"},
+                             "transform":{"scale":0.75}}]}]}"#;
+    let timeline = dir.path().join("parts.json");
+    std::fs::write(&timeline, text).unwrap();
+    let single = dir.path().join("single.mp4");
+    run(&[
+        "render",
+        timeline.to_str().unwrap(),
+        "--assets",
+        corpus().to_str().unwrap(),
+        "-o",
+        single.to_str().unwrap(),
+    ]);
+    let joined = render_in_parts(&timeline, &corpus(), &dir.path().join("joined.mp4"), 3);
+    for path in [&single, &joined] {
+        let info = probe(path).unwrap();
+        assert_eq!(
+            info.video.as_ref().unwrap().frames,
+            Some(72),
+            "{}",
+            path.display()
+        );
+        assert!(info.audio.is_some(), "{}", path.display());
+    }
+    // As with chunked encoding: each part restarts rate control, so the
+    // bits differ and the pixels barely.
+    let mut a = VideoReader::open(&single, ColorTags::default()).unwrap();
+    let mut b = VideoReader::open(&joined, ColorTags::default()).unwrap();
+    for n in [0u64, 23, 24, 25, 47, 48, 49, 71] {
+        let t = Ratio::from_int(n as i64) / Ratio::from_int(24);
+        let x = a.frame_at(t).unwrap().pixels.clone();
+        let y = b.frame_at(t).unwrap().pixels.clone();
+        let mse: f64 = x
+            .iter()
+            .zip(&y)
+            .map(|(p, q)| {
+                let d = |u: f32, v: f32| f64::from(u - v).powi(2);
+                (d(p.r, q.r) + d(p.g, q.g) + d(p.b, q.b)) / 3.0
+            })
+            .sum::<f64>()
+            / x.len() as f64;
+        let psnr = 10.0 * (1.0 / mse.max(1e-12)).log10();
+        assert!(
+            psnr > 40.0,
+            "frame {n}: {psnr:.1} dB between single and parts"
+        );
+    }
+}
+
+#[test]
+fn join_refuses_a_missing_part_and_plan_refuses_what_cannot_split() {
+    let dir = tempfile::tempdir().unwrap();
+    let text = r#"{"geneva":"1.0",
+        "output":{"width":160,"height":90,"fps":24,"duration":"6s"},
+        "layers":[{"clips":[{"source":{"kind":"solid","color":"blue"}}]}]}"#;
+    let timeline = dir.path().join("missing.json");
+    std::fs::write(&timeline, text).unwrap();
+    let t = timeline.to_str().unwrap();
+    let part = |range: &str, name: &str| {
+        let file = dir.path().join(name);
+        run(&["render", t, "--frames", range, "-o", file.to_str().unwrap()]);
+        file
+    };
+    let a = part("0..72", "a.mp4");
+    let c = part("96..144", "c.mp4");
+    let out = dir.path().join("out.mp4");
+    let joined = geneva()
+        .args(["join", t, a.to_str().unwrap(), c.to_str().unwrap()])
+        .args(["-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let said = |o: &std::process::Output| {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        )
+    };
+    assert!(!joined.status.success());
+    assert!(
+        said(&joined).contains("a part is missing"),
+        "{}",
+        said(&joined)
+    );
+    // A bitrate ceiling holds over the whole file: no plan.
+    let capped = dir.path().join("capped.json");
+    std::fs::write(
+        &capped,
+        text.replace(
+            r#""duration":"6s"}"#,
+            r#""duration":"6s","encode":{"video":{"max_bitrate_kbps":2000}}}"#,
+        ),
+    )
+    .unwrap();
+    let planned = geneva()
+        .args([
+            "plan",
+            capped.to_str().unwrap(),
+            "-o",
+            "out.mp4",
+            "--parts",
+            "3",
+        ])
+        .output()
+        .unwrap();
+    assert!(!planned.status.success());
+    assert!(said(&planned).contains("E504"), "{}", said(&planned));
+}

@@ -743,8 +743,19 @@ fn audio_diagnostics(
     }
 }
 
+/// One part of a render split across processes or machines.
+#[derive(Debug, Clone)]
+#[cfg_attr(not(feature = "media"), allow(dead_code))]
+pub enum Part {
+    /// Output frames in this range, picture only.
+    Frames(std::ops::Range<u64>),
+    /// The whole soundtrack, no picture.
+    Audio,
+}
+
 pub use imp::{
-    copy_sources, describe, measure_audio, probe, read_subtitles, render, render_outputs, renderer,
+    can_split, copy_sources, describe, join_parts, measure_audio, probe, read_subtitles, render,
+    render_outputs, render_part, renderer,
 };
 
 #[cfg(feature = "media")]
@@ -2112,6 +2123,234 @@ mod imp {
         Ok(reason)
     }
 
+    /// Whether the output of `comp` to `output` can be rendered in parts
+    /// and joined: `Ok` with whether it has a sound part, or `Err` with
+    /// why not. The exclusions are chunked encoding's: a bitrate target
+    /// or ceiling (the rate control cannot restart at a boundary), an
+    /// image sequence (nothing to join), an output with no picture, and
+    /// a document with `outputs`.
+    pub fn can_split(comp: &Composition, output: &Path) -> Result<bool, String> {
+        if !comp.outputs.is_empty() {
+            return Err("the document has `outputs`; render each entry on its own".to_owned());
+        }
+        let Some(container) =
+            geneva_media::container_for(output, comp.encode.as_ref().and_then(|e| e.container))
+        else {
+            return Err("unknown container; use .mp4, .mov, .mkv, .webm or .mxf".to_owned());
+        };
+        if container == geneva_timeline::schema::Container::ImageSequence {
+            return Err(
+                "an image sequence needs no join; render frame ranges into the same pattern"
+                    .to_owned(),
+            );
+        }
+        if container.is_audio_only() {
+            return Err("the output has no picture to split".to_owned());
+        }
+        let video = comp.encode.as_ref().and_then(|e| e.video.as_ref());
+        if video.is_some_and(|v| v.bitrate_kbps.is_some() || v.max_bitrate_kbps.is_some()) {
+            return Err(
+                "a bitrate target or ceiling holds over the whole file, and each part would restart it"
+                    .to_owned(),
+            );
+        }
+        Ok(!container.is_video_only())
+    }
+
+    /// Renders one part of the output of `comp` into `output`, a file with
+    /// the same container as the final output: a stretch of the picture
+    /// with no sound, or the whole sound with no picture. The parts are
+    /// put together by [`join_parts`] without re-encoding. Frames are
+    /// composited on the CPU, as in chunked encoding, so every part comes
+    /// from the same renderer wherever it runs.
+    pub fn render_part(
+        comp: &Composition,
+        root: &Path,
+        output: &Path,
+        overrides: &RenderOverrides,
+        part: &super::Part,
+        progress: &super::Progress,
+    ) -> Result<RenderStats, RenderError> {
+        let started = Instant::now();
+        let refuse = |reason: String| RenderError::Asset {
+            id: output.display().to_string(),
+            reason,
+        };
+        if let Err(reason) = can_split(comp, output) {
+            return Err(refuse(format!("cannot render in parts: {reason}")));
+        }
+        let media_err = |e: geneva_media::MediaError| RenderError::Asset {
+            id: output.display().to_string(),
+            reason: e.to_string(),
+        };
+        let (mut settings, _) = output_settings(comp, root, output, overrides)?;
+        settings.subtitles.clear();
+        settings.copied_audio = None;
+        settings.fast_start = false;
+        let total = comp.frame_count();
+        match part {
+            super::Part::Frames(range) => {
+                if range.start >= range.end || range.end > total {
+                    return Err(refuse(format!(
+                        "frames {}..{} are not inside the output's 0..{total}",
+                        range.start, range.end
+                    )));
+                }
+                settings.audio = None;
+                let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as u32);
+                let done = std::sync::atomic::AtomicU64::new(0);
+                let count = range.end - range.start;
+                let fps = comp.fps.to_f64();
+                let reason = std::thread::scope(|scope| {
+                    let worker = scope.spawn(|| {
+                        encode_chunk(comp, root, output, settings, range.clone(), cores, &done)
+                    });
+                    while !worker.is_finished() {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        progress.frame(done.load(std::sync::atomic::Ordering::Relaxed), count, fps);
+                    }
+                    worker
+                        .join()
+                        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                })
+                .map_err(media_err)?;
+                progress.finish(count, count, fps);
+                let mut notes: Vec<String> = reason.into_iter().collect();
+                notes.push(format!(
+                    "frames {}..{} of {total}, picture only, for `geneva join`",
+                    range.start, range.end
+                ));
+                Ok(RenderStats {
+                    frames: count,
+                    duration: Ratio::from_int(count as i64) / comp.fps,
+                    mode: if direct_reason_is_direct(&notes) {
+                        RenderMode::Direct
+                    } else {
+                        RenderMode::Render
+                    },
+                    notes,
+                    warnings: Vec::new(),
+                    seconds: started.elapsed().as_secs_f64(),
+                })
+            }
+            super::Part::Audio => {
+                settings.video = None;
+                let Some(rate) = settings.audio.as_ref().map(|a| a.sample_rate) else {
+                    return Err(refuse(
+                        "the output has no sound: the document has no audio, or --no-audio was given"
+                            .to_owned(),
+                    ));
+                };
+                let mut encoder = Encoder::new(output, settings).map_err(media_err)?;
+                let mut enc = encoder
+                    .take_audio_encoder()
+                    .expect("audio settings give an audio encoder");
+                let mut mixer = geneva_media::mix::Mixer::for_output(comp, root, enc.settings());
+                let written = (|| -> Result<(), geneva_media::MediaError> {
+                    while let Some(block) = mixer.next_block(rate as usize)? {
+                        let packets = enc.push(&block)?;
+                        encoder.write_audio_packets(packets, enc.time())?;
+                    }
+                    let time = enc.time();
+                    let packets = enc.finish()?;
+                    encoder.write_audio_packets(packets, time)?;
+                    encoder.finish()
+                })();
+                written.map_err(media_err)?;
+                let mut notes = vec!["the whole sound, no picture, for `geneva join`".to_owned()];
+                if let Some(r) = mixer.report() {
+                    notes.extend(treatment_notes(r));
+                }
+                Ok(RenderStats {
+                    frames: 0,
+                    duration: comp.duration,
+                    mode: RenderMode::Render,
+                    notes,
+                    warnings: Vec::new(),
+                    seconds: started.elapsed().as_secs_f64(),
+                })
+            }
+        }
+    }
+
+    /// Puts parts written by [`render_part`] together into `output` by
+    /// stream copy: the picture parts in order, the sound part beside
+    /// them, and the document's subtitle tracks and fast start as a
+    /// single render would write them. Refuses parts that do not add up
+    /// to the document's length, so that a missing or repeated part is
+    /// an error rather than a shorter file.
+    pub fn join_parts(
+        comp: &Composition,
+        root: &Path,
+        output: &Path,
+        overrides: &RenderOverrides,
+        parts: &[std::path::PathBuf],
+        audio: Option<&Path>,
+    ) -> Result<RenderStats, RenderError> {
+        let started = Instant::now();
+        let refuse = |reason: String| RenderError::Asset {
+            id: output.display().to_string(),
+            reason,
+        };
+        if let Err(reason) = can_split(comp, output) {
+            return Err(refuse(format!("cannot join parts: {reason}")));
+        }
+        let (settings, _) = output_settings(comp, root, output, overrides)?;
+        let mut frames = 0u64;
+        for part in parts {
+            let info = geneva_media::probe(part).map_err(|e| refuse(e.to_string()))?;
+            let Some(v) = info.video else {
+                return Err(refuse(format!("{}: no picture", part.display())));
+            };
+            frames += v.frames.unwrap_or_else(|| {
+                info.duration
+                    .map_or(0, |d| (d * v.fps).round().max(0) as u64)
+            });
+        }
+        let total = comp.frame_count();
+        if frames != total {
+            return Err(refuse(format!(
+                "the parts hold {frames} frames and the output has {total}; a part is missing, repeated or incomplete"
+            )));
+        }
+        let segment = |path: &Path| geneva_media::CopySegment {
+            path: path.to_path_buf(),
+            from: Ratio::ZERO,
+            to: None,
+        };
+        let mut warnings = Vec::new();
+        if settings.audio.is_some() && audio.is_none() {
+            warnings.push(
+                "the document has sound and no sound part was given, so the output has none"
+                    .to_owned(),
+            );
+        }
+        let plan = geneva_media::CopyPlan {
+            segments: parts.iter().map(|p| segment(p)).collect(),
+            audio: audio.map(segment).into_iter().collect(),
+            reason: String::new(),
+        };
+        let report =
+            geneva_media::stream_copy(&plan, output, &settings.subtitles, settings.fast_start)
+                .map_err(|e| refuse(e.to_string()))?;
+        Ok(RenderStats {
+            frames: 0,
+            duration: report.duration,
+            mode: RenderMode::Copy,
+            notes: vec![format!(
+                "{} parts joined without re-encoding{}",
+                parts.len(),
+                if audio.is_some() {
+                    ", with the sound part"
+                } else {
+                    ""
+                }
+            )],
+            warnings,
+            seconds: started.elapsed().as_secs_f64(),
+        })
+    }
+
     /// The static HDR10 metadata for a PQ output: the first HDR video
     /// asset's, or standard defaults. `None` for SDR and HLG outputs.
     fn hdr_metadata_for(comp: &Composition, root: &Path) -> Option<geneva_media::HdrMetadata> {
@@ -2250,14 +2489,15 @@ mod imp {
     /// source's quality, since they sit between its own pictures.
     const STITCH_CRF: u8 = 18;
 
-    pub fn render(
+    /// The encode settings a render of `comp` to `output` starts from,
+    /// with the output's container: the document's encode block under the
+    /// command line's overrides, and the container's defaults.
+    fn output_settings(
         comp: &Composition,
         root: &Path,
         output: &Path,
         overrides: &RenderOverrides,
-        progress: &super::Progress,
-    ) -> Result<RenderStats, RenderError> {
-        let started = Instant::now();
+    ) -> Result<(EncodeSettings, geneva_timeline::schema::Container), RenderError> {
         let container =
             geneva_media::container_for(output, comp.encode.as_ref().and_then(|e| e.container))
                 .ok_or_else(|| {
@@ -2348,7 +2588,7 @@ mod imp {
             });
         }
         let subtitles = subtitle_settings(comp, root)?;
-        let mut settings = EncodeSettings {
+        let settings = EncodeSettings {
             video: video_settings,
             container: Some(container),
             audio: audio_settings,
@@ -2360,6 +2600,20 @@ mod imp {
                 .unwrap_or(true),
             copied_audio: None,
         };
+        Ok((settings, container))
+    }
+
+    pub fn render(
+        comp: &Composition,
+        root: &Path,
+        output: &Path,
+        overrides: &RenderOverrides,
+        progress: &super::Progress,
+    ) -> Result<RenderStats, RenderError> {
+        let started = Instant::now();
+        let (mut settings, container) = output_settings(comp, root, output, overrides)?;
+        let video = comp.encode.as_ref().and_then(|e| e.video.as_ref());
+        let sample_rate = settings.audio.as_ref().map_or(48000, |a| a.sample_rate);
         let has_audio = settings.audio.is_some();
         let media_err = |e: geneva_media::MediaError| RenderError::Asset {
             id: output.display().to_string(),
@@ -2928,6 +3182,38 @@ mod imp {
     ) -> Result<(Vec<super::OutputStats>, RenderStats), RenderError> {
         Err(RenderError::Asset {
             id: dir.display().to_string(),
+            reason: geneva_media::MediaError::Unavailable.to_string(),
+        })
+    }
+
+    pub fn can_split(_: &Composition, _: &Path) -> Result<bool, String> {
+        Err(geneva_media::MediaError::Unavailable.to_string())
+    }
+
+    pub fn render_part(
+        _: &Composition,
+        _: &Path,
+        output: &Path,
+        _: &RenderOverrides,
+        _: &super::Part,
+        _: &super::Progress,
+    ) -> Result<RenderStats, RenderError> {
+        Err(RenderError::Asset {
+            id: output.display().to_string(),
+            reason: geneva_media::MediaError::Unavailable.to_string(),
+        })
+    }
+
+    pub fn join_parts(
+        _: &Composition,
+        _: &Path,
+        output: &Path,
+        _: &RenderOverrides,
+        _: &[std::path::PathBuf],
+        _: Option<&Path>,
+    ) -> Result<RenderStats, RenderError> {
+        Err(RenderError::Asset {
+            id: output.display().to_string(),
             reason: geneva_media::MediaError::Unavailable.to_string(),
         })
     }
