@@ -423,13 +423,24 @@ fn srgb_from_linear(v: f32) -> f32 {
     table[i] + (table[i + 1] - table[i]) * f
 }
 
-/// The painter's image back in linear light.
+/// The painter's image back in linear light: its content rectangle,
+/// since everything outside it is transparent, which converts to itself.
+/// A caption's box is the size of the frame, its words a strip of it.
 fn to_linear(image: &mut Image) {
-    image.pixels.par_chunks_mut(1 << 12).for_each(|part| {
-        for p in part {
-            *p = decode_pixel(*p);
-        }
-    });
+    let width = image.width as usize;
+    let [cx, cy, cw, ch] = image.content.unwrap_or([0, 0, image.width, image.height]);
+    let (x0, x1) = (cx as usize, ((cx + cw) as usize).min(width));
+    let rows = cy as usize..((cy + ch) as usize).min(image.height as usize);
+    if x0 >= x1 || rows.is_empty() || width == 0 {
+        return;
+    }
+    image.pixels[rows.start * width..rows.end * width]
+        .par_chunks_mut(width)
+        .for_each(|row| {
+            for p in &mut row[x0..x1] {
+                *p = decode_pixel(*p);
+            }
+        });
 }
 
 /// The rectangle one box can touch: its own, grown by what its shadows

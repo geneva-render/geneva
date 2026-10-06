@@ -690,7 +690,8 @@ group composited with the transform, opacity and blur of the moment.
 **Cost**
 
 - No animation inside: laid out and painted once per clip.
-- Animation inside: painted each frame; laid out each frame only when an animation sets `width`, `height`, `max-width`, `min-width` or `letter-spacing`.
+- Animations that only step (a `steps()` timing, or keyframes that all say the same): laid out and painted once per interval between the moments they can change, as word-by-word highlighting does; the picture is reused for the frames in between.
+- Any other animation inside: laid out and painted each frame; an animated element whose boxes do not change keeps its picture and is only composited again.
 
 ## Known limitations
 

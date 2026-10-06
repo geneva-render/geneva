@@ -758,3 +758,45 @@ fn a_text_stroke_draws_and_its_colour_animates() {
     let mid = edge(Ratio::new(1, 2));
     assert!(mid.r > 0.1 && mid.b > 0.1, "{mid:?}");
 }
+
+/// Markup whose animations only step is drawn once per interval between
+/// the moments it can change, and the picture is reused for the frames
+/// after it. Every frame of a render going forward must be the frame a
+/// fresh renderer draws at that moment.
+#[test]
+fn stepped_markup_reused_between_steps_matches_fresh_frames() {
+    use std::fmt::Write as _;
+    let mut spans = String::new();
+    for k in 0..6 {
+        let delay = 0.05 + 0.13 * f64::from(k);
+        write!(
+            spans,
+            "<span style='animation: lit 0.2s steps(2, jump-end) {delay:.3}s both'>w{k}</span>"
+        )
+        .unwrap();
+    }
+    let text = format!(
+        r##"{{"geneva":"1.1","output":{{"width":240,"height":60,"fps":30,"duration":"1s","background":"#203040"}},
+        "layers":[{{"clips":[{{"source":{{"kind":"html","html":"<style>@keyframes lit {{ from {{ color: #ffffff }} to {{ color: #ffd400 }} }} .c {{ display: flex; gap: 4px; font-size: 18px; color: #ffffff }}</style><div class='c'>{spans}</div>"}}}}]}}]}}"##
+    );
+    let l = load(&text);
+    assert!(l.is_ok(), "{:?}", l.diagnostics);
+    let comp = l.composition.unwrap();
+    let mut going = CpuRenderer::new(NoAssets);
+    let mut changes = 0;
+    let mut previous: Option<Vec<LinearRgba>> = None;
+    for n in 0..comp.frame_count() {
+        let t = comp.frame_time(n);
+        let reused = going.render_frame(&comp, t).unwrap();
+        let fresh = CpuRenderer::new(NoAssets).render_frame(&comp, t).unwrap();
+        assert!(
+            reused.pixels() == fresh.pixels(),
+            "frame {n} differs from a fresh render"
+        );
+        if previous.as_deref().is_some_and(|p| p != reused.pixels()) {
+            changes += 1;
+        }
+        previous = Some(reused.pixels().to_vec());
+    }
+    assert!(changes >= 6, "the words light up: {changes} changes");
+}

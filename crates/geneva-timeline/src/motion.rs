@@ -24,6 +24,90 @@ pub struct Play {
     pub frames: Vec<(f64, Values)>,
 }
 
+impl Play {
+    /// The moments, in seconds from the clip's start and up to
+    /// `horizon`, at which this animation's values can change, when they
+    /// hold still between them: a `steps()` timing, or keyframes that all
+    /// say the same. `None` when the values move continuously.
+    ///
+    /// Between two neighbouring moments the values are those at the
+    /// earlier one, as CSS's steps hold on `[k/n, (k+1)/n)`. A moment
+    /// more than needed only costs a repaint.
+    #[must_use]
+    pub fn changes(&self, horizon: f64) -> Option<Vec<f64>> {
+        let a = &self.animation;
+        let flat = self.frames.windows(2).all(|w| w[0].1 == w[1].1)
+            && !self.frames.is_empty()
+            && self.frames.first().is_some_and(|f| f.0 <= 0.0)
+            && self.frames.last().is_some_and(|f| f.0 >= 1.0);
+        let steps = match a.easing {
+            Easing::Steps { steps: (n, _) } => Some(n.max(1)),
+            _ => None,
+        };
+        if !flat && steps.is_none() {
+            return None;
+        }
+        let end = if a.iterations.is_finite() {
+            (a.delay + a.duration * a.iterations).min(horizon)
+        } else {
+            horizon
+        };
+        let mut out = vec![a.delay, end];
+        if let Some(n) = steps.filter(|_| !flat) {
+            // Each pair of neighbouring offsets is one segment, the
+            // implicit 0% and 100% included, and its steps fall at
+            // equal shares of it; a run played backwards mirrors them.
+            let mut offsets: Vec<f64> = self.frames.iter().map(|f| f.0).collect();
+            offsets.push(0.0);
+            offsets.push(1.0);
+            offsets.sort_by(f64::total_cmp);
+            offsets.dedup();
+            let mut within: Vec<f64> = Vec::new();
+            for w in offsets.windows(2) {
+                for k in 0..=n {
+                    let p = w[0] + (w[1] - w[0]) * f64::from(k) / f64::from(n);
+                    within.push(p);
+                    within.push(1.0 - p);
+                }
+            }
+            let mut run = 0.0f64;
+            while a.delay + run * a.duration < end {
+                let start = a.delay + run * a.duration;
+                for p in &within {
+                    let at = start + p * a.duration;
+                    if at < end {
+                        out.push(at);
+                    }
+                }
+                run += 1.0;
+                // A step every frame or more often is no saving.
+                if out.len() > 100_000 {
+                    return None;
+                }
+            }
+        }
+        out.retain(|t| (0.0..=horizon).contains(t));
+        Some(out)
+    }
+}
+
+/// The moments up to `horizon` at which the picture of markup with these
+/// animations inside can change, sorted, when every animation holds
+/// still between moments ([`Play::changes`]); `None` when any moves
+/// continuously, and the markup has to be drawn at every frame.
+#[must_use]
+pub fn step_moments(motion: &[NodeMotion], horizon: f64) -> Option<Vec<f64>> {
+    let mut out = vec![0.0];
+    for node in motion {
+        for play in &node.plays {
+            out.extend(play.changes(horizon)?);
+        }
+    }
+    out.sort_by(f64::total_cmp);
+    out.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    Some(out)
+}
+
 /// An element's animations.
 #[derive(Debug, Clone)]
 pub struct NodeMotion {
@@ -408,6 +492,55 @@ mod tests {
             },
             frames,
         }
+    }
+
+    /// A word that switches colour with `steps(1, jump-end)` can change
+    /// only at its delay and at the end of its run; a smooth animation
+    /// can change at any moment; one whose keyframes all say the same
+    /// changes only where its run starts and ends.
+    #[test]
+    fn stepped_and_flat_animations_change_only_at_known_moments() {
+        use geneva_anim::StepPosition;
+        let mut word = play(
+            0.5,
+            0.01,
+            Fill::Both,
+            vec![(0.0, opacity(1.0)), (1.0, opacity(0.5))],
+        );
+        word.animation.easing = Easing::Steps {
+            steps: (1, StepPosition::JumpEnd),
+        };
+        let moments = word.changes(2.5).expect("it steps");
+        assert!(moments.contains(&0.5) && moments.iter().any(|m| (m - 0.51).abs() < 1e-9));
+        assert!(
+            moments.iter().all(|m| (0.5..=0.51 + 1e-9).contains(m)),
+            "{moments:?}"
+        );
+
+        let smooth = play(
+            0.5,
+            1.0,
+            Fill::Both,
+            vec![(0.0, opacity(1.0)), (1.0, opacity(0.5))],
+        );
+        assert_eq!(smooth.changes(2.5), None);
+
+        let flat = play(
+            1.0,
+            0.5,
+            Fill::None,
+            vec![(0.0, opacity(0.5)), (1.0, opacity(0.5))],
+        );
+        assert_eq!(flat.changes(2.5), Some(vec![1.0, 1.5]));
+
+        let node = |plays| NodeMotion { node: 1, plays };
+        assert_eq!(
+            step_moments(&[node(vec![word.clone()]), node(vec![smooth])], 2.5),
+            None
+        );
+        let all = step_moments(&[node(vec![word]), node(vec![flat])], 2.5).expect("all step");
+        assert_eq!(all.first(), Some(&0.0));
+        assert!(all.windows(2).all(|w| w[0] < w[1]), "{all:?}");
     }
 
     fn opacity(v: f64) -> Values {

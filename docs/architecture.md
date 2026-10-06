@@ -101,14 +101,21 @@ and painted by the renderer into a picture placed like an image.
   downsampled above sigma 8, then the colour filters) and mixed in. The
   GPU compositor does not draw them; documents using them render on the
   CPU.
-- A box with nothing animated inside is painted once per clip.
+- A box with nothing animated inside is painted once per clip. One whose
+  animations only step (`steps()`, or keyframes that all say the same)
+  is painted once per interval between the moments they can change
+  (`motion::step_moments`), and the picture reused until the next; a
+  frame within a microsecond of such a moment is painted fresh and not
+  kept. The CPU renderer keeps the last few markup pictures converted
+  to sRGB-encoded values, so a caption that holds still is converted
+  once.
 - An element with an animation, opacity, filter, blend mode or clip is a
   group: a buffer of its own, bounded to what its parent can show
   (through the inverse transform, padded for blur, cut to its
   `clip-path` polygon, at most nine frames of area), composited with
   those applied. Groups off the frame, and groups whose polygon covers
-  nothing, are skipped. An animation that changes a size re-lays out
-  each frame.
+  nothing, are skipped. Markup with an animation that moves is laid
+  out again each frame.
 - A group with no group inside keeps its picture between frames while
   its boxes stay the same, blurred in place once its blur holds still
   for two frames, and composited through its transform each frame. A

@@ -53,6 +53,16 @@ versions changed the format freely.
   once, and `validate` looks each font family up once.
 - **A markup warning repeated by many clips is reported once**, with the
   number of other clips that share it.
+- **Markup whose animations only step is painted once per step.** Word
+  by word highlighting written as keyframes with `steps()` (or keyframes
+  that all say the same) was laid out and painted at every frame, as
+  moving captions are; it is now painted once per interval between the
+  moments it can change, and the picture reused. With a still caption's
+  picture also turned to sRGB-encoded values once rather than at every
+  frame, and only its painted area converted to linear light, a two-line
+  caption whose 13 words light up one after another costs about 2.8%
+  more than the same captions through `subtitles --highlight` (it was
+  about 10%), and still markup captions cost no more than `--highlight`.
 - **Markup text lines are stacked as in Chromium.** `line-height:
   normal`, the default, was 1.2 times the size for every font; it is now
   the font's own ascent, descent and line gap, rounded as Chromium
