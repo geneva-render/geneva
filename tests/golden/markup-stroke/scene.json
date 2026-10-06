@@ -1,0 +1,10 @@
+{
+  "geneva": "1.1",
+  "output": { "width": 720, "height": 470, "fps": 30, "duration": "1s", "background": "#c0504d" },
+  "assets": {
+    "page": { "src": "markup-stroke/stroke.html" },
+    "sans": { "src": "fonts/LiberationSans-Regular.ttf" },
+    "sans-bold": { "src": "fonts/LiberationSans-Bold.ttf" }
+  },
+  "layers": [ { "clips": [ { "source": { "kind": "html", "asset": "page" } } ] } ]
+}

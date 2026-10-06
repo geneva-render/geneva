@@ -46,6 +46,7 @@ serde_path_to_error = "0.1"
 thiserror = "2.0"
 cosmic-text = { version = "0.19", default-features = false, features = ["std", "swash"] }
 swash = "0.2"
+kurbo = { version = "0.13", default-features = false, features = ["std"] }
 taffy = { version = "0.9", default-features = false, features = ["std", "flexbox", "block_layout", "content_size", "calc", "taffy_tree"] }
 pollster = "0.4"
 bytemuck = { version = "1.20", features = ["derive"] }

@@ -729,3 +729,32 @@ fn a_smaller_word_leaves_its_line_as_tall_as_the_rest() {
         "the first line whole: {bands:?}"
     );
 }
+
+#[test]
+fn a_text_stroke_draws_and_its_colour_animates() {
+    let text = r##"{"geneva":"1.1","output":{"width":200,"height":120,"fps":30,"duration":"1s",
+        "background":"transparent"},
+        "layers":[{"clips":[{"source":{"kind":"html","width":200,"height":120,
+        "html":"<div><p>I</p></div>",
+        "css":"p { margin: 0; padding: 10px 40px; font: 700 96px sans-serif; color: #fff; -webkit-text-stroke: 12px #ff0000; animation: s 1s linear both } @keyframes s { to { -webkit-text-stroke-color: #0000ff } }"},
+        "transform":{"anchor":"top left","position":"0 0"}}]}]}"##;
+    let l = load(text);
+    assert!(l.is_ok(), "{:?}", l.diagnostics);
+    let comp = l.composition.unwrap();
+    let mut renderer = CpuRenderer::new(NoAssets);
+    // The first opaque pixel along a row through the stem is the stroke
+    // drawn over the glyph's left edge.
+    let mut edge = |t: Ratio| {
+        let f = renderer.render_frame(&comp, t).unwrap();
+        (0..200)
+            .map(|x| f.get(x, 60))
+            .find(|p| p.a > 0.95)
+            .expect("the stroke is drawn")
+    };
+    let start = edge(Ratio::ZERO);
+    assert!(start.r > 0.9 && start.b < 0.05, "{start:?}");
+    let end = edge(Ratio::new(29, 30));
+    assert!(end.b > 0.8 && end.r < 0.1, "{end:?}");
+    let mid = edge(Ratio::new(1, 2));
+    assert!(mid.r > 0.1 && mid.b > 0.1, "{mid:?}");
+}

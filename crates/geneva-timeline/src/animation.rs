@@ -132,6 +132,8 @@ pub struct Values {
     pub blur: Option<f64>,
     /// `color`.
     pub color: Option<Color>,
+    /// `-webkit-text-stroke-color`.
+    pub stroke_color: Option<Color>,
     /// `text-shadow`: the list front to back, empty for `none`.
     pub text_shadow: Option<Vec<TextShadow>>,
     /// `letter-spacing`.
@@ -174,6 +176,7 @@ impl Values {
     pub fn beyond_a_clip(&self) -> bool {
         self.blur.is_some()
             || self.color.is_some()
+            || self.stroke_color.is_some()
             || self.text_shadow.is_some()
             || self.moves_layout()
             || self.background_position.is_some()
@@ -831,6 +834,10 @@ pub fn parse_declarations(block: &str) -> Result<Values, String> {
                 v.color =
                     Some(Color::from_str(value).map_err(|_| format!("{value:?} is not a colour"))?);
             }
+            "-webkit-text-stroke-color" => {
+                v.stroke_color =
+                    Some(Color::from_str(value).map_err(|_| format!("{value:?} is not a colour"))?);
+            }
             "text-shadow" => v.text_shadow = Some(text_shadow(value)?),
             "letter-spacing" => v.letter_spacing = Some(spacing(value)?),
             "width" => v.width = Some(pixels(value)?),
@@ -842,8 +849,8 @@ pub fn parse_declarations(block: &str) -> Result<Values, String> {
             _ => {
                 return Err(format!(
                     "{property:?} cannot be animated; a keyframe sets transform, translate, \
-scale, rotate, opacity, filter, color, text-shadow, letter-spacing, width, height, \
-max-width, min-width, background-position or clip-path"
+scale, rotate, opacity, filter, color, -webkit-text-stroke-color, text-shadow, \
+letter-spacing, width, height, max-width, min-width, background-position or clip-path"
                 ));
             }
         }

@@ -122,6 +122,13 @@ impl NodeMotion {
             opacity: stacked(plays, t, base.paint.opacity, |v| v.opacity, lerp),
             blur: stacked(plays, t, base.paint.blur, |v| v.blur, lerp),
             color: stacked(plays, t, base.text.color, |v| v.color, color_lerp),
+            stroke_color: stacked(
+                plays,
+                t,
+                base.text.stroke_color(),
+                |v| v.stroke_color,
+                color_lerp,
+            ),
             text_shadow: stacked(
                 plays,
                 t,

@@ -15,9 +15,9 @@ use cosmic_text::{
 };
 use geneva_color::{Color, LinearRgba};
 use geneva_timeline::schema::{TextAlign, TextStyle};
-use geneva_timeline::{FillTrack, ResolvedText};
-use swash::scale::{Render, ScaleContext, Source, StrikeWith};
-use swash::zeno::{Format, Stroke, Style as ZenoStyle, Vector};
+use geneva_timeline::{FillTrack, OutlinePaint, ResolvedText};
+use swash::scale::ScaleContext;
+use swash::zeno::{Command, Format, Mask as ZenoMask, Origin, Vector, Verb};
 
 use crate::assets::Image;
 use crate::fill::Fill;
@@ -52,7 +52,8 @@ impl Default for TextEngine {
 /// ignores it: neither a stroke nor a shadow changes where text sits.
 #[must_use]
 pub fn inset_for(text: &ResolvedText) -> f64 {
-    let outline = text.spec.outline.as_ref().map_or(0.0, |o| o.width.max(0.0));
+    let outline =
+        text.spec.outline.as_ref().map_or(0.0, |o| o.width.max(0.0)) * text.outline_paint.reach();
     // A shadow's reach is its furthest over the whole clip, so a shadow
     // that grows does not grow the image and move the glyphs with it.
     outline + text.shadow.iter().fold(0.0f64, |m, s| m.max(s.reach))
@@ -377,7 +378,10 @@ impl TextEngine {
             mask.blur(*blur);
             mask.composite(&mut image, *color);
         }
-        if outline_w > 0.0 {
+        // The outline goes under the fill, so only its outer half shows,
+        // unless it is asked for on top (markup's `paint-order: normal`).
+        let over = text.outline_paint == OutlinePaint::StrokeOver;
+        let outline = (outline_w > 0.0).then(|| {
             let color = spec
                 .outline
                 .as_ref()
@@ -386,10 +390,16 @@ impl TextEngine {
             for g in &placed {
                 self.stroke_into(&mut mask, g, outline_w, 0.0, 0.0);
             }
-            mask.composite(&mut image, color);
+            (mask, color)
+        });
+        if let Some((mask, color)) = outline.as_ref().filter(|_| !over) {
+            mask.composite(&mut image, *color);
         }
         for g in &placed {
             self.fill_into(&mut image, g, fills[g.style].as_ref());
+        }
+        if let Some((mask, color)) = outline.as_ref().filter(|_| over) {
+            mask.composite(&mut image, *color);
         }
         image
     }
@@ -571,32 +581,46 @@ impl TextEngine {
     /// Adds a glyph's stroked outline to a mask. The stroke is centered on
     /// the outline, so `width` is doubled to leave a ring of that width
     /// outside the fill once the fill is drawn on top.
+    ///
+    /// Joins are mitred up to a limit of 4, as browsers stroke text: a
+    /// corner sharper than about 29 degrees is bevelled, any other comes
+    /// to a point. The stroke is built with kurbo, whose joins follow that
+    /// rule; zeno's own stroker bevels every corner under 90 degrees.
     fn stroke_into(&mut self, mask: &mut Mask, g: &PlacedGlyph, width: f32, dx: f32, dy: f32) {
         let Some(font) = self.fonts.get_font(g.font_id, g.weight) else {
             return;
         };
-        let mut scaler = self
-            .scale
-            .builder(font.as_swash())
-            .size(g.font_size)
-            .hint(false)
-            .build();
-        let (fx, fy) = (g.cache_key.x_bin.as_float(), g.cache_key.y_bin.as_float());
-        let Some(rendered) = Render::new(&[Source::Outline, Source::Bitmap(StrikeWith::BestFit)])
-            .format(Format::Alpha)
-            .offset(Vector::new(fx, fy))
-            .style(ZenoStyle::Stroke(Stroke::new(width * 2.0)))
-            .render(&mut scaler, g.glyph_id)
-        else {
+        let swash_font = font.as_swash();
+        let mut builder = self.scale.builder(swash_font).size(g.font_size).hint(false);
+        // A variable font draws its fill at the weight asked for; the
+        // stroke has to follow the same outline.
+        let wght = swash::Tag::from_be_bytes(*b"wght");
+        if let Some(axis) = swash_font.variations().find_by_tag(wght) {
+            let value = f32::from(g.weight.0).clamp(axis.min_value(), axis.max_value());
+            builder = builder
+                .normalized_coords(swash_font.variations().normalized_coords([(wght, value)]));
+        }
+        let mut scaler = builder.build();
+        let Some(outline) = scaler.scale_outline(g.glyph_id) else {
             return;
         };
-        if rendered.content != swash::scale::image::Content::Mask {
+        let stroked = stroke_outline(outline.points(), outline.verbs(), f64::from(width) * 2.0);
+        // The outline is y-up about the baseline; the path comes back
+        // y-down, so its placement is in the image's own direction.
+        let offset = Vector::new(g.cache_key.x_bin.as_float(), -g.cache_key.y_bin.as_float());
+        let (data, placement) = ZenoMask::new(&stroked)
+            .format(Format::Alpha)
+            .origin(Origin::TopLeft)
+            .offset(offset)
+            .render_offset(offset)
+            .render();
+        let left = g.x + placement.left + dx.round() as i32;
+        let top = g.y + placement.top + dy.round() as i32;
+        let w = placement.width as usize;
+        if w == 0 {
             return;
         }
-        let left = g.x + rendered.placement.left + dx.round() as i32;
-        let top = g.y - rendered.placement.top + dy.round() as i32;
-        let w = rendered.placement.width as usize;
-        for (i, v) in rendered.data.iter().enumerate() {
+        for (i, v) in data.iter().enumerate() {
             mask.add(
                 left + (i % w) as i32,
                 top + (i / w) as i32,
@@ -604,6 +628,54 @@ impl TextEngine {
             );
         }
     }
+}
+
+/// A glyph outline stroked `width` wide, centred on the outline, with
+/// mitred joins limited to 4 and butt ends, as a path to fill, turned
+/// y-down.
+fn stroke_outline(points: &[swash::zeno::Point], verbs: &[Verb], width: f64) -> Vec<Command> {
+    use kurbo::{BezPath, Cap, Join, PathEl, Point};
+    let at = |p: swash::zeno::Point| Point::new(f64::from(p.x), f64::from(p.y));
+    let mut path = BezPath::new();
+    let mut i = 0usize;
+    for verb in verbs {
+        match verb {
+            Verb::MoveTo => {
+                path.move_to(at(points[i]));
+                i += 1;
+            }
+            Verb::LineTo => {
+                path.line_to(at(points[i]));
+                i += 1;
+            }
+            Verb::QuadTo => {
+                path.quad_to(at(points[i]), at(points[i + 1]));
+                i += 2;
+            }
+            Verb::CurveTo => {
+                path.curve_to(at(points[i]), at(points[i + 1]), at(points[i + 2]));
+                i += 3;
+            }
+            Verb::Close => path.close_path(),
+        }
+    }
+    let style = kurbo::Stroke::new(width)
+        .with_join(Join::Miter)
+        .with_miter_limit(4.0)
+        .with_caps(Cap::Butt);
+    let stroked = kurbo::stroke(path, &style, &kurbo::StrokeOpts::default(), 0.01);
+    let back = |p: Point| swash::zeno::Point::new(p.x as f32, -p.y as f32);
+    stroked
+        .elements()
+        .iter()
+        .map(|el| match *el {
+            PathEl::MoveTo(p) => Command::MoveTo(back(p)),
+            PathEl::LineTo(p) => Command::LineTo(back(p)),
+            PathEl::QuadTo(a, b) => Command::QuadTo(back(a), back(b)),
+            PathEl::CurveTo(a, b, c) => Command::CurveTo(back(a), back(b), back(c)),
+            PathEl::ClosePath => Command::Close,
+        })
+        .collect()
 }
 
 /// A font face registered from an asset.

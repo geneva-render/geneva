@@ -13,8 +13,10 @@ use geneva_html::layout::Rectangle;
 use geneva_html::style::{Extent, TextFill};
 use geneva_html::{Content, Group, Laid, Measure, Painted, Prepared, Text};
 use geneva_timeline::motion::{NodeMotion, Transform};
-use geneva_timeline::schema::{BlendMode, Shadow, Shadows, TextAlign, TextSource, TextStyle};
-use geneva_timeline::{Animated, FillTrack, ResolvedHtml, ResolvedText};
+use geneva_timeline::schema::{
+    BlendMode, Shadow, Shadows, Stroke, TextAlign, TextSource, TextStyle,
+};
+use geneva_timeline::{Animated, FillTrack, OutlinePaint, ResolvedHtml, ResolvedText};
 use rayon::prelude::*;
 
 use crate::assets::Image;
@@ -38,7 +40,7 @@ struct Context<'a> {
 /// Turns an HTML text style into the text source the engine draws, so
 /// markup takes the same shaping, fallback and colour path as a text clip.
 fn as_text_source(text: &str, style: &Text, max_width: f64) -> ResolvedText {
-    ResolvedText::constant(
+    let mut source = ResolvedText::constant(
         text.to_owned(),
         TextSource {
             text: Some(text.to_owned()),
@@ -55,7 +57,12 @@ fn as_text_source(text: &str, style: &Text, max_width: f64) -> ResolvedText {
             padding: None,
             background: None,
             radius: None,
-            outline: None,
+            // A CSS stroke is centred on the outline; the engine's
+            // outline is the part outside the glyph, half of it.
+            outline: (style.stroke_width > 0.0).then(|| Stroke {
+                color: style.stroke_color().into(),
+                width: style.stroke_width / 2.0,
+            }),
             shadow: (!style.shadow.is_empty()).then(|| {
                 Shadows(
                     style
@@ -72,7 +79,13 @@ fn as_text_source(text: &str, style: &Text, max_width: f64) -> ResolvedText {
             }),
         },
         max_width,
-    )
+    );
+    source.outline_paint = if style.stroke_over_fill {
+        OutlinePaint::StrokeOver
+    } else {
+        OutlinePaint::StrokeUnder
+    };
+    source
 }
 
 /// An HTML text style as the style block a text source carries.
@@ -126,6 +139,7 @@ impl Measure for Context<'_> {
         // the shadow were not there, and so does this.
         let mut plain = style.clone();
         plain.shadow.clear();
+        plain.stroke_width = 0.0;
         let source = as_text_source(text, &plain, f64::from(limit));
         let image = self.text.render(&source, 0.0);
         let size = (image.width as f32, image.height as f32);
@@ -152,6 +166,7 @@ impl Measure for Context<'_> {
         }
         let mut plain = style.clone();
         plain.shadow.clear();
+        plain.stroke_width = 0.0;
         let source = as_text_source("", &plain, f64::from(limit));
         let image = self.text.render_runs(&source, &engine_runs(runs), 0.0);
         let size = (image.width as f32, image.height as f32);
@@ -335,8 +350,13 @@ fn reach_of(painted: &Painted) -> Bounds {
     let reach = |s: &geneva_html::style::Shadow| s.blur.abs() + s.x.abs().max(s.y.abs()) + 1.0;
     let furthest = |list: &[geneva_html::style::Shadow]| list.iter().map(reach).fold(0.0, f64::max);
     let box_shadow = furthest(&painted.paint.shadow);
+    // A stroke reaches half its width out, and a miter at a sharp corner
+    // up to four times that; its shadow reaches as far again.
     let text_shadow = match &painted.content {
-        Content::Text { style, .. } | Content::Rich { style, .. } => furthest(&style.shadow),
+        Content::Text { style, .. } | Content::Rich { style, .. } => {
+            let stroke = style.stroke_width / 2.0 * OutlinePaint::StrokeUnder.reach();
+            stroke + furthest(&style.shadow) + f64::from(u8::from(stroke > 0.0))
+        }
         _ => 0.0,
     };
     let grow = box_shadow.max(text_shadow);

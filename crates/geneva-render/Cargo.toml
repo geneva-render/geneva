@@ -14,6 +14,7 @@ geneva-color = { workspace = true }
 geneva-html = { workspace = true }
 geneva-timeline = { workspace = true }
 image = { workspace = true }
+kurbo = { workspace = true }
 rayon = { workspace = true }
 swash = { workspace = true }
 thiserror = { workspace = true }

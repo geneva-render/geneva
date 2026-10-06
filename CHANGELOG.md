@@ -8,6 +8,21 @@ versions changed the format freely.
 
 ## Unreleased
 
+### Added
+
+- **Text stroke in markup.** `-webkit-text-stroke` (and its `-width` and
+  `-color` longhands) and `paint-order`, inherited like `color`: a
+  stroke centred on the outline with mitred joins, over the fill by
+  default or under it with `paint-order: stroke fill`, so half its width
+  shows. It does not change layout.
+
+### Changed
+
+- **A text outline mitres its sharp corners as browsers do.** Joins
+  sharper than 90 degrees were bevelled; now every join is mitred up to
+  a miter limit of 4, so the tip of an A or a W comes to a point. The
+  stroke also follows a variable font's weight.
+
 ### Fixed
 
 - **A source whose length ends a fraction of a frame past its last frame

@@ -280,6 +280,14 @@ pub struct Text {
     /// `background-clip: text`. It stands in for `color` while it is set.
     /// Boxed so a style with no fill stays small.
     pub fill: Option<Box<TextFill>>,
+    /// `-webkit-text-stroke-width` in pixels: a stroke centred on the
+    /// glyph outline, so half of it lies outside the glyph.
+    pub stroke_width: f64,
+    /// `-webkit-text-stroke-color`; `None` is `currentcolor`.
+    pub stroke_color: Option<Color>,
+    /// Whether the stroke is painted over the fill, as `paint-order:
+    /// normal` does; `stroke fill` puts it underneath.
+    pub stroke_over_fill: bool,
 }
 
 impl Default for Text {
@@ -296,7 +304,18 @@ impl Default for Text {
             pre: false,
             shadow: Vec::new(),
             fill: None,
+            stroke_width: 0.0,
+            stroke_color: None,
+            stroke_over_fill: true,
         }
+    }
+}
+
+impl Text {
+    /// The stroke's colour, `currentcolor` resolved.
+    #[must_use]
+    pub fn stroke_color(&self) -> Color {
+        self.stroke_color.unwrap_or(self.color)
     }
 }
 
@@ -324,6 +343,8 @@ pub struct Overrides {
     pub blur: Option<f64>,
     /// `color`.
     pub color: Option<Color>,
+    /// `-webkit-text-stroke-color`.
+    pub stroke_color: Option<Color>,
     /// `text-shadow`: the list, empty for `none`.
     pub text_shadow: Option<Vec<Shadow>>,
     /// `letter-spacing`, in pixels.
@@ -644,6 +665,11 @@ fn text_override(text: &mut Text, from: &Text, o: &Overrides) {
             text.color = c;
         }
     }
+    if let Some(c) = o.stroke_color {
+        if text.stroke_color() == from.stroke_color() {
+            text.stroke_color = Some(c);
+        }
+    }
     if let Some(sh) = &o.text_shadow {
         if text.shadow == from.shadow {
             text.shadow.clone_from(sh);
@@ -934,6 +960,20 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
             };
         }
         "white-space" => c.text.pre = matches!(l, "pre" | "pre-wrap" | "break-spaces"),
+        "-webkit-text-stroke" => {
+            let (mut width, mut stroke) = (0.0, None);
+            for token in parts(v) {
+                match stroke_width(token, em) {
+                    Ok(w) => width = w,
+                    Err(_) => stroke = stroke_color(token)?,
+                }
+            }
+            c.text.stroke_width = width;
+            c.text.stroke_color = stroke;
+        }
+        "-webkit-text-stroke-width" => c.text.stroke_width = stroke_width(v.trim(), em)?,
+        "-webkit-text-stroke-color" => c.text.stroke_color = stroke_color(v.trim())?,
+        "paint-order" => c.text.stroke_over_fill = fill_before_stroke(l)?,
         _ => {
             return Err(
                 "is not a property geneva draws; see the timeline reference for the list"
@@ -1130,6 +1170,49 @@ fn length_percentage_auto(value: &str, em: f64) -> Result<LengthPercentageAuto, 
 
 fn color(value: &str) -> Result<Color, String> {
     Color::from_str(value.trim()).map_err(|e| format!("{value:?} is not a colour: {e}"))
+}
+
+/// A stroke width: a length, or `thin`, `medium` or `thick` (1, 3 and
+/// 5 px, as browsers draw them).
+fn stroke_width(token: &str, em: f64) -> Result<f64, String> {
+    match token.to_ascii_lowercase().as_str() {
+        "thin" => Ok(1.0),
+        "medium" => Ok(3.0),
+        "thick" => Ok(5.0),
+        _ => Ok(pixels(token, em)?.max(0.0)),
+    }
+}
+
+/// A stroke colour; `currentcolor` is `None`, the text's own colour.
+fn stroke_color(token: &str) -> Result<Option<Color>, String> {
+    if token.eq_ignore_ascii_case("currentcolor") {
+        Ok(None)
+    } else {
+        color(token).map(Some)
+    }
+}
+
+/// Whether `paint-order` puts the fill before the stroke. The keywords
+/// listed come first in the order given and the rest follow in the
+/// default order, fill, stroke, markers; markers draw nothing on text.
+fn fill_before_stroke(l: &str) -> Result<bool, String> {
+    if l.trim() == "normal" {
+        return Ok(true);
+    }
+    let mut order: Vec<&str> = Vec::new();
+    for token in l.split_whitespace() {
+        if !matches!(token, "fill" | "stroke" | "markers") || order.contains(&token) {
+            return unsupported(l, "normal, or fill, stroke and markers in some order");
+        }
+        order.push(token);
+    }
+    for token in ["fill", "stroke", "markers"] {
+        if !order.contains(&token) {
+            order.push(token);
+        }
+    }
+    let at = |k: &str| order.iter().position(|t| *t == k);
+    Ok(at("fill") < at("stroke"))
 }
 
 fn family(value: &str) -> String {
@@ -1710,6 +1793,40 @@ mod tests {
             styles[card].layout.padding.top,
             LengthPercentage::length(4.0)
         );
+    }
+
+    #[test]
+    fn a_text_stroke_inherits_and_paint_order_puts_it_under() {
+        let (doc, styles, problems) = styled(
+            "<style>.a { color: #fff; font-size: 40px; -webkit-text-stroke: 0.1em black } \
+             .b { -webkit-text-stroke-color: currentcolor; color: #f00; paint-order: stroke fill } \
+             .c { -webkit-text-stroke: thick; paint-order: markers } \
+             .d { -webkit-text-stroke: #0f0 2px; paint-order: stroke }</style>\
+             <div class=a><p>x</p><p class=b>x</p><p class=c>x</p><p class=d>x</p></div>",
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let a = doc.children(doc.root)[0];
+        let ps = doc.children(a);
+        // Inherited from .a, as `color` is; em is the element's size.
+        assert_eq!(styles[a].text.stroke_width, 4.0);
+        assert_eq!(styles[ps[0]].text.stroke_width, 4.0);
+        assert_eq!(styles[ps[0]].text.stroke_color().to_hex(), "#000000");
+        assert!(styles[ps[0]].text.stroke_over_fill);
+        // currentcolor follows the element's own colour.
+        assert_eq!(styles[ps[1]].text.stroke_color().to_hex(), "#ff0000");
+        assert!(!styles[ps[1]].text.stroke_over_fill);
+        // A shorthand with no colour resets it to currentcolor; markers
+        // first leaves fill before stroke.
+        assert_eq!(styles[ps[2]].text.stroke_width, 5.0);
+        assert_eq!(styles[ps[2]].text.stroke_color().to_hex(), "#ffffff");
+        assert!(styles[ps[2]].text.stroke_over_fill);
+        // Colour first, width second; `stroke` alone puts it first.
+        assert_eq!(styles[ps[3]].text.stroke_width, 2.0);
+        assert_eq!(styles[ps[3]].text.stroke_color().to_hex(), "#00ff00");
+        assert!(!styles[ps[3]].text.stroke_over_fill);
+
+        let (_, _, problems) = styled("<style>p { paint-order: fill fill }</style><p>x</p>");
+        assert_eq!(problems.len(), 1, "{problems:?}");
     }
 
     #[test]

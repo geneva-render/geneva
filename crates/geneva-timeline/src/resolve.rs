@@ -456,6 +456,39 @@ pub struct ResolvedText {
     pub highlight_fill: Option<FillTrack>,
     /// The shadows, front to back as listed; empty for none.
     pub shadow: Vec<ShadowTrack>,
+    /// How the outline is painted: a text source's outline, or markup's
+    /// `-webkit-text-stroke` under or over the fill.
+    pub outline_paint: OutlinePaint,
+}
+
+/// How a text's outline is painted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OutlinePaint {
+    /// A text source's `outline`: under the fill, its `width` the ring
+    /// outside the glyph. Its image leaves that width around the text,
+    /// so the tip of a sharp corner's miter is cut.
+    #[default]
+    Outline,
+    /// A CSS stroke under the fill (`paint-order: stroke fill`): the
+    /// same ring, with room for miters as long as a browser draws them.
+    StrokeUnder,
+    /// A CSS stroke over the fill (`paint-order: normal`): it covers the
+    /// glyph's edge as well as the ring outside.
+    StrokeOver,
+}
+
+impl OutlinePaint {
+    /// How far a sharp corner's miter reaches, as a multiple of the
+    /// ring's width. Browsers stroke text with a miter limit of 4, so a
+    /// join reaches at most 4 half-widths out; a text source keeps the
+    /// ring alone.
+    #[must_use]
+    pub fn reach(self) -> f64 {
+        match self {
+            Self::Outline => 1.0,
+            Self::StrokeUnder | Self::StrokeOver => 4.0,
+        }
+    }
 }
 
 impl ResolvedText {
@@ -522,6 +555,7 @@ impl ResolvedText {
             fill,
             highlight_fill,
             shadow,
+            outline_paint: OutlinePaint::Outline,
         }
     }
 
@@ -3406,6 +3440,7 @@ fills the frame",
             fill,
             highlight_fill,
             shadow,
+            outline_paint: OutlinePaint::Outline,
         }
     }
 
@@ -3593,8 +3628,8 @@ letter-spacing, a size or background-position",
                         "E442",
                         path.clone(),
                         format!(
-                            "{:?} sets a property the clip cannot play: filter, color, \
-text-shadow, letter-spacing, a size or background-position",
+                            "{:?} sets a property the clip cannot play: only transform and \
+opacity move the whole clip",
                             a.name
                         ),
                     )

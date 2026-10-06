@@ -599,7 +599,7 @@ reported by name rather than drawn differently.
 | Flex | `flex-direction`, `flex-wrap`, `justify-content`, `align-items`, `align-self`, `align-content`, `gap`, `row-gap`, `column-gap`, `flex-grow`, `flex-shrink`, `flex-basis`, `flex` |
 | Border | `border`, `border-top`, `border-right`, `border-bottom`, `border-left`, `border-width`, `border-color`, `border-style` (`solid`, `none`), `border-radius` |
 | Paint | `background`, `background-color` (colour or gradient), `background-size`, `background-position`, `background-clip` (`text`, `border-box`, `-webkit-` too), `opacity`, `mix-blend-mode` (`normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `difference`, `soft-light`), `filter` (`blur()`), `clip-path` (`polygon()`, `none`), `box-shadow` (list; no `inset`) |
-| Text | `color`, `-webkit-text-fill-color` (as `color`), `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space`, `text-shadow` (list) |
+| Text | `color`, `-webkit-text-fill-color` (as `color`), `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space`, `text-shadow` (list), `-webkit-text-stroke` and its `-width` and `-color` longhands, `paint-order` |
 | Motion | `animation`, `animation-name`, `-duration`, `-delay`, `-timing-function`, `-iteration-count`, `-direction`, `-fill-mode` |
 
 `align-items: baseline` and `align-self: baseline` line up the bottoms of the boxes, not their text baselines.
@@ -624,6 +624,7 @@ property are named, and the rest of the document is drawn. A `<style>` rule matc
 - `z-index` orders positioned boxes and flex items (negative under the flow); elsewhere W454.
 - A box with `opacity` < 1, `filter`, `clip-path`, `mix-blend-mode` or an animation is a group: its subtree is painted into its own buffer and composited whole (a stacking context).
 - A group's buffer is capped at nine times the frame's area, any shape (a news crawl fits); larger is cut back with W455.
+- `-webkit-text-stroke` is centred on the glyph outline, with mitred joins (limit 4) and butt ends, as browsers draw it; it inherits, and its colour defaults to `currentcolor`. With `paint-order: normal` it is drawn over the fill and covers the glyph's edge; `paint-order: stroke fill` (or `stroke`) puts it underneath, so half its width shows. It does not change layout. Inside a run of inline elements the whole run takes the stroke of the element holding it.
 - No static `transform`: transforms come from animations (W450 otherwise). Hold a pose with a one-keyframe animation.
 - `body` and `html` select the clip's box; unstyled, it marks nothing.
 
@@ -677,7 +678,7 @@ group composited with the transform, opacity and blur of the moment.
 
 - Several animations stack in written order; a `to`-only rule starts from what the rules under it, or the style, leave.
 - Longhands read, comma lists included: `animation-delay`, `-duration`, `-iteration-count`, `-direction`, `-fill-mode`.
-- Keyframe properties: `transform`, `opacity`, `filter: blur()`, `color`, `text-shadow`, `letter-spacing` (`px` or `em`), `width`, `height`, `max-width`, `min-width`, `background-position`, `clip-path`; anything else E442. `color` and `text-shadow` reach inheriting descendants.
+- Keyframe properties: `transform`, `opacity`, `filter: blur()`, `color`, `-webkit-text-stroke-color`, `text-shadow`, `letter-spacing` (`px` or `em`), `width`, `height`, `max-width`, `min-width`, `background-position`, `clip-path`; anything else E442. `color`, `-webkit-text-stroke-color` and `text-shadow` reach inheriting descendants.
 - Polygons with the same point count mix point by point; otherwise a step at halfway. A length and a percentage do not mix (step), except zero.
 
 **Cost**
