@@ -276,6 +276,20 @@ pub fn choose_renderer(
     }
 }
 
+/// How many frames may wait between the renderer and the encoder: eight,
+/// or fewer under a memory budget, at most a sixteenth of it in frames
+/// of this size (a frame is counted at three bytes a pixel, the most a
+/// queued picture takes), and never fewer than two.
+#[cfg(feature = "media")]
+fn queue_depth(comp: &Composition) -> usize {
+    let frame = u64::from(comp.width) * u64::from(comp.height) * 3;
+    geneva_render::limits::memory_budget().map_or(8, |b| {
+        usize::try_from(b / 16 / frame.max(1))
+            .unwrap_or(8)
+            .clamp(2, 8)
+    })
+}
+
 /// What a render produced.
 /// How `render` produced its output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1748,7 +1762,7 @@ mod imp {
         comp: &'env Composition,
         root: &'env Path,
     ) -> Feed<'scope> {
-        let (tx, rx) = std::sync::mpsc::sync_channel::<Msg>(8);
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Msg>(super::queue_depth(comp));
         let (spare_tx, spare_rx) = std::sync::mpsc::channel();
         let audio_encoder = sample_rate.and_then(|_| encoder.take_audio_encoder());
         let worker = scope.spawn(move || -> Result<Encoder, geneva_media::MediaError> {
@@ -1917,7 +1931,7 @@ mod imp {
         let join_secs = join_started.elapsed().as_secs_f64();
         let _ = std::fs::remove_dir_all(&dir);
         let report = report.map_err(media_err)?;
-        let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+        let cores = geneva_render::limits::threads();
         let mut notes = Vec::new();
         if let Some(reason) = direct_reason {
             notes.push(reason);
@@ -1991,7 +2005,7 @@ mod imp {
         // As in the single run: frames are produced here while the
         // encoder runs on its own thread a few frames behind, and buffers
         // come back to be filled again.
-        let (tx, rx) = std::sync::mpsc::sync_channel::<Msg>(8);
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Msg>(super::queue_depth(comp));
         let (spare_tx, spare_rx) = std::sync::mpsc::channel::<geneva_media::convert::Planes>();
         let mut pool = geneva_media::convert::PlanePool::default();
         std::thread::scope(|scope| -> Result<(), geneva_media::MediaError> {
@@ -2543,7 +2557,7 @@ mod imp {
                     && v.bitrate_kbps.is_none()
                     && container != geneva_timeline::schema::Container::ImageSequence =>
             {
-                let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as u32);
+                let cores = geneva_render::limits::threads() as u32;
                 geneva_media::chunks::plan_chunks(
                     comp,
                     v.codec,
@@ -2640,7 +2654,7 @@ mod imp {
         // its own thread, a few frames behind; the audio is mixed and
         // encoded on a third thread and its packets are interleaved by the
         // encoder thread as they arrive.
-        let (tx, rx) = std::sync::mpsc::sync_channel::<Msg>(8);
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Msg>(super::queue_depth(comp));
         // Encoded frames come back here to be filled again, so the run
         // allocates as many frame buffers as are in flight, not one per
         // picture.

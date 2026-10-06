@@ -893,7 +893,7 @@ impl GroupCache {
     /// Lets go of pictures not wanted this frame, the longest unused
     /// first, until `bytes` more fit in the budget. Whether they now do.
     fn make_room(&mut self, bytes: usize) -> bool {
-        while self.bytes + bytes > BUDGET {
+        while self.bytes + bytes > crate::limits::cache_budget(BUDGET, 0.125) {
             let Some(oldest) = self
                 .entries
                 .iter()

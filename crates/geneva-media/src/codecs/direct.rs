@@ -348,7 +348,7 @@ impl Converter {
                 // path is the generic one, which can run on several threads.
                 flags |= scaling::Flags::FULL_CHR_H_INT | scaling::Flags::FULL_CHR_H_INP;
             }
-            let threads = std::thread::available_parallelism().map_or(1, usize::from);
+            let threads = geneva_render::limits::threads();
             let mut scaler = ffi::ThreadedScaler::new(
                 raw.format(),
                 (raw.width(), raw.height()),

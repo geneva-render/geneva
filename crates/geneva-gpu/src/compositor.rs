@@ -1803,7 +1803,8 @@ impl Compositor {
     /// Drops kept pictures not drawn this frame, least recently drawn
     /// first, until the rest fit the budget.
     fn evict(&mut self) {
-        while self.kept_bytes > CACHE_BUDGET {
+        let budget = geneva_render::limits::cache_budget(CACHE_BUDGET as usize, 0.125) as u64;
+        while self.kept_bytes > budget {
             let Some((&key, _)) = self
                 .kept
                 .iter()

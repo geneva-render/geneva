@@ -75,8 +75,8 @@ What each command adds to those three keys:
 | Command | Adds |
 | --- | --- |
 | `validate` | nothing |
-| `render`, and the verbs | `output`, `content_type`, `mode`, `frames`, `duration`, `seconds` |
-| `render` on a document with `outputs` | `directory`, `outputs`, `frames`, `duration`, `seconds` |
+| `render`, and the verbs | `output`, `content_type`, `mode`, `frames`, `duration`, `seconds`, `threads`, `peak_memory` (bytes; `null` where the system does not say, outside Linux) |
+| `render` on a document with `outputs` | `directory`, `outputs`, `frames`, `duration`, `seconds`, `threads`, `peak_memory` |
 | `frame` on a timeline | `output`, `content_type`, `time`, `frame`, `width`, `height` |
 | `frame` on a media file | as for `outputs`, with one entry |
 | `subtitles --extract` | `output`, `content_type`, `cues` |

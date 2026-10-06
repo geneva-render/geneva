@@ -15,6 +15,12 @@ versions changed the format freely.
   stroke centred on the outline with mitred joins, over the fill by
   default or under it with `paint-order: stroke fill`, so half its width
   shows. It does not change layout.
+- **`--threads N` and `--memory-budget SIZE`** (or `GENEVA_THREADS` and
+  `GENEVA_MEMORY_BUDGET`), so jobs sharing a host each keep to a share.
+  The thread count reaches every pool: decoders, the scaler, rendering,
+  x264 and the other encoders, and the number of chunks encoded at
+  once. The budget sizes the caches and the queue of frames waiting for
+  the encoder. The render report gives `threads` and `peak_memory`.
 
 ### Changed
 

@@ -476,9 +476,10 @@ fn open_video_encoder(
     if global_header {
         vctx.set_flags(codec::Flags::GLOBAL_HEADER);
     }
-    // Software encoders spread work over all cores unless told a share;
-    // the count is theirs to pick from the machine.
-    ffi::set_threads(&mut vctx, settings.threads.unwrap_or(0));
+    // Software encoders spread work over all cores unless told a share,
+    // or the process is capped; the count is then theirs to pick.
+    let cap = geneva_render::limits::threads_set().map(|n| n as u32);
+    ffi::set_threads(&mut vctx, settings.threads.or(cap).unwrap_or(0));
     let mut venc = vctx
         .encoder()
         .video()
@@ -889,7 +890,9 @@ fn open_video_track(
                 bframes: None,
                 tune: settings.tune.map(VideoTune::as_str),
                 fixed_keyframes: settings.fixed_keyframes,
-                threads: settings.threads,
+                threads: settings
+                    .threads
+                    .or(geneva_render::limits::threads_set().map(|n| n as u32)),
             };
             match X264Encoder::open(&x264) {
                 Ok(enc) => {

@@ -17,6 +17,7 @@ mod cpu;
 mod fill;
 mod frame;
 mod html;
+pub mod limits;
 mod painter;
 mod placement;
 mod text;

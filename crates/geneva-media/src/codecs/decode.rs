@@ -69,7 +69,12 @@ impl StreamDecoder {
         };
         let mut ctx = codec::context::Context::from_parameters(stream.parameters())
             .map_err(|e| codec_error(format!("{}: decoder setup", path.display()), e))?;
-        ffi::set_threads(&mut ctx, DECODER_THREADS.with(std::cell::Cell::get));
+        // A share set for this thread, else the process's cap, else all.
+        let threads = match DECODER_THREADS.with(std::cell::Cell::get) {
+            0 => geneva_render::limits::threads_set().map_or(0, |n| n as u32),
+            n => n,
+        };
+        ffi::set_threads(&mut ctx, threads);
         Ok((
             Self {
                 path: path.to_owned(),

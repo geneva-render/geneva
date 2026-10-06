@@ -1950,3 +1950,30 @@ fn a_diagnostic_from_a_real_run_can_be_explained() {
         .success()
         .stdout(predicate::str::contains(code));
 }
+
+#[test]
+#[cfg(feature = "media")]
+fn threads_and_a_memory_budget_are_taken_and_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("solid.mp4");
+    let report = run_json(
+        &["--threads", "2", "--memory-budget", "512M", "render"],
+        &[
+            examples().join("solid.json").as_path(),
+            std::path::Path::new("-o"),
+            &out,
+        ],
+    );
+    assert_eq!(report["ok"], true, "{report}");
+    assert_eq!(report["threads"], 2);
+    if cfg!(target_os = "linux") {
+        assert!(report["peak_memory"].as_u64().unwrap() > 0, "{report}");
+    }
+    let bad = geneva()
+        .args(["--memory-budget", "lots", "validate"])
+        .arg(examples().join("solid.json"))
+        .output()
+        .unwrap();
+    assert_eq!(bad.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("is not a size"));
+}
