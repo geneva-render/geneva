@@ -223,10 +223,7 @@ impl<A: AssetSource> CpuRenderer<A> {
         };
         let mut items: Vec<(Paint<'static>, Placement, f32, BlendMode)> = Vec::new();
         for layer in layers {
-            for (i, clip) in layer.clips.iter().enumerate() {
-                if clip.start > t || t >= clip.end {
-                    continue;
-                }
+            for (i, clip) in layer.visible_at(t) {
                 let local = (t - clip.start).to_f64();
                 let mut opacity = clip.opacity.sample(local).clamp(0.0, 1.0);
                 opacity *= transition_gain(layer, i, t);
@@ -354,14 +351,9 @@ impl<A: AssetSource> CpuRenderer<A> {
         frame: &mut Frame,
     ) -> Result<(), RenderError> {
         frame.reset(width, height, background);
-        let visible = layers.iter().flat_map(|layer| {
-            layer
-                .clips
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| c.start <= t && t < c.end)
-                .map(move |(i, c)| (layer, i, c))
-        });
+        let visible = layers
+            .iter()
+            .flat_map(|layer| layer.visible_at(t).map(move |(i, c)| (layer, i, c)));
         for (layer, i, clip) in visible {
             let local = (t - clip.start).to_f64();
             let mut opacity = clip.opacity.sample(local).clamp(0.0, 1.0);

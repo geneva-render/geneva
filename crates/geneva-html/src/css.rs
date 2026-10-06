@@ -202,6 +202,38 @@ impl fmt::Display for CssError {
     }
 }
 
+/// How many parsed stylesheets [`parse_shared`] keeps.
+const SHARED_KEPT: usize = 64;
+
+/// [`parse_stylesheet`], remembered: the same text parsed again comes back
+/// from a process-wide cache of the last [`SHARED_KEPT`] sheets. A
+/// timeline of thousands of captions repeats one `<style>` in every clip,
+/// or links one stylesheet from every clip, and each is then parsed once.
+pub fn parse_shared(source: &str) -> Result<std::sync::Arc<Stylesheet>, CssError> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::sync::{Arc, Mutex, OnceLock};
+    type Kept = Vec<(u64, String, Result<Arc<Stylesheet>, CssError>)>;
+    static KEPT: OnceLock<Mutex<Kept>> = OnceLock::new();
+    let mut hasher = DefaultHasher::new();
+    source.hash(&mut hasher);
+    let key = hasher.finish();
+    let kept = KEPT.get_or_init(Mutex::default);
+    if let Ok(list) = kept.lock() {
+        if let Some((_, _, parsed)) = list.iter().find(|(k, s, _)| *k == key && s == source) {
+            return parsed.clone();
+        }
+    }
+    let parsed = parse_stylesheet(source).map(Arc::new);
+    if let Ok(mut list) = kept.lock() {
+        if list.len() >= SHARED_KEPT {
+            drop(list.remove(0));
+        }
+        list.push((key, source.to_owned(), parsed.clone()));
+    }
+    parsed
+}
+
 /// Parses a stylesheet. At-rules are refused by name rather than skipped,
 /// so nothing silently does nothing.
 pub fn parse_stylesheet(source: &str) -> Result<Stylesheet, CssError> {

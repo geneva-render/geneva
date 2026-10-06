@@ -18,12 +18,25 @@ versions changed the format freely.
 
 ### Changed
 
+- **A timeline with thousands of markup clips renders in the memory of
+  the few on screen.** Each markup clip's prepared document and picture
+  were kept for the whole render, about 33 MB a clip at 1080p; they are
+  now dropped once the clip has ended. The clips a frame shows are found
+  by binary search instead of a scan of every clip, a stylesheet shared
+  by many clips (repeated as `<style>` or linked) is read and parsed
+  once, and `validate` looks each font family up once.
+- **A markup warning repeated by many clips is reported once**, with the
+  number of other clips that share it.
 - **A text outline mitres its sharp corners as browsers do.** Joins
   sharper than 90 degrees were bevelled; now every join is mitred up to
   a miter limit of 4, so the tip of an A or a W comes to a point. The
   stroke also follows a variable font's weight.
 
 ### Fixed
+
+- **`validate` without `--probe` looked for linked stylesheets in the
+  working directory** rather than under the asset root, so a document
+  checked from elsewhere reported E452 for a sheet that was there.
 
 - **A source whose length ends a fraction of a frame past its last frame
   failed to render.** 73 frames at 24 fps last 3.0416666... s; a verb

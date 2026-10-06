@@ -113,13 +113,9 @@ impl Composition {
 
     /// Clips visible at time `t`, bottom layer first, in layer order.
     pub fn clips_at(&self, t: Ratio) -> impl Iterator<Item = (&ResolvedLayer, &ResolvedClip)> {
-        self.layers.iter().flat_map(move |layer| {
-            layer
-                .clips
-                .iter()
-                .filter(move |c| c.start <= t && t < c.end)
-                .map(move |c| (layer, c))
-        })
+        self.layers
+            .iter()
+            .flat_map(move |layer| layer.visible_at(t).map(move |(_, c)| (layer, c)))
     }
 }
 
@@ -141,6 +137,56 @@ pub struct ResolvedLayer {
     pub id: String,
     /// Clips in time order.
     pub clips: Vec<ResolvedClip>,
+    /// The longest clip's length, worked out the first time a frame
+    /// asks which clips it shows; the clips are not changed after that.
+    longest: std::sync::OnceLock<Ratio>,
+}
+
+impl ResolvedLayer {
+    /// A layer of `clips`, which are in time order.
+    #[must_use]
+    pub fn new(id: String, clips: Vec<ResolvedClip>) -> Self {
+        Self {
+            id,
+            clips,
+            longest: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// The indices of the clips that may show at `t`, found without
+    /// looking at the rest. Clips are in time order, so one still
+    /// showing at `t` started within the longest clip's length of it: a
+    /// layer with thousands of captions costs two binary searches a
+    /// frame.
+    fn around(&self, t: Ratio) -> std::ops::Range<usize> {
+        let longest = *self.longest.get_or_init(|| {
+            self.clips
+                .iter()
+                .map(|c| c.end - c.start)
+                .max()
+                .unwrap_or(Ratio::ZERO)
+        });
+        let from = t - longest;
+        let lo = self.clips.partition_point(|c| c.start < from);
+        let hi = self.clips.partition_point(|c| c.start <= t);
+        lo..hi.max(lo)
+    }
+
+    /// The clips visible at `t` (`start <= t < end`), in order, with
+    /// their index in the layer.
+    pub fn visible_at(&self, t: Ratio) -> impl Iterator<Item = (usize, &ResolvedClip)> {
+        self.around(t)
+            .map(move |i| (i, &self.clips[i]))
+            .filter(move |(_, c)| c.start <= t && t < c.end)
+    }
+
+    /// The clips with `start <= t <= end`, visible or ending at `t`, in
+    /// order: what a transition closing at `t` is measured from.
+    pub fn touching(&self, t: Ratio) -> impl Iterator<Item = &ResolvedClip> {
+        self.around(t)
+            .map(move |i| &self.clips[i])
+            .filter(move |c| c.start <= t && t <= c.end)
+    }
 }
 
 /// A clip with exact timing and sampleable properties.
@@ -762,11 +808,43 @@ pub fn resolve_with(
         used_rules: BTreeSet::new(),
         rules: BTreeMap::new(),
         from_markup: None,
+        linked_texts: std::collections::HashMap::new(),
         composition_stack: Vec::new(),
     };
     let comp = r.run();
-    let has_errors = r.diags.iter().any(Diagnostic::is_error);
-    (if has_errors { None } else { Some(comp) }, r.diags)
+    let diags = collapse_repeats(r.diags);
+    let has_errors = diags.iter().any(Diagnostic::is_error);
+    (if has_errors { None } else { Some(comp) }, diags)
+}
+
+/// Warnings about markup that come out word for word from many clips, as
+/// they do when every caption repeats one `<style>`, said once: the first
+/// clip's path, and how many others share it.
+fn collapse_repeats(diags: Vec<Diagnostic>) -> Vec<Diagnostic> {
+    const PER_CLIP: [&str; 4] = ["W405", "W450", "W452", "W454"];
+    let mut seen: std::collections::HashMap<(&'static str, String), usize> =
+        std::collections::HashMap::new();
+    let mut out: Vec<Diagnostic> = Vec::with_capacity(diags.len());
+    let mut more: Vec<usize> = Vec::new();
+    for d in diags {
+        if PER_CLIP.contains(&d.code) {
+            let key = (d.code, d.message.clone());
+            if let Some(&first) = seen.get(&key) {
+                more[first] += 1;
+                continue;
+            }
+            seen.insert(key, out.len());
+        }
+        out.push(d);
+        more.push(0);
+    }
+    for (d, n) in out.iter_mut().zip(more) {
+        if n > 0 {
+            let clips = if n == 1 { "clip" } else { "clips" };
+            d.message = format!("{} (the same in {n} more {clips})", d.message);
+        }
+    }
+    out
 }
 
 struct Resolver<'a> {
@@ -786,6 +864,9 @@ struct Resolver<'a> {
     from_markup: Option<Markup>,
     /// Names of the compositions currently being resolved, for cycle checks.
     composition_stack: Vec<String>,
+    /// Stylesheets markup links to, read once by path: thousands of
+    /// captions linking one sheet read the file once.
+    linked_texts: std::collections::HashMap<String, Option<String>>,
 }
 
 /// What a clip's markup said about motion.
@@ -2634,7 +2715,7 @@ transitions in over the same join"
             });
             cursor = end;
         }
-        (ResolvedLayer { id, clips }, any_open)
+        (ResolvedLayer::new(id, clips), any_open)
     }
 
     /// Resolves a clip's source. `frame` is the frame percentages refer to
@@ -3862,7 +3943,15 @@ be; write the distance in pixels, or give the source a size",
                 let Some(path) = self.markup_path(&base, &href, spath, "stylesheet") else {
                     continue;
                 };
-                match self.info.read(&path) {
+                let read = match self.linked_texts.get(&path) {
+                    Some(known) => known.clone(),
+                    None => {
+                        let text = self.info.read(&path);
+                        self.linked_texts.insert(path.clone(), text.clone());
+                        text
+                    }
+                };
+                match read {
                     Some(text) => {
                         linked.insert(href, text);
                     }

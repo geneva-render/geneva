@@ -1024,3 +1024,71 @@ fn a_clip_that_says_what_it_wants_is_left_alone() {
         );
     }
 }
+
+#[test]
+fn the_clips_a_frame_shows_are_found_without_a_full_scan() {
+    // Captions with gaps, captions back to back, one long clip among
+    // short ones, and a layer of crossfades: at every frame the windowed
+    // lookup gives what a scan of every clip gives.
+    let mut captions = Vec::new();
+    for i in 0..300 {
+        let start = format!("{:.1}", f64::from(i) * 0.4);
+        let duration = if i % 7 == 0 { 0.4 } else { 0.3 };
+        captions.push(format!(
+            r#"{{"source":{{"kind":"solid","color":"red"}},"start":"{start}s","duration":"{duration}s"}}"#
+        ));
+    }
+    captions.push(
+        r#"{"source":{"kind":"solid","color":"red"},"start":"121s","duration":"20s"}"#.to_owned(),
+    );
+    let fades: Vec<String> = (0..40)
+        .map(|i| {
+            if i == 0 {
+                r#"{"source":{"kind":"solid","color":"blue"},"duration":"3s"}"#.to_owned()
+            } else {
+                r#"{"source":{"kind":"solid","color":"blue"},"duration":"3s","transition":{"kind":"crossfade","duration":"1s"}}"#.to_owned()
+            }
+        })
+        .collect();
+    let text = format!(
+        r#"{{"geneva":"1.1","output":{{"width":64,"height":64,"fps":10,"duration":"150s"}},
+           "layers":[{{"clips":[{}]}},{{"clips":[{}]}}]}}"#,
+        captions.join(","),
+        fades.join(",")
+    );
+    let l = load(&text);
+    assert!(l.is_ok(), "{:#?}", l.diagnostics);
+    let comp = l.composition.unwrap();
+    for n in 0..comp.frame_count() {
+        let t = comp.frame_time(n);
+        for layer in &comp.layers {
+            let fast: Vec<usize> = layer.visible_at(t).map(|(i, _)| i).collect();
+            let slow: Vec<usize> = layer
+                .clips
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.start <= t && t < c.end)
+                .map(|(i, _)| i)
+                .collect();
+            assert_eq!(fast, slow, "at {t}s");
+        }
+    }
+}
+
+#[test]
+fn a_warning_every_caption_repeats_is_said_once() {
+    let clip = r#"{"source":{"kind":"html","html":"<style>.nope { color: red }</style><p>hi</p>"},"duration":"1s"}"#;
+    let text = format!(
+        r#"{{"geneva":"1.1","output":{{"width":64,"height":64,"fps":10}},
+           "layers":[{{"clips":[{clip},{clip},{clip}]}}]}}"#
+    );
+    let l = load(&text);
+    let w452: Vec<&Diagnostic> = l.diagnostics.iter().filter(|d| d.code == "W452").collect();
+    assert_eq!(w452.len(), 1, "{:#?}", l.diagnostics);
+    assert_eq!(w452[0].path, "/layers/0/clips/0/source");
+    assert!(
+        w452[0].message.ends_with("(the same in 2 more clips)"),
+        "{}",
+        w452[0].message
+    );
+}

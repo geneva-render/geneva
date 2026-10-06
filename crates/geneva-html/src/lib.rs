@@ -231,27 +231,29 @@ pub fn prepare(
 ) -> Result<Prepared, Error> {
     let doc = dom::parse(html).map_err(Error::Html)?;
     let mut sheet = css::Stylesheet::default();
+    // Sheets are parsed through a shared cache: a timeline's captions
+    // repeat the same few, and each is parsed once.
     for href in &doc.links {
         if let Some(text) = linked.get(href) {
-            let more = css::parse_stylesheet(text).map_err(Error::Css)?;
-            sheet.rules.extend(more.rules);
-            sheet.keyframes.extend(more.keyframes);
+            let more = css::parse_shared(text).map_err(Error::Css)?;
+            sheet.rules.extend(more.rules.iter().cloned());
+            sheet.keyframes.extend(more.keyframes.clone());
         }
     }
     // Where this document's own <style> rules sit in the sheet, so that a
     // rule someone wrote here can be told apart from one in a stylesheet
     // shared with other markup.
     let own_from = sheet.rules.len();
-    let own = css::parse_stylesheet(&doc.style).map_err(Error::Css)?;
-    sheet.rules.extend(own.rules);
-    sheet.keyframes.extend(own.keyframes);
+    let own = css::parse_shared(&doc.style).map_err(Error::Css)?;
+    sheet.rules.extend(own.rules.iter().cloned());
+    sheet.keyframes.extend(own.keyframes.clone());
     let own_to = sheet.rules.len();
     if !extra.trim().is_empty() {
-        let more = css::parse_stylesheet(extra).map_err(Error::Css)?;
-        sheet.rules.extend(more.rules);
+        let more = css::parse_shared(extra).map_err(Error::Css)?;
+        sheet.rules.extend(more.rules.iter().cloned());
         // A rule of the same name replaces the markup's, as the field is
         // applied after it.
-        sheet.keyframes.extend(more.keyframes);
+        sheet.keyframes.extend(more.keyframes.clone());
     }
     let (styles, problems, used) = style::cascade(&doc, &sheet);
     // CSS honours z-index on a positioned box or a flex item and ignores

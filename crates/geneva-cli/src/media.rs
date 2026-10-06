@@ -440,6 +440,10 @@ pub struct ProbedAssets {
     /// family. Scanning the font directories costs more than most
     /// documents need, and one without text should not pay it.
     fonts: std::cell::OnceCell<geneva_render::TextEngine>,
+    /// Families already looked up, so a document with thousands of
+    /// clips naming the same few families scans the machine's fonts once
+    /// for each.
+    families: std::cell::RefCell<std::collections::HashMap<String, bool>>,
 }
 
 impl ProbedAssets {
@@ -460,9 +464,13 @@ impl ProbedAssets {
     /// a document can be checked away from its material; the fonts are
     /// not material, they are on the machine either way, so the check on
     /// a family a document names works there too.
-    pub fn fonts_only() -> Self {
+    ///
+    /// Stylesheets that markup links to are still read, from under
+    /// `root`, the asset root, since the markup cannot be checked without
+    /// them.
+    pub fn fonts_only(root: &Path) -> Self {
         Self {
-            root: std::path::PathBuf::new(),
+            root: root.to_path_buf(),
             absolute_paths: false,
             durations: std::collections::HashMap::new(),
             sizes: std::collections::HashMap::new(),
@@ -470,6 +478,7 @@ impl ProbedAssets {
             asset_families: std::collections::HashMap::new(),
             problems: Vec::new(),
             fonts: std::cell::OnceCell::new(),
+            families: std::cell::RefCell::default(),
         }
     }
 }
@@ -487,11 +496,15 @@ impl AssetInfo for ProbedAssets {
         if self.asset_families.values().any(|f| f == family) {
             return Some(true);
         }
-        Some(
-            self.fonts
-                .get_or_init(geneva_render::TextEngine::new)
-                .family_is_available(family),
-        )
+        if let Some(known) = self.families.borrow().get(family) {
+            return Some(*known);
+        }
+        let found = self
+            .fonts
+            .get_or_init(geneva_render::TextEngine::new)
+            .family_is_available(family);
+        self.families.borrow_mut().insert(family.to_owned(), found);
+        Some(found)
     }
 
     fn size(&self, asset_id: &str, _: &str) -> Option<(u32, u32)> {

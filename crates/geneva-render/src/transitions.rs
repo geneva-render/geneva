@@ -46,7 +46,7 @@ pub fn fade_veil(layers: &[ResolvedLayer], t: Ratio) -> Option<(LinearRgba, f64)
         }
     };
     for layer in layers {
-        for clip in &layer.clips {
+        for clip in layer.touching(t) {
             strongest(clip.transition_in.as_ref(), t - clip.start);
             // A closing transition is measured back from the clip's end.
             strongest(clip.transition_out.as_ref(), clip.end - t);

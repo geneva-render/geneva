@@ -28,6 +28,9 @@ const WORD_TEXT_KEEP: usize = 8;
 struct Scene {
     /// The clip this scene was made for, so a remark can name it.
     path: String,
+    /// When the clip ends, after which the scene is not needed again by
+    /// a render going forward in time.
+    end: Ratio,
     prepared: geneva_html::Prepared,
     images: HashMap<String, Image>,
     /// The box as drawn, kept when no animation inside can change it.
@@ -42,8 +45,9 @@ pub struct Painter<A: AssetSource> {
     assets: A,
     text: TextEngine,
     /// Rendered text images that do not change with time, by a hash of
-    /// the clip and its text, so a caption is laid out once per clip.
-    text_cache: HashMap<u64, Image>,
+    /// the clip and its text, so a caption is laid out once per clip,
+    /// with the time its clip ends.
+    text_cache: HashMap<u64, (Ratio, Image)>,
     /// Word-timed text drawn lately, by a hash of the clip, its text and
     /// the word lit: the picture only changes when the lit word does, and
     /// frames come in order, so the last few are all worth keeping. Most
@@ -155,6 +159,12 @@ impl<A: AssetSource> Painter<A> {
         clip.path.hash(&mut hasher);
         let scene_key = hasher.finish();
         if !self.html_cache.contains_key(&scene_key) {
+            // Frames are asked for in order, so a scene whose clip ended
+            // before this one started is done with: a timeline with
+            // thousands of captions keeps only the ones on screen. A
+            // render that jumps back (a poster, a sprite sheet) only
+            // prepares the markup again.
+            self.html_cache.retain(|_, s| s.end > clip.start);
             let prepared = crate::html::prepare(html).map_err(|reason| RenderError::Asset {
                 id: clip.path.clone(),
                 reason,
@@ -177,6 +187,7 @@ impl<A: AssetSource> Painter<A> {
                 scene_key,
                 Scene {
                     path: clip.path.clone(),
+                    end: clip.end,
                     prepared,
                     images,
                     still: None,
@@ -356,11 +367,14 @@ impl<A: AssetSource> Painter<A> {
                     // shadow with keyframes is drawn fresh each frame.
                     let text_key = text_key().finish();
                     key = Some(text_key);
-                    let engine = &mut self.text;
-                    let image = self
-                        .text_cache
-                        .entry(text_key)
-                        .or_insert_with(|| engine.render(text, local));
+                    if !self.text_cache.contains_key(&text_key) {
+                        // As with markup: what ended before this clip
+                        // started is not drawn again going forward.
+                        self.text_cache.retain(|_, (end, _)| *end > clip.start);
+                        let image = self.text.render(text, local);
+                        self.text_cache.insert(text_key, (clip.end, image));
+                    }
+                    let (_, image) = &self.text_cache[&text_key];
                     Paint::Image(Cow::Borrowed(image))
                 } else if text.is_static() {
                     // Word-timed text with nothing animated: the picture

@@ -1309,7 +1309,10 @@ fn load_text_with(
         loaded.diagnostics.extend(info.diagnostics());
         loaded
     } else {
-        geneva_timeline::load_with(text, &media::ProbedAssets::fonts_only())
+        geneva_timeline::load_with(
+            text,
+            &media::ProbedAssets::fonts_only(root).with_absolute_paths(absolute_paths),
+        )
     };
     loaded.diagnostics.sort_by(|a, b| {
         b.severity

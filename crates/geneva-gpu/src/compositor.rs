@@ -1229,10 +1229,7 @@ impl Compositor {
         let mut draws = Vec::new();
         let frame_size = [width as f32, height as f32];
         for layer in layers {
-            for (i, clip) in layer.clips.iter().enumerate() {
-                if !(clip.start <= t && t < clip.end) {
-                    continue;
-                }
+            for (i, clip) in layer.visible_at(t) {
                 let local = (t - clip.start).to_f64();
                 let mut opacity = clip.opacity.sample(local).clamp(0.0, 1.0);
                 opacity *= transition_gain(layer, i, t);
