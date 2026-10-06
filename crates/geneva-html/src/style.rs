@@ -296,8 +296,9 @@ pub struct Text {
     pub weight: u16,
     /// Italic.
     pub italic: bool,
-    /// Multiple of the font size.
-    pub line_height: f64,
+    /// Multiple of the font size; `None` for `normal`, the font's own
+    /// spacing.
+    pub line_height: Option<f64>,
     /// Extra space between characters, in pixels.
     pub letter_spacing: f64,
     /// Horizontal alignment.
@@ -328,7 +329,7 @@ impl Default for Text {
             size: ROOT_FONT_SIZE,
             weight: 400,
             italic: false,
-            line_height: 1.2,
+            line_height: None,
             letter_spacing: 0.0,
             align: TextAlign::Left,
             pre: false,
@@ -970,13 +971,13 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
         "font" => font_shorthand(v, em, c)?,
         "line-height" => {
             c.text.line_height = if let Some(p) = percent(v) {
-                p / 100.0
+                Some(p / 100.0)
             } else if l == "normal" {
-                1.2
+                None
             } else if l.ends_with("px") || l.ends_with("em") || l.ends_with("rem") {
-                pixels(v, em)? / c.text.size.max(1.0)
+                Some(pixels(v, em)? / c.text.size.max(1.0))
             } else {
-                number(v)?
+                Some(number(v)?)
             };
         }
         "letter-spacing" => {
@@ -1402,13 +1403,13 @@ fn font_shorthand(value: &str, em: f64, c: &mut Computed) -> Result<(), String> 
         None => (*size_part, None),
     };
     c.text.size = pixels(size, em)?;
-    if let Some(l) = line {
-        c.text.line_height = if l.ends_with("px") {
-            pixels(l, em)? / c.text.size.max(1.0)
-        } else {
-            number(l)?
-        };
-    }
+    // The shorthand resets what it leaves out: no `/line-height` is
+    // `normal`.
+    c.text.line_height = match line {
+        Some(l) if l.ends_with("px") => Some(pixels(l, em)? / c.text.size.max(1.0)),
+        Some(l) => Some(number(l)?),
+        None => None,
+    };
     let rest = p[i + 1..].join(" ");
     if !rest.trim().is_empty() {
         c.text.family = Some(family(&rest));
@@ -1946,7 +1947,7 @@ mod tests {
         assert!(problems.is_empty(), "{problems:?}");
         let b = doc.children(doc.children(doc.root)[0])[0];
         assert_eq!(styles[b].text.size, 30.0);
-        assert!((styles[b].text.line_height - 2.0).abs() < 1e-9);
+        assert!((styles[b].text.line_height.unwrap() - 2.0).abs() < 1e-9);
     }
 
     /// Every mode the compositor implements is taken by its CSS name,
@@ -2017,7 +2018,7 @@ mod tests {
         assert!(s.text.italic);
         assert_eq!(s.text.weight, 700);
         assert_eq!(s.text.size, 32.0);
-        assert!((s.text.line_height - 1.25).abs() < 1e-9);
+        assert!((s.text.line_height.unwrap() - 1.25).abs() < 1e-9);
         assert_eq!(s.text.family.as_deref(), Some("Liberation Sans"));
         let sh = s.paint.shadow[0];
         assert_eq!((sh.x, sh.y, sh.blur), (0.0, 2.0, 8.0));

@@ -346,6 +346,15 @@ impl TextEngine {
             }
             bottom = bottom.max(run.line_top + run.line_height);
         }
+        // Each line's baseline: the shaper's, or for markup the browser's
+        // (`browser_lines`), which also sets where the text ends.
+        let baselines: Vec<f32> = if text.browser_lines {
+            let (lines, end) = self.browser_baselines(&buffer, &base, spec.line_height.is_none());
+            bottom = end;
+            lines
+        } else {
+            buffer.layout_runs().map(|run| run.line_y).collect()
+        };
         if glyph_count == 0 {
             min_x = 0.0;
             max_x = 0.0;
@@ -433,9 +442,9 @@ impl TextEngine {
 
         // Glyph placements, computed once and reused for every pass.
         let mut placed: Vec<PlacedGlyph> = Vec::new();
-        for run in buffer.layout_runs() {
+        for (run, baseline) in buffer.layout_runs().zip(&baselines) {
             for g in run.glyphs.iter() {
-                let physical = g.physical((origin_x, origin_y + run.line_y), 1.0);
+                let physical = g.physical((origin_x, origin_y + baseline), 1.0);
                 let style = g.metadata.min(styles.len() - 1);
                 placed.push(PlacedGlyph {
                     cache_key: physical.cache_key,
@@ -573,6 +582,87 @@ impl TextEngine {
         let found = self.fonts.db().query(&query);
         self.faces.insert(key, found);
         found
+    }
+
+    /// A face's ascent, descent and line gap at a size, each rounded to
+    /// whole pixels as a browser rounds them; `None` for a face the
+    /// database cannot open.
+    fn rounded_metrics(
+        &mut self,
+        id: cosmic_text::fontdb::ID,
+        weight: Weight,
+        size: f32,
+    ) -> Option<(f32, f32, f32)> {
+        let font = self.fonts.get_font(id, weight)?;
+        let m = font.as_swash().metrics(&[]);
+        let scale = size / f32::from(m.units_per_em.max(1));
+        Some((
+            (m.ascent * scale).round(),
+            (m.descent * scale).round(),
+            (m.leading * scale).round(),
+        ))
+    }
+
+    /// Lines stacked as a browser stacks them: on each line, every font
+    /// used gets half the leading its line height leaves over its rounded
+    /// ascent and descent, floored above the baseline; the line is as
+    /// tall as the most any font reaches above it plus the most below.
+    /// With `normal` the line height is each font's own ascent, descent
+    /// and line gap. The baselines from the top, and the bottom of the
+    /// last line.
+    fn browser_baselines(
+        &mut self,
+        buffer: &Buffer,
+        base: &Resolved,
+        normal: bool,
+    ) -> (Vec<f32>, f32) {
+        let mut baselines = Vec::new();
+        let mut top = 0.0f32;
+        for run in buffer.layout_runs() {
+            let mut fonts: Vec<(cosmic_text::fontdb::ID, Weight, f32, f32)> = Vec::new();
+            for g in run.glyphs.iter() {
+                let height = g.line_height_opt.unwrap_or(run.line_height);
+                if !fonts
+                    .iter()
+                    .any(|f| f.0 == g.font_id && f.2 == g.font_size && f.3 == height)
+                {
+                    fonts.push((g.font_id, g.font_weight, g.font_size, height));
+                }
+            }
+            // A line with nothing on it takes the first font's metrics.
+            if fonts.is_empty() {
+                let family = base
+                    .family
+                    .clone()
+                    .unwrap_or_else(|| "sans-serif".to_owned());
+                if let Some(id) = self.face_of(&family, base.weight, base.italic) {
+                    fonts.push((id, Weight(base.weight), base.size, run.line_height));
+                }
+            }
+            let (mut above, mut below) = (0.0f32, 0.0f32);
+            for (id, weight, size, height) in fonts {
+                let Some((ascent, descent, gap)) = self.rounded_metrics(id, weight, size) else {
+                    continue;
+                };
+                let height = if normal {
+                    ascent + descent + gap
+                } else {
+                    height
+                };
+                let up = ((height - (ascent + descent)) / 2.0).floor() + ascent;
+                above = above.max(up);
+                below = below.max(height - up);
+            }
+            if above + below <= 0.0 {
+                // No font to measure: the shaper's own placement.
+                baselines.push(top + run.line_y - run.line_top);
+                top += run.line_height;
+                continue;
+            }
+            baselines.push(top + above);
+            top += above + below;
+        }
+        (baselines, top)
     }
 
     /// Whether a face has a glyph for a character.

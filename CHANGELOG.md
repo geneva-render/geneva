@@ -47,6 +47,15 @@ versions changed the format freely.
   once, and `validate` looks each font family up once.
 - **A markup warning repeated by many clips is reported once**, with the
   number of other clips that share it.
+- **Markup text lines are stacked as in Chromium.** `line-height:
+  normal`, the default, was 1.2 times the size for every font; it is now
+  the font's own ascent, descent and line gap, rounded as Chromium
+  rounds them, and a fallback font with taller metrics makes its line
+  taller. Explicit line heights place the baseline with Chromium's
+  rounding. Line boxes now equal Chromium's for the fonts measured, and
+  glyphs sit within a pixel of it; a plate around a caption is as tall
+  as in the browser. Text sources keep their layout (1.2 by default).
+  Markup renders change wherever text uses `normal`.
 - **Markup is laid over the picture in sRGB-encoded values, as a
   browser lays a page over a video.** A markup clip with the `normal`
   blend mode was laid on in linear light, so a translucent plate
@@ -61,6 +70,12 @@ versions changed the format freely.
   stroke also follows a variable font's weight.
 
 ### Fixed
+
+- **Text in a box narrower than the text did not wrap** when the box
+  was a flex container (an absolutely positioned `<div>` with a
+  `width`, for one): the text's narrowest size was taken as its whole
+  width, so it ran out of the box. It is now its longest word, and the
+  text wraps.
 
 - **A font asset named in markup only by the family its file declares
   was reported unused** (W201), and by `validate` also as not installed

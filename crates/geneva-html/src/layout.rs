@@ -754,8 +754,18 @@ mod tests {
     impl Measure for Cells {
         fn text(&mut self, text: &str, style: &Text, width: Option<f32>) -> (f32, f32) {
             let cell = style.size as f32 * 0.5;
-            let line = style.size as f32 * style.line_height as f32;
+            let line = style.size as f32 * style.line_height.unwrap_or(1.2) as f32;
             let chars = text.chars().count() as f32;
+            if width == Some(0.0) {
+                // Min-content: the longest word.
+                let longest = text
+                    .split_whitespace()
+                    .map(|w| w.chars().count())
+                    .max()
+                    .unwrap_or(0);
+                let per_line = longest.max(1) as f32;
+                return (per_line * cell, (chars / per_line).ceil() * line);
+            }
             match width {
                 Some(w) if w > 0.0 && chars * cell > w => {
                     let per_line = (w / cell).floor().max(1.0);
@@ -961,6 +971,28 @@ mod tests {
         );
         let b = laid.boxes.iter().find(|x| x.rect[2] == 30.0).unwrap();
         assert_eq!(b.rect, [10.0, 80.0, 30.0, 15.0]);
+    }
+
+    #[test]
+    fn an_absolute_box_with_a_width_wraps_its_text() {
+        // 20 characters of 10 px in a 100 px box, padded: two lines.
+        let (_, laid) = lay(
+            "<style>.p { position: absolute; left: 0; top: 0; width: 100px; padding: 5px; font-size: 20px; line-height: 1 }\
+             </style><div class=p>aaaaaaaaa bbbbbbbbb</div>",
+            400.0,
+            300.0,
+        );
+        let b = laid
+            .boxes
+            .iter()
+            .find(|x| x.rect[2] == 110.0)
+            .expect("the padded box");
+        assert_eq!(
+            b.rect[3],
+            50.0,
+            "{:?}",
+            laid.boxes.iter().map(|b| b.rect).collect::<Vec<_>>()
+        );
     }
 
     #[test]

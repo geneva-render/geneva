@@ -505,6 +505,11 @@ pub struct ResolvedText {
     /// How the outline is painted: a text source's outline, or markup's
     /// `-webkit-text-stroke` under or over the fill.
     pub outline_paint: OutlinePaint,
+    /// Lines as a browser stacks them (markup): ascent and descent
+    /// rounded to pixels, the half-leading floored, and with no
+    /// `line_height` the fonts' own spacing (`line-height: normal`).
+    /// A text source keeps its own layout, `line_height` 1.2 by default.
+    pub browser_lines: bool,
 }
 
 /// How a text's outline is painted.
@@ -602,6 +607,7 @@ impl ResolvedText {
             highlight_fill,
             shadow,
             outline_paint: OutlinePaint::Outline,
+            browser_lines: false,
         }
     }
 
@@ -3557,6 +3563,7 @@ fills the frame",
             highlight_fill,
             shadow,
             outline_paint: OutlinePaint::Outline,
+            browser_lines: false,
         }
     }
 

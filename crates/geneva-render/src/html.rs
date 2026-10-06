@@ -54,7 +54,7 @@ fn as_text_source(text: &str, style: &Text, max_width: f64) -> ResolvedText {
                 geneva_html::TextAlign::Center => TextAlign::Center,
                 geneva_html::TextAlign::Right => TextAlign::Right,
             }),
-            line_height: Some(style.line_height),
+            line_height: style.line_height,
             padding: None,
             background: None,
             radius: None,
@@ -81,6 +81,7 @@ fn as_text_source(text: &str, style: &Text, max_width: f64) -> ResolvedText {
         },
         max_width,
     );
+    source.browser_lines = true;
     source.outline_paint = if style.stroke_over_fill {
         OutlinePaint::StrokeOver
     } else {
@@ -112,7 +113,7 @@ fn engine_runs(runs: &[(String, Text)]) -> Vec<(String, TextStyle, LinearRgba)> 
 /// A key that distinguishes two runs with different styles.
 fn style_key(style: &Text) -> String {
     format!(
-        "{}|{}|{}|{}|{}|{}|{:?}",
+        "{}|{}|{}|{}|{:?}|{}|{:?}",
         style.family.as_deref().unwrap_or(""),
         style.size,
         style.weight,
@@ -123,10 +124,30 @@ fn style_key(style: &Text) -> String {
     )
 }
 
+impl Context<'_> {
+    /// The min-content width of some pieces of text: the widest word,
+    /// since a line breaks between words and not inside one.
+    fn longest_word<'a>(&mut self, pieces: impl Iterator<Item = (&'a str, &'a Text)>) -> f32 {
+        let mut widest = 0.0f32;
+        for (piece, style) in pieces {
+            for word in piece.split_whitespace() {
+                widest = widest.max(self.text(word, style, None).0);
+            }
+        }
+        widest
+    }
+}
+
 impl Measure for Context<'_> {
     fn text(&mut self, text: &str, style: &Text, width: Option<f32>) -> (f32, f32) {
         if text.trim().is_empty() {
             return (0.0, 0.0);
+        }
+        // Min-content is asked for as a width of zero: the text at the
+        // width of its longest word.
+        if width == Some(0.0) {
+            let widest = self.longest_word(std::iter::once((text, style)));
+            return self.text(text, style, Some(widest.max(1.0)));
         }
         // A run with no limit is measured at a width nothing will reach,
         // which is what max-content means here.
@@ -151,6 +172,10 @@ impl Measure for Context<'_> {
     fn rich(&mut self, runs: &[(String, Text)], style: &Text, width: Option<f32>) -> (f32, f32) {
         if runs.iter().all(|(piece, _)| piece.trim().is_empty()) {
             return (0.0, 0.0);
+        }
+        if width == Some(0.0) {
+            let widest = self.longest_word(runs.iter().map(|(p, s)| (p.as_str(), s)));
+            return self.rich(runs, style, Some(widest.max(1.0)));
         }
         let limit = width.filter(|w| *w > 0.0).unwrap_or(1.0e5);
         let mut text = String::new();
