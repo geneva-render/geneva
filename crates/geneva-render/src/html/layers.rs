@@ -25,9 +25,9 @@ use geneva_timeline::ResolvedHtml;
 use geneva_timeline::motion::Transform;
 
 use super::{
-    Bounds, GroupCache, Layer, affine_inverse, buffer_rect, centre_of, chain_of, composite,
-    content_of, fill_cache, first_seen, group_bounds, lay_out, paint_one, polygon_coverage,
-    shifted, taps_of, to_linear, transparent,
+    Bounds, GroupCache, Layer, affine_inverse, buffer_rect, chain_of, composite, content_of,
+    fill_cache, first_seen, group_bounds, lay_out, paint_one, polygon_coverage, shifted, taps_of,
+    to_linear, transparent,
 };
 use super::{blends_inside, marks, passes_through};
 use crate::assets::Image;
@@ -85,9 +85,11 @@ pub struct MarkupGroup<'a> {
     pub buffer: [i64; 4],
     /// What is in the buffer, in paint order.
     pub items: Vec<MarkupItem<'a>>,
-    /// The element's border box on the surface, which the transform
-    /// turns about.
+    /// The element's border box on the surface.
     pub rect: Rectangle,
+    /// The point the transform turns and scales about
+    /// (`transform-origin`), on the surface.
+    pub pivot: (f64, f64),
     /// The group's own opacity, applied when it is laid.
     pub opacity: f32,
     /// `filter: blur()` in pixels, applied to the buffer before the
@@ -103,8 +105,8 @@ pub struct MarkupGroup<'a> {
     /// `mix-blend-mode`: how the composited picture is mixed with what
     /// is behind it on the surface.
     pub blend: geneva_html::Blend,
-    /// The transform the buffer is laid through, about the centre of
-    /// `rect`; straight, pixel for pixel, when there is none.
+    /// The transform the buffer is laid through, about `pivot`;
+    /// straight, pixel for pixel, when there is none.
     pub transform: Option<Transform>,
     /// Where the transformed buffer lands on the surface, as its left,
     /// top, right and bottom; read only with a transform.
@@ -127,7 +129,7 @@ impl MarkupGroup<'_> {
 
     /// The point the transform turns about.
     pub fn centre(&self) -> (f64, f64) {
-        centre_of(self.rect)
+        self.pivot
     }
 
     /// The pixels of the surface the group is laid on, as left, top,
@@ -477,6 +479,7 @@ fn close<'a>(
         buffer,
         items: level.items,
         rect: group.rect,
+        pivot: group.pivot,
         opacity: group.opacity,
         blur: if level.blurred { 0.0 } else { group.blur },
         clip: group.clip,
@@ -535,6 +538,7 @@ fn flatten_into(items: &[MarkupItem<'_>], dst: &mut Image, dst_origin: (i64, i64
                     node: 0,
                     parent: None,
                     rect: [0.0; 4],
+                    pivot: (0.0, 0.0),
                     opacity: 1.0,
                     blur: 0.0,
                     clip: None,
@@ -564,6 +568,7 @@ fn flatten_into(items: &[MarkupItem<'_>], dst: &mut Image, dst_origin: (i64, i64
                     node: 0,
                     parent: None,
                     rect: group.rect,
+                    pivot: group.pivot,
                     opacity: group.opacity,
                     blur: group.blur,
                     clip: group.clip,

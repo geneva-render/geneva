@@ -255,7 +255,7 @@ fn backdrops(laid: &Laid, transforms: &[Option<Transform>]) -> Vec<Backdrop> {
             let gr = &laid.groups[g];
             opacity *= f64::from(gr.opacity);
             if let Some(tr) = transforms.get(g).and_then(Option::as_ref) {
-                let centre = centre_of(gr.rect);
+                let centre = gr.pivot;
                 for c in &mut corners {
                     *c = forward(tr, centre, *c);
                 }
@@ -478,7 +478,8 @@ fn padded(r: Bounds, by: f64) -> Bounds {
     [r[0] - by, r[1] - by, r[2] + by, r[3] + by]
 }
 
-/// A group's rectangle after its transform, about the centre of its box.
+/// A group's rectangle after its transform, about its pivot
+/// (`transform-origin`).
 fn transformed(r: Bounds, centre: (f64, f64), tr: &Transform) -> Bounds {
     let mut out: Option<Bounds> = None;
     for (x, y) in [(r[0], r[1]), (r[2], r[1]), (r[0], r[3]), (r[2], r[3])] {
@@ -488,7 +489,7 @@ fn transformed(r: Bounds, centre: (f64, f64), tr: &Transform) -> Bounds {
     out.unwrap_or(r)
 }
 
-/// Where a point of the group lands: scaled and turned about the centre,
+/// Where a point of the group lands: scaled and turned about the pivot,
 /// then moved. `rotate` is clockwise on a screen whose y grows down.
 fn forward(tr: &Transform, centre: (f64, f64), p: (f64, f64)) -> (f64, f64) {
     let (dx, dy) = (
@@ -561,7 +562,7 @@ fn group_bounds(
             }
         }
         if let Some(tr) = &transforms[g] {
-            r = transformed(r, centre_of(group.rect), tr);
+            r = transformed(r, group.pivot, tr);
         }
         placed[g] = Some(r);
         if let Some(p) = group.parent {
@@ -589,7 +590,7 @@ fn group_bounds(
         let visible = window.and_then(|w| {
             let seen = match &transforms[g] {
                 Some(tr) if tr.scale[0] == 0.0 || tr.scale[1] == 0.0 => return None,
-                Some(tr) => inverted(w, centre_of(group.rect), tr),
+                Some(tr) => inverted(w, group.pivot, tr),
                 None => w,
             };
             // Only what is inside the polygon shows, and the blur reads
@@ -709,13 +710,6 @@ fn inverted(r: Bounds, centre: (f64, f64), tr: &Transform) -> Bounds {
         out = Some(union(out, [px, py, px, py]));
     }
     out.unwrap_or(r)
-}
-
-fn centre_of(rect: Rectangle) -> (f64, f64) {
-    (
-        f64::from(rect[0]) + f64::from(rect[2]) / 2.0,
-        f64::from(rect[1]) + f64::from(rect[3]) / 2.0,
-    )
 }
 
 /// The integer rectangle a group's buffer covers, and whether bounding it
@@ -1587,7 +1581,7 @@ fn composite(
     let Some(l) = landing else {
         return;
     };
-    let centre = centre_of(group.rect);
+    let centre = group.pivot;
     let x0 = (l[0].floor() as i64 - dst_origin.0).max(0);
     let y0 = (l[1].floor() as i64 - dst_origin.1).max(0);
     let x1 = (l[2].ceil() as i64 - dst_origin.0).min(dw);

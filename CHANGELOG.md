@@ -21,6 +21,12 @@ versions changed the format freely.
   x264 and the other encoders, and the number of chunks encoded at
   once. The budget sizes the caches and the queue of frames waiting for
   the encoder. The render report gives `threads` and `peak_memory`.
+- **`transform-origin` in markup**: keywords, lengths and percentages,
+  for the point an animated `transform`, `scale`, `rotate` or
+  `translate` turns and scales about, such as a word growing from near
+  its baseline (`50% 72%`) or a line shrinking towards its corner
+  (`0 100%`). Transforms turned about the box's centre only. Compared
+  with Chromium frame by frame.
 - **Font fallback through `font-family` lists.** Markup's
   `font-family: Inter, "Noto Sans Arabic", "Noto Sans JP"` (and a text
   source's `font` written as a list) draws each character in the first
@@ -70,6 +76,10 @@ versions changed the format freely.
   stroke also follows a variable font's weight.
 
 ### Fixed
+
+- **A `transform` list was collected rather than composed in order**, so
+  `scale(0.5) translateX(20px)` moved 20 px where CSS moves 10. A
+  translation written after a scale or rotation now goes through them.
 
 - **Text in a box narrower than the text did not wrap** when the box
   was a flex container (an absolutely positioned `<div>` with a

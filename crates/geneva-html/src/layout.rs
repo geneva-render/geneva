@@ -98,8 +98,11 @@ pub struct Group {
     pub node: DomId,
     /// The group this one is inside, if any.
     pub parent: Option<usize>,
-    /// The element's border box, which a transform turns about.
+    /// The element's border box.
     pub rect: Rectangle,
+    /// The point a transform turns and scales about: `transform-origin`
+    /// on the border box, in the surface's pixels.
+    pub pivot: (f64, f64),
     /// The element's own opacity, applied to the composited picture.
     pub opacity: f32,
     /// `filter: blur()` in pixels, applied to the composited picture.
@@ -310,10 +313,16 @@ impl Walk<'_> {
                 })
                 .collect()
         });
+        let (ox, oy) = style.paint.transform_origin;
+        let pivot = (
+            f64::from(rect[0]) + ox.size(f64::from(rect[2])),
+            f64::from(rect[1]) + oy.size(f64::from(rect[3])),
+        );
         self.groups.push(Group {
             node: dom,
             parent,
             rect,
+            pivot,
             opacity: style.paint.opacity as f32,
             blur: style.paint.blur,
             clip: None,

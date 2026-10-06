@@ -989,10 +989,13 @@ fn scale_pair(value: &str) -> Result<[f64; 2], String> {
     }
 }
 
-/// A `transform` function list. The functions are collected rather than
-/// multiplied in order: translations add, scales multiply and rotations
-/// add, and the renderer applies scale and rotation about the anchor and
-/// then the translation.
+/// A `transform` function list, composed in written order as CSS does,
+/// into the scale, rotation and translation the renderer applies (scale
+/// and rotation about the origin, then the translation): a translation
+/// written after a scale or a rotation is taken through them, so
+/// `scale(0.5) translateX(20px)` moves 10 px. A percentage translation
+/// after a rotation is scaled but not turned, since the box's size is
+/// not known here. Scales after a rotation are taken as if before it.
 fn apply_transform(value: &str, v: &mut Values) -> Result<(), String> {
     if value.trim() == "none" {
         // CSS's identity transform, which is what "to { transform: none }"
@@ -1002,6 +1005,26 @@ fn apply_transform(value: &str, v: &mut Values) -> Result<(), String> {
         v.rotate = Some(0.0);
         return Ok(());
     }
+    // The scale and rotation written so far in this list, which a
+    // translation written after them goes through.
+    let mut so_far_scale = [1.0f64, 1.0];
+    let mut so_far_turn = 0.0f64;
+    let through = |d: [Shift; 2], scale: [f64; 2], turn: f64| -> [Shift; 2] {
+        match d {
+            [Shift::Px(x), Shift::Px(y)] => {
+                let (x, y) = (x * scale[0], y * scale[1]);
+                let (sin, cos) = turn.to_radians().sin_cos();
+                [Shift::Px(x * cos - y * sin), Shift::Px(x * sin + y * cos)]
+            }
+            [x, y] => {
+                let by = |s: Shift, k: f64| match s {
+                    Shift::Px(v) => Shift::Px(v * k),
+                    Shift::Percent(p) => Shift::Percent(p * k),
+                };
+                [by(x, scale[0]), by(y, scale[1])]
+            }
+        }
+    };
     for token in tokens(value) {
         let (name, _) = token
             .split_once('(')
@@ -1012,25 +1035,34 @@ fn apply_transform(value: &str, v: &mut Values) -> Result<(), String> {
         }
         let two = |i: usize| args.get(i).copied();
         match name {
-            "translate" => {
-                let x = pixels(args[0])?;
-                let y = two(1).map(pixels).transpose()?.unwrap_or(Shift::Px(0.0));
-                v.translate = Some(add(v.translate, [x, y]));
+            "translate" | "translateX" | "translateY" => {
+                let d = match name {
+                    "translateX" => [pixels(args[0])?, Shift::Px(0.0)],
+                    "translateY" => [Shift::Px(0.0), pixels(args[0])?],
+                    _ => [
+                        pixels(args[0])?,
+                        two(1).map(pixels).transpose()?.unwrap_or(Shift::Px(0.0)),
+                    ],
+                };
+                v.translate = Some(add(v.translate, through(d, so_far_scale, so_far_turn)));
             }
-            "translateX" => {
-                v.translate = Some(add(v.translate, [pixels(args[0])?, Shift::Px(0.0)]));
+            "scale" | "scaleX" | "scaleY" => {
+                let f = match name {
+                    "scaleX" => [number(args[0])?, 1.0],
+                    "scaleY" => [1.0, number(args[0])?],
+                    _ => {
+                        let x = number(args[0])?;
+                        [x, two(1).map(number).transpose()?.unwrap_or(x)]
+                    }
+                };
+                so_far_scale = mul(Some(so_far_scale), f);
+                v.scale = Some(mul(v.scale, f));
             }
-            "translateY" => {
-                v.translate = Some(add(v.translate, [Shift::Px(0.0), pixels(args[0])?]));
+            "rotate" => {
+                let a = angle(args[0])?;
+                so_far_turn += a;
+                v.rotate = Some(v.rotate.unwrap_or(0.0) + a);
             }
-            "scale" => {
-                let x = number(args[0])?;
-                let y = two(1).map(number).transpose()?.unwrap_or(x);
-                v.scale = Some(mul(v.scale, [x, y]));
-            }
-            "scaleX" => v.scale = Some(mul(v.scale, [number(args[0])?, 1.0])),
-            "scaleY" => v.scale = Some(mul(v.scale, [1.0, number(args[0])?])),
-            "rotate" => v.rotate = Some(v.rotate.unwrap_or(0.0) + angle(args[0])?),
             _ => {
                 return Err(format!(
                     "{name:?} is not a transform geneva animates; use translate, translateX, \
@@ -1145,6 +1177,22 @@ mod tests {
                 .unwrap();
         assert_eq!(v.translate, Some([Shift::Px(10.0), Shift::Px(20.0)]));
         assert_eq!(v.scale, Some([6.0, 2.0]));
+    }
+
+    /// A translation written after a scale or a rotation goes through
+    /// them, as CSS multiplies the list in order.
+    #[test]
+    fn a_transform_list_composes_in_written_order() {
+        let v = parse_declarations("transform: scale(0.5) translateX(20px)").unwrap();
+        assert_eq!(v.translate, Some([Shift::Px(10.0), Shift::Px(0.0)]));
+        assert_eq!(v.scale, Some([0.5, 0.5]));
+        let v = parse_declarations("transform: rotate(90deg) translate(10px, 0)").unwrap();
+        let Some([Shift::Px(x), Shift::Px(y)]) = v.translate else {
+            panic!("{:?}", v.translate);
+        };
+        assert!(x.abs() < 1e-9 && (y - 10.0).abs() < 1e-9, "{x} {y}");
+        let v = parse_declarations("transform: scale(2) translateY(-50%)").unwrap();
+        assert_eq!(v.translate, Some([Shift::Px(0.0), Shift::Percent(-100.0)]));
     }
 
     #[test]

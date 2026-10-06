@@ -188,6 +188,10 @@ pub struct Paint {
     /// `mix-blend-mode`: how the box and its children are mixed with
     /// what is behind them.
     pub blend: Blend,
+    /// `transform-origin`: the point an animated transform turns and
+    /// scales about, a share or a length of the border box from its
+    /// top-left corner. The centre by default.
+    pub transform_origin: (Extent, Extent),
     /// `backdrop-filter`: what is done to the picture behind the box,
     /// inside its border box, before the box is drawn over it. Empty for
     /// none.
@@ -233,6 +237,7 @@ impl Default for Paint {
             blur: 0.0,
             clip_path: None,
             blend: Blend::default(),
+            transform_origin: (Extent::Percent(50.0), Extent::Percent(50.0)),
             backdrop: Vec::new(),
         }
     }
@@ -895,6 +900,7 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
                 .longhands
                 .push((property.to_owned(), v.to_owned()));
         }
+        "transform-origin" => c.paint.transform_origin = transform_origin(v, em)?,
         "clip-path" => {
             c.paint.clip_path = if l == "none" {
                 None
@@ -1453,6 +1459,56 @@ fn extent(token: &str, em: f64) -> Result<Extent, String> {
     }
 }
 
+/// `transform-origin`: one to three values, keywords (`left`, `center`,
+/// `right`, `top`, `bottom`), lengths or percentages. One value is the
+/// horizontal one (or the vertical, for `top` and `bottom`), the other
+/// centred; two are horizontal then vertical, unless the keywords say
+/// otherwise; a third, the depth, is ignored.
+fn transform_origin(value: &str, em: f64) -> Result<(Extent, Extent), String> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Axis {
+        Either,
+        X,
+        Y,
+    }
+    let one = |t: &str| -> Result<(Extent, Axis), String> {
+        Ok(match t.to_ascii_lowercase().as_str() {
+            "left" => (Extent::Percent(0.0), Axis::X),
+            "right" => (Extent::Percent(100.0), Axis::X),
+            "top" => (Extent::Percent(0.0), Axis::Y),
+            "bottom" => (Extent::Percent(100.0), Axis::Y),
+            "center" => (Extent::Percent(50.0), Axis::Either),
+            _ => (extent(t, em)?, Axis::Either),
+        })
+    };
+    let centre = Extent::Percent(50.0);
+    let tokens = parts(value);
+    match tokens.as_slice() {
+        [a] => {
+            let (v, axis) = one(a)?;
+            Ok(if axis == Axis::Y {
+                (centre, v)
+            } else {
+                (v, centre)
+            })
+        }
+        [a, b] | [a, b, _] => {
+            let ((va, aa), (vb, ab)) = (one(a)?, one(b)?);
+            if aa == Axis::Y || ab == Axis::X {
+                if aa == Axis::X || ab == Axis::Y {
+                    return Err(format!("{value:?}: both values are on the same side"));
+                }
+                Ok((vb, va))
+            } else {
+                Ok((va, vb))
+            }
+        }
+        _ => Err(format!(
+            "{value:?}: transform-origin takes one to three values"
+        )),
+    }
+}
+
 /// `background-size`: one or two of `auto`, a length or a percentage.
 /// One value sets the width and leaves the height `auto`. The keywords
 /// `cover` and `contain`, and more than one layer, are not drawn.
@@ -1973,6 +2029,32 @@ mod tests {
             assert_eq!(styles[a].paint.blend, expected, "{keyword}");
             assert_eq!(expected.keyword(), keyword);
         }
+    }
+
+    /// `transform-origin` in its one-, two- and three-value forms, with
+    /// keywords in either order.
+    #[test]
+    fn transform_origin_takes_keywords_lengths_and_percentages() {
+        use Extent::{Percent as P, Px};
+        for (value, expected) in [
+            ("50% 72%", (P(50.0), P(72.0))),
+            ("0 100%", (Px(0.0), P(100.0))),
+            ("left", (P(0.0), P(50.0))),
+            ("bottom", (P(50.0), P(100.0))),
+            ("bottom right", (P(100.0), P(100.0))),
+            ("right top", (P(100.0), P(0.0))),
+            ("10px 2em 5px", (Px(10.0), Px(32.0))),
+        ] {
+            let (doc, styles, problems) = styled(&format!(
+                "<style>.a {{ font-size: 16px; transform-origin: {value} }}</style><div class=a></div>"
+            ));
+            assert!(problems.is_empty(), "{value}: {problems:?}");
+            let a = doc.children(doc.root)[0];
+            assert_eq!(styles[a].paint.transform_origin, expected, "{value}");
+        }
+        let (_, _, problems) =
+            styled("<style>.a { transform-origin: left right }</style><div class=a></div>");
+        assert!(!problems.is_empty(), "two horizontal keywords");
     }
 
     /// The modes geneva does not have. A browser would draw these; this
