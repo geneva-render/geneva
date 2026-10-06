@@ -84,10 +84,26 @@ pub struct ResolvedOutput {
     pub columns: Option<u32>,
 }
 
+/// How far apart two times may be and still name the same instant: a
+/// millisecond. A duration printed with six decimals and the exact length
+/// of a clip at a fractional rate differ by less (2123 frames at 29.97 fps
+/// last 70.837433... s), and no picture or sound edit is that short.
+pub const END_SLACK: Ratio = Ratio::MILLI;
+
 impl Composition {
     /// Number of frames in the output, rounding partial frames up.
+    ///
+    /// A frame that would start less than [`END_SLACK`] before the end
+    /// (or half a frame, at rates above 500 fps) is not counted. A
+    /// duration written with six decimals can land a fraction of a
+    /// microsecond past a clip's exact end, and an audio track can run a
+    /// little past the picture; neither is a frame of its own.
     pub fn frame_count(&self) -> u64 {
-        (self.duration * self.fps).ceil().max(0) as u64
+        if self.duration <= Ratio::ZERO {
+            return 0;
+        }
+        let slack = (END_SLACK * self.fps).min(Ratio::new(1, 2));
+        (self.duration * self.fps - slack).ceil().max(1) as u64
     }
 
     /// The presentation time of frame `n`.

@@ -10,6 +10,16 @@ versions changed the format freely.
 
 ### Fixed
 
+- **A source whose length ends a fraction of a frame past its last frame
+  failed to render.** 73 frames at 24 fps last 3.0416666... s; a verb
+  (`subtitles --burn`, `overlay`, `audio`) writes that into its document
+  as 3.041667 s, and the frame count, rounded up, asked for a 74th frame
+  that no clip covered: `error[E501]: ... no clip covers 3.041667s`. An
+  audio track ending up to 1 ms past the picture did the same. A frame
+  that would start less than 1 ms before the end is no longer counted.
+  When the smart cut ran instead, the frame was dropped but still
+  counted in the report.
+
 - **The install scripts failed for anyone with a `GITHUB_TOKEN` set.** A
   token in the environment sent them down the path meant for a private
   repository, whose parsing expected the API's JSON on one line and

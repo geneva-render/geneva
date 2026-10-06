@@ -52,6 +52,9 @@ fn corpus_files() -> Vec<(&'static str, Marks)> {
         ("aac-44k.mp4", at(24, 1.0)),
         ("opus.webm", at(24, 1.0)),
         ("mpegts.ts", at(24, 1.0)),
+        ("editlist-73.mov", at(24, 1.0)),
+        ("audio-long.mp4", at(24, 1.0)),
+        ("audio-short.mp4", at(24, 1.0)),
     ]
 }
 
@@ -369,4 +372,93 @@ fn chunked_and_single_runs_give_the_same_frames() {
             "frame {n}: {psnr:.1} dB between single and chunked"
         );
     }
+}
+
+/// Files whose length is not a whole number of frames in six decimals,
+/// or whose audio runs past or stops short of the picture: every path
+/// writes the frames the source shows and no more. A source of 73
+/// frames at 24 fps lasts 3.0416666... s, which a verb writes into its
+/// document as 3.041667 s, a third of a microsecond past the last frame;
+/// that used to ask the direct path for a 74th frame no clip covered.
+#[test]
+fn a_length_that_ends_mid_frame_adds_no_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let srt = dir.path().join("a.srt");
+    std::fs::write(&srt, "1\n00:00:00,500 --> 00:00:02,500\nHello\n").unwrap();
+    // The count the muxer wrote: MP4 keeps one entry per sample.
+    let frames_of = |path: &Path| probe(path).unwrap().video.unwrap().frames.unwrap_or(0);
+    let corpus_dir = corpus();
+    let corpus_dir = corpus_dir.to_str().unwrap();
+    let mut problems = Vec::new();
+    for (name, want) in [
+        ("editlist-73.mov", 73u32),
+        ("audio-long.mp4", 72),
+        ("audio-short.mp4", 72),
+    ] {
+        let src = corpus().join(name);
+        let src = src.to_str().unwrap();
+        // Burned captions with the defaults (copied where it can be),
+        // re-encoded throughout, and as a document with a markup clip
+        // and the duration written out to six decimals.
+        let doc = dir.path().join("doc.json");
+        std::fs::write(
+            &doc,
+            format!(
+                r#"{{"geneva":"1.1","output":{{"width":160,"height":90,"fps":24,"duration":"{:.6}s"}},
+                   "assets":{{"v":{{"src":"{name}"}}}},
+                   "layers":[{{"clips":[{{"source":{{"kind":"video","asset":"v"}}}}]}},
+                             {{"clips":[{{"source":{{"kind":"html","html":"<p style='color:white'>Hi</p>"}},
+                                         "start":"0.5s","duration":"1s"}}]}}]}}"#,
+                f64::from(want) / 24.0
+            ),
+        )
+        .unwrap();
+        let runs: [(&str, Vec<&str>); 3] = [
+            (
+                "burn",
+                vec!["subtitles", src, "--burn", srt.to_str().unwrap()],
+            ),
+            (
+                "burn --crf",
+                vec![
+                    "subtitles",
+                    src,
+                    "--burn",
+                    srt.to_str().unwrap(),
+                    "--crf",
+                    "20",
+                ],
+            ),
+            (
+                "document",
+                vec![
+                    "render",
+                    doc.to_str().unwrap(),
+                    "--crf",
+                    "20",
+                    "--assets",
+                    corpus_dir,
+                ],
+            ),
+        ];
+        for (what, mut args) in runs {
+            let out = dir
+                .path()
+                .join(format!("{name}-{}.mp4", what.replace(' ', "")));
+            args.extend(["-o", out.to_str().unwrap()]);
+            let run = geneva().args(&args).output().unwrap();
+            if !run.status.success() {
+                problems.push(format!(
+                    "{name}, {what}: {}",
+                    String::from_utf8_lossy(&run.stderr)
+                ));
+                continue;
+            }
+            let got = frames_of(&out);
+            if got != u64::from(want) {
+                problems.push(format!("{name}, {what}: {got} frames, want {want}"));
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
 }

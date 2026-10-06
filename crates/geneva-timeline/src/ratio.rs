@@ -25,6 +25,8 @@ impl Ratio {
     pub const ZERO: Self = Self { num: 0, den: 1 };
     /// One.
     pub const ONE: Self = Self { num: 1, den: 1 };
+    /// One thousandth.
+    pub const MILLI: Self = Self { num: 1, den: 1000 };
 
     /// Builds a reduced ratio. Panics if `den` is zero.
     pub fn new(num: i64, den: i64) -> Self {

@@ -44,7 +44,7 @@ pub use length::{Length, Point, Scale};
 pub use parse::parse;
 pub use ratio::Ratio;
 pub use resolve::{
-    AssetInfo, Composition, FillTrack, NoAssetInfo, ResolvedAsset, ResolvedAudioClip,
+    AssetInfo, Composition, END_SLACK, FillTrack, NoAssetInfo, ResolvedAsset, ResolvedAudioClip,
     ResolvedAudioTrack, ResolvedClip, ResolvedComposition, ResolvedEffect, ResolvedHtml,
     ResolvedLayer, ResolvedMask, ResolvedOutput, ResolvedSource, ResolvedSubtitleTrack,
     ResolvedText, ResolvedTransition, ShadowTrack, resolve, resolve_with,

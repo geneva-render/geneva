@@ -168,7 +168,7 @@ The `animation` value is the CSS shorthand, parts in any order:
 | --- | --- | --- | --- |
 | `width`, `height` | yes | | Frame size in pixels. Odd values: W401. |
 | `fps` | yes | | Frame rate. |
-| `duration` | no | end of the last clip | Clips past it are cut (W301). |
+| `duration` | no | end of the last clip | Clips past it are cut (W301). A partial last frame counts as a frame, unless it would start less than 1 ms before the end. |
 | `background` | no | `"black"` | Clear color; `"transparent"` for alpha output. |
 | `color` | no | BT.709 SDR, limited range | Color tags; see [color.md](color.md). `pq`, `hlg` need a ten-bit codec: `h265`, `av1`, `vp9`, `prores` (E420). |
 | `audio.sample_rate` | no | 48000 | |

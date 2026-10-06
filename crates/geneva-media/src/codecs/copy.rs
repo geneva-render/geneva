@@ -496,7 +496,7 @@ fn video_layer_clips(
 /// 70.837433… s), where copying the clip whole is still what was asked.
 fn about_equal(a: Ratio, b: Ratio) -> bool {
     let diff = if a > b { a - b } else { b - a };
-    diff <= Ratio::new(1, 1000)
+    diff <= geneva_timeline::END_SLACK
 }
 
 /// Whether a `w`×`h` picture fitted into the output covers the whole frame

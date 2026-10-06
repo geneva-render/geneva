@@ -87,6 +87,31 @@ fn sequential_clips_and_transitions_resolve_exactly() {
 }
 
 #[test]
+fn a_duration_just_past_a_frame_adds_no_frame() {
+    let frames = |duration: &str, fps: &str| {
+        let text = format!(
+            r#"{{"geneva":"1.1","output":{{"width":64,"height":64,"fps":{fps},"duration":"{duration}"}},
+               "layers":[{{"clips":[{{"source":{{"kind":"solid","color":"red"}}}}]}}]}}"#
+        );
+        let l = load(&text);
+        assert!(l.is_ok(), "{:#?}", l.diagnostics);
+        l.composition.unwrap().frame_count()
+    };
+    // 73 frames at 24 fps last 3.0416666... s; six decimals write it a
+    // third of a microsecond late, which is not a 74th frame.
+    assert_eq!(frames("3.041667s", "24"), 73);
+    assert_eq!(frames("10s", "30"), 300);
+    assert_eq!(frames("10.0005s", "30"), 300);
+    // Past the slack, a partial frame is still a frame.
+    assert_eq!(frames("10.002s", "30"), 301);
+    assert_eq!(frames("3.003s", "\"30000/1001\""), 90);
+    // At a rate where a millisecond is most of a frame, half a frame is
+    // the most that is let go.
+    assert_eq!(frames("1s", "1000"), 1000);
+    assert_eq!(frames("0.0004s", "30"), 1);
+}
+
+#[test]
 fn open_ended_clips_run_to_the_output_end() {
     let text = std::fs::read_to_string("../../examples/solid.json").unwrap();
     let comp = load(&text).composition.unwrap();
