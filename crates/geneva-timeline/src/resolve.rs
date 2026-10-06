@@ -767,6 +767,14 @@ pub trait AssetInfo {
         None
     }
 
+    /// The family a font asset's file declares, so that a style naming
+    /// the family rather than the asset id still counts as using it.
+    /// `None` where the caller has not read the file.
+    fn font_family(&self, asset_id: &str) -> Option<String> {
+        let _ = asset_id;
+        None
+    }
+
     /// Whether a file under the asset root is there, for a picture markup
     /// points at. `None` where the caller cannot tell, so validation
     /// without files stays quiet.
@@ -3259,13 +3267,16 @@ fills the frame",
         px
     }
 
-    /// Warns when a style names a font family this machine does not have.
+    /// Warns when a style names a font family this machine does not have,
+    /// each family of a list on its own.
     ///
     /// The text still draws, in whatever the shaper falls back to, which
     /// is a different picture on a different machine and the kind of
     /// difference that is only noticed once the file is somewhere else.
-    /// A family that is the id of a font asset is fine by definition:
-    /// the document carries the file, which is the fix this suggests.
+    /// A family that is the id of a font asset, or the family a font
+    /// asset declares, is fine by definition: the document carries the
+    /// file, which is the fix this suggests. Such an asset is used.
+    /// CSS's generic families are not checked.
     fn check_font(
         &mut self,
         family: Option<&str>,
@@ -3273,10 +3284,34 @@ fills the frame",
         assets: &BTreeMap<String, ResolvedAsset>,
         in_markup: bool,
     ) {
-        let Some(family) = family else {
+        let Some(list) = family else {
             return;
         };
+        for family in geneva_html::style::font_list(list) {
+            if !geneva_html::style::is_generic_family(&family) {
+                self.check_one_font(&family, path, assets, in_markup);
+            }
+        }
+    }
+
+    fn check_one_font(
+        &mut self,
+        family: &str,
+        path: &Path,
+        assets: &BTreeMap<String, ResolvedAsset>,
+        in_markup: bool,
+    ) {
         if assets.contains_key(family) {
+            self.used_assets.insert(family.to_owned());
+            return;
+        }
+        let declared: Vec<String> = assets
+            .keys()
+            .filter(|id| self.info.font_family(id).as_deref() == Some(family))
+            .cloned()
+            .collect();
+        if !declared.is_empty() {
+            self.used_assets.extend(declared);
             return;
         }
         if self.info.has_font_family(family) != Some(false) {

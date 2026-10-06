@@ -760,6 +760,8 @@ dependencies = [
  "serde_json",
  "swash",
  "thiserror",
+ "unicode-bidi",
+ "unicode-general-category",
 ]
 
 [[package]]

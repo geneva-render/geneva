@@ -1351,9 +1351,10 @@ impl JsonSchema for Word {
 #[serde(deny_unknown_fields)]
 pub struct TextStyle {
     /// Font: the id of an asset of kind "font", a family name available
-    /// on the system, or the CSS `font` shorthand ("600 40px/1.2 Inter"),
-    /// whose parts fill in size, weight, italic and line_height unless
-    /// those are set.
+    /// on the system, a comma list of them tried in order for each
+    /// character ("Inter, Noto Sans Arabic"), or the CSS `font` shorthand
+    /// ("600 40px/1.2 Inter"), whose parts fill in size, weight, italic
+    /// and line_height unless those are set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
     /// Font size in pixels. Defaults to 48.

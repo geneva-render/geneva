@@ -21,6 +21,13 @@ versions changed the format freely.
   x264 and the other encoders, and the number of chunks encoded at
   once. The budget sizes the caches and the queue of frames waiting for
   the encoder. The render report gives `threads` and `peak_memory`.
+- **Font fallback through `font-family` lists.** Markup's
+  `font-family: Inter, "Noto Sans Arabic", "Noto Sans JP"` (and a text
+  source's `font` written as a list) draws each character in the first
+  listed family that has it, so a Latin caption with an Arabic or
+  Japanese word uses the fonts the document names, shaped and joined,
+  rather than whatever the machine falls back to. Only the first family
+  was used before.
 - **`backdrop-filter` in markup** (`-webkit-` too): `blur()`,
   `saturate()`, `brightness()` and `contrast()`, in order, on what is
   under the box, for frosted caption plates. As in Chromium, only the
@@ -54,6 +61,10 @@ versions changed the format freely.
   stroke also follows a variable font's weight.
 
 ### Fixed
+
+- **A font asset named in markup only by the family its file declares
+  was reported unused** (W201), and by `validate` also as not installed
+  (W405), though the render used it.
 
 - **`validate` without `--probe` looked for linked stylesheets in the
   working directory** rather than under the asset root, so a document

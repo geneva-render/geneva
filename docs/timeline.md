@@ -406,7 +406,7 @@ determines its other fields.
 | `text` | unless `words` | | |
 | `words` | no | | Timed words, ordered, non-overlapping (E411): `{ "text", "start", "end" }`, `["word", start, end]` or `["word", start]`. Clip-relative. Without `end`, current until the next; the last needs one (E102). |
 | `highlight` | no | | Style overrides for the current word. |
-| `font` | no | system sans-serif | `font` asset id, family name, or CSS `font` shorthand (`"600 40px/1.2 Inter"`) filling unset `size`, `weight`, `italic`, `line_height`. A font asset supplies its weight and style unless set. |
+| `font` | no | system sans-serif | `font` asset id, family name, a comma list of them (`"Inter, Noto Sans Arabic"`, see Fonts under markup), or CSS `font` shorthand (`"600 40px/1.2 Inter"`) filling unset `size`, `weight`, `italic`, `line_height`. A font asset supplies its weight and style unless set. |
 | `size` | no | `48` | Pixels. |
 | `weight` | no | `400` | 100 to 900. |
 | `italic` | no | `false` | |
@@ -632,6 +632,8 @@ property are named, and the rest of the document is drawn. A `<style>` rule matc
 **Fonts**
 
 - A family shipped as a `font` asset replaces the installed one of that name, in markup and text sources, by asset id or declared family. Other installed families remain as fallback.
+- A `font-family` list (and a text source's `font` list) is fallen back through a character at a time, as in a browser: each character is drawn in the first family with a glyph for it, at that family's nearest weight; spaces, combining marks and joiners stay with the text before them, so a word is shaped whole (Arabic joins). Generic names (`sans-serif`, `serif`, `monospace`, ...) are the machine's. Only characters no listed family has fall back to the installed fonts, so a list of font assets draws the same everywhere. Each named family that is neither installed nor an asset is reported (W405).
+- A paragraph is left to right, CSS's default `direction`, even when it starts with a right-to-left word; right-to-left words inside it are ordered as in a browser. `direction` and `dir` are not read.
 - A missing weight resolves by the CSS rule (above 500: next heavier; below 400: next lighter; 400 to 500: heavier up to 500, then lighter). A family with no italic face is drawn upright. Decided from the family alone, so identical on every machine.
 
 ### Gradients

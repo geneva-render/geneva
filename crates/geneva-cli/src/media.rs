@@ -496,8 +496,8 @@ impl ProbedAssets {
     /// Stylesheets that markup links to are still read, from under
     /// `root`, the asset root, since the markup cannot be checked without
     /// them.
-    pub fn fonts_only(root: &Path) -> Self {
-        Self {
+    pub fn fonts_only(text: &str, root: &Path) -> Self {
+        let mut out = Self {
             root: root.to_path_buf(),
             absolute_paths: false,
             durations: std::collections::HashMap::new(),
@@ -507,7 +507,19 @@ impl ProbedAssets {
             problems: Vec::new(),
             fonts: std::cell::OnceCell::new(),
             families: std::cell::RefCell::default(),
+        };
+        // The families the document's font files declare, which markup
+        // can name them by.
+        if let Ok(timeline) = geneva_timeline::parse(text) {
+            for (id, asset) in &timeline.assets {
+                if asset_kind(asset) == Some(geneva_timeline::schema::AssetKind::Font) {
+                    if let Some(family) = read_family(&root.join(&asset.src)) {
+                        out.asset_families.insert(id.clone(), family);
+                    }
+                }
+            }
         }
+        out
     }
 }
 
@@ -539,6 +551,10 @@ impl AssetInfo for ProbedAssets {
         self.sizes.get(asset_id).copied()
     }
 
+    fn font_family(&self, asset_id: &str) -> Option<String> {
+        self.asset_families.get(asset_id).cloned()
+    }
+
     fn text(&self, asset_id: &str, _: &str) -> Option<String> {
         self.texts.get(asset_id).cloned()
     }
@@ -550,6 +566,24 @@ impl AssetInfo for ProbedAssets {
     fn exists(&self, path: &str) -> Option<bool> {
         Some(self.root.join(path).is_file())
     }
+}
+
+/// An asset's kind, as declared or as its extension says.
+fn asset_kind(
+    asset: &geneva_timeline::schema::Asset,
+) -> Option<geneva_timeline::schema::AssetKind> {
+    asset.kind.or_else(|| {
+        let ext = Path::new(&asset.src)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        geneva_timeline::schema::AssetKind::from_extension(ext)
+    })
+}
+
+/// The family a font file declares, if it can be read.
+fn read_family(path: &Path) -> Option<String> {
+    geneva_render::declared_family(std::fs::read(path).ok()?)
 }
 
 /// Opens every video and audio asset declared in `text` under `root`.
@@ -565,13 +599,7 @@ pub fn probe_assets(text: &str, root: &Path, measure: bool) -> ProbedAssets {
         return out;
     };
     for (id, asset) in &timeline.assets {
-        let kind = asset.kind.or_else(|| {
-            let ext = Path::new(&asset.src)
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("");
-            geneva_timeline::schema::AssetKind::from_extension(ext)
-        });
+        let kind = asset_kind(asset);
         let path = root.join(&asset.src);
         // Text a document draws rather than muxes: markup, and captions,
         // which a .srt or .vtt infers as a subtitle.
@@ -604,11 +632,8 @@ pub fn probe_assets(text: &str, root: &Path, measure: bool) -> ProbedAssets {
         // is what stops the check below from reporting a document that
         // carries its font, which is the very thing the check asks for.
         if matches!(kind, Some(geneva_timeline::schema::AssetKind::Font)) {
-            if let Ok(data) = std::fs::read(&path) {
-                let mut engine = geneva_render::TextEngine::new();
-                if let Some(family) = engine.add_font(id, data) {
-                    out.asset_families.insert(id.clone(), family);
-                }
+            if let Some(family) = read_family(&path) {
+                out.asset_families.insert(id.clone(), family);
             }
             continue;
         }

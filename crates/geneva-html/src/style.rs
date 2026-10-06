@@ -1247,15 +1247,41 @@ fn fill_before_stroke(l: &str) -> Result<bool, String> {
 }
 
 fn family(value: &str) -> String {
-    // Only the first family is used; there is no font matching to fall
-    // back through, and the renderer already falls back on its own.
+    // The whole list, written plainly: the renderer falls back through
+    // it a character at a time.
+    font_list(value).join(", ")
+}
+
+/// The families of a `font-family` list, in order, unquoted:
+/// `Inter, "Noto Sans Arabic", sans-serif` gives the three names.
+#[must_use]
+pub fn font_list(value: &str) -> Vec<String> {
     value
         .split(',')
-        .next()
-        .unwrap_or(value)
-        .trim()
-        .trim_matches(['"', '\''])
-        .to_owned()
+        .map(|f| f.trim().trim_matches(['"', '\'']).trim().to_owned())
+        .filter(|f| !f.is_empty())
+        .collect()
+}
+
+/// Whether a family name is one of CSS's generic families, which name
+/// whatever the machine has rather than a font.
+#[must_use]
+pub fn is_generic_family(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "serif"
+            | "sans-serif"
+            | "monospace"
+            | "cursive"
+            | "fantasy"
+            | "system-ui"
+            | "ui-serif"
+            | "ui-sans-serif"
+            | "ui-monospace"
+            | "ui-rounded"
+            | "emoji"
+            | "math"
+    )
 }
 
 /// `border: 5px solid #4ade80`, in any order, on the named sides.

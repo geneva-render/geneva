@@ -38,12 +38,25 @@ pub struct TextEngine {
     /// of these in it is the document's, and the machine's faces of that
     /// family are dropped.
     asset_ids: HashSet<cosmic_text::fontdb::ID>,
+    /// The face a family, weight and style comes to, for fallback
+    /// through a family list.
+    faces: HashMap<(String, u16, bool), Option<cosmic_text::fontdb::ID>>,
 }
 
 impl Default for TextEngine {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The family a font file declares (its first face's), read without the
+/// machine's fonts; `None` when the file has no usable face.
+#[must_use]
+pub fn declared_family(data: Vec<u8>) -> Option<String> {
+    let mut db = cosmic_text::fontdb::Database::new();
+    db.load_font_data(data);
+    let face = db.faces().next()?;
+    face.families.first().map(|(name, _)| name.clone())
 }
 
 /// The room `render` leaves around the glyphs for a stroke and a shadow,
@@ -83,6 +96,7 @@ impl TextEngine {
             scale: ScaleContext::new(),
             asset_faces: HashMap::new(),
             asset_ids: HashSet::new(),
+            faces: HashMap::new(),
         }
     }
 
@@ -142,6 +156,7 @@ impl TextEngine {
             db.remove_face(id);
         }
         self.asset_faces.insert(asset_id.to_owned(), loaded);
+        self.faces.clear();
         Some(family)
     }
 
@@ -204,6 +219,91 @@ impl TextEngine {
                 styles.push(self.style(style, Some(&spec.style), *color));
             }
         }
+        // The pieces of text in order, each with its style and whether it
+        // carries its own metrics (a run's pieces do).
+        let mut spans: Vec<(String, usize, bool)> = Vec::new();
+        if let Some(runs) = runs {
+            for (i, (piece, _, _)) in runs.iter().enumerate() {
+                spans.push((piece.clone(), i + 1, true));
+            }
+        } else if text.words.is_empty() {
+            spans.push((text.text.clone(), 0, false));
+        } else {
+            for (i, (word, _, _)) in text.words.iter().enumerate() {
+                if i > 0 {
+                    spans.push((" ".to_owned(), 0, false));
+                }
+                let style_index = match (&highlight, active_word) {
+                    (Some(h), Some(active)) if active == i => {
+                        styles.push(h.clone());
+                        styles.len() - 1
+                    }
+                    _ => 0,
+                };
+                spans.push((word.clone(), style_index, false));
+            }
+        }
+        // CSS's default direction is left to right, while the shaper
+        // takes a paragraph's direction from its first strong character,
+        // which would set a caption that starts with an Arabic word right
+        // to left. A left-to-right mark (invisible) before such a
+        // paragraph keeps it left to right; other paragraphs are left as
+        // they are.
+        let mut first_strong_pending = true;
+        let mut mark_at: Option<(usize, usize)> = None;
+        let mut marks: Vec<(usize, usize)> = Vec::new();
+        for (index, (piece, _, _)) in spans.iter().enumerate() {
+            for (at, ch) in piece.char_indices() {
+                if ch == '\n' {
+                    first_strong_pending = true;
+                    mark_at = None;
+                    continue;
+                }
+                if mark_at.is_none() {
+                    mark_at = Some((index, at));
+                }
+                if first_strong_pending {
+                    use unicode_bidi::BidiClass;
+                    match unicode_bidi::bidi_class(ch) {
+                        BidiClass::R | BidiClass::AL => {
+                            marks.extend(mark_at);
+                            first_strong_pending = false;
+                        }
+                        BidiClass::L => first_strong_pending = false,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        for (index, at) in marks.into_iter().rev() {
+            spans[index].0.insert(at, LTR_MARK);
+        }
+        // `origin[i]` is the style `styles[i]` was made from: a piece in a
+        // fallback family gets a style of its own, which keeps its colour
+        // and fill.
+        let mut origin: Vec<usize> = (0..styles.len()).collect();
+        let mut pieces: Vec<(String, usize, bool)> = Vec::with_capacity(spans.len());
+        for (piece, index, own_metrics) in spans {
+            let parts = self.split_by_family(&piece, &styles[index]);
+            if parts.len() == 1 && parts[0].1 == 0 {
+                pieces.push((piece, index, own_metrics));
+                continue;
+            }
+            for (range, family) in parts {
+                let mut style = styles[index].clone();
+                if family > 0 {
+                    let name = style.families[family].clone();
+                    let (weight, italic) = style.asked;
+                    let (weight, italic) = self.available_face(Some(&name), weight, italic);
+                    style.family = Some(name);
+                    style.weight = weight;
+                    style.italic = italic;
+                }
+                styles.push(style);
+                origin.push(origin[index]);
+                pieces.push((piece[range].to_owned(), styles.len() - 1, own_metrics));
+            }
+        }
         let mut buffer = Buffer::new(
             &mut self.fonts,
             Metrics::new(base.size, base.size * line_height),
@@ -213,37 +313,22 @@ impl TextEngine {
         buffer.set_wrap(Wrap::WordOrGlyph);
         buffer.set_size(Some(wrap_width), None);
         let default_attrs = attrs_for(&base, 0);
-        if let Some(runs) = runs {
-            // Every piece carries its own metrics: a line is as tall as
+        if pieces.len() == 1 && pieces[0].1 == 0 {
+            buffer.set_text(&pieces[0].0, &default_attrs, Shaping::Advanced, Some(align));
+        } else {
+            // A run's pieces carry their own metrics: a line is as tall as
             // the tallest piece on it, but only pieces with metrics count,
             // so one `<small>` alone would shrink the line under the rest.
-            let rich = runs.iter().enumerate().map(|(i, (piece, _, _))| {
-                let style = &styles[i + 1];
-                let attrs = attrs_for(style, i + 1)
-                    .metrics(Metrics::new(style.size, style.size * line_height));
+            let rich = pieces.iter().map(|(piece, i, own_metrics)| {
+                let style = &styles[*i];
+                let attrs = attrs_for(style, *i);
+                let attrs = if *own_metrics {
+                    attrs.metrics(Metrics::new(style.size, style.size * line_height))
+                } else {
+                    attrs
+                };
                 (piece.as_str(), attrs)
             });
-            buffer.set_rich_text(rich, &default_attrs, Shaping::Advanced, Some(align));
-        } else if text.words.is_empty() {
-            buffer.set_text(&text.text, &default_attrs, Shaping::Advanced, Some(align));
-        } else {
-            let mut spans: Vec<(String, usize)> = Vec::new();
-            for (i, (word, _, _)) in text.words.iter().enumerate() {
-                if i > 0 {
-                    spans.push((" ".to_owned(), 0));
-                }
-                let style_index = match (&highlight, active_word) {
-                    (Some(h), Some(active)) if active == i => {
-                        styles.push(h.clone());
-                        styles.len() - 1
-                    }
-                    _ => 0,
-                };
-                spans.push((word.clone(), style_index));
-            }
-            let rich = spans
-                .iter()
-                .map(|(s, i)| (s.as_str(), attrs_for(&styles[*i], *i)));
             buffer.set_rich_text(rich, &default_attrs, Shaping::Advanced, Some(align));
         }
         buffer.shape_until_scroll(&mut self.fonts, true);
@@ -338,7 +423,7 @@ impl TextEngine {
         // that clips its background to all the text inside it.
         let fills: Vec<Option<Fill>> = (0..styles.len())
             .map(|i| {
-                if i == 0 || runs.is_some() {
+                if origin[i] == 0 || runs.is_some() {
                     text.fill.as_ref().map(fill_now)
                 } else {
                     text.highlight_fill.as_ref().map(fill_now)
@@ -467,6 +552,84 @@ impl TextEngine {
         (picked.unwrap_or(weight), italic)
     }
 
+    /// The face the database gives a family at a weight and style, or
+    /// `None` when it has no face of that family.
+    fn face_of(
+        &mut self,
+        family: &str,
+        weight: u16,
+        italic: bool,
+    ) -> Option<cosmic_text::fontdb::ID> {
+        let key = (family.to_owned(), weight, italic);
+        if let Some(found) = self.faces.get(&key) {
+            return *found;
+        }
+        let query = cosmic_text::fontdb::Query {
+            families: &[family_of(family)],
+            weight: Weight(weight),
+            stretch: cosmic_text::fontdb::Stretch::Normal,
+            style: if italic { Style::Italic } else { Style::Normal },
+        };
+        let found = self.fonts.db().query(&query);
+        self.faces.insert(key, found);
+        found
+    }
+
+    /// Whether a face has a glyph for a character.
+    fn face_has(&mut self, id: cosmic_text::fontdb::ID, weight: u16, ch: char) -> bool {
+        self.fonts
+            .get_font(id, Weight(weight))
+            .is_some_and(|font| font.as_swash().charmap().map(ch) != 0)
+    }
+
+    /// The first family of `style`'s list, by index, with a glyph for
+    /// `ch` in the weight and style the family snaps to; `None` when none
+    /// has one, and the shaper's own fallback is left to find one.
+    fn family_for(&mut self, style: &Resolved, ch: char) -> Option<usize> {
+        let (weight, italic) = style.asked;
+        for (i, family) in style.families.iter().enumerate() {
+            let (w, it) = self.available_face(Some(family), weight, italic);
+            if let Some(id) = self.face_of(family, w, it) {
+                if self.face_has(id, w, ch) {
+                    return Some(i);
+                }
+            }
+        }
+        None
+    }
+
+    /// Cuts `text` where the family a character comes from changes: each
+    /// character goes to the first family of the list with a glyph for
+    /// it, as in a browser; spaces, marks and joiners stay with what is
+    /// before them, so a word is shaped whole. Characters no family has
+    /// go to the first, whose shaper falls back to the machine's fonts.
+    /// Byte ranges and the index of the family in `style.families`.
+    fn split_by_family(
+        &mut self,
+        text: &str,
+        style: &Resolved,
+    ) -> Vec<(std::ops::Range<usize>, usize)> {
+        if style.families.len() < 2 {
+            return vec![(0..text.len(), 0)];
+        }
+        let mut out: Vec<(std::ops::Range<usize>, usize)> = Vec::new();
+        for (at, ch) in text.char_indices() {
+            let end = at + ch.len_utf8();
+            let chosen = match out.last() {
+                Some((_, last)) if follows_neighbour(ch) => *last,
+                _ => self.family_for(style, ch).unwrap_or(0),
+            };
+            match out.last_mut() {
+                Some((range, last)) if *last == chosen => range.end = end,
+                _ => out.push((at..end, chosen)),
+            }
+        }
+        if out.is_empty() {
+            out.push((0..text.len(), 0));
+        }
+        out
+    }
+
     /// Resolves a style block against defaults (and a parent for highlights).
     ///
     /// A font asset supplies its face's weight and style unless the style
@@ -479,10 +642,22 @@ impl TextEngine {
             .font
             .clone()
             .or_else(|| parent.and_then(|p| p.font.clone()));
-        let face = font.as_ref().and_then(|f| self.asset_faces.get(f));
-        let family = font
-            .clone()
-            .map(|f| face.map_or(f, |face| face.family.clone()));
+        // A list names asset ids or families; an asset id stands for the
+        // family its file declares. The first decides the defaults.
+        let list = font
+            .as_deref()
+            .map(geneva_html::style::font_list)
+            .unwrap_or_default();
+        let face = list.first().and_then(|f| self.asset_faces.get(f));
+        let families: Vec<String> = list
+            .iter()
+            .map(|f| {
+                self.asset_faces
+                    .get(f)
+                    .map_or_else(|| f.clone(), |a| a.family.clone())
+            })
+            .collect();
+        let family = families.first().cloned();
         let weight = s
             .weight
             .or_else(|| parent.and_then(|p| p.weight))
@@ -493,9 +668,12 @@ impl TextEngine {
             .or_else(|| parent.and_then(|p| p.italic))
             .or_else(|| face.map(|f| f.style != Style::Normal))
             .unwrap_or(false);
+        let asked = (weight, italic);
         let (weight, italic) = self.available_face(family.as_deref(), weight, italic);
         Resolved {
             family,
+            families,
+            asked,
             size: pick(&|s| s.size).unwrap_or(DEFAULT_SIZE).max(1.0) as f32,
             weight,
             italic,
@@ -689,6 +867,13 @@ struct LoadedFace {
 #[derive(Debug, Clone)]
 struct Resolved {
     family: Option<String>,
+    /// The whole family list, `family` first; more than one means the
+    /// text falls back through them a character at a time.
+    families: Vec<String>,
+    /// The weight and style asked for, before `available_face` snapped
+    /// them to the first family's faces: a fallback family snaps them
+    /// to its own.
+    asked: (u16, bool),
     size: f32,
     weight: u16,
     italic: bool,
@@ -696,9 +881,38 @@ struct Resolved {
     color: LinearRgba,
 }
 
+/// U+200E, which makes a paragraph that starts with it left to right.
+const LTR_MARK: char = '\u{200e}';
+
+/// A family name as the font database takes it: CSS's generic names
+/// are the database's generic families.
+fn family_of(name: &str) -> Family<'_> {
+    match name.to_ascii_lowercase().as_str() {
+        "serif" | "ui-serif" => Family::Serif,
+        "sans-serif" | "system-ui" | "ui-sans-serif" | "ui-rounded" => Family::SansSerif,
+        "monospace" | "ui-monospace" => Family::Monospace,
+        "cursive" => Family::Cursive,
+        "fantasy" => Family::Fantasy,
+        _ => Family::Name(name),
+    }
+}
+
+/// Whether a character goes with the text around it rather than choosing
+/// a font of its own: spaces, combining marks and joiners, which a
+/// browser draws in the font of the character they follow.
+fn follows_neighbour(ch: char) -> bool {
+    use unicode_general_category::{GeneralCategory as G, get_general_category};
+    ch.is_whitespace()
+        || matches!(
+            get_general_category(ch),
+            G::NonspacingMark | G::SpacingMark | G::EnclosingMark | G::Format
+        )
+        || ('\u{fe00}'..='\u{fe0f}').contains(&ch)
+}
+
 fn attrs_for(style: &Resolved, metadata: usize) -> Attrs<'_> {
     let family = match &style.family {
-        Some(name) => Family::Name(name.as_str()),
+        Some(name) => family_of(name),
         None => Family::SansSerif,
     };
     let mut attrs = Attrs::new()
@@ -971,6 +1185,43 @@ mod face_tests {
                 "every face left is the document's"
             );
         }
+    }
+
+    /// Each character goes to the first family of the list with a glyph
+    /// for it; the space between two Arabic words stays with them, so
+    /// the phrase is shaped whole, and the Latin after them goes back to
+    /// the first family.
+    #[test]
+    fn a_family_list_is_fallen_back_through_a_character_at_a_time() {
+        let mut engine = TextEngine::new();
+        let (regular, _) = liberation();
+        engine.add_font("sans", regular).expect("a usable face");
+        let arabic = std::fs::read("../../tests/golden/fonts/NotoSansArabic-Subset.ttf")
+            .expect("the golden root ships it");
+        engine.add_font("arabic", arabic).expect("a usable face");
+        let style = TextStyle {
+            font: Some("sans, arabic".to_owned()),
+            ..TextStyle::default()
+        };
+        let resolved = engine.style(&style, None, LinearRgba::TRANSPARENT);
+        assert_eq!(resolved.families, ["Liberation Sans", "Noto Sans Arabic"]);
+        let text = "Hi مرحبا بالعالم ok";
+        let parts: Vec<(&str, usize)> = engine
+            .split_by_family(text, &resolved)
+            .into_iter()
+            .map(|(r, f)| (&text[r], f))
+            .collect();
+        assert_eq!(parts, [("Hi ", 0), ("مرحبا بالعالم ", 1), ("ok", 0)]);
+        // One family: nothing to split, whatever it covers.
+        let one = engine.style(
+            &TextStyle {
+                font: Some("sans".to_owned()),
+                ..TextStyle::default()
+            },
+            None,
+            LinearRgba::TRANSPARENT,
+        );
+        assert_eq!(engine.split_by_family(text, &one), [(0..text.len(), 0)]);
     }
 
     /// A family nobody shipped is left to the machine, which is what

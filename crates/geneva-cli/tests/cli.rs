@@ -1977,3 +1977,50 @@ fn threads_and_a_memory_budget_are_taken_and_reported() {
     assert_eq!(bad.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&bad.stderr).contains("is not a size"));
 }
+
+/// Markup that names its font assets by the families their files declare,
+/// in a fallback list, uses them: no "never used" note, no "not installed"
+/// warning. A family in the list that nothing provides is still reported.
+#[test]
+fn font_assets_named_by_family_in_a_list_are_used() {
+    let dir = tempfile::tempdir().unwrap();
+    let fonts = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/fonts");
+    for name in ["LiberationSans-Regular.ttf", "NotoSansArabic-Subset.ttf"] {
+        std::fs::copy(fonts.join(name), dir.path().join(name)).unwrap();
+    }
+    let doc = |family: &str| {
+        format!(
+            r#"{{"geneva":"1.1","output":{{"width":320,"height":120,"fps":30,"duration":"1s"}},
+                "assets":{{"latin":{{"src":"LiberationSans-Regular.ttf"}},"arabic":{{"src":"NotoSansArabic-Subset.ttf"}}}},
+                "layers":[{{"clips":[{{"source":{{"kind":"html","html":"<p style='font-family: {family}; color: white'>Hi مرحبا</p>"}}}}]}}]}}"#
+        )
+    };
+    let path = dir.path().join("fallback.json");
+    std::fs::write(
+        &path,
+        doc("Liberation Sans, \\\"Noto Sans Arabic\\\", sans-serif"),
+    )
+    .unwrap();
+    geneva()
+        .args(["frame"])
+        .arg(&path)
+        .args(["--at", "0s", "-o"])
+        .arg(dir.path().join("f.png"))
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("W201").not())
+        .stderr(predicate::str::contains("W405").not());
+    std::fs::write(
+        &path,
+        doc("Liberation Sans, Nowhere Sans, Noto Sans Arabic"),
+    )
+    .unwrap();
+    geneva()
+        .args(["validate"])
+        .arg(&path)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("W405"))
+        .stderr(predicate::str::contains("Nowhere Sans"))
+        .stderr(predicate::str::contains("W201").not());
+}

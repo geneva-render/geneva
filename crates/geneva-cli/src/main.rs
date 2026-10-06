@@ -1366,7 +1366,7 @@ fn load_text_with(
     } else {
         geneva_timeline::load_with(
             text,
-            &media::ProbedAssets::fonts_only(root).with_absolute_paths(absolute_paths),
+            &media::ProbedAssets::fonts_only(text, root).with_absolute_paths(absolute_paths),
         )
     };
     loaded.diagnostics.sort_by(|a, b| {
