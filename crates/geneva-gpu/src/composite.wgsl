@@ -410,6 +410,48 @@ fn straight(c: f32, a: f32) -> f32 {
     return 0.0;
 }
 
+fn srgb_encode(v: f32) -> f32 {
+    if v <= 0.0031308 {
+        return v * 12.92;
+    }
+    return 1.055 * pow(v, 1.0 / 2.4) - 0.055;
+}
+
+fn srgb_decode(v: f32) -> f32 {
+    if v <= 0.04045 {
+        return v / 12.92;
+    }
+    return pow((v + 0.055) / 1.055, 2.4);
+}
+
+// A premultiplied linear color to premultiplied sRGB-encoded values,
+// and back (html.rs, encode_pixel and decode_pixel).
+fn encode(p: vec4<f32>) -> vec4<f32> {
+    if p.a <= 0.0 {
+        return vec4<f32>(0.0);
+    }
+    let c = p.rgb / p.a;
+    return vec4<f32>(
+        srgb_encode(c.r) * p.a,
+        srgb_encode(c.g) * p.a,
+        srgb_encode(c.b) * p.a,
+        p.a,
+    );
+}
+
+fn decode(p: vec4<f32>) -> vec4<f32> {
+    if p.a <= 0.0 {
+        return vec4<f32>(0.0);
+    }
+    let c = p.rgb / p.a;
+    return vec4<f32>(
+        srgb_decode(c.r) * p.a,
+        srgb_decode(c.g) * p.a,
+        srgb_decode(c.b) * p.a,
+        p.a,
+    );
+}
+
 // The W3C formula on premultiplied colors: each channel is
 // Cs*as*(1-ab) + Cb*ab*(1-as) + as*ab*B(Cb, Cs); the alpha is "over".
 fn separable(s: vec4<f32>, d: vec4<f32>) -> vec4<f32> {
@@ -446,6 +488,10 @@ fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
         color = acc * 0.25;
     }
     let src = color * clip.opacity;
+    if clip.blend == 9u {
+        let dst = textureLoad(backdrop, vec2<i32>(i32(px), i32(py)), 0);
+        return decode(encode(src) + encode(dst) * (1.0 - src.a));
+    }
     if clip.blend >= 1u && clip.blend <= 7u {
         // The pipeline replaces the pixel with what is computed here,
         // from a copy of the frame taken before this draw.

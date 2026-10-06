@@ -20,6 +20,7 @@ use geneva_timeline::{Animated, FillTrack, OutlinePaint, ResolvedHtml, ResolvedT
 use rayon::prelude::*;
 
 use crate::assets::Image;
+use crate::backdrop::{Backdrop, Filter};
 use crate::fill::{Fill, encoded};
 use crate::text::TextEngine;
 
@@ -199,11 +200,73 @@ pub fn render(
     images: &HashMap<String, Image>,
     t: f64,
     cache: &mut GroupCache,
-) -> Result<Image, String> {
+) -> Result<(Image, Vec<Backdrop>), String> {
     let (laid, transforms) = lay_out(html, prepared, text, images, t)?;
     let mut surface = paint(&laid, &transforms, text, images, cache);
     to_linear(&mut surface);
-    Ok(surface)
+    Ok((surface, backdrops(&laid, &transforms)))
+}
+
+/// The boxes with a `backdrop-filter`, where they land in the clip's box
+/// at this moment: each group they are in moves their rectangle (to its
+/// bounding box, when the group turns) and multiplies its opacity in.
+fn backdrops(laid: &Laid, transforms: &[Option<Transform>]) -> Vec<Backdrop> {
+    let mut out = Vec::new();
+    for b in &laid.boxes {
+        if b.paint.backdrop.is_empty() || b.opacity <= 0.0 {
+            continue;
+        }
+        let r = b.rect;
+        let mut corners = [
+            (f64::from(r[0]), f64::from(r[1])),
+            (f64::from(r[0] + r[2]), f64::from(r[1])),
+            (f64::from(r[0]), f64::from(r[1] + r[3])),
+            (f64::from(r[0] + r[2]), f64::from(r[1] + r[3])),
+        ];
+        let mut opacity = f64::from(b.opacity);
+        let mut scale = 1.0f64;
+        let mut group = b.group;
+        while let Some(g) = group {
+            let gr = &laid.groups[g];
+            opacity *= f64::from(gr.opacity);
+            if let Some(tr) = transforms.get(g).and_then(Option::as_ref) {
+                let centre = centre_of(gr.rect);
+                for c in &mut corners {
+                    *c = forward(tr, centre, *c);
+                }
+                scale *= f64::midpoint(tr.scale[0].abs(), tr.scale[1].abs());
+            }
+            group = gr.parent;
+        }
+        if opacity <= 0.0 {
+            continue;
+        }
+        let x0 = corners.iter().map(|c| c.0).fold(f64::INFINITY, f64::min);
+        let y0 = corners.iter().map(|c| c.1).fold(f64::INFINITY, f64::min);
+        let x1 = corners
+            .iter()
+            .map(|c| c.0)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let y1 = corners
+            .iter()
+            .map(|c| c.1)
+            .fold(f64::NEG_INFINITY, f64::max);
+        out.push(Backdrop {
+            rect: [x0, y0, x1 - x0, y1 - y0],
+            radius: b.paint.radius.map(|r| r * scale),
+            filters: b
+                .paint
+                .backdrop
+                .iter()
+                .map(|f| match *f {
+                    Filter::Blur(r) => Filter::Blur(r * scale),
+                    other => other,
+                })
+                .collect(),
+            opacity,
+        });
+    }
+    out
 }
 
 /// Lays the document out at `t`, with the animated styles of the moment
@@ -259,7 +322,7 @@ fn lay_out(
 /// box (gradients, translucent boxes, shadows, blur, text) blends there,
 /// so a page looks as it does in a browser, and the finished box is
 /// turned into linear light once, for the compositor.
-fn encode_pixel(p: LinearRgba) -> LinearRgba {
+pub(crate) fn encode_pixel(p: LinearRgba) -> LinearRgba {
     if p.a <= 0.0 {
         return LinearRgba::TRANSPARENT;
     }
@@ -272,7 +335,7 @@ fn encode_pixel(p: LinearRgba) -> LinearRgba {
     }
 }
 
-fn decode_pixel(p: LinearRgba) -> LinearRgba {
+pub(crate) fn decode_pixel(p: LinearRgba) -> LinearRgba {
     if p.a <= 0.0 {
         return LinearRgba::TRANSPARENT;
     }

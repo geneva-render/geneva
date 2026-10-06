@@ -188,6 +188,35 @@ pub struct Paint {
     /// `mix-blend-mode`: how the box and its children are mixed with
     /// what is behind them.
     pub blend: Blend,
+    /// `backdrop-filter`: what is done to the picture behind the box,
+    /// inside its border box, before the box is drawn over it. Empty for
+    /// none.
+    pub backdrop: Vec<Filter>,
+}
+
+/// One function of a `backdrop-filter`, applied in the order written to
+/// sRGB-encoded values, as a browser does.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Filter {
+    /// `blur(<length>)`: a Gaussian of that standard deviation, in pixels.
+    Blur(f64),
+    /// `saturate(<number>|<percentage>)`: 1 leaves the colour as it is.
+    Saturate(f64),
+    /// `brightness(...)`: a factor on every channel.
+    Brightness(f64),
+    /// `contrast(...)`: a factor on every channel's distance from grey.
+    Contrast(f64),
+}
+
+impl Filter {
+    /// The blur's standard deviation, zero for the other functions.
+    #[must_use]
+    pub fn blur(self) -> f64 {
+        match self {
+            Self::Blur(r) => r,
+            _ => 0.0,
+        }
+    }
 }
 
 impl Default for Paint {
@@ -204,6 +233,7 @@ impl Default for Paint {
             blur: 0.0,
             clip_path: None,
             blend: Blend::default(),
+            backdrop: Vec::new(),
         }
     }
 }
@@ -883,6 +913,7 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
                 return unsupported(v, "none or polygon(x y, ...)");
             };
         }
+        "backdrop-filter" | "-webkit-backdrop-filter" => c.paint.backdrop = filters(v, em)?,
         "filter" => {
             c.paint.blur = if l == "none" {
                 0.0
@@ -1460,6 +1491,40 @@ fn background_position(value: &str, em: f64) -> Result<(Extent, Extent), String>
 }
 
 /// The inside of `name(...)`, keeping the original case of the argument.
+/// A `backdrop-filter` list: `none`, or `blur()`, `saturate()`,
+/// `brightness()` and `contrast()` in any order and number.
+pub fn filters(value: &str, em: f64) -> Result<Vec<Filter>, String> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Ok(Vec::new());
+    }
+    let amount = |arg: &str| -> Result<f64, String> {
+        let arg = arg.trim();
+        match percent(arg) {
+            Some(p) => Ok(p / 100.0),
+            None => number(arg),
+        }
+        .map(|a| a.max(0.0))
+    };
+    parts(v)
+        .into_iter()
+        .map(|f| {
+            let l = f.to_ascii_lowercase();
+            if let Some(arg) = function(&l, f, "blur") {
+                Ok(Filter::Blur(pixels(arg.trim(), em)?.max(0.0)))
+            } else if let Some(arg) = function(&l, f, "saturate") {
+                Ok(Filter::Saturate(amount(arg)?))
+            } else if let Some(arg) = function(&l, f, "brightness") {
+                Ok(Filter::Brightness(amount(arg)?))
+            } else if let Some(arg) = function(&l, f, "contrast") {
+                Ok(Filter::Contrast(amount(arg)?))
+            } else {
+                unsupported(f, "blur(), saturate(), brightness() or contrast()")
+            }
+        })
+        .collect()
+}
+
 fn function<'a>(lower: &str, value: &'a str, name: &str) -> Option<&'a str> {
     let head = format!("{name}(");
     if !lower.starts_with(&head) || !lower.ends_with(')') {

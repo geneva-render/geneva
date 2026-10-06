@@ -91,8 +91,16 @@ with box, outline and shadow, placed like an image.
 **Markup**: parsed and styled once per clip by `geneva-html`, laid out
 and painted by the renderer into a picture placed like an image.
 
-- Painted in sRGB-encoded premultiplied values, as a browser does; the
-  finished box is converted to linear light once.
+- Painted in sRGB-encoded premultiplied values, as a browser does, and
+  laid on in them too with the `normal` blend mode: the frame under the
+  box is encoded, the box drawn over it, and the result decoded. On the
+  GPU, the shader does the same from a copy of the frame, as for a blend
+  mode.
+- `backdrop-filter` boxes are handed to the compositor with the picture:
+  before the clip is drawn, the region under each box is filtered (blur,
+  downsampled above sigma 8, then the colour filters) and mixed in. The
+  GPU compositor does not draw them; documents using them render on the
+  CPU.
 - A box with nothing animated inside is painted once per clip.
 - An element with an animation, opacity, filter, blend mode or clip is a
   group: a buffer of its own, bounded to what its parent can show
@@ -175,7 +183,9 @@ Picture untouched but not copyable (another codec, a quality setting,
   transparent frames the size of their bounding boxes, one per group of
   clips whose boxes touch (a card at the top and captions at the bottom
   are two), and laid over the decoded planes, converting only covered
-  pixels to linear light and back. Untouched pixels stay byte-identical.
+  pixels to linear light and back (markup: to sRGB-encoded values and
+  back). A backdrop filter splits the overlays where it falls and is
+  done to the planes under its box. Untouched pixels stay byte-identical.
   Word-timed text is drawn again only when the lit word changes.
 - RGB outputs from 8-bit Y'CbCr sources go through the scaler with the
   source matrix and range and a per-channel transfer table. Other

@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 mod assets;
+pub mod backdrop;
 mod blur;
 mod cpu;
 mod fill;
@@ -29,7 +30,7 @@ use thiserror::Error;
 
 pub use assets::{AssetSource, FileAssets, Image, NoAssets, VideoPlanes};
 pub use blur::{box_radii, gaussian_blur};
-pub use cpu::CpuRenderer;
+pub use cpu::{CpuRenderer, Overlay, composited_encoded};
 pub use frame::Frame;
 pub use html::{MarkupGroup, MarkupItem, MarkupLayers, MarkupRun, blend_mode};
 pub use painter::{Paint, Painted, Painter};

@@ -52,6 +52,34 @@ fn from_linear_lut(transfer: Transfer) -> &'static Lut {
     build_lut(&LUTS, transfer, |x| transfer.from_linear(x) as f32)
 }
 
+/// A value in `transfer` to the sRGB-encoded value of the same light,
+/// and back: markup is laid on in sRGB-encoded values, as the compositor
+/// does after decoding the video to linear light, so the direct path
+/// goes through the same curve.
+fn srgb_recoding(transfer: Transfer) -> (impl Fn(f32) -> f32, impl Fn(f32) -> f32) {
+    let same = transfer == Transfer::Srgb;
+    let (to_linear, from_linear) = (to_linear_lut(transfer), from_linear_lut(transfer));
+    let (srgb_in, srgb_out) = (
+        to_linear_lut(Transfer::Srgb),
+        from_linear_lut(Transfer::Srgb),
+    );
+    let to_srgb = move |v: f32| {
+        if same {
+            v
+        } else {
+            srgb_out[lut_index(to_linear[lut_index(v)])]
+        }
+    };
+    let from_srgb = move |v: f32| {
+        if same {
+            v
+        } else {
+            from_linear[lut_index(srgb_in[lut_index(v)])]
+        }
+    };
+    (to_srgb, from_srgb)
+}
+
 /// Per-transfer lookup from linear light over `[0, peak]`, indexed by
 /// the fourth root of the fraction of the peak, to the non-linear value:
 /// for HDR outputs, whose light runs far past reference white.
@@ -673,12 +701,50 @@ pub fn frame_to_planes_into(
         });
 }
 
+/// Lays one step of the clips above a direct-path base onto its decoded
+/// planes: a picture blended over them (in linear light, or in
+/// sRGB-encoded values for markup), or a box's backdrop filter done to
+/// them.
+pub fn lay_overlay(planes: &mut Planes, overlay: &geneva_render::Overlay, tags: ResolvedTags) {
+    match overlay {
+        geneva_render::Overlay::Picture(frame, rect, false) => {
+            blend_overlay(planes, frame, *rect, tags);
+        }
+        geneva_render::Overlay::Picture(frame, rect, true) => {
+            blend_overlay_encoded(planes, frame, *rect, tags);
+        }
+        geneva_render::Overlay::Backdrop(placed) => backdrop_planes(planes, placed, tags),
+    }
+}
+
 /// Lays `overlay` (premultiplied linear RGBA drawn over transparency,
 /// covering `rect` = `[x0, y0, x1, y1]` of the picture) onto packed
 /// planes in place, through the same conversions as [`frame_to_planes`].
 /// Only pixels the overlay covers change; for subsampled chroma, the
 /// blocks they belong to are recomputed from every pixel in the block.
 pub fn blend_overlay(planes: &mut Planes, overlay: &Frame, rect: [u32; 4], tags: ResolvedTags) {
+    blend_overlay_in(planes, overlay, rect, tags, false);
+}
+
+/// [`blend_overlay`] for an overlay of sRGB-encoded values (markup), laid
+/// on in sRGB-encoded R'G'B' as a browser lays a page over a video,
+/// rather than in linear light.
+pub fn blend_overlay_encoded(
+    planes: &mut Planes,
+    overlay: &Frame,
+    rect: [u32; 4],
+    tags: ResolvedTags,
+) {
+    blend_overlay_in(planes, overlay, rect, tags, true);
+}
+
+fn blend_overlay_in(
+    planes: &mut Planes,
+    overlay: &Frame,
+    rect: [u32; 4],
+    tags: ResolvedTags,
+    encoded: bool,
+) {
     let [x0, y0, x1, y1] = rect;
     let x1 = x1.min(planes.width).min(x0 + overlay.width());
     let y1 = y1.min(planes.height).min(y0 + overlay.height());
@@ -708,6 +774,18 @@ pub fn blend_overlay(planes: &mut Planes, overlay: &Frame, rect: [u32; 4], tags:
                         continue;
                     }
                     let px = &mut row[x as usize * 4..x as usize * 4 + 4];
+                    if encoded {
+                        let base = LinearRgba {
+                            r: f32::from(px[0]) / 255.0,
+                            g: f32::from(px[1]) / 255.0,
+                            b: f32::from(px[2]) / 255.0,
+                            a: 1.0,
+                        };
+                        let out = src.over(base);
+                        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                        px.copy_from_slice(&[byte(out.r), byte(out.g), byte(out.b), 255]);
+                        continue;
+                    }
                     let base =
                         geneva_color::Color::from_rgba8(px[0], px[1], px[2], 255).to_linear();
                     let out = src.over(base).to_srgb8();
@@ -719,6 +797,7 @@ pub fn blend_overlay(planes: &mut Planes, overlay: &Frame, rect: [u32; 4], tags:
 
     let to_linear = to_linear_lut(tags.transfer);
     let from_linear = from_linear_lut(tags.transfer);
+    let (to_srgb, from_srgb) = srgb_recoding(tags.transfer);
     let bits = format.bits();
     let max = f64::from((1u32 << bits) - 1);
     let wide = format.bytes_per_sample() == 2;
@@ -770,19 +849,33 @@ pub fn blend_overlay(planes: &mut Planes, overlay: &Frame, rect: [u32; 4], tags:
                         let [yn, cbn, crn] =
                             matrix::decode_ycbcr(tags.range, bits, [y_code, cb, cr]);
                         let rgb = matrix::ycbcr_to_rgb(tags.matrix, [yn, cbn, crn]);
-                        let base = LinearRgba {
-                            r: to_linear[lut_index(rgb[0].clamp(0.0, 1.0) as f32)],
-                            g: to_linear[lut_index(rgb[1].clamp(0.0, 1.0) as f32)],
-                            b: to_linear[lut_index(rgb[2].clamp(0.0, 1.0) as f32)],
-                            a: 1.0,
+                        let level = |v: f64| v.clamp(0.0, 1.0) as f32;
+                        let base = if encoded {
+                            LinearRgba {
+                                r: to_srgb(level(rgb[0])),
+                                g: to_srgb(level(rgb[1])),
+                                b: to_srgb(level(rgb[2])),
+                                a: 1.0,
+                            }
+                        } else {
+                            LinearRgba {
+                                r: to_linear[lut_index(level(rgb[0]))],
+                                g: to_linear[lut_index(level(rgb[1]))],
+                                b: to_linear[lut_index(level(rgb[2]))],
+                                a: 1.0,
+                            }
                         };
                         let src = src_at(x as u32, (by * dy + r) as u32);
                         let out = if src.a > 0.0 { src.over(base) } else { base };
-                        let enc = [
-                            f64::from(from_linear[lut_index(out.r)]),
-                            f64::from(from_linear[lut_index(out.g)]),
-                            f64::from(from_linear[lut_index(out.b)]),
-                        ];
+                        let enc = if encoded {
+                            [out.r, out.g, out.b].map(|v| f64::from(from_srgb(v)))
+                        } else {
+                            [
+                                f64::from(from_linear[lut_index(out.r)]),
+                                f64::from(from_linear[lut_index(out.g)]),
+                                f64::from(from_linear[lut_index(out.b)]),
+                            ]
+                        };
                         let ycc = matrix::rgb_to_ycbcr(tags.matrix, enc);
                         let [yc, cbc, crc] = matrix::encode_ycbcr(tags.range, bits, ycc);
                         if src.a > 0.0 {
@@ -807,6 +900,158 @@ pub fn blend_overlay(planes: &mut Planes, overlay: &Frame, rect: [u32; 4], tags:
                 );
             }
         });
+}
+
+/// Does a box's `backdrop-filter` to decoded planes, for the direct path:
+/// the region under the box read as sRGB-encoded R'G'B' (through linear
+/// light, as the compositor reads it), filtered and mixed in as
+/// [`geneva_render::backdrop`] does for a composited frame, and written
+/// back. Luma is written where the box reaches; a chroma sample takes the
+/// mean of its block, as [`blend_overlay`] does.
+pub fn backdrop_planes(
+    planes: &mut Planes,
+    placed: &geneva_render::backdrop::PlacedBackdrop,
+    tags: ResolvedTags,
+) {
+    use geneva_render::backdrop::filter_region;
+    let [bx0, by0, bx1, by1] = placed.bounds;
+    let x1 = bx1.min(planes.width);
+    let y1 = by1.min(planes.height);
+    let format = planes.format;
+    let (dx, dy) = if format.is_rgb() {
+        (1, 1)
+    } else {
+        format.chroma_divisors()
+    };
+    // Whole chroma blocks, so every block written is read whole.
+    let x0 = (bx0 as usize / dx * dx) as u32;
+    let y0 = (by0 as usize / dy * dy) as u32;
+    let x1 = ((x1 as usize).div_ceil(dx) * dx).min(planes.width as usize) as u32;
+    let y1 = ((y1 as usize).div_ceil(dy) * dy).min(planes.height as usize) as u32;
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let (w, h) = ((x1 - x0) as usize, (y1 - y0) as usize);
+    let mut region = vec![[0.0f32; 4]; w * h];
+
+    if format.is_rgb() {
+        let plane = &mut planes.planes[0];
+        let stride = plane.stride;
+        for y in 0..h {
+            for x in 0..w {
+                let i = (y0 as usize + y) * stride + (x0 as usize + x) * 4;
+                let px = &plane.data[i..i + 4];
+                region[y * w + x] = [
+                    f32::from(px[0]) / 255.0,
+                    f32::from(px[1]) / 255.0,
+                    f32::from(px[2]) / 255.0,
+                    1.0,
+                ];
+            }
+        }
+        let original = region.clone();
+        filter_region(&mut region, w, h, &placed.backdrop.filters, placed.scale());
+        for y in 0..h {
+            for x in 0..w {
+                let k = placed.weight(x0 + x as u32, y0 + y as u32);
+                if k <= 0.0 {
+                    continue;
+                }
+                let (o, f) = (original[y * w + x], region[y * w + x]);
+                let i = (y0 as usize + y) * stride + (x0 as usize + x) * 4;
+                for c in 0..3 {
+                    let v = o[c] + (f[c] - o[c]) * k;
+                    plane.data[i + c] = (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                }
+            }
+        }
+        return;
+    }
+
+    let bits = format.bits();
+    let max = f64::from((1u32 << bits) - 1);
+    let wide = format.bytes_per_sample() == 2;
+    let bps = format.bytes_per_sample();
+    let load = |data: &[u8], i: usize| -> f64 {
+        if wide {
+            f64::from(u16::from_le_bytes([data[i * 2], data[i * 2 + 1]]))
+        } else {
+            f64::from(data[i])
+        }
+    };
+    let (to_srgb, from_srgb) = srgb_recoding(tags.transfer);
+    let [y_plane, cb_plane, cr_plane] = &mut planes.planes[..] else {
+        unreachable!("Y'CbCr layouts have three planes");
+    };
+    let (ys, cbs, crs) = (
+        y_plane.stride / bps,
+        cb_plane.stride / bps,
+        cr_plane.stride / bps,
+    );
+    for y in 0..h {
+        let (gy, cy) = (y0 as usize + y, (y0 as usize + y) / dy);
+        for x in 0..w {
+            let (gx, cx) = (x0 as usize + x, (x0 as usize + x) / dx);
+            let ycc = [
+                load(&y_plane.data, gy * ys + gx),
+                load(&cb_plane.data, cy * cbs + cx),
+                load(&cr_plane.data, cy * crs + cx),
+            ];
+            let n = matrix::decode_ycbcr(tags.range, bits, ycc);
+            let rgb = matrix::ycbcr_to_rgb(tags.matrix, n);
+            let level = |v: f64| to_srgb(v.clamp(0.0, 1.0) as f32);
+            region[y * w + x] = [level(rgb[0]), level(rgb[1]), level(rgb[2]), 1.0];
+        }
+    }
+    let original = region.clone();
+    filter_region(&mut region, w, h, &placed.backdrop.filters, placed.scale());
+    // Mixed, back to Y'CbCr: luma per pixel, chroma summed per block.
+    let (cw, ch) = (w / dx, h / dy);
+    let mut chroma = vec![(0.0f64, 0.0f64, 0.0f64, false); cw * ch];
+    for y in 0..h {
+        for x in 0..w {
+            let (gx, gy) = (x0 as usize + x, y0 as usize + y);
+            let k = placed.weight(gx as u32, gy as u32);
+            let (o, f) = (original[y * w + x], region[y * w + x]);
+            let out = [0, 1, 2].map(|c| f64::from(from_srgb(o[c] + (f[c] - o[c]) * k)));
+            let ycc =
+                matrix::encode_ycbcr(tags.range, bits, matrix::rgb_to_ycbcr(tags.matrix, out));
+            if k > 0.0 {
+                store(
+                    &mut y_plane.data,
+                    gy * ys + gx,
+                    (ycc[0] + 0.5).clamp(0.0, max) as u16,
+                    wide,
+                );
+            }
+            let block = &mut chroma[(y / dy) * cw + x / dx];
+            block.0 += ycc[1];
+            block.1 += ycc[2];
+            block.2 += 1.0;
+            block.3 |= k > 0.0;
+        }
+    }
+    for by in 0..ch {
+        for bx in 0..cw {
+            let (sb, sr, n, touched) = chroma[by * cw + bx];
+            if !touched {
+                continue;
+            }
+            let (cx, cy) = (x0 as usize / dx + bx, y0 as usize / dy + by);
+            store(
+                &mut cb_plane.data,
+                cy * cbs + cx,
+                (sb / n + 0.5).clamp(0.0, max) as u16,
+                wide,
+            );
+            store(
+                &mut cr_plane.data,
+                cy * crs + cx,
+                (sr / n + 0.5).clamp(0.0, max) as u16,
+                wide,
+            );
+        }
+    }
 }
 
 #[cfg(test)]

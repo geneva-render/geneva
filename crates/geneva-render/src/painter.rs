@@ -33,8 +33,9 @@ struct Scene {
     end: Ratio,
     prepared: geneva_html::Prepared,
     images: HashMap<String, Image>,
-    /// The box as drawn, kept when no animation inside can change it.
-    still: Option<Image>,
+    /// The box as drawn, kept when no animation inside can change it,
+    /// with the backdrops of its boxes.
+    still: Option<(Image, Vec<crate::backdrop::Backdrop>)>,
     /// Pictures of the groups inside that do not change from frame to
     /// frame, which an animated source is redrawn from.
     groups: crate::html::GroupCache,
@@ -73,6 +74,10 @@ pub struct Painted<'a> {
     pub paint: Paint<'a>,
     /// The picture's identity, when it is kept.
     pub key: Option<u64>,
+    /// Boxes in markup with a `backdrop-filter`, in the paint's own
+    /// coordinates: done to what is under the clip before the paint is
+    /// drawn over it.
+    pub backdrops: Vec<crate::backdrop::Backdrop>,
 }
 
 impl<A: AssetSource> std::fmt::Debug for Painter<A> {
@@ -259,6 +264,7 @@ impl<A: AssetSource> Painter<A> {
         size: Option<[u32; 2]>,
     ) -> Result<Painted<'_>, RenderError> {
         let mut key = None;
+        let mut backdrops = Vec::new();
         let paint = match &clip.source {
             ResolvedSource::Solid { color } => Paint::Solid {
                 color: color.sample(local),
@@ -331,9 +337,11 @@ impl<A: AssetSource> Painter<A> {
                         scene.groups.clear();
                         scene.still = Some(drawn);
                     }
-                    Paint::Image(Cow::Borrowed(scene.still.as_ref().expect("drawn above")))
+                    let (image, kept) = scene.still.as_ref().expect("drawn above");
+                    backdrops.clone_from(kept);
+                    Paint::Image(Cow::Borrowed(image))
                 } else {
-                    let drawn = crate::html::render(
+                    let (drawn, now) = crate::html::render(
                         html,
                         &scene.prepared,
                         &mut self.text,
@@ -342,6 +350,7 @@ impl<A: AssetSource> Painter<A> {
                         &mut scene.groups,
                     )
                     .map_err(failed)?;
+                    backdrops = now;
                     Paint::Image(Cow::Owned(drawn))
                 }
             }
@@ -405,7 +414,11 @@ impl<A: AssetSource> Painter<A> {
                 }
             }
         };
-        Ok(Painted { paint, key })
+        Ok(Painted {
+            paint,
+            key,
+            backdrops,
+        })
     }
 }
 

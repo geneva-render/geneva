@@ -727,7 +727,9 @@ fn overlays_laid_onto_direct_frames_match_the_compositor() {
     let before = planes.clone();
     let mut drawn = renderer.render_overlays(&comp, t).unwrap();
     assert_eq!(drawn.len(), 1, "one caption, one box");
-    let (overlay, rect) = drawn.pop().expect("caption shown");
+    let Some(geneva_render::Overlay::Picture(overlay, rect, false)) = drawn.pop() else {
+        panic!("the caption is a picture in linear light");
+    };
     assert!(rect[1] > 50 && rect[3] <= 108, "{rect:?}");
     blend_overlay(&mut planes, &overlay, rect, comp.color);
     let slow = frame_to_planes(
@@ -764,6 +766,73 @@ fn overlays_laid_onto_direct_frames_match_the_compositor() {
     );
     // The caption did land: something in the box differs from the plain frame.
     assert_ne!(fast, was);
+}
+
+#[test]
+fn markup_and_its_backdrop_on_direct_frames_match_the_compositor() {
+    // A translucent plate with a backdrop filter over the video: the
+    // direct path lays the markup on in sRGB-encoded values and filters
+    // the planes under the plate, and must come out as the compositor
+    // does, inside the plate as well as at its edges.
+    use geneva_media::convert::{PlaneFormat, frame_to_planes, lay_overlay};
+    use geneva_media::{DirectSource, MediaAssets};
+    use geneva_render::{CpuRenderer, Overlay, Renderer};
+
+    let root = clip().parent().unwrap().to_path_buf();
+    let text = r##"{
+      "geneva": "1.1",
+      "output": { "width": 192, "height": 108, "fps": 25, "duration": "2s" },
+      "assets": { "clip": { "src": "clip.mp4" } },
+      "layers": [
+        { "clips": [ { "source": { "kind": "video", "asset": "clip" } } ] },
+        { "clips": [ { "source": { "kind": "html", "html":
+          "<div style='position:absolute;left:20px;top:30px;width:120px;height:50px;border-radius:10px;background:#ffffff30;backdrop-filter:blur(4px) saturate(150%)'></div>" } } ] }
+      ]
+    }"##;
+    let comp = load(text).composition.unwrap();
+    let mut base = DirectSource::open_base(&comp, &root, PlaneFormat::Yuv420p8, comp.color)
+        .unwrap()
+        .expect("the video with overlays qualifies");
+    let mut renderer = CpuRenderer::new(MediaAssets::new(root.clone()));
+    let t = comp.frame_time(20);
+    let mut planes = base.frame(t).unwrap();
+    let drawn = renderer.render_overlays(&comp, t).unwrap();
+    assert!(
+        matches!(
+            drawn.as_slice(),
+            [Overlay::Backdrop(_), Overlay::Picture(_, _, true)]
+        ),
+        "the backdrop, then the plate in encoded values"
+    );
+    for overlay in &drawn {
+        lay_overlay(&mut planes, overlay, comp.color);
+    }
+    let slow = frame_to_planes(
+        &renderer.render_frame(&comp, t).unwrap(),
+        comp.color,
+        PlaneFormat::Yuv420p8,
+    );
+    for (p, name) in ["Y'", "Cb", "Cr"].iter().enumerate() {
+        let (fast, full) = (&planes.planes[p], &slow.planes[p]);
+        // Chroma is halved both ways.
+        let k = if p == 0 { 1 } else { 2 };
+        let (mut sum, mut n) = (0.0f64, 0.0f64);
+        for y in 30 / k..80 / k {
+            for x in 20 / k..140 / k {
+                let (a, b) = (
+                    fast.data[y * fast.stride + x],
+                    full.data[y * full.stride + x],
+                );
+                sum += (f64::from(a) - f64::from(b)).abs();
+                n += 1.0;
+            }
+        }
+        assert!(
+            sum / n < 2.0,
+            "mean {name} difference under the plate: {}",
+            sum / n
+        );
+    }
 }
 
 #[test]

@@ -21,6 +21,13 @@ versions changed the format freely.
   x264 and the other encoders, and the number of chunks encoded at
   once. The budget sizes the caches and the queue of frames waiting for
   the encoder. The render report gives `threads` and `peak_memory`.
+- **`backdrop-filter` in markup** (`-webkit-` too): `blur()`,
+  `saturate()`, `brightness()` and `contrast()`, in order, on what is
+  under the box, for frosted caption plates. As in Chromium, only the
+  picture inside the border box is read, the blur thins out towards its
+  edges, and the result follows the rounded corners and the box's
+  opacity. On the direct path it is done to the decoded video under the
+  box. Documents using it render on the CPU.
 
 ### Changed
 
@@ -33,6 +40,14 @@ versions changed the format freely.
   once, and `validate` looks each font family up once.
 - **A markup warning repeated by many clips is reported once**, with the
   number of other clips that share it.
+- **Markup is laid over the picture in sRGB-encoded values, as a
+  browser lays a page over a video.** A markup clip with the `normal`
+  blend mode was laid on in linear light, so a translucent plate
+  (`#ffffff20`), a soft `box-shadow` or a text shadow came out lighter
+  than in Chromium. Measured on a plate, a 60% black box-shadow and a
+  gradient over a flat colour, they now match Chromium to a code or two. Markup with
+  another blend mode, and every other source, still composite in linear
+  light. Renders of existing documents with translucent markup change.
 - **A text outline mitres its sharp corners as browsers do.** Joins
   sharper than 90 degrees were bevelled; now every join is mitred up to
   a miter limit of 4, so the tip of an A or a W comes to a point. The

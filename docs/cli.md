@@ -83,7 +83,7 @@ for pictures and video. A sprite sheet's `.vtt` is its own row (`kind`
 | `--preset NAME` | Encoder preset, `ultrafast` to `veryslow`. Forces a re-encode. |
 | `--for TARGET`, `--quality`, `--budget` | Encode for a destination; see [targets](#targets). The timeline's size is kept. |
 | `--no-audio` | No audio track. |
-| `--renderer auto\|cpu\|gpu` | `auto`: a hardware GPU if present, else the CPU. `gpu`: any device, software ones included, else the CPU with a note. A software device (llvmpipe, WARP) is for testing and is several times slower than the CPU renderer: `auto` never picks one. `cpu`: the reference. `GENEVA_GPU=software` forces the software device. The note names the device. `frame` and overlays on a direct-path picture always use the CPU. |
+| `--renderer auto\|cpu\|gpu` | `auto`: a hardware GPU if present, else the CPU. `gpu`: any device, software ones included, else the CPU with a note. A software device (llvmpipe, WARP) is for testing and is several times slower than the CPU renderer: `auto` never picks one. `cpu`: the reference. `GENEVA_GPU=software` forces the software device. The note names the device. `frame`, overlays on a direct-path picture and documents with a markup `backdrop-filter` always use the CPU (with a note when `gpu` was asked for). |
 | `--exact` | Frame-accurate cuts; a [smart cut](#smart-cut) where possible. |
 | `--assets DIR` | Asset root. |
 

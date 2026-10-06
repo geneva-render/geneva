@@ -598,7 +598,7 @@ reported by name rather than drawn differently.
 | Spacing | `margin`, `padding`, per-side forms, one-to-four-value shorthands |
 | Flex | `flex-direction`, `flex-wrap`, `justify-content`, `align-items`, `align-self`, `align-content`, `gap`, `row-gap`, `column-gap`, `flex-grow`, `flex-shrink`, `flex-basis`, `flex` |
 | Border | `border`, `border-top`, `border-right`, `border-bottom`, `border-left`, `border-width`, `border-color`, `border-style` (`solid`, `none`), `border-radius` |
-| Paint | `background`, `background-color` (colour or gradient), `background-size`, `background-position`, `background-clip` (`text`, `border-box`, `-webkit-` too), `opacity`, `mix-blend-mode` (`normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `difference`, `soft-light`), `filter` (`blur()`), `clip-path` (`polygon()`, `none`), `box-shadow` (list; no `inset`) |
+| Paint | `background`, `background-color` (colour or gradient), `background-size`, `background-position`, `background-clip` (`text`, `border-box`, `-webkit-` too), `opacity`, `mix-blend-mode` (`normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `difference`, `soft-light`), `filter` (`blur()`), `clip-path` (`polygon()`, `none`), `box-shadow` (list; no `inset`), `backdrop-filter` (`-webkit-` too; `blur()`, `saturate()`, `brightness()`, `contrast()`, in order) |
 | Text | `color`, `-webkit-text-fill-color` (as `color`), `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space`, `text-shadow` (list), `-webkit-text-stroke` and its `-width` and `-color` longhands, `paint-order` |
 | Motion | `animation`, `animation-name`, `-duration`, `-delay`, `-timing-function`, `-iteration-count`, `-direction`, `-fill-mode` |
 
@@ -625,6 +625,7 @@ property are named, and the rest of the document is drawn. A `<style>` rule matc
 - A box with `opacity` < 1, `filter`, `clip-path`, `mix-blend-mode` or an animation is a group: its subtree is painted into its own buffer and composited whole (a stacking context).
 - A group's buffer is capped at nine times the frame's area, any shape (a news crawl fits); larger is cut back with W455.
 - `-webkit-text-stroke` is centred on the glyph outline, with mitred joins (limit 4) and butt ends, as browsers draw it; it inherits, and its colour defaults to `currentcolor`. With `paint-order: normal` it is drawn over the fill and covers the glyph's edge; `paint-order: stroke fill` (or `stroke`) puts it underneath, so half its width shows. It does not change layout. Inside a run of inline elements the whole run takes the stroke of the element holding it.
+- `backdrop-filter` filters what is under the box, inside its border box, before the box is drawn: the clips on lower layers and earlier clips of the same layer, not the boxes of the same markup painted under it. As in Chromium, nothing outside the border box is read, so a blur thins out towards the edges and the unblurred picture shows through there; the result is clipped to the rounded corners and mixed in by the box's opacity. Works on sRGB-encoded values. A document using it renders on the CPU (`--renderer gpu` says so).
 - No static `transform`: transforms come from animations (W450 otherwise). Hold a pose with a one-keyframe animation.
 - `body` and `html` select the clip's box; unstyled, it marks nothing.
 
@@ -650,10 +651,11 @@ background: radial-gradient(circle at 30% 40%, #00EEE1, #00EEE100);
 
 **Colour space**: inside the box, blending (stops, translucent boxes,
 shadows, blur, text edges) is on sRGB-encoded premultiplied values, as in a
-browser. The finished box is converted to linear light once, so clip
-transform, opacity, blend and transitions stay linear
-([color.md](color.md)). Exception: glyphs use the text engine, so a text
-gradient mixes its stops in linear light.
+browser. A markup clip with the `normal` blend mode is also laid over what
+is under it in sRGB-encoded values, its opacity and transition ramps
+included, as a browser lays a page over a video; with another blend mode
+it is laid on in linear light ([color.md](color.md)). Exception: glyphs use
+the text engine, so a text gradient mixes its stops in linear light.
 
 ### Motion
 

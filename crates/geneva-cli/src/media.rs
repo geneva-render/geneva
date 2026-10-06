@@ -216,6 +216,7 @@ pub fn choose_renderer(
     choice: RendererChoice,
     root: &std::path::Path,
     keep_hdr: bool,
+    comp: &Composition,
 ) -> (Box<dyn geneva_media::PlaneRenderer>, Vec<String>) {
     use geneva_media::{FramePacker, MediaAssets, PlaneRenderer};
     use geneva_render::CpuRenderer;
@@ -228,6 +229,19 @@ pub fn choose_renderer(
     };
     if choice == RendererChoice::Cpu {
         return cpu(Vec::new());
+    }
+    // The GPU compositor does not draw backdrop filters yet.
+    if geneva_render::backdrop::used_in(comp) {
+        let notes = if choice == RendererChoice::Gpu {
+            vec![
+                "markup uses backdrop-filter, which the GPU renderer does not draw; the frames \
+                 were composited on the CPU"
+                    .to_owned(),
+            ]
+        } else {
+            Vec::new()
+        };
+        return cpu(notes);
     }
     #[cfg(feature = "gpu")]
     {
@@ -1244,7 +1258,7 @@ mod imp {
         let mut previous_gist: Option<Vec<f32>> = None;
 
         let (mut renderer, renderer_notes) =
-            super::choose_renderer(overrides.renderer, root, comp.color.is_hdr());
+            super::choose_renderer(overrides.renderer, root, comp.color.is_hdr(), comp);
         notes.extend(renderer_notes);
         let mut frame = geneva_render::Frame::new(0, 0, geneva_color::Color::BLACK);
         let mut render_error: Option<RenderError> = None;
@@ -2040,15 +2054,8 @@ mod imp {
                     d.frame_with(t, &mut pool)
                 } else if let Some(b) = base.as_mut() {
                     b.frame_with(t, &mut pool).and_then(|mut planes| {
-                        for (overlay, rect) in
-                            renderer.render_overlays(comp, t).map_err(render_err)?
-                        {
-                            geneva_media::convert::blend_overlay(
-                                &mut planes,
-                                &overlay,
-                                rect,
-                                output_tags,
-                            );
+                        for overlay in renderer.render_overlays(comp, t).map_err(render_err)? {
+                            geneva_media::convert::lay_overlay(&mut planes, &overlay, output_tags);
                         }
                         Ok(planes)
                     })
@@ -2630,7 +2637,7 @@ mod imp {
         let composites = direct.is_none() && base.is_none();
         let mut renderer = if has_video {
             let (renderer, renderer_notes) =
-                super::choose_renderer(overrides.renderer, root, comp.color.is_hdr());
+                super::choose_renderer(overrides.renderer, root, comp.color.is_hdr(), comp);
             if composites {
                 notes.extend(renderer_notes);
             }
@@ -2755,9 +2762,9 @@ mod imp {
                     if !drawn.is_empty() {
                         composited += 1;
                     }
-                    for (overlay, rect) in drawn {
+                    for overlay in &drawn {
                         let tags = output_tags.expect("video output has tags");
-                        geneva_media::convert::blend_overlay(&mut planes, &overlay, rect, tags);
+                        geneva_media::convert::lay_overlay(&mut planes, overlay, tags);
                     }
                     return Ok(planes);
                 }

@@ -1,0 +1,420 @@
+{
+  "geneva": "1.1",
+  "output": {
+    "width": 640,
+    "height": 300,
+    "fps": 30,
+    "duration": "1s",
+    "background": "#203040"
+  },
+  "assets": {
+    "page": {
+      "src": "markup-backdrop/frosted.html"
+    },
+    "sans": {
+      "src": "fonts/LiberationSans-Regular.ttf"
+    },
+    "sans-bold": {
+      "src": "fonts/LiberationSans-Bold.ttf"
+    }
+  },
+  "layers": [
+    {
+      "clips": [
+        {
+          "source": {
+            "kind": "shape",
+            "shape": "rect",
+            "width": 20,
+            "height": 300,
+            "fill": "#f2f2f2"
+          },
+          "transform": {
+            "anchor": {
+              "x": 0,
+              "y": 0
+            },
+            "position": {
+              "x": 20,
+              "y": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "clips": [
+        {
+          "source": {
+            "kind": "shape",
+            "shape": "rect",
+            "width": 20,
+            "height": 300,
+            "fill": "#e8c040"
+          },
+          "transform": {
+            "anchor": {
+              "x": 0,
+              "y": 0
+            },
+            "position": {
+              "x": 60,
+              "y": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "clips": [
+        {
+          "source": {
+            "kind": "shape",
+            "shape": "rect",
+            "width": 20,
+            "height": 300,
+            "fill": "#f2f2f2"
+          },
+          "transform": {
+            "anchor": {
+              "x": 0,
+              "y": 0
+            },
+            "position": {
+              "x": 100,
+              "y": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "clips": [
+        {
+          "source": {
+            "kind": "shape",
+            "shape": "rect",
+            "width": 20,
+            "height": 300,
+            "fill": "#40a0e8"
+          },
+          "transform": {
+            "anchor": {
+              "x": 0,
+              "y": 0
+            },
+            "position": {
+              "x": 140,
+              "y": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "clips": [
+        {
+          "source": {
+            "kind": "shape",
+            "shape": "rect",
+            "width": 20,
+            "height": 300,
+            "fill": "#f2f2f2"
+          },
+          "transform": {
+            "anchor": {
+              "x": 0,
+              "y": 0
+            },
+            "position": {
+              "x": 180,
+              "y": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "clips": [
+        {
+          "source": {
+            "kind": "shape",
+            "shape": "rect",
+            "width": 20,
+            "height": 300,
+            "fill": "#e8c040"
+          },
+          "transform": {
+            "anchor": {
+              "x": 0,
+              "y": 0
+            },
+            "position": {
+              "x": 220,
+              "y": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "clips": [
+        {
+          "source": {
+            "kind": "shape",
+            "shape": "rect",
+            "width": 20,
+            "height": 300,
+            "fill": "#f2f2f2"
+          },
+          "transform": {
+            "anchor": {
+              "x": 0,
+              "y": 0
+            },
+            "position": {
+              "x": 260,
+              "y": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "clips": [
+        {
+          "source": {
+            "kind": "shape",
+            "shape": "rect",
+            "width": 20,
+            "height": 300,
+            "fill": "#40a0e8"
+          },
+          "transform": {
+            "anchor": {
+              "x": 0,
+              "y": 0
+            },
+            "position": {
+              "x": 300,
+              "y": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "clips": [
+        {
+          "source": {
+            "kind": "shape",
+            "shape": "rect",
+            "width": 20,
+            "height": 300,
+            "fill": "#f2f2f2"
+          },
+          "transform": {
+            "anchor": {
+              "x": 0,
+              "y": 0
+            },
+            "position": {
+              "x": 340,
+              "y": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "clips": [
+        {
+          "source": {
+            "kind": "shape",
+            "shape": "rect",
+            "width": 20,
+            "height": 300,
+            "fill": "#e8c040"
+          },
+          "transform": {
+            "anchor": {
+              "x": 0,
+              "y": 0
+            },
+            "position": {
+              "x": 380,
+              "y": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "clips": [
+        {
+          "source": {
+            "kind": "shape",
+            "shape": "rect",
+            "width": 20,
+            "height": 300,
+            "fill": "#f2f2f2"
+          },
+          "transform": {
+            "anchor": {
+              "x": 0,
+              "y": 0
+            },
+            "position": {
+              "x": 420,
+              "y": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "clips": [
+        {
+          "source": {
+            "kind": "shape",
+            "shape": "rect",
+            "width": 20,
+            "height": 300,
+            "fill": "#40a0e8"
+          },
+          "transform": {
+            "anchor": {
+              "x": 0,
+              "y": 0
+            },
+            "position": {
+              "x": 460,
+              "y": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "clips": [
+        {
+          "source": {
+            "kind": "shape",
+            "shape": "rect",
+            "width": 20,
+            "height": 300,
+            "fill": "#f2f2f2"
+          },
+          "transform": {
+            "anchor": {
+              "x": 0,
+              "y": 0
+            },
+            "position": {
+              "x": 500,
+              "y": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "clips": [
+        {
+          "source": {
+            "kind": "shape",
+            "shape": "rect",
+            "width": 20,
+            "height": 300,
+            "fill": "#e8c040"
+          },
+          "transform": {
+            "anchor": {
+              "x": 0,
+              "y": 0
+            },
+            "position": {
+              "x": 540,
+              "y": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "clips": [
+        {
+          "source": {
+            "kind": "shape",
+            "shape": "rect",
+            "width": 20,
+            "height": 300,
+            "fill": "#f2f2f2"
+          },
+          "transform": {
+            "anchor": {
+              "x": 0,
+              "y": 0
+            },
+            "position": {
+              "x": 580,
+              "y": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "clips": [
+        {
+          "source": {
+            "kind": "shape",
+            "shape": "rect",
+            "width": 20,
+            "height": 300,
+            "fill": "#40a0e8"
+          },
+          "transform": {
+            "anchor": {
+              "x": 0,
+              "y": 0
+            },
+            "position": {
+              "x": 620,
+              "y": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "clips": [
+        {
+          "source": {
+            "kind": "shape",
+            "shape": "ellipse",
+            "width": 160,
+            "height": 160,
+            "fill": "#e04040"
+          },
+          "transform": {
+            "position": {
+              "x": 170,
+              "y": 120
+            }
+          }
+        }
+      ]
+    },
+    {
+      "clips": [
+        {
+          "source": {
+            "kind": "html",
+            "asset": "page"
+          }
+        }
+      ]
+    }
+  ]
+}

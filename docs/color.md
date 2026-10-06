@@ -13,10 +13,13 @@ Blending encoded values (the common shortcut) makes semi-transparent edges
 and fades too dark; a 50% white over black is code 188 in linear light, not
 128.
 
-The one exception is inside a markup box: an `html` source blends the way a
-browser does, on sRGB-encoded values, and the finished box is converted to
-linear light once before it is composited like any other clip. See the
-gradients section of [timeline.md](timeline.md).
+The one exception is markup: an `html` source blends the way a browser
+does, on sRGB-encoded values, inside the box and, with the `normal` blend
+mode, onto the picture under it (a translucent plate or a soft shadow
+over a video comes out as dark as in a browser; in linear light it is
+lighter). With another blend mode the finished box is laid on in linear
+light like any other clip. See the gradients section of
+[timeline.md](timeline.md).
 
 Another, on the CPU renderer: a video drawn smaller than it is is first
 made smaller while it is still Y'CbCr, to its drawn size (rounded up to

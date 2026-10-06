@@ -1383,7 +1383,14 @@ impl Compositor {
                     };
                 }
                 set_placement(&mut uniform, &place, size);
-                let (blending, code) = blending(clip.blend);
+                let (blending, code) = if geneva_render::composited_encoded(clip) {
+                    // Markup mixes in sRGB-encoded values, as a browser
+                    // does (`composited_encoded`): the shader does it
+                    // from a copy of the frame, as for a blend mode.
+                    (Blending::Separable, BLEND_ENCODED)
+                } else {
+                    blending(clip.blend)
+                };
                 uniform.blend = code;
                 let draw = Draw {
                     uniform,
@@ -2445,6 +2452,9 @@ fn image_key(id: &str) -> u64 {
     id.hash(&mut hasher);
     hasher.finish()
 }
+
+/// The shader's code for "over" in sRGB-encoded values.
+const BLEND_ENCODED: u32 = 9;
 
 /// How a blend mode is drawn, and its code for the shader.
 fn blending(mode: BlendMode) -> (Blending, u32) {
