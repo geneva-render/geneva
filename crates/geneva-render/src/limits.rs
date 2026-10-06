@@ -58,7 +58,7 @@ pub fn cache_budget(default: usize, share: f64) -> usize {
 }
 
 /// The most memory this process has held at once, in bytes, where the
-/// operating system says: Linux and macOS.
+/// operating system says: Linux (`VmHWM`) only, for now.
 #[must_use]
 pub fn peak_memory() -> Option<u64> {
     #[cfg(target_os = "linux")]

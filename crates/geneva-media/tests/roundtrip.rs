@@ -836,6 +836,60 @@ fn markup_and_its_backdrop_on_direct_frames_match_the_compositor() {
 }
 
 #[test]
+fn frames_without_a_markup_caption_have_nothing_to_lay_on() {
+    // Markup captions back to back and after a gap, one with a backdrop
+    // filter: the direct path keeps the video, and exactly the frames a
+    // caption covers get overlays, so the rest go from the decoder to
+    // the encoder untouched.
+    use geneva_media::convert::PlaneFormat;
+    use geneva_media::{DirectSource, MediaAssets};
+    use geneva_render::CpuRenderer;
+
+    let root = clip().parent().unwrap().to_path_buf();
+    let caption = |text: &str, extra: &str| {
+        format!(
+            "<div style='position:absolute;left:10px;top:70px;padding:4px 8px;background:#000a;color:#fff;font-size:14px{extra}'>{text}</div>"
+        )
+    };
+    let text = format!(
+        r#"{{
+      "geneva": "1.1",
+      "output": {{ "width": 192, "height": 108, "fps": 25, "duration": "2s" }},
+      "assets": {{ "clip": {{ "src": "clip.mp4" }} }},
+      "layers": [
+        {{ "clips": [ {{ "source": {{ "kind": "video", "asset": "clip" }} }} ] }},
+        {{ "clips": [
+          {{ "start": "0.2s", "duration": "0.4s", "source": {{ "kind": "html", "html": "{}" }} }},
+          {{ "start": "0.6s", "duration": "0.4s", "source": {{ "kind": "html", "html": "{}" }} }},
+          {{ "start": "1.4s", "duration": "0.2s", "source": {{ "kind": "html", "html": "{}" }} }}
+        ] }}
+      ]
+    }}"#,
+        caption("one", ""),
+        caption("two", ""),
+        caption("three", ";backdrop-filter:blur(3px)")
+    );
+    let comp = load(&text).composition.unwrap();
+    assert!(
+        DirectSource::open_base(&comp, &root, PlaneFormat::Yuv420p8, comp.color)
+            .unwrap()
+            .is_some(),
+        "markup captions keep the direct path"
+    );
+    let mut renderer = CpuRenderer::new(MediaAssets::new(root));
+    let drawn: Vec<u64> = (0..comp.frame_count())
+        .filter(|&i| {
+            !renderer
+                .render_overlays(&comp, comp.frame_time(i))
+                .unwrap()
+                .is_empty()
+        })
+        .collect();
+    let expected: Vec<u64> = (5..25).chain(35..40).collect();
+    assert_eq!(drawn, expected);
+}
+
+#[test]
 fn stream_copy_is_refused_when_anything_would_change_the_picture() {
     use geneva_media::plan_stream_copy;
     use geneva_timeline::schema::Container;
