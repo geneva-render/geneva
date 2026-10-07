@@ -193,6 +193,11 @@ Picture untouched but not copyable (another codec, a quality setting,
   pixels to linear light and back (markup: to sRGB-encoded values and
   back). A backdrop filter splits the overlays where it falls and is
   done to the planes under its box. Untouched pixels stay byte-identical.
+  A group of overlay clips that holds still (the same pictures, by the
+  painter's key, in the same places) is laid on from the picture drawn
+  for the previous frame. The blend works per chroma block: the block's
+  chroma decoded once, one table each way across the curve, single
+  precision; pixels the overlay leaves alone are not converted.
   Word-timed text is drawn again only when the lit word changes.
 - RGB outputs from 8-bit Y'CbCr sources go through the scaler with the
   source matrix and range and a per-channel transfer table. Other

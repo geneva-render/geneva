@@ -63,6 +63,9 @@ versions changed the format freely.
   caption whose 13 words light up one after another costs about 2.8%
   more than the same captions through `subtitles --highlight` (it was
   about 10%), and still markup captions cost no more than `--highlight`.
+  A group of captions or titles that holds still is no longer drawn
+  again at every frame on the direct path, and laying it on the video
+  costs about half what it did.
 - **Markup text lines are stacked as in Chromium.** `line-height:
   normal`, the default, was 1.2 times the size for every font; it is now
   the font's own ascent, descent and line gap, rounded as Chromium

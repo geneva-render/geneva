@@ -795,6 +795,17 @@ fn blend_overlay_in(
         return;
     }
 
+    if let Some(coefficients) = matrix::luma_coefficients(tags.matrix) {
+        blend_ycbcr(
+            planes,
+            overlay,
+            [x0, y0, x1, y1],
+            tags,
+            coefficients,
+            encoded,
+        );
+        return;
+    }
     let to_linear = to_linear_lut(tags.transfer);
     let from_linear = from_linear_lut(tags.transfer);
     let (to_srgb, from_srgb) = srgb_recoding(tags.transfer);
@@ -884,6 +895,181 @@ fn blend_overlay_in(
                         sum_b += cbc;
                         sum_r += crc;
                         count += 1.0;
+                    }
+                }
+                store(
+                    cb_row,
+                    bx,
+                    (sum_b / count + 0.5).clamp(0.0, max) as u16,
+                    wide,
+                );
+                store(
+                    cr_row,
+                    bx,
+                    (sum_r / count + 0.5).clamp(0.0, max) as u16,
+                    wide,
+                );
+            }
+        });
+}
+
+/// From a value in `transfer` (16-bit index) straight to the value the
+/// overlay is mixed with: linear light, or for markup the sRGB-encoded
+/// value of the same light. One table rather than two in a row.
+fn to_mix_lut(transfer: Transfer, encoded: bool) -> &'static Lut {
+    static LINEAR: LutCache = OnceLock::new();
+    static ENCODED: LutCache = OnceLock::new();
+    if encoded {
+        build_lut(&ENCODED, transfer, |x| {
+            Transfer::Srgb.from_linear(transfer.to_linear(x)) as f32
+        })
+    } else {
+        build_lut(&LINEAR, transfer, |x| transfer.to_linear(x) as f32)
+    }
+}
+
+/// The way back from [`to_mix_lut`].
+fn from_mix_lut(transfer: Transfer, encoded: bool) -> &'static Lut {
+    static LINEAR: LutCache = OnceLock::new();
+    static ENCODED: LutCache = OnceLock::new();
+    if encoded {
+        build_lut(&ENCODED, transfer, |x| {
+            transfer.from_linear(Transfer::Srgb.to_linear(x)) as f32
+        })
+    } else {
+        build_lut(&LINEAR, transfer, |x| transfer.from_linear(x) as f32)
+    }
+}
+
+/// [`blend_overlay_in`] for Y'CbCr with a luma matrix, the common case,
+/// worked out per chroma block: the block's chroma decoded once, each
+/// pixel's luma added to it, the curve crossed through one table each
+/// way, in single precision. A pixel the overlay leaves alone keeps its
+/// codes and adds its block's own chroma to the mean; one it covers
+/// fully needs nothing from under it.
+fn blend_ycbcr(
+    planes: &mut Planes,
+    overlay: &Frame,
+    [x0, y0, x1, y1]: [u32; 4],
+    tags: ResolvedTags,
+    (kr, kb): (f64, f64),
+    encoded: bool,
+) {
+    // The overlay's row `y` of the picture, as a slice starting at
+    // picture column `x0`; empty outside it.
+    let ow = overlay.width() as usize;
+    let span = (x1 - x0) as usize;
+    let row_of = |y: usize| -> &[LinearRgba] {
+        if y < y0 as usize || y >= y1 as usize {
+            return &[];
+        }
+        let start = (y - y0 as usize) * ow;
+        &overlay.pixels()[start..start + span]
+    };
+    let format = planes.format;
+    let to_mix = to_mix_lut(tags.transfer, encoded);
+    let from_mix = from_mix_lut(tags.transfer, encoded);
+    let bits = format.bits();
+    let max = ((1u32 << bits) - 1) as f32;
+    let wide = format.bytes_per_sample() == 2;
+    let bps = format.bytes_per_sample();
+    let (dx, dy) = format.chroma_divisors();
+    // Codes to normalized values and back, as `matrix::decode_ycbcr`.
+    let scale = (1u32 << (bits - 8)) as f32;
+    let (y_off, y_mul, c_off, c_mul) = match tags.range {
+        Range::Full => (0.0, 1.0 / max, (1u32 << (bits - 1)) as f32, 1.0 / max),
+        Range::Limited => (
+            16.0 * scale,
+            1.0 / (219.0 * scale),
+            128.0 * scale,
+            1.0 / (224.0 * scale),
+        ),
+    };
+    let (kr, kb) = (kr as f32, kb as f32);
+    let kg = 1.0 - kr - kb;
+    let (r_cr, b_cb) = (2.0 * (1.0 - kr), 2.0 * (1.0 - kb));
+    let (g_cb, g_cr) = (-kb * b_cb / kg, -kr * r_cr / kg);
+    let (to_cb, to_cr) = (1.0 / b_cb, 1.0 / r_cr);
+    let load = |data: &[u8], i: usize| -> f32 {
+        if wide {
+            f32::from(u16::from_le_bytes([data[i * 2], data[i * 2 + 1]]))
+        } else {
+            f32::from(data[i])
+        }
+    };
+    let w = planes.width as usize;
+    let height = planes.height as usize;
+    let (bx0, bx1) = (x0 as usize / dx, (x1 as usize).div_ceil(dx));
+    let (by0, by1) = (y0 as usize / dy, (y1 as usize).div_ceil(dy));
+    let [y_plane, cb_plane, cr_plane] = &mut planes.planes[..] else {
+        unreachable!("Y'CbCr layouts have three planes");
+    };
+    let y_stride = y_plane.stride;
+    let y_rows = &mut y_plane.data[by0 * dy * y_stride..(by1 * dy).min(height) * y_stride];
+    let cb_rows = &mut cb_plane.data[by0 * cb_plane.stride..by1 * cb_plane.stride];
+    let cr_rows = &mut cr_plane.data[by0 * cr_plane.stride..by1 * cr_plane.stride];
+    let (cb_stride, cr_stride) = (cb_plane.stride, cr_plane.stride);
+    y_rows
+        .par_chunks_mut(y_stride * dy)
+        .zip(cb_rows.par_chunks_mut(cb_stride))
+        .zip(cr_rows.par_chunks_mut(cr_stride))
+        .enumerate()
+        .for_each(|(bi, ((y_block_rows, cb_row), cr_row))| {
+            let by = by0 + bi;
+            let rows = y_block_rows.len() / y_stride;
+            let src_rows: [&[LinearRgba]; 2] = [row_of(by * dy), row_of(by * dy + 1)];
+            let src_at = |r: usize, x: usize| -> LinearRgba {
+                x.checked_sub(x0 as usize)
+                    .and_then(|i| src_rows[r].get(i))
+                    .copied()
+                    .unwrap_or(LinearRgba::TRANSPARENT)
+            };
+            for bx in bx0..bx1 {
+                let xs = bx * dx..(bx * dx + dx).min(w);
+                let mut srcs = [LinearRgba::TRANSPARENT; 4];
+                let mut covered = false;
+                for r in 0..rows {
+                    for (k, x) in xs.clone().enumerate() {
+                        let p = src_at(r, x);
+                        covered |= p.a > 0.0;
+                        srcs[r * dx + k] = p;
+                    }
+                }
+                if !covered {
+                    continue;
+                }
+                let (cb_code, cr_code) = (load(cb_row, bx), load(cr_row, bx));
+                let (cbn, crn) = ((cb_code - c_off) * c_mul, (cr_code - c_off) * c_mul);
+                let (dr, dg, db) = (r_cr * crn, g_cb * cbn + g_cr * crn, b_cb * cbn);
+                let (mut sum_b, mut sum_r, mut count) = (0.0f32, 0.0f32, 0.0f32);
+                for r in 0..rows {
+                    for (k, x) in xs.clone().enumerate() {
+                        count += 1.0;
+                        let src = srcs[r * dx + k];
+                        if src.a <= 0.0 {
+                            sum_b += cb_code;
+                            sum_r += cr_code;
+                            continue;
+                        }
+                        let yi = r * y_stride / bps + x;
+                        let out = if src.a >= 1.0 {
+                            [src.r, src.g, src.b]
+                        } else {
+                            let yn = (load(y_block_rows, yi) - y_off) * y_mul;
+                            let under = 1.0 - src.a;
+                            let mix = |v: f32| to_mix[lut_index(v.clamp(0.0, 1.0))];
+                            [
+                                src.r + mix(yn + dr) * under,
+                                src.g + mix(yn + dg) * under,
+                                src.b + mix(yn + db) * under,
+                            ]
+                        };
+                        let [rr, gg, bb] = out.map(|v| from_mix[lut_index(v)]);
+                        let yy = kr * rr + kg * gg + kb * bb;
+                        let yc = yy / y_mul + y_off;
+                        store(y_block_rows, yi, (yc + 0.5).clamp(0.0, max) as u16, wide);
+                        sum_b += (bb - yy) * to_cb / c_mul + c_off;
+                        sum_r += (rr - yy) * to_cr / c_mul + c_off;
                     }
                 }
                 store(

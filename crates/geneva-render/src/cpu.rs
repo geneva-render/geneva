@@ -35,6 +35,13 @@ pub struct CpuRenderer<A: AssetSource> {
     /// key, most recent last: a caption that holds still is converted
     /// once rather than at every frame.
     encoded: Vec<(u64, Arc<Image>)>,
+    /// The overlay pictures drawn for the last frame, with what was drawn
+    /// into each: a group of clips that holds still is laid on from the
+    /// same picture at the next frame rather than drawn again.
+    drawn: Vec<(Vec<u64>, [u32; 4], Arc<Frame>)>,
+    /// The same for the frame being drawn, which becomes `drawn` when the
+    /// next one starts.
+    drawing: Vec<(Vec<u64>, [u32; 4], Arc<Frame>)>,
 }
 
 /// How many encoded markup pictures are kept: the captions on screen at
@@ -66,6 +73,8 @@ impl<A: AssetSource> CpuRenderer<A> {
             spare: Vec::new(),
             masks: HashMap::new(),
             encoded: Vec::new(),
+            drawn: Vec::new(),
+            drawing: Vec::new(),
         }
     }
 
@@ -127,14 +136,19 @@ pub enum Overlay {
     /// A picture of some clips, transparent around them, and its box
     /// `[x0, y0, x1, y1]` in output pixels. With `encoded`, the picture
     /// holds sRGB-encoded values, to be laid on as a browser lays markup
-    /// on (see [`composited_encoded`]); otherwise linear light.
-    Picture(Frame, [u32; 4], bool),
+    /// on (see [`composited_encoded`]); otherwise linear light. Shared,
+    /// since a picture that holds still is the same from frame to frame.
+    Picture(Arc<Frame>, [u32; 4], bool),
     /// A box's `backdrop-filter`, done to the picture as it stands.
     Backdrop(Box<PlacedBackdrop>),
 }
 
 /// A clip drawn for the overlay path, not yet laid on.
 struct OverlayItem {
+    /// What was drawn, as the painter keeps it (`None` when it does not)
+    /// and where and how: the same signature at the next frame means the
+    /// same pixels.
+    signature: Option<Vec<u64>>,
     paint: Pic,
     place: Placement,
     opacity: f32,
@@ -321,6 +335,9 @@ impl<A: AssetSource> CpuRenderer<A> {
         comp: &Composition,
         t: Ratio,
     ) -> Result<Vec<Overlay>, RenderError> {
+        // The pictures drawn for the last frame are the ones this frame
+        // can reuse; the older ones go.
+        self.drawn = std::mem::take(&mut self.drawing);
         let Some(layers) = comp.layers.get(1..) else {
             return Ok(Vec::new());
         };
@@ -369,7 +386,24 @@ impl<A: AssetSource> CpuRenderer<A> {
                     (true, None) => Pic::Own(encoded_paint(paint)),
                     (false, _) => Pic::Own(paint.into_owned()),
                 };
+                let signature = key.filter(|_| place.mask.is_none()).map(|key| {
+                    let mut s = vec![key, u64::from(opacity.to_bits() as u32)];
+                    s.extend(
+                        place
+                            .window
+                            .iter()
+                            .chain(&place.anchor)
+                            .chain(&place.position)
+                            .chain(&place.scale)
+                            .chain([&place.cos, &place.sin])
+                            .map(|v| v.to_bits()),
+                    );
+                    s.extend(place.bounds.iter().map(|v| u64::from(*v)));
+                    s.push(clip.blend as u64);
+                    s
+                });
                 items.push(OverlayItem {
+                    signature,
                     paint,
                     place,
                     opacity: opacity as f32,
@@ -451,6 +485,26 @@ impl<A: AssetSource> CpuRenderer<A> {
         for (rect, _, mut members) in groups {
             // Painter's order within a group, as in one shared frame.
             members.sort_unstable();
+            // The same clips, drawn the same way, as at the last frame:
+            // the same picture.
+            let signature: Option<Vec<u64>> = members
+                .iter()
+                .map(|i| items[*i].as_ref().and_then(|item| item.signature.clone()))
+                .collect::<Option<Vec<Vec<u64>>>>()
+                .map(|parts| parts.concat());
+            if let Some(signature) = &signature {
+                if let Some((_, _, frame)) = self
+                    .drawn
+                    .iter()
+                    .find(|(s, r, _)| s == signature && *r == rect)
+                {
+                    let frame = Arc::clone(frame);
+                    self.drawing
+                        .push((signature.clone(), rect, Arc::clone(&frame)));
+                    out.push(Overlay::Picture(frame, rect, encoded));
+                    continue;
+                }
+            }
             let mut frame = Frame::new(rect[2] - rect[0], rect[3] - rect[1], Color::TRANSPARENT);
             for i in members {
                 let item = items[i].take().expect("in one group");
@@ -465,6 +519,10 @@ impl<A: AssetSource> CpuRenderer<A> {
                 if let Pic::Own(paint) = item.paint {
                     self.recycle(owned_pixels(paint));
                 }
+            }
+            let frame = Arc::new(frame);
+            if let Some(signature) = signature {
+                self.drawing.push((signature, rect, Arc::clone(&frame)));
             }
             out.push(Overlay::Picture(frame, rect, encoded));
         }
