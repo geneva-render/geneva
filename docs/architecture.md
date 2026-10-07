@@ -99,8 +99,8 @@ and painted by the renderer into a picture placed like an image.
 - `backdrop-filter` boxes are handed to the compositor with the picture:
   before the clip is drawn, the region under each box is filtered (blur,
   downsampled above sigma 8, then the colour filters) and mixed in. The
-  GPU compositor does not draw them; documents using them render on the
-  CPU.
+  GPU compositor does not draw them; documents using them, or a
+  `mask-image`, render on the CPU.
 - A box with nothing animated inside is painted once per clip. One whose
   animations only step (`steps()`, or keyframes that all say the same)
   is painted once per interval between the moments they can change
@@ -114,11 +114,18 @@ and painted by the renderer into a picture placed like an image.
   (through the inverse transform, padded for blur, cut to its
   `clip-path` polygon, at most nine frames of area), composited with
   those applied. Groups off the frame, and groups whose polygon covers
-  nothing, are skipped. Markup with an animation that moves is laid
-  out again each frame.
+  nothing, are skipped. A `mask-image` is applied to the group's picture
+  after its blur and polygon, before its transform. Markup with an
+  animation that moves is laid out again each frame, with text sizes
+  kept from earlier frames; a keyframe that names another box
+  (`anchor()`) is worked out from a first pass, and the frame laid out
+  again.
 - A group with no group inside keeps its picture between frames while
   its boxes stay the same, blurred in place once its blur holds still
-  for two frames, and composited through its transform each frame. A
+  for two frames, and composited through its transform each frame. While
+  its blur changes, one blurred copy is kept per radius, radii rounded
+  to 0.25 px; above 8 px the blur is a Gaussian on a copy reduced 2 to 4
+  times. Groups under 64x64 pixels are not kept unless they hold text. A
   group whose boxes change three frames running is painted fresh until
   they hold still again. Pictures not wanted in a frame are let go,
   oldest first, when a new one would pass the budget (96 MB per
@@ -131,6 +138,9 @@ and painted by the renderer into a picture placed like an image.
   it) gets no buffer: its boxes and groups are painted into what holds
   it. A group with a blend mode inside it does this only while what
   holds it is still empty, so the blend sees the same backdrop.
+- A picture painted fresh each frame is handed back to the painter once
+  laid on, and the next frame is drawn into it, clearing only what the
+  last one marked.
 - On the GPU, boxes, glyphs, shadows and polygon coverage are still
   painted on the CPU and uploaded; groups are composited on the device.
 

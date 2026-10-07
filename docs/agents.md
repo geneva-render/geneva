@@ -228,7 +228,15 @@ debuggable:
 | W451 | Both the markup and the clip set an `animation` |
 | W454 | `z-index` where it does not apply |
 
-What it parses and draws is in [timeline.md](timeline.md#markup).
+What it parses and draws is in [timeline.md](timeline.md#markup). For
+word-timed captions written as markup, the parts that matter most:
+keyframes on `color`, `background-color`, `box-shadow`, `text-shadow`,
+`filter: blur()`, `mask-position` (a soft wipe) and `max-width` (a plate
+that grows with the words); `steps()` timing for words that switch,
+which is painted once per step; `anchor()` in keyframes for an underline
+that moves from word to word; `font-family` lists for words in other
+scripts; `dir="rtl"` for right-to-left captions; WOFF2 fonts through
+`@font-face`; `-webkit-text-stroke` and `backdrop-filter` for plates.
 
 ## Captions
 
