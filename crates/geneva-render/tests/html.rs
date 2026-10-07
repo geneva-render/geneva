@@ -971,3 +971,38 @@ fn a_box_wholly_below_the_picture_is_left_out() {
     );
     assert!(near(at(&f, 100, 50), 1.0, 0.0, 0.0, 1.0));
 }
+
+/// A word whose text shadow grows stays where layout puts it: the room
+/// left for the shadow changes every frame, the glyphs do not move.
+#[test]
+fn a_growing_text_shadow_leaves_the_glyphs_still() {
+    let frames = markup_run(
+        "<div class='c'>one <span class='w'>word</span> two</div>",
+        "@keyframes g { from { text-shadow: 0 0 0px rgba(255,226,180,0) } \
+                        to { text-shadow: 0 0 12.43px rgba(255,226,180,0.55) } } \
+         .c { position: absolute; left: 10px; top: 20px; font: 700 30px Liberation Sans; color: #ffffff } \
+         .w { animation: g 2s ease both }",
+        &(0..20).collect::<Vec<_>>(),
+    );
+    // The glyphs' white cores; the shadow is never white.
+    let cores = |f: &geneva_render::Frame| -> Vec<bool> {
+        (0..f.height())
+            .flat_map(|y| (0..f.width()).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                let p = f.get(x, y);
+                p.a > 0.99 && p.b > 0.95
+            })
+            .collect()
+    };
+    let first = cores(&frames[0]);
+    let count = first.iter().filter(|c| **c).count();
+    for (i, f) in frames.iter().enumerate() {
+        let moved = cores(f).iter().zip(&first).filter(|(a, b)| a != b).count();
+        // Edge pixels the shadow shows through can cross the line; a
+        // glyph a pixel off changes a tenth or more.
+        assert!(
+            moved * 50 <= count,
+            "at {i} tenths {moved} of {count} core pixels changed"
+        );
+    }
+}

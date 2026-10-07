@@ -17,6 +17,12 @@ versions changed the format freely.
   bidi run are now put in the order the run's direction gives, as in a
   browser. This also covers a right-to-left word split by a style change
   (a highlighted or bold part).
+- **Glyphs still while a markup text shadow grows**: an animated
+  `text-shadow` blur changed the room left around the text every frame,
+  and with a fractional room the glyphs moved by a pixel from frame to
+  frame. The room is now whole pixels, so the word stays where layout
+  puts it (within 0.1 px). `filter: blur()` and `box-shadow` growing
+  were checked and do not move their content.
 
 ## 1.2.0 (2026-10-07)
 

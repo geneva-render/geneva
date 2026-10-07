@@ -81,7 +81,11 @@ pub fn inset_for(text: &ResolvedText) -> f64 {
         text.spec.outline.as_ref().map_or(0.0, |o| o.width.max(0.0)) * text.outline_paint.reach();
     // A shadow's reach is its furthest over the whole clip, so a shadow
     // that grows does not grow the image and move the glyphs with it.
-    outline + text.shadow.iter().fold(0.0f64, |m, s| m.max(s.reach))
+    // Whole pixels: the glyphs are placed in the image to a pixel and the
+    // image on the page to a pixel, and with a fractional room the two
+    // roundings add up differently as the room changes (a markup shadow
+    // that animates gives a new one each frame), so the glyphs jumped.
+    (outline + text.shadow.iter().fold(0.0f64, |m, s| m.max(s.reach))).ceil()
 }
 
 /// Drawn with when the machine has no fonts at all (a bare container, a
