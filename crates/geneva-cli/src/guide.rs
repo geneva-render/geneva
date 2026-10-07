@@ -232,7 +232,8 @@ mod tests {
     #[test]
     fn the_exit_code_table_is_not_read_as_diagnostics() {
         let page = "## Exit codes\n\n| Code | Meaning |\n| --- | --- |\n| 0 | Success. |\n";
-        assert!(parse(page).is_empty());
+        let entries = parse(page);
+        assert!(entries.is_empty(), "{entries:?}");
         assert!(!is_code("0") && !is_code("E30") && !is_code("X302") && is_code("N600"));
     }
 

@@ -564,7 +564,8 @@ fn fixed_keyframes_need_an_interval() {
         "{errs:?}"
     );
     let text = r#"{"geneva":"1.0","output":{"width":640,"height":360,"fps":30,"duration":1,"encode":{"video":{"fixed_keyframes":true,"keyframe_interval":2}}}}"#;
-    assert!(errors(text).is_empty());
+    let errs = errors(text);
+    assert!(errs.is_empty(), "{errs:?}");
 }
 
 #[test]
@@ -795,7 +796,8 @@ fn outputs_need_format_0_3_and_are_absent_by_default() {
     let l = load(&doc(
         r##""layers":[{"clips":[{"source":{"kind":"solid","color":"#fff"}}]}]"##,
     ));
-    assert!(l.composition.unwrap().outputs.is_empty());
+    let outputs = l.composition.unwrap().outputs;
+    assert!(outputs.is_empty(), "{outputs:?}");
 }
 
 #[test]

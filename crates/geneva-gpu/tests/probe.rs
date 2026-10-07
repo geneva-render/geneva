@@ -18,8 +18,8 @@ fn probe_describes_the_device_or_says_there_is_none() {
         Err(e) => panic!("an adapter was found but could not be used: {e}"),
     };
     let report = gpu.report();
-    assert!(!report.name.is_empty());
-    assert!(!report.backend.is_empty());
+    assert_ne!(report.name, "");
+    assert_ne!(report.backend, "");
     assert!(
         ["discrete", "integrated", "virtual", "software", "unknown"]
             .contains(&report.kind.as_str())

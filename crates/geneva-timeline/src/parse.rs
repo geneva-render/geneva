@@ -93,7 +93,7 @@ mod tests {
     fn parses_minimal_document() {
         let tl = parse(MINIMAL).unwrap();
         assert_eq!(tl.output.width, 16);
-        assert!(tl.layers.is_empty());
+        assert!(tl.layers.is_empty(), "{:?}", tl.layers);
     }
 
     #[test]

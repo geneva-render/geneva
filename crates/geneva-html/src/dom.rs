@@ -630,7 +630,7 @@ mod tests {
         assert_eq!(d.nodes[d.children(kids[0])[0]].text(), Some("Hi"));
         let img = d.nodes[kids[1]].element().unwrap();
         assert_eq!(img.attrs.get("src").map(String::as_str), Some("x.png"));
-        assert!(d.children(kids[1]).is_empty());
+        assert!(d.children(kids[1]).is_empty(), "{:?}", d.children(kids[1]));
     }
 
     #[test]

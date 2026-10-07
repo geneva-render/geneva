@@ -591,7 +591,7 @@ fn stream_copy_trims_at_keyframes_and_joins_compatible_sources() {
     let report = stream_copy(&plan, &out, &[], true).unwrap();
     // Keyframes every 12 frames at 25 fps: the cut moves back to 0.48 s.
     assert_eq!(report.segments[0].1, Ratio::new(12, 25));
-    assert!(!report.notes().is_empty());
+    assert!(!report.notes().is_empty(), "the moved cut is not reported");
     let info = probe(&out).unwrap();
     let v = info.video.unwrap();
     assert_eq!(v.codec, "h264");
@@ -1711,7 +1711,8 @@ fn a_tune_without_an_equivalent_is_reported_not_applied() {
     let mut settings = solid_settings(VideoCodec::Vp9, None, 192, 108);
     settings.video.as_mut().unwrap().tune = Some(VideoTune::Film);
     let enc = Encoder::new(&dir.path().join("film.webm"), settings).unwrap();
-    assert!(enc.video_setting_notes().is_empty());
+    let notes = enc.video_setting_notes();
+    assert!(notes.is_empty(), "{notes:?}");
 }
 
 /// The sync corpus (`tests/media/sync`): the tone starts at 1.0 s of

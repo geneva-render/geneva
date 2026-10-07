@@ -2816,7 +2816,11 @@ mod tests {
             1,
             "the inset box-shadow is named: {problems:?}"
         );
-        assert!(styles[p].paint.shadow.is_empty());
+        assert!(
+            styles[p].paint.shadow.is_empty(),
+            "{:?}",
+            styles[p].paint.shadow
+        );
     }
 
     #[test]
