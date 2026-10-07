@@ -97,18 +97,36 @@ fetch() { # name url [strip-components, default 1] [fallback-url fallback-strip]
   if [ -f "$dir/.fetched" ]; then return; fi
   echo "==> fetching $name"
   rm -rf "$dir"
-  # -f: an error page (a 503 from a busy mirror) is a failure, not a
-  # file that tar then cannot read.
-  if ! curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o "$src/$name.tar" "$url"; then
+  if ! download "$name" "$url"; then
     [ $# -ge 5 ] || { echo "error: could not fetch $name from $url" >&2; exit 1; }
     echo "==> $url failed; fetching $name from $4"
     url=$4 strip=$5
-    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o "$src/$name.tar" "$url"
+    download "$name" "$url" || { echo "error: could not fetch $name from $url" >&2; exit 1; }
   fi
   mkdir -p "$dir"
   tar xf "$src/$name.tar" --strip-components="$strip" -C "$dir"
   rm -f "$src/$name.tar"
   touch "$dir/.fetched"
+}
+
+# Downloads url into $src/name.tar and checks that tar can read it, three
+# times at most, waiting longer each time. -f makes an error page (a 503
+# from a busy mirror) a failure; the listing catches a server that answers
+# 200 with something that is not the archive, such as a bot check's
+# challenge page (code.videolan.org, 2026-10-05, which failed a macOS
+# build).
+download() { # name url
+  local try
+  for try in 1 2 3; do
+    if curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o "$src/$1.tar" "$2" &&
+      tar tf "$src/$1.tar" >/dev/null 2>&1; then
+      return 0
+    fi
+    echo "==> $2 did not give a readable archive (try $try of 3)" >&2
+    rm -f "$src/$1.tar"
+    [ "$try" = 3 ] || sleep $((try * 15))
+  done
+  return 1
 }
 
 done_marker() { [ -f "$prefix/.built-$1" ]; }
@@ -197,7 +215,11 @@ fi
 
 # --- dav1d (BSD-2), AV1 decoding ------------------------------------------
 if ! done_marker dav1d; then
-  fetch dav1d "https://code.videolan.org/videolan/dav1d/-/archive/$DAV1D_VERSION/dav1d-$DAV1D_VERSION.tar.gz"
+  # From VideoLAN's mirror on GitHub first: code.videolan.org sits behind
+  # a bot check (Anubis) that answers scripted downloads with a challenge
+  # page some of the time. The same tag there is the fallback.
+  fetch dav1d "https://github.com/videolan/dav1d/archive/refs/tags/$DAV1D_VERSION.tar.gz" 1 \
+    "https://code.videolan.org/videolan/dav1d/-/archive/$DAV1D_VERSION/dav1d-$DAV1D_VERSION.tar.gz" 1
   echo "==> building dav1d"
   (cd "$src/dav1d" && rm -rf build && meson setup build ${meson_cross:+--cross-file="$meson_cross"} --prefix="$prefix" --libdir=lib --buildtype=release \
       --default-library=static -Denable_tools=false -Denable_tests=false >/dev/null \
