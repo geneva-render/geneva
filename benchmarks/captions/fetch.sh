@@ -10,14 +10,16 @@ here=$(cd "$(dirname "$0")" && pwd)
 film="$here/../real-world/src/tears_of_steel_1080p.mov"
 mkdir -p "$here/src" "$here/fonts"
 cd "$here/src"
-# 2 minutes at 1920x800, and 30 s scaled to 3840x1600, both at 24 fps,
+# 2 minutes at 1920x800, and 60 s scaled to 3840x2160, both at 24 fps,
 # H.264 at CRF 18: the sources of the proposal's baseline table.
 # The film is 1920x800 already.
 [ -f tos-800.mp4 ] || geneva trim "$film" -o tos-800.mp4 --from 6:00 --to 8:00 --exact --crf 18
-[ -f tos-1600.mp4 ] || {
-  geneva trim tos-800.mp4 -o tos-30s.mp4 --to 30s --exact --crf 18
-  geneva convert tos-30s.mp4 -o tos-1600.mp4 --width 3840 --height 1600 --crf 18
-  rm -f tos-30s.mp4
+# 60 s at 3840x2160 for the native 4K rows: the film is wider than
+# 16:9, so convert fills the rest of the frame with its blur.
+[ -f tos-2160.mp4 ] || {
+  geneva trim tos-800.mp4 -o tos-60s.mp4 --to 60s --exact --crf 18
+  geneva convert tos-60s.mp4 -o tos-2160.mp4 --width 3840 --height 2160 --crf 18
+  rm -f tos-60s.mp4
 }
 cd "$here/fonts"
 if [ ! -f Inter-700.ttf ]; then

@@ -10,6 +10,11 @@ every run of a job draws the same thing.
     make-jobs.py OUT_DIR --video src.mp4 --size 1920x800 --fps 24 \\
                  --seconds 120 [--jobs still,steps,blur-in,stroke,frosted,glow]
 
+Lengths in the markup are written for 1920 wide and scaled with the
+output's width, as a generator writes them for the size it renders.
+With --native, the same captions are also written as an .srt
+(NAME.srt) and a word file (NAME.words.json) for `subtitles --burn`.
+
 A video shorter than the job is laid end to end as often as it takes;
 give its length with --video-seconds. Without --video the bottom layer
 is a solid, which is what the many-clips job uses to measure geneva
@@ -19,6 +24,7 @@ rather than the decoder.
 import argparse
 import json
 import os
+import re
 
 WORDS = (
     "we shipped the new build on friday and nobody noticed until the "
@@ -99,7 +105,12 @@ STYLE = {
 }
 
 
-def caption(job, i):
+def scaled(css, k):
+    """Every px length in `css` times `k`."""
+    return re.sub(r"(\d+(?:\.\d+)?)px", lambda m: f"{float(m.group(1)) * k:g}px", css)
+
+
+def caption(job, i, k=1.0):
     times = iter(word_times(i))
     if job == "still":
         body = rows(i, lambda r, k, w: f"<span>{w}</span>")
@@ -122,7 +133,7 @@ def caption(job, i):
             i,
             lambda r, k, w: f'<span style="animation:glow 0.56s ease-in-out {next(times):.3f}s both">{w}</span>',
         )
-    return f'<style>{STYLE[job]}</style><div class="cap">{body}</div>'
+    return f'<style>{scaled(STYLE[job], k)}</style><div class="cap">{body}</div>'
 
 
 def timeline(job, args, out_dir):
@@ -141,7 +152,7 @@ def timeline(job, args, out_dir):
     else:
         base = [{"source": {"kind": "solid", "color": "#334455"}}]
     clips = [
-        {"source": {"kind": "html", "html": caption(job, i)},
+        {"source": {"kind": "html", "html": caption(job, i, w / 1920)},
          "start": f"{i * EVERY:.3f}s", "duration": f"{SHOWN}s"}
         for i in range(count)
     ]
@@ -163,6 +174,7 @@ def main():
     ap.add_argument("--seconds", default=120, type=float)
     ap.add_argument("--jobs", default="still,steps,blur-in,stroke,frosted,glow")
     ap.add_argument("--suffix", default="")
+    ap.add_argument("--native", help="also write NAME.srt and NAME.words.json")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     for job in args.jobs.split(","):
@@ -170,6 +182,32 @@ def main():
         with open(path, "w") as f:
             json.dump(timeline(job, args, args.out), f, indent=1)
         print(path)
+    if args.native:
+        native(args, args.native)
+
+
+def native(args, name):
+    """The captions as an .srt (two lines each) and as a word file with
+    one segment per caption, so `--burn` groups the words the same way."""
+    def stamp(t):
+        ms = round(t * 1000)
+        return f"{ms // 3600000:02}:{ms // 60000 % 60:02}:{ms // 1000 % 60:02},{ms % 1000:03}"
+    cues, segments = [], []
+    for i in range(int(args.seconds / EVERY)):
+        start = i * EVERY
+        ls = lines(i)
+        cues.append(f"{i + 1}\n{stamp(start)} --> {stamp(start + SHOWN)}\n" + "\n".join(" ".join(l) for l in ls) + "\n")
+        flat = [w for l in ls for w in l]
+        times = word_times(i)
+        words = []
+        for k, (w, t) in enumerate(zip(flat, times)):
+            end = times[k + 1] if k + 1 < len(times) else SHOWN
+            words.append({"word": w, "start": round(start + t, 3), "end": round(start + end, 3)})
+        segments.append({"words": words})
+    with open(os.path.join(args.out, f"{name}.srt"), "w") as f:
+        f.write("\n".join(cues))
+    with open(os.path.join(args.out, f"{name}.words.json"), "w") as f:
+        json.dump({"segments": segments}, f)
 
 
 if __name__ == "__main__":

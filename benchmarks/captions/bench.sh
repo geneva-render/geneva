@@ -3,7 +3,8 @@
 # CPU time and peak memory (measure.py). Writes one line per run to
 # results/<label>.txt and prints it.
 #
-#   bench.sh [label]          the jobs at 1920x800 (2 min) and 3840x1600 (30 s)
+#   bench.sh [label]          the jobs at 1920x800 (2 min) and 3840x2160 (60 s),
+#                             and the same captions through subtitles --burn
 #   bench.sh [label] many     a 2-hour 1920x1080 timeline of 2,666 html captions
 #                             over a solid, against a 2-minute one of 45; at
 #                             6 fps and x264 ultrafast, since what it measures
@@ -47,10 +48,26 @@ if [ "$what" = many ]; then
   exit 0
 fi
 
-python3 "$here/make-jobs.py" "$here" --video "$here/src/tos-800.mp4" --size 1920x800 --seconds 120 --suffix=-800 >/dev/null
-python3 "$here/make-jobs.py" "$here" --video "$here/src/tos-1600.mp4" --size 3840x1600 --seconds 30 --suffix=-1600 >/dev/null
-for size in 800 1600; do
-  for job in still steps blur-in stroke frosted glow; do
-    run "$job-$size" "$here/$job-$size.json"
-  done
+python3 "$here/make-jobs.py" "$here" --video "$here/src/tos-800.mp4" --size 1920x800 --seconds 120 --suffix=-800 --native native-800 >/dev/null
+python3 "$here/make-jobs.py" "$here" --video "$here/src/tos-2160.mp4" --size 3840x2160 --seconds 60 \
+  --jobs still,steps,blur-in,glow --suffix=-2160 --native native-2160 >/dev/null
+# The native caption paths, for comparison: an .srt on a plate, and word
+# times with the spoken word lit.
+burn() { # name source captions [flags]
+  local name=$1 src=$2 caps=$3 wall cpu rss
+  shift 3
+  read -r wall cpu rss < <(python3 "$here/measure.py" \
+    "$geneva" subtitles "$src" -o "$work/$name.mp4" --burn "$caps" --crf 17 --preset medium "${threads[@]}" "$@" 2>"$work/$name.log")
+  printf '%-28s wall %7.1f s  cpu %7.1f s  peak %6.2f GB\n' "$name" "$wall" "$cpu" \
+    "$(echo "scale=2; $rss / 1048576" | bc)" | tee -a "$out"
+}
+for size in 800 2160; do
+  burn "srt-plate-$size" "$here/src/tos-$size.mp4" "$here/native-$size.srt" --style '{"background": "#000000b3", "padding": "8px"}'
+  burn "words-highlight-$size" "$here/src/tos-$size.mp4" "$here/native-$size.words.json" --highlight '#FFD400'
+done
+for job in still steps blur-in stroke frosted glow; do
+  run "$job-800" "$here/$job-800.json"
+done
+for job in still steps blur-in glow; do
+  run "$job-2160" "$here/$job-2160.json"
 done
