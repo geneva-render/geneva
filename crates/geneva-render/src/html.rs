@@ -1016,8 +1016,9 @@ pub struct GroupCache {
     measured: Measured,
 }
 
-/// Pictures below this many pixels are not worth keeping: the copy out
-/// of the cache would cost about what painting them does.
+/// Pictures below this many pixels are not worth keeping, unless they
+/// hold text: the copy out of the cache would cost about what painting
+/// their boxes does.
 const MIN_PIXELS: i64 = 64 * 64;
 
 /// What one markup source may hold. Each thread rendering frames has a
@@ -1178,9 +1179,6 @@ fn fill_cache(
         let Some(want) = buffer_rect(*bounds, surface) else {
             continue;
         };
-        if (want[2] - want[0]) * (want[3] - want[1]) < MIN_PIXELS {
-            continue;
-        }
         if !is_leaf(laid, g) {
             continue;
         }
@@ -1190,6 +1188,15 @@ fn fill_cache(
             .cloned()
             .collect();
         if boxes.is_empty() {
+            continue;
+        }
+        // Text is shaped and drawn by the engine, which costs far more
+        // than copying the picture, however small: a word that has
+        // finished arriving is kept, not drawn again every frame.
+        let text = boxes
+            .iter()
+            .any(|b| matches!(b.content, Content::Text { .. } | Content::Rich { .. }));
+        if !text && (want[2] - want[0]) * (want[3] - want[1]) < MIN_PIXELS {
             continue;
         }
         // Wanted this frame, fresh or not, so that making room for
