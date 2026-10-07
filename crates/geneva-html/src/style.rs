@@ -329,8 +329,9 @@ pub struct Text {
     pub letter_spacing: f64,
     /// Horizontal alignment.
     pub align: TextAlign,
-    /// Whether runs of whitespace and newlines are kept.
-    pub pre: bool,
+    /// `white-space`: whether spaces and newlines are kept, and whether
+    /// lines break where they run out of room.
+    pub white_space: WhiteSpace,
     /// Shadows drawn behind the glyphs, front to back as CSS lists them.
     pub shadow: Vec<Shadow>,
     /// A background clipped to the glyphs, from an ancestor's
@@ -379,6 +380,36 @@ fn first_strong_is_rtl(doc: &Document, id: crate::dom::NodeId) -> Option<bool> {
         }
     }
     None
+}
+
+/// `white-space`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WhiteSpace {
+    /// Spaces collapse and lines break where they run out of room.
+    #[default]
+    Normal,
+    /// Spaces collapse; lines never break where they run out of room.
+    Nowrap,
+    /// Spaces and newlines kept; lines break only at newlines.
+    Pre,
+    /// Spaces and newlines kept, and lines break where they run out of
+    /// room (`pre-wrap`, `break-spaces`).
+    PreWrap,
+}
+
+impl WhiteSpace {
+    /// Whether runs of spaces and newlines are kept as written.
+    #[must_use]
+    pub fn keeps_spaces(self) -> bool {
+        matches!(self, Self::Pre | Self::PreWrap)
+    }
+
+    /// Whether a line breaks where it runs out of room; forced breaks
+    /// always do.
+    #[must_use]
+    pub fn wraps(self) -> bool {
+        matches!(self, Self::Normal | Self::PreWrap)
+    }
 }
 
 /// `direction`.
@@ -478,7 +509,7 @@ impl Default for Text {
             line_height: None,
             letter_spacing: 0.0,
             align: TextAlign::Left,
-            pre: false,
+            white_space: WhiteSpace::Normal,
             shadow: Vec::new(),
             fill: None,
             stroke_width: 0.0,
@@ -1314,7 +1345,14 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
                 _ => return unsupported(v, "ltr or rtl"),
             };
         }
-        "white-space" => c.text.pre = matches!(l, "pre" | "pre-wrap" | "break-spaces"),
+        "white-space" => {
+            c.text.white_space = match l {
+                "nowrap" => WhiteSpace::Nowrap,
+                "pre" => WhiteSpace::Pre,
+                "pre-wrap" | "break-spaces" => WhiteSpace::PreWrap,
+                _ => WhiteSpace::Normal,
+            }
+        }
         "-webkit-text-stroke" => {
             let (mut width, mut stroke) = (0.0, None);
             for token in parts(v) {

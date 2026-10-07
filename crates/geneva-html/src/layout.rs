@@ -537,7 +537,7 @@ fn collapse_runs(raw: Vec<(Option<String>, Text)>) -> Vec<(String, Text)> {
     // A space written last, dropped if the line ends there.
     let trim_end = |out: &mut Vec<(String, Text)>| {
         if let Some(last) = out.iter_mut().rev().find(|(t, _)| !t.is_empty()) {
-            if last.0.ends_with(' ') && !last.1.pre {
+            if last.0.ends_with(' ') && !last.1.white_space.keeps_spaces() {
                 last.0.pop();
             }
         }
@@ -549,7 +549,7 @@ fn collapse_runs(raw: Vec<(Option<String>, Text)>) -> Vec<(String, Text)> {
             quiet = true;
             continue;
         };
-        if style.pre {
+        if style.white_space.keeps_spaces() {
             quiet = text.ends_with(char::is_whitespace);
             out.push((text, style));
             continue;
@@ -665,7 +665,7 @@ impl Walk<'_> {
             crate::dom::NodeKind::Text(text) => Content::Text {
                 text: collapse(
                     &crate::style::transform_text(text, &style.text, &mut true),
-                    style.text.pre,
+                    style.text.white_space.keeps_spaces(),
                 ),
                 style: style.text.clone(),
             },

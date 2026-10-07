@@ -29,8 +29,8 @@ pub use dom::{Document, Element, HtmlError, Node, NodeId, NodeKind};
 pub use layout::{Content, Group, Laid, Measure, Painted};
 pub use style::{
     AnimationSpec, Background, Blend, Computed, Direction, Extent, Overrides, Paint, Shadow, Stop,
-    Text, TextAlign, TextDirection, TextFill, TextTransform, declared_box, extent_of, inset_extent,
-    overridden,
+    Text, TextAlign, TextDirection, TextFill, TextTransform, WhiteSpace, declared_box, extent_of,
+    inset_extent, overridden,
 };
 
 /// Why a document did not parse, and where.

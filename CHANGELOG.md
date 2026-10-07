@@ -6,6 +6,22 @@ version it was written for; within 1.x the format only gains optional
 fields, so a document keeps meaning what it meant. Before 1.0, minor
 versions changed the format freely.
 
+## Unreleased
+
+### Fixed
+
+- **A word broke inside a box as wide as its text** when the text was
+  centred or right-aligned (`Makin` / `g`). The box was measured with
+  the text laid out in a very wide line, where a centred word sits tens
+  of thousands of pixels along and its width read back slightly short;
+  the box came out narrower than the line and the paint broke it. Text
+  is now measured left-aligned, so a box sized to its content keeps the
+  lines it was measured with, and its glyphs sit in the same place under
+  `start`, `center` and `right`.
+- **`white-space: nowrap` (and `pre`) never breaks a line** in markup;
+  it was read only for whether spaces are kept. A line too long for its
+  box now runs past it, as in a browser.
+
 ## 1.2.1 (2026-10-07)
 
 ### Fixed

@@ -1006,3 +1006,98 @@ fn a_growing_text_shadow_leaves_the_glyphs_still() {
         );
     }
 }
+
+/// A word in a box sized to it draws on one line, and in the same place,
+/// whether it is aligned to the start, the centre or the right; with
+/// `white-space: nowrap` and without.
+#[test]
+fn a_word_in_a_box_as_wide_as_it_stays_on_one_line_however_aligned() {
+    use std::fmt::Write as _;
+    let (cols, rows) = (4, 21);
+    let render = |align: &str, nowrap: bool| {
+        let mut html = String::new();
+        for i in 0..cols * rows {
+            let size = 18.0 + 0.6 * f64::from(i / cols);
+            let spacing = [0.0, 0.05, 0.118, 0.2][(i % cols) as usize];
+            write!(
+                html,
+                "<div style='position: absolute; left: {}px; top: {}px; text-align: {align}; {} \
+                 font: 700 {size}px Liberation Sans; letter-spacing: {spacing}em; color: #ffffff'>Making</div>",
+                10 + (i % cols) * 200,
+                10 + (i / cols) * 50,
+                if nowrap { "white-space: nowrap;" } else { "" },
+            )
+            .unwrap();
+        }
+        let text = format!(
+            r#"{{"geneva":"1.0","output":{{"width":800,"height":1060,"fps":30,"duration":"1s",
+            "background":"transparent"}},"layers":[{{"clips":[{{"source":{{"kind":"html","width":800,"height":1060,
+            "html":{}}},"transform":{{"anchor":"top left","position":"0 0"}}}}]}}]}}"#,
+            serde_json::to_string(&html).unwrap()
+        );
+        let l = load(&text);
+        assert!(l.is_ok(), "{:?}", l.diagnostics);
+        CpuRenderer::new(NoAssets)
+            .render_frame(&l.composition.unwrap(), Ratio::ZERO)
+            .unwrap()
+    };
+    for nowrap in [true, false] {
+        let start = render("start", nowrap);
+        for i in 0..cols * rows {
+            let (x0, y0) = (10 + (i % cols) * 200, 10 + (i / cols) * 50);
+            let (mut top, mut bottom) = (u32::MAX, 0);
+            for y in y0..y0 + 48 {
+                for x in x0..x0 + 195 {
+                    if start.get(x, y).a > 0.5 {
+                        top = top.min(y);
+                        bottom = bottom.max(y);
+                    }
+                }
+            }
+            assert!(bottom - top < 32, "cell {i} drew on two lines");
+        }
+        for align in ["center", "right"] {
+            let other = render(align, nowrap);
+            assert!(
+                furthest(&start, &other) == 0.0,
+                "{align} (nowrap {nowrap}) drew the words elsewhere or on two lines"
+            );
+        }
+    }
+}
+
+/// `white-space: nowrap` keeps a line whole in a box narrower than it:
+/// the line runs past the box rather than breaking.
+#[test]
+fn nowrap_text_runs_past_a_narrow_box_on_one_line() {
+    let height = |css: &str| {
+        let f = markup_at(
+            "<div class='n'>Making things</div>",
+            &format!(
+                ".n {{ position: absolute; left: 0; top: 0; width: 40px; font: 700 20px Liberation Sans; color: #ffffff; {css} }}"
+            ),
+            0,
+        );
+        let (mut top, mut bottom, mut right) = (u32::MAX, 0, 0);
+        for y in 0..f.height() {
+            for x in 0..f.width() {
+                if f.get(x, y).a > 0.5 {
+                    top = top.min(y);
+                    bottom = bottom.max(y);
+                    right = right.max(x);
+                }
+            }
+        }
+        (bottom - top, right)
+    };
+    let (wrapped, _) = height("");
+    let (kept, right) = height("white-space: nowrap");
+    assert!(
+        wrapped > 30,
+        "without nowrap the words take two lines: {wrapped}"
+    );
+    assert!(
+        kept < 25 && right > 100,
+        "nowrap kept one line past the box: {kept} tall, to x {right}"
+    );
+}

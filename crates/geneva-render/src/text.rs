@@ -391,7 +391,11 @@ impl TextEngine {
         );
         // Lines break between words; a word longer than the line breaks
         // inside rather than running past the edge.
-        buffer.set_wrap(Wrap::WordOrGlyph);
+        buffer.set_wrap(if text.nowrap {
+            Wrap::None
+        } else {
+            Wrap::WordOrGlyph
+        });
         buffer.set_size(Some(wrap_width), None);
         let default_attrs = attrs_for(&base, 0);
         if pieces.len() == 1 && pieces[0].1 == 0 {

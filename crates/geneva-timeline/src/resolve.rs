@@ -514,6 +514,9 @@ pub struct ResolvedText {
     /// it a paragraph is left to right, as CSS's default is, whatever
     /// script it starts in.
     pub rtl: bool,
+    /// Lines never break where they run out of room (markup's
+    /// `white-space: nowrap`); the width still places them.
+    pub nowrap: bool,
 }
 
 /// How a text's outline is painted.
@@ -613,6 +616,7 @@ impl ResolvedText {
             outline_paint: OutlinePaint::Outline,
             browser_lines: false,
             rtl: false,
+            nowrap: false,
         }
     }
 
@@ -3570,6 +3574,7 @@ fills the frame",
             outline_paint: OutlinePaint::Outline,
             browser_lines: false,
             rtl: false,
+            nowrap: false,
         }
     }
 

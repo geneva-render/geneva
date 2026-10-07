@@ -94,6 +94,7 @@ fn as_text_source(text: &str, style: &Text, max_width: f64) -> ResolvedText {
     );
     source.browser_lines = true;
     source.rtl = style.rtl();
+    source.nowrap = !style.white_space.wraps();
     source.outline_paint = if style.stroke_over_fill {
         OutlinePaint::StrokeOver
     } else {
@@ -123,16 +124,41 @@ fn engine_runs(runs: &[(String, Text)]) -> Vec<(String, TextStyle, LinearRgba)> 
 }
 
 /// A key that distinguishes two runs with different styles.
+/// The width a text is measured at: a run with no limit, or one that
+/// never breaks, at a width nothing will reach, which is max-content.
+fn measure_limit(style: &Text, width: Option<f32>) -> f32 {
+    width
+        .filter(|w| *w > 0.0 && style.white_space.wraps())
+        .unwrap_or(1.0e5)
+}
+
+/// A text style as it is measured. A shadow or stroke pads the rendered
+/// image, so measuring with one would move the text it is drawn behind;
+/// CSS lays text out as though they were not there, and so does this.
+/// Alignment does not change where lines break, and it is left out: in
+/// the measuring width a centred line sits tens of thousands of pixels
+/// along, where an `f32` holds positions to about 1/256 px, and the
+/// width read back came out short of the line (91.0 for 91.0008), so the
+/// box was made too narrow and the paint broke the line.
+fn plain_for_measure(style: &Text) -> Text {
+    let mut plain = style.clone();
+    plain.shadow.clear();
+    plain.stroke_width = 0.0;
+    plain.align = geneva_html::TextAlign::Left;
+    plain
+}
+
 fn style_key(style: &Text) -> String {
     format!(
-        "{}|{}|{}|{}|{:?}|{}|{:?}",
+        "{}|{}|{}|{}|{:?}|{}|{:?}|{}",
         style.family.as_deref().unwrap_or(""),
         style.size,
         style.weight,
         style.italic,
         style.line_height,
         style.letter_spacing,
-        style.align
+        style.align,
+        style.white_space.wraps()
     )
 }
 
@@ -156,24 +182,17 @@ impl Measure for Context<'_> {
             return (0.0, 0.0);
         }
         // Min-content is asked for as a width of zero: the text at the
-        // width of its longest word.
-        if width == Some(0.0) {
+        // width of its longest word, or all of it when it never breaks.
+        if width == Some(0.0) && style.white_space.wraps() {
             let widest = self.longest_word(std::iter::once((text, style)));
             return self.text(text, style, Some(widest.max(1.0)));
         }
-        // A run with no limit is measured at a width nothing will reach,
-        // which is what max-content means here.
-        let limit = width.filter(|w| *w > 0.0).unwrap_or(1.0e5);
+        let limit = measure_limit(style, width);
         let key = (text.to_owned(), style_key(style), limit.to_bits());
         if let Some(size) = self.memo.get(&key) {
             return *size;
         }
-        // A shadow pads the rendered image, so measuring with one would
-        // move the text it is drawn behind. CSS lays text out as though
-        // the shadow were not there, and so does this.
-        let mut plain = style.clone();
-        plain.shadow.clear();
-        plain.stroke_width = 0.0;
+        let plain = plain_for_measure(style);
         let source = as_text_source(text, &plain, f64::from(limit));
         let image = self.text.render(&source, 0.0);
         let size = (image.width as f32, image.height as f32);
@@ -185,11 +204,11 @@ impl Measure for Context<'_> {
         if runs.iter().all(|(piece, _)| piece.trim().is_empty()) {
             return (0.0, 0.0);
         }
-        if width == Some(0.0) {
+        if width == Some(0.0) && style.white_space.wraps() {
             let widest = self.longest_word(runs.iter().map(|(p, s)| (p.as_str(), s)));
             return self.rich(runs, style, Some(widest.max(1.0)));
         }
-        let limit = width.filter(|w| *w > 0.0).unwrap_or(1.0e5);
+        let limit = measure_limit(style, width);
         let mut text = String::new();
         let mut styles = style_key(style);
         for (piece, s) in runs {
@@ -202,9 +221,7 @@ impl Measure for Context<'_> {
         if let Some(size) = self.memo.get(&key) {
             return *size;
         }
-        let mut plain = style.clone();
-        plain.shadow.clear();
-        plain.stroke_width = 0.0;
+        let plain = plain_for_measure(style);
         let source = as_text_source("", &plain, f64::from(limit));
         let image = self.text.render_runs(&source, &engine_runs(runs), 0.0);
         let size = (image.width as f32, image.height as f32);
