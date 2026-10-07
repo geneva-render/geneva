@@ -6,6 +6,18 @@ version it was written for; within 1.x the format only gains optional
 fields, so a document keeps meaning what it meant. Before 1.0, minor
 versions changed the format freely.
 
+## Unreleased
+
+### Fixed
+
+- **Right-to-left words with characters from two fonts**: a word whose
+  letters come from one family of the list and its punctuation or digits
+  from another was drawn with the runs in reading order, so `له.` with
+  the full stop from a Latin font came out as `.له`. The glyphs of each
+  bidi run are now put in the order the run's direction gives, as in a
+  browser. This also covers a right-to-left word split by a style change
+  (a highlighted or bold part).
+
 ## 1.2.0 (2026-10-07)
 
 ### Added

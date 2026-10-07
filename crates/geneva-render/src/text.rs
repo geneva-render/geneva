@@ -415,10 +415,11 @@ impl TextEngine {
         let mut max_x = f32::NEG_INFINITY;
         let mut bottom = 0.0f32;
         let mut glyph_count = 0usize;
-        for run in buffer.layout_runs() {
-            for g in run.glyphs.iter() {
-                min_x = min_x.min(g.x);
-                max_x = max_x.max(g.x + g.w);
+        let xs: Vec<Vec<f32>> = buffer.layout_runs().map(|run| visual_x(&run)).collect();
+        for (run, xs) in buffer.layout_runs().zip(&xs) {
+            for (g, &x) in run.glyphs.iter().zip(xs) {
+                min_x = min_x.min(x);
+                max_x = max_x.max(x + g.w);
                 glyph_count += 1;
             }
             bottom = bottom.max(run.line_top + run.line_height);
@@ -519,9 +520,9 @@ impl TextEngine {
 
         // Glyph placements, computed once and reused for every pass.
         let mut placed: Vec<PlacedGlyph> = Vec::new();
-        for (run, baseline) in buffer.layout_runs().zip(&baselines) {
-            for g in run.glyphs.iter() {
-                let physical = g.physical((origin_x, origin_y + baseline), 1.0);
+        for ((run, baseline), xs) in buffer.layout_runs().zip(&baselines).zip(&xs) {
+            for (g, &x) in run.glyphs.iter().zip(xs) {
+                let physical = g.physical((origin_x + x - g.x, origin_y + baseline), 1.0);
                 let style = g.metadata.min(styles.len() - 1);
                 placed.push(PlacedGlyph {
                     cache_key: physical.cache_key,
@@ -1078,6 +1079,54 @@ const LTR_MARK: char = '\u{200e}';
 /// U+200F, which makes a paragraph that starts with it right to left.
 const RTL_MARK: char = '\u{200f}';
 
+/// Where each glyph of a line goes, left edge, in the line's order.
+///
+/// The shaper orders the glyphs of a word by the runs it was given, and
+/// a word whose characters come from two fonts (or two styles) is two
+/// runs: in right-to-left text it puts them in reading order where they
+/// should be reversed, so `له.` with the full stop from a Latin font came
+/// out as `.له`. Every stretch of glyphs at one bidi level is put back in
+/// the order the level gives (ascending text position left to right on
+/// an even level, descending on an odd one) and laid end to end from
+/// where the stretch starts. A stretch already in order keeps the
+/// shaper's positions.
+fn visual_x(run: &cosmic_text::LayoutRun) -> Vec<f32> {
+    let glyphs = run.glyphs;
+    let mut xs: Vec<f32> = glyphs.iter().map(|g| g.x).collect();
+    let mut start = 0;
+    while start < glyphs.len() {
+        let level = glyphs[start].level;
+        let end = glyphs[start..]
+            .iter()
+            .position(|g| g.level != level)
+            .map_or(glyphs.len(), |n| start + n);
+        // The stretch from left to right: the line holds a right-to-left
+        // line's glyphs from the right.
+        let mut seen: Vec<usize> = (start..end).collect();
+        if run.rtl {
+            seen.reverse();
+        }
+        let mut wanted = seen.clone();
+        if level.is_rtl() {
+            wanted.sort_by_key(|&i| std::cmp::Reverse(glyphs[i].start));
+        } else {
+            wanted.sort_by_key(|&i| glyphs[i].start);
+        }
+        if wanted != seen {
+            let mut x = seen
+                .iter()
+                .map(|&i| glyphs[i].x)
+                .fold(f32::INFINITY, f32::min);
+            for &i in &wanted {
+                xs[i] = x;
+                x += glyphs[i].w;
+            }
+        }
+        start = end;
+    }
+    xs
+}
+
 /// A family name as the font database takes it: CSS's generic names
 /// are the database's generic families.
 fn family_of(name: &str) -> Family<'_> {
@@ -1416,6 +1465,57 @@ mod face_tests {
             LinearRgba::TRANSPARENT,
         );
         assert_eq!(engine.split_by_family(text, &one), [(0..text.len(), 0)]);
+    }
+
+    /// A right-to-left word whose full stop comes from another font
+    /// keeps it at its end, on the left, as a browser draws it; a line
+    /// the shaper already orders keeps its positions.
+    #[test]
+    fn punctuation_from_another_font_ends_a_right_to_left_word() {
+        let mut engine = TextEngine::new();
+        let (regular, _) = liberation();
+        engine.add_font("sans", regular).expect("a usable face");
+        let arabic = std::fs::read("../../tests/golden/fonts/NotoSansArabic-Subset.ttf")
+            .expect("the golden root ships it");
+        engine.add_font("arabic", arabic).expect("a usable face");
+        let shape = |engine: &mut TextEngine, pieces: &[(&str, &str)]| {
+            let mut buffer = Buffer::new(&mut engine.fonts, Metrics::new(40.0, 48.0));
+            buffer.set_size(Some(1000.0), None);
+            let attrs = Attrs::new();
+            let rich = pieces
+                .iter()
+                .map(|(text, family)| (*text, attrs.clone().family(Family::Name(family))));
+            buffer.set_rich_text(rich, &attrs, Shaping::Advanced, None);
+            buffer.shape_until_scroll(&mut engine.fonts, true);
+            let run = buffer.layout_runs().next().expect("one line");
+            let glyphs: Vec<(String, f32)> = run
+                .glyphs
+                .iter()
+                .map(|g| (run.text[g.start..g.end].to_owned(), g.x))
+                .collect();
+            (glyphs, visual_x(&run))
+        };
+        let (glyphs, xs) = shape(
+            &mut engine,
+            &[
+                ("\u{200f}مال", "Noto Sans Arabic"),
+                (".", "Liberation Sans"),
+            ],
+        );
+        let dot = glyphs.iter().position(|(t, _)| t == ".").expect("drawn");
+        for (i, (t, _)) in glyphs.iter().enumerate() {
+            if i != dot && t != "\u{200f}" {
+                assert!(
+                    xs[dot] < xs[i],
+                    "{t:?} at {} is left of the stop at {}",
+                    xs[i],
+                    xs[dot]
+                );
+            }
+        }
+        // One font, digits inside: already in order, so left alone.
+        let (glyphs, xs) = shape(&mut engine, &[("\u{200f}مال 12 لك", "Noto Sans Arabic")]);
+        assert_eq!(xs, glyphs.iter().map(|(_, x)| *x).collect::<Vec<_>>());
     }
 
     /// A WOFF2 file given a family by `@font-face` answers to that family,
