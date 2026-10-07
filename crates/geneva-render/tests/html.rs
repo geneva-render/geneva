@@ -700,14 +700,26 @@ fn a_sentence_with_a_bold_word_wraps_as_one() {
 fn a_smaller_word_leaves_its_line_as_tall_as_the_rest() {
     // Two lines of 40 px text with a 12 px word in the first. The line
     // took its height from the small word alone, so the big glyphs were
-    // cut at the top and the second line was drawn over the first.
-    let f = markup_at(
-        "<p>BIG <small>SMALL</small> BIG<br>BIG BIG</p>",
-        "p { position: absolute; left: 10px; top: 10px; width: 300px; margin: 0; \
-             font: 40px Liberation Sans; color: #ffffff } \
-         small { font-size: 12px }",
-        0,
+    // cut at the top and the second line was drawn over the first. The
+    // frame is tall enough for both lines in any face: a machine without
+    // Liberation Sans (Windows) draws one whose lines are further apart.
+    let text = format!(
+        r#"{{"geneva":"1.0","output":{{"width":200,"height":200,"fps":30,"duration":"1s",
+        "background":"transparent"}},"layers":[{{"clips":[{{"source":{{"kind":"html","width":200,"height":200,
+        "html":{},"css":{}}},"transform":{{"anchor":"top left","position":"0 0"}}}}]}}]}}"#,
+        serde_json::to_string("<p>BIG <small>SMALL</small> BIG<br>BIG BIG</p>").unwrap(),
+        serde_json::to_string(
+            "p { position: absolute; left: 10px; top: 10px; width: 300px; margin: 0; \
+                 font: 40px Liberation Sans; color: #ffffff } \
+             small { font-size: 12px }"
+        )
+        .unwrap(),
     );
+    let l = load(&text);
+    assert!(l.is_ok(), "{:?}", l.diagnostics);
+    let f = CpuRenderer::new(NoAssets)
+        .render_frame(&l.composition.unwrap(), Ratio::ZERO)
+        .unwrap();
     let inked: Vec<bool> = (0..f.height())
         .map(|y| (0..f.width()).any(|x| at(&f, x, y).a > 0.5))
         .collect();
