@@ -29,7 +29,8 @@ pub use dom::{Document, Element, HtmlError, Node, NodeId, NodeKind};
 pub use layout::{Content, Group, Laid, Measure, Painted};
 pub use style::{
     AnimationSpec, Background, Blend, Computed, Direction, Extent, Overrides, Paint, Shadow, Stop,
-    Text, TextAlign, TextFill, declared_box, extent_of, overridden,
+    Text, TextAlign, TextDirection, TextFill, TextTransform, declared_box, extent_of, inset_extent,
+    overridden,
 };
 
 /// Why a document did not parse, and where.
@@ -115,7 +116,62 @@ pub struct Prepared {
     animated: Option<Computed>,
 }
 
+/// Where a box named by `anchor()` is: by `anchor-name` (`--name`) or by
+/// element id (`#id` or the bare id), its border box in the surface's
+/// pixels.
+#[derive(Debug, Clone, Default)]
+pub struct Anchors {
+    boxes: std::collections::HashMap<String, layout::Rectangle>,
+}
+
+impl Anchors {
+    /// The border box `name` refers to.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<layout::Rectangle> {
+        let name = name.trim();
+        self.boxes
+            .get(name)
+            .or_else(|| self.boxes.get(name.trim_start_matches('#')))
+            .copied()
+    }
+}
+
 impl Prepared {
+    /// The boxes `anchor()` can name in a laid-out frame: every element
+    /// with an `anchor-name` or an id, at its first box.
+    #[must_use]
+    pub fn anchors(&self, laid: &Laid) -> Anchors {
+        let mut boxes = std::collections::HashMap::new();
+        for b in &laid.boxes {
+            let Some(el) = self.doc.nodes[b.node].element() else {
+                continue;
+            };
+            if let Some(name) = &self.styles[b.node].paint.anchor_name {
+                boxes.entry(name.clone()).or_insert(b.rect);
+            }
+            if let Some(id) = &el.id {
+                boxes.entry(id.clone()).or_insert(b.rect);
+            }
+        }
+        Anchors { boxes }
+    }
+
+    /// The box `left` and `top` of `node` are measured from: the padding
+    /// box of its nearest positioned ancestor, or the surface's origin.
+    #[must_use]
+    pub fn containing_origin(&self, laid: &Laid, node: NodeId) -> (f32, f32) {
+        let mut at = self.doc.nodes[node].parent;
+        while let Some(n) = at {
+            if self.styles[n].positioned {
+                if let Some(b) = laid.boxes.iter().find(|b| b.node == n) {
+                    return (b.rect[0] + b.border[3], b.rect[1] + b.border[0]);
+                }
+            }
+            at = self.doc.nodes[n].parent;
+        }
+        (0.0, 0.0)
+    }
+
     /// The border box of the element carrying the animation, against a
     /// surface of `width` by `height`. `None` on an axis its style leaves
     /// to the content.

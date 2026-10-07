@@ -510,6 +510,10 @@ pub struct ResolvedText {
     /// `line_height` the fonts' own spacing (`line-height: normal`).
     /// A text source keeps its own layout, `line_height` 1.2 by default.
     pub browser_lines: bool,
+    /// Paragraphs run right to left (markup's `direction: rtl`). Without
+    /// it a paragraph is left to right, as CSS's default is, whatever
+    /// script it starts in.
+    pub rtl: bool,
 }
 
 /// How a text's outline is painted.
@@ -608,6 +612,7 @@ impl ResolvedText {
             shadow,
             outline_paint: OutlinePaint::Outline,
             browser_lines: false,
+            rtl: false,
         }
     }
 
@@ -3564,6 +3569,7 @@ fills the frame",
             shadow,
             outline_paint: OutlinePaint::Outline,
             browser_lines: false,
+            rtl: false,
         }
     }
 
@@ -4033,6 +4039,16 @@ be; write the distance in pixels, or give the source a size",
                             "it is skipped and the rest is drawn; the timeline reference lists what geneva draws",
                         ),
                     );
+                }
+                for raw in p.styles.iter().filter_map(|s| s.paint.transform.as_deref()) {
+                    if let Err(e) =
+                        crate::animation::parse_declarations(&format!("transform: {raw}"))
+                    {
+                        self.push(
+                            Diagnostic::warning("W450", spath.clone(), format!("transform: {e}"))
+                                .with_help("it is skipped and the rest is drawn; the timeline reference lists what geneva draws"),
+                        );
+                    }
                 }
                 for what in &p.inert {
                     self.push(

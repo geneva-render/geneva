@@ -168,8 +168,12 @@ enum Pic {
 }
 
 impl Pic {
+    /// The paint, its picture borrowed rather than copied: a picture
+    /// drawn fresh this frame is as big as the clip's box, 133 MB at
+    /// 3840x2160.
     fn paint(&self) -> Paint<'_> {
         match self {
+            Self::Own(Paint::Image(image)) => Paint::Image(Cow::Borrowed(image.as_ref())),
             Self::Own(p) => p.clone(),
             Self::Shared(image) => Paint::Image(Cow::Borrowed(image)),
         }
@@ -516,8 +520,14 @@ impl<A: AssetSource> CpuRenderer<A> {
                     item.opacity,
                     item.blend,
                 );
-                if let Pic::Own(paint) = item.paint {
-                    self.recycle(owned_pixels(paint));
+                match item.paint {
+                    // Markup drawn fresh this frame: its buffer goes back
+                    // to the painter for the next.
+                    Pic::Own(Paint::Image(Cow::Owned(image))) if item.encoded => {
+                        self.painter.recycle_markup(image);
+                    }
+                    Pic::Own(paint) => self.recycle(owned_pixels(paint)),
+                    Pic::Shared(_) => {}
                 }
             }
             let frame = Arc::new(frame);
@@ -638,11 +648,17 @@ impl<A: AssetSource> CpuRenderer<A> {
                         continue;
                     }
                     None => {
-                        let encoded = encoded_paint(paint.clone());
+                        // Drawn fresh for this frame, so it is turned to
+                        // encoded values in place rather than copied.
+                        let encoded = encoded_paint(paint);
                         draw_encoded(frame, &encoded, &placement, opacity as f32);
+                        if let Paint::Image(Cow::Owned(image)) = encoded {
+                            self.painter.recycle_markup(image);
+                        }
+                        self.recycle(Some(scratch));
+                        continue;
                     }
                 }
-                None
             } else {
                 draw(
                     frame,

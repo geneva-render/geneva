@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 geneva-color = { workspace = true }
 taffy = { workspace = true }
+unicode-bidi = { workspace = true }
 
 [lints]
 workspace = true

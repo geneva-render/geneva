@@ -598,8 +598,8 @@ reported by name rather than drawn differently.
 | Spacing | `margin`, `padding`, per-side forms, one-to-four-value shorthands |
 | Flex | `flex-direction`, `flex-wrap`, `justify-content`, `align-items`, `align-self`, `align-content`, `gap`, `row-gap`, `column-gap`, `flex-grow`, `flex-shrink`, `flex-basis`, `flex` |
 | Border | `border`, `border-top`, `border-right`, `border-bottom`, `border-left`, `border-width`, `border-color`, `border-style` (`solid`, `none`), `border-radius` |
-| Paint | `background`, `background-color` (colour or gradient), `background-size`, `background-position`, `background-clip` (`text`, `border-box`, `-webkit-` too), `opacity`, `mix-blend-mode` (`normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `difference`, `soft-light`), `filter` (`blur()`), `clip-path` (`polygon()`, `none`), `box-shadow` (list; no `inset`), `backdrop-filter` (`-webkit-` too; `blur()`, `saturate()`, `brightness()`, `contrast()`, in order), `transform-origin` |
-| Text | `color`, `-webkit-text-fill-color` (as `color`), `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align`, `white-space`, `text-shadow` (list), `-webkit-text-stroke` and its `-width` and `-color` longhands, `paint-order` |
+| Paint | `background`, `background-color` (colour or gradient), `background-size`, `background-position`, `background-clip` (`text`, `border-box`, `-webkit-` too), `opacity`, `mix-blend-mode` (`normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `difference`, `soft-light`), `filter` (`blur()`), `clip-path` (`polygon()`, `none`), `box-shadow` (list; no `inset`), `backdrop-filter` (`-webkit-` too; `blur()`, `saturate()`, `brightness()`, `contrast()`, in order), `transform`, `transform-origin`, `anchor-name`, `mask-image` (`linear-gradient()`, `radial-gradient()`, `none`), `mask-size`, `mask-position`, `mask-repeat` (`repeat`, `no-repeat`, `repeat-x`, `repeat-y`; the four with `-webkit-` too) |
+| Text | `color`, `-webkit-text-fill-color` (as `color`), `font`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `letter-spacing`, `text-align` (`start`, `end`, `left`, `center`, `right`), `text-transform` (`none`, `uppercase`, `lowercase`, `capitalize`), `direction` (`ltr`, `rtl`), `white-space`, `text-shadow` (list), `-webkit-text-stroke` and its `-width` and `-color` longhands, `paint-order` |
 | Motion | `animation`, `animation-name`, `-duration`, `-delay`, `-timing-function`, `-iteration-count`, `-direction`, `-fill-mode` |
 
 `align-items: baseline` and `align-self: baseline` line up the bottoms of the boxes, not their text baselines.
@@ -610,6 +610,7 @@ property are named, and the rest of the document is drawn. A `<style>` rule matc
 **Lengths**
 
 - `px`, `em`, `rem`, `%`. `em` = the element's own font size; a percentage `font-size` or `line-height` is of the inherited one.
+- `calc()`, `min()`, `max()`, `clamp()` over `px`, `em`, `rem` and numbers, nested, wherever a length is read: `max(1px, 0.06em)`. A percentage inside one is W450.
 - Percentages only on widths, heights, margins, padding, gaps and insets (against the containing block). Elsewhere absolute only: `border-radius: 50%` is W450.
 - `box-sizing: content-box` by default, as in CSS.
 
@@ -622,13 +623,21 @@ property are named, and the rest of the document is drawn. A `<style>` rule matc
 **Painting**
 
 - `z-index` orders positioned boxes and flex items (negative under the flow); elsewhere W454.
-- A box with `opacity` < 1, `filter`, `clip-path`, `mix-blend-mode` or an animation is a group: its subtree is painted into its own buffer and composited whole (a stacking context).
+- A box with `opacity` < 1, `filter`, `clip-path`, `mask-image`, `mix-blend-mode` or an animation is a group: its subtree is painted into its own buffer and composited whole (a stacking context).
 - A group's buffer is capped at nine times the frame's area, any shape (a news crawl fits); larger is cut back with W455.
+- `box-shadow` is drawn only outside the border box, as in CSS: a translucent box does not show its own shadow through it.
 - `-webkit-text-stroke` is centred on the glyph outline, with mitred joins (limit 4) and butt ends, as browsers draw it; it inherits, and its colour defaults to `currentcolor`. With `paint-order: normal` it is drawn over the fill and covers the glyph's edge; `paint-order: stroke fill` (or `stroke`) puts it underneath, so half its width shows. It does not change layout. Inside a run of inline elements the whole run takes the stroke of the element holding it.
+- `mask-image` keeps the group by the gradient's alpha, laid out on the border box as a background is (size, position, repeat; a tile that does not repeat keeps nothing outside it), after the blur and `clip-path` and before the transform. A document using it renders on the CPU.
 - `backdrop-filter` filters what is under the box, inside its border box, before the box is drawn: the clips on lower layers and earlier clips of the same layer, not the boxes of the same markup painted under it. As in Chromium, nothing outside the border box is read, so a blur thins out towards the edges and the unblurred picture shows through there; the result is clipped to the rounded corners and mixed in by the box's opacity. Works on sRGB-encoded values. A document using it renders on the CPU (`--renderer gpu` says so).
-- No static `transform`: transforms come from animations (W450 otherwise). Hold a pose with a one-keyframe animation.
-- An animated transform (`transform`, `translate`, `scale`, `rotate`) turns and scales about `transform-origin`: one to three values, keywords (`left`, `center`, `right`, `top`, `bottom`), lengths or percentages of the border box; a third (depth) is ignored. The centre by default. A `transform` list composes in written order: `scale(0.5) translateX(20px)` moves 10 px. A percentage translation written after a `rotate()` is scaled but not turned.
+- A static `transform` takes the functions keyframes do (`translate`, `scale`, `rotate` and their axis forms) and makes the box a group; an animation of `transform` replaces it while it plays, and starts from it where its rules leave a value out. A function geneva does not draw is W450.
+- A transform (`transform`, `translate`, `scale`, `rotate`) turns and scales about `transform-origin`: one to three values, keywords (`left`, `center`, `right`, `top`, `bottom`), lengths or percentages of the border box; a third (depth) is ignored. The centre by default. A `transform` list composes in written order: `scale(0.5) translateX(20px)` moves 10 px. A percentage translation written after a `rotate()` is scaled but not turned.
 - `body` and `html` select the clip's box; unstyled, it marks nothing.
+
+**Direction and case**
+
+- `direction: rtl`, or `dir="rtl"` on an element (the style sheet wins over the attribute), inherits: each paragraph of its text runs right to left whatever script it starts in, `text-align: start` (the default) and `end` are the right and left edges, and a flex row runs from the right (`row` and `row-reverse` swap). `dir="auto"` takes the direction of the first strong character in the element's text. Without either, paragraphs run left to right, as CSS's default is. Block boxes are not mirrored: a narrower block child still sits at the left.
+- `text-transform` applies Unicode's casing (`ß` uppercase is `SS`, a word-final sigma lowercase is `ς`); with `lang="tr"` or `"az"` on the element or an ancestor, `i` and `I` case as in Turkish. `capitalize` capitalises the first letter or digit of each word, words being separated by spaces, across inline elements.
+- Variable fonts load, and `font-weight` sets their `wght` axis. Other axes (`font-variation-settings`, `font-optical-sizing`) are not set: W450.
 
 **Fonts**
 
@@ -636,7 +645,7 @@ property are named, and the rest of the document is drawn. A `<style>` rule matc
 - A family shipped as a `font` asset replaces the installed one of that name, in markup and text sources, by asset id or declared family. Other installed families remain as fallback.
 - `@font-face` in markup gives a font file a family: `font-family`, `src` (the first `url()`, relative to the stylesheet; `local()` and `format()` are not read), and optionally `font-weight` and `font-style`, which the face then answers to. The family replaces an installed one of that name, as a font asset's does. A missing file is E452 (checked by `validate --probe` and at render).
 - A `font-family` list (and a text source's `font` list) is fallen back through a character at a time, as in a browser: each character is drawn in the first family with a glyph for it, at that family's nearest weight; spaces, combining marks and joiners stay with the text before them, so a word is shaped whole (Arabic joins). Generic names (`sans-serif`, `serif`, `monospace`, ...) are the machine's. Only characters no listed family has fall back to the installed fonts, so a list of font assets draws the same everywhere. Each named family that is neither installed nor an asset is reported (W405).
-- Lines are stacked as in Chromium: each font's ascent, descent and line gap (OS/2 typographic metrics when the font sets `USE_TYPO_METRICS`, else `hhea`) are rounded to whole pixels; the half-leading a line height leaves is floored above the baseline; a line is as tall as the most any of its fonts reaches above the baseline plus the most below. `line-height: normal` (the default) is each font's own ascent + descent + line gap, so a fallback font with taller metrics makes its line taller, as in a browser. A `font` shorthand without `/line-height` resets it to `normal`. Measured against Chromium 1194 for Inter, Lora, Manrope, Newsreader, Oswald, Cairo: line boxes equal, glyphs within 1 px. There is no synthetic bold or italic: a family without the face is drawn in the nearest it has.
+- Lines are stacked as in Chromium: each font's ascent, descent and line gap (OS/2 typographic metrics when the font sets `USE_TYPO_METRICS`, else `hhea`) are rounded to whole pixels; the half-leading a line height leaves is floored above the baseline; a line is as tall as the most any of its fonts reaches above the baseline plus the most below. `line-height: normal` (the default) is each font's own ascent + descent + line gap, so a fallback font with taller metrics makes its line taller, as in a browser. Every line also holds the first available family of the list (CSS's strut), so a Latin line in `font-family: "Noto Sans Arabic", Inter` is as tall as an Arabic one. A `font` shorthand without `/line-height` resets it to `normal`. Measured against Chromium 1194 for Inter, Lora, Manrope, Newsreader, Oswald, Cairo: line boxes equal, glyphs within 1 px. There is no synthetic bold or italic: a family without the face is drawn in the nearest it has.
 - A paragraph is left to right, CSS's default `direction`, even when it starts with a right-to-left word; right-to-left words inside it are ordered as in a browser. `direction` and `dir` are not read.
 - A missing weight resolves by the CSS rule (above 500: next heavier; below 400: next lighter; 400 to 500: heavier up to 500, then lighter). A family with no italic face is drawn upright. Decided from the family alone, so identical on every machine.
 
@@ -686,14 +695,17 @@ group composited with the transform, opacity and blur of the moment.
 
 - Several animations stack in written order; a `to`-only rule starts from what the rules under it, or the style, leave.
 - Longhands read, comma lists included: `animation-delay`, `-duration`, `-iteration-count`, `-direction`, `-fill-mode`.
-- Keyframe properties: `transform`, `opacity`, `filter: blur()`, `color`, `-webkit-text-stroke-color`, `text-shadow`, `letter-spacing` (`px` or `em`), `width`, `height`, `max-width`, `min-width`, `background-position`, `clip-path`; anything else E442. `color`, `-webkit-text-stroke-color` and `text-shadow` reach inheriting descendants.
+- Keyframe properties: `transform`, `opacity`, `filter: blur()`, `color`, `-webkit-text-stroke-color`, `text-shadow`, `letter-spacing` (`px` or `em`), `width`, `height`, `max-width`, `min-width`, `left`, `top`, `background-position`, `clip-path`, `background-color` (or a `background` that is one colour), `border-color` and `border-*-color`, `box-shadow`, `mask-position`, `mask-size` (`-webkit-` too); anything else E442. `color`, `-webkit-text-stroke-color` and `text-shadow` reach inheriting descendants.
+- `left`, `top` and `width` in a keyframe may name another box: `anchor(<name> left|right|top|bottom|center)` and `anchor-size(<name> width|height)`, the name an `anchor-name` (`--word`) or an element id. They are worked out from where that box is laid out in the same frame, against the animated box's containing block, and then mixed as lengths: an underline that glides from word to word is `@keyframes { from { left: anchor(--w3 left); width: anchor-size(--w3 width) } to { left: anchor(--w4 left); width: anchor-size(--w4 width) } }`. A fallback after a comma is not read. A name that matches nothing leaves the property as the style has it.
+- Colours mix as in a browser: sRGB-encoded channels, premultiplied by alpha. Shadow lists mix shadow by shadow, the shorter padded with transparent shadows. An animated `background-color` under a gradient is not drawn.
 - Polygons with the same point count mix point by point; otherwise a step at halfway. A length and a percentage do not mix (step), except zero.
 
 **Cost**
 
 - No animation inside: laid out and painted once per clip.
 - Animations that only step (a `steps()` timing, or keyframes that all say the same): laid out and painted once per interval between the moments they can change, as word-by-word highlighting does; the picture is reused for the frames in between.
-- Any other animation inside: laid out and painted each frame; an animated element whose boxes do not change keeps its picture and is only composited again.
+- Any other animation inside: laid out each frame (text measured once per clip); an animated element whose boxes do not change keeps its picture and is only composited again.
+- `filter: blur()` is rounded to 0.25 px, so frames whose radii round the same share a blurred picture, and a radius under 0.125 px is none. Over 8 px it is computed at half to a quarter of the size and scaled back, within a code of the full blur.
 
 ## Known limitations
 

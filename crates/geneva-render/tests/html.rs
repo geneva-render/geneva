@@ -800,3 +800,174 @@ fn stepped_markup_reused_between_steps_matches_fresh_frames() {
     }
     assert!(changes >= 6, "the words light up: {changes} changes");
 }
+
+#[test]
+fn a_mask_wipes_a_box_on_from_the_left() {
+    // The gradient's opaque half is shown through a tile 220% wide that
+    // slides from the right: hidden at the start, whole at the end, and
+    // part way through, the left side shown and the right not yet.
+    let f = |tenths| {
+        markup_at(
+            "<div class='s'><div class='w'></div></div>",
+            ".s { position: relative; width: 200px; height: 100px } \
+             @keyframes wipe { from { mask-position: 100% 0 } to { mask-position: 0 0 } } \
+             .w { position: absolute; left: 0; top: 0; width: 200px; height: 100px; background: #ff0000; \
+                  mask-image: linear-gradient(90deg, #000 45%, transparent 55%); \
+                  mask-size: 220% 100%; mask-repeat: no-repeat; animation: wipe 1s linear both }",
+            tenths,
+        )
+    };
+    assert!(at(&f(0), 20, 50).a < 0.01, "{:?}", at(&f(0), 20, 50));
+    let mid = f(5);
+    assert!(
+        near(at(&mid, 10, 50), 1.0, 0.0, 0.0, 1.0),
+        "{:?}",
+        at(&mid, 10, 50)
+    );
+    assert!(at(&mid, 190, 50).a < 0.01, "{:?}", at(&mid, 190, 50));
+    assert!(near(at(&f(10), 190, 50), 1.0, 0.0, 0.0, 1.0));
+}
+
+#[test]
+fn an_underline_glides_from_one_anchor_to_the_next() {
+    let f = |tenths| {
+        markup_at(
+            "<div class='row'><div class='a'></div><div class='b'></div><div class='u'></div></div>",
+            "@keyframes glide { from { left: anchor(--a left); width: anchor-size(--a width) } \
+                                to { left: anchor(--b left); width: anchor-size(--b width) } } \
+             .row { position: absolute; left: 10px; top: 0; display: flex; gap: 20px } \
+             .a { anchor-name: --a; width: 40px; height: 20px } \
+             .b { anchor-name: --b; width: 80px; height: 20px } \
+             .u { position: absolute; top: 30px; left: 0; width: 1px; height: 4px; background: #00ff00; \
+                  animation: glide 1s linear both }",
+            tenths,
+        )
+    };
+    // At the start it lies under the first box (10..50), at the end under
+    // the second (70..150), and halfway it is between: 40..100.
+    let start = f(0);
+    assert!(
+        near(at(&start, 30, 31), 0.0, 1.0, 0.0, 1.0),
+        "{:?}",
+        at(&start, 30, 31)
+    );
+    assert!(at(&start, 60, 31).a < 0.01);
+    let end = f(10);
+    assert!(
+        near(at(&end, 140, 31), 0.0, 1.0, 0.0, 1.0),
+        "{:?}",
+        at(&end, 140, 31)
+    );
+    assert!(at(&end, 30, 31).a < 0.01);
+    let mid = f(5);
+    assert!(
+        near(at(&mid, 45, 31), 0.0, 1.0, 0.0, 1.0),
+        "{:?}",
+        at(&mid, 45, 31)
+    );
+    assert!(
+        near(at(&mid, 95, 31), 0.0, 1.0, 0.0, 1.0),
+        "{:?}",
+        at(&mid, 95, 31)
+    );
+    assert!(at(&mid, 30, 31).a < 0.01 && at(&mid, 115, 31).a < 0.01);
+}
+
+#[test]
+fn a_static_transform_moves_the_box() {
+    let f = markup_at(
+        "<div class='a'></div>",
+        ".a { position: absolute; left: 0; top: 0; width: 50px; height: 50px; background: #0000ff; \
+              transform: translateX(100px) }",
+        0,
+    );
+    assert!(at(&f, 25, 25).a < 0.01);
+    assert!(
+        near(at(&f, 125, 25), 0.0, 0.0, 1.0, 1.0),
+        "{:?}",
+        at(&f, 125, 25)
+    );
+}
+
+#[test]
+fn a_background_colour_and_box_shadow_animate() {
+    let f = |tenths| {
+        markup_at(
+            "<div class='s'><div class='a'></div></div>",
+            ".s { position: relative; width: 200px; height: 100px } \
+             @keyframes lit { from { background-color: #000000 } to { background-color: #ffffff; box-shadow: 0 0 0 #ff0000, 60px 0 0 #00ff00 } } \
+             .a { position: absolute; left: 10px; top: 10px; width: 40px; height: 40px; animation: lit 1s linear both }",
+            tenths,
+        )
+    };
+    assert!(near(at(&f(0), 30, 30), 0.0, 0.0, 0.0, 1.0));
+    assert!(near(at(&f(10), 30, 30), 1.0, 1.0, 1.0, 1.0));
+    // The second shadow, offset to the right, is padded from nothing:
+    // transparent at the start, solid at the end.
+    assert!(at(&f(0), 90, 30).a < 0.01);
+    assert!(
+        near(at(&f(10), 90, 30), 0.0, 1.0, 0.0, 1.0),
+        "{:?}",
+        at(&f(10), 90, 30)
+    );
+}
+
+#[test]
+fn a_right_to_left_row_starts_at_the_right() {
+    let f = markup_at(
+        "<div class='r' dir='rtl'><div class='a'></div><div class='b'></div></div>",
+        ".r { position: absolute; left: 0; top: 0; width: 200px; display: flex } \
+         .a { width: 50px; height: 50px; background: #ff0000 } \
+         .b { width: 50px; height: 50px; background: #0000ff }",
+        0,
+    );
+    assert!(
+        near(at(&f, 175, 25), 1.0, 0.0, 0.0, 1.0),
+        "{:?}",
+        at(&f, 175, 25)
+    );
+    assert!(
+        near(at(&f, 125, 25), 0.0, 0.0, 1.0, 1.0),
+        "{:?}",
+        at(&f, 125, 25)
+    );
+    assert!(at(&f, 25, 25).a < 0.01);
+}
+
+#[test]
+fn a_reused_picture_keeps_nothing_of_the_last_frame() {
+    // One renderer draws a moving box at two times: the second frame is
+    // drawn into the first one's buffer, which must come back clear.
+    let text = format!(
+        r#"{{"geneva":"1.0","output":{{"width":200,"height":100,"fps":30,"duration":"2s",
+        "background":"transparent"}},"layers":[{{"clips":[{{"source":{{"kind":"html","width":200,"height":100,
+        "html":{html},"css":{css}}},"duration":"2s",
+        "transform":{{"anchor":"top left","position":"0 0"}}}}]}}]}}"#,
+        html = serde_json::to_string("<div class='stage'><div class='dot'></div></div>").unwrap(),
+        css = serde_json::to_string(
+            "@keyframes go { to { transform: translateX(100px) } } \
+             .stage { position: relative; width: 200px; height: 100px } \
+             .dot { position: absolute; left: 0; top: 0; width: 50px; height: 100px; background: #00ff00; \
+                    animation: go 1s linear forwards }"
+        )
+        .unwrap(),
+    );
+    let comp = load(&text).composition.unwrap();
+    let mut r = CpuRenderer::new(NoAssets);
+    let first = r.render_frame(&comp, Ratio::ZERO).unwrap();
+    assert!(near(at(&first, 25, 50), 0.0, 1.0, 0.0, 1.0));
+    let second = r.render_frame(&comp, Ratio::new(1, 1)).unwrap();
+    assert!(at(&second, 25, 50).a < 0.01, "{:?}", at(&second, 25, 50));
+    assert!(near(at(&second, 125, 50), 0.0, 1.0, 0.0, 1.0));
+}
+
+#[test]
+fn a_box_wholly_below_the_picture_is_left_out() {
+    // The second box starts past the bottom of a 100-pixel picture.
+    let f = markup_at(
+        "<div class='a'></div><div class='b'>below</div>",
+        ".a { height: 150px; background: #ff0000 } .b { height: 40px; background: #0000ff }",
+        0,
+    );
+    assert!(near(at(&f, 100, 50), 1.0, 0.0, 0.0, 1.0));
+}

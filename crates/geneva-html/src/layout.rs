@@ -116,6 +116,22 @@ pub struct Group {
     /// `mix-blend-mode`: how the composited picture is mixed with what
     /// is already behind it.
     pub blend: crate::style::Blend,
+    /// `mask-image` placed on the border box, applied to the group's
+    /// picture after `clip-path` and before the transform.
+    pub mask: Option<GroupMask>,
+}
+
+/// A mask as painting takes it: the gradient, its tile in the surface's
+/// pixels, and whether the tile repeats along each axis.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroupMask {
+    /// The gradient whose alpha is kept.
+    pub image: crate::style::Background,
+    /// The tile: left, top, width, height.
+    pub tile: (f64, f64, f64, f64),
+    /// Whether the tile repeats across and down; where it does not,
+    /// nothing outside it is kept.
+    pub repeat: (bool, bool),
 }
 
 /// The laid-out document.
@@ -180,7 +196,12 @@ pub fn layout<M: Measure>(
             match leaf {
                 Leaf::Text(dom) => {
                     let style = &styles[*dom].text;
-                    let text = doc.nodes[*dom].text().unwrap_or_default();
+                    let mut text = doc.nodes[*dom].text().unwrap_or_default();
+                    let transformed;
+                    if style.transform != crate::style::TextTransform::None {
+                        transformed = crate::style::transform_text(text, style, &mut true);
+                        text = &transformed;
+                    }
                     let limit = known.width.or(match available.width {
                         AvailableSpace::Definite(w) => Some(w),
                         AvailableSpace::MinContent => Some(0.0),
@@ -277,6 +298,8 @@ impl Walk<'_> {
             && (style.paint.opacity < 1.0
                 || style.paint.blur > 0.0
                 || style.paint.clip_path.is_some()
+                || style.paint.mask.is_some()
+                || style.paint.transform.is_some()
                 || style.paint.blend != crate::style::Blend::Normal
                 || (style.animation.is_some() && self.played_by_clip != Some(dom)))
     }
@@ -313,6 +336,22 @@ impl Walk<'_> {
                 })
                 .collect()
         });
+        let mask = style.paint.mask.as_ref().map(|image| {
+            let (w, h) = (f64::from(rect[2]), f64::from(rect[3]));
+            let (sw, sh) = style.paint.mask_size;
+            let (tw, th) = (sw.size(w).max(1.0), sh.size(h).max(1.0));
+            let (px, py) = style.paint.mask_position;
+            GroupMask {
+                image: image.clone(),
+                tile: (
+                    f64::from(rect[0]) + px.position(w, tw),
+                    f64::from(rect[1]) + py.position(h, th),
+                    tw,
+                    th,
+                ),
+                repeat: style.paint.mask_repeat,
+            }
+        });
         let (ox, oy) = style.paint.transform_origin;
         let pivot = (
             f64::from(rect[0]) + ox.size(f64::from(rect[2])),
@@ -328,6 +367,7 @@ impl Walk<'_> {
             clip: None,
             clip_path,
             blend: style.paint.blend,
+            mask,
         });
         Ok(Some(self.groups.len() - 1))
     }
@@ -409,6 +449,8 @@ fn plain_inline(doc: &Document, styles: &[Computed], dom: DomId) -> bool {
         && s.paint.opacity >= 1.0
         && s.paint.blur <= 0.0
         && s.paint.clip_path.is_none()
+        && s.paint.mask.is_none()
+        && s.paint.transform.is_none()
         && s.paint.blend == crate::style::Blend::Normal
         && s.layout.border == none.border
         && s.layout.padding == none.padding
@@ -445,26 +487,40 @@ fn inline_runs(doc: &Document, styles: &[Computed], dom: DomId) -> Option<Vec<(S
         return None;
     }
     let mut raw = Vec::new();
-    gather(doc, styles, dom, &mut raw);
+    gather(doc, styles, dom, &mut raw, &mut true);
     Some(collapse_runs(raw))
 }
 
 /// The text of an element's inline content in order, each piece with its
 /// style, as written; a `<br>` is `None`.
-fn gather(doc: &Document, styles: &[Computed], dom: DomId, out: &mut Vec<(Option<String>, Text)>) {
+/// `word_start` carries whether the next piece begins a word, for
+/// `text-transform: capitalize` across elements.
+fn gather(
+    doc: &Document,
+    styles: &[Computed],
+    dom: DomId,
+    out: &mut Vec<(Option<String>, Text)>,
+    word_start: &mut bool,
+) {
     for c in doc.children(dom) {
         if styles[*c].layout.display != Display::None {
             match &doc.nodes[*c].kind {
                 crate::dom::NodeKind::Text(t) => {
-                    out.push((Some(t.clone()), styles[*c].text.clone()));
+                    let style = &styles[*c].text;
+                    out.push((
+                        Some(crate::style::transform_text(t, style, word_start)),
+                        style.clone(),
+                    ));
                 }
                 crate::dom::NodeKind::Element(e) if e.tag == "br" => {
+                    *word_start = true;
                     out.push((None, styles[*c].text.clone()));
                 }
-                crate::dom::NodeKind::Element(_) => gather(doc, styles, *c, out),
+                crate::dom::NodeKind::Element(_) => gather(doc, styles, *c, out, word_start),
             }
         }
         if doc.nodes[*c].space_after {
+            *word_start = true;
             out.push((Some(" ".to_owned()), styles[dom].text.clone()));
         }
     }
@@ -607,7 +663,10 @@ impl Walk<'_> {
                 style: style.text.clone(),
             },
             crate::dom::NodeKind::Text(text) => Content::Text {
-                text: collapse(text, style.text.pre),
+                text: collapse(
+                    &crate::style::transform_text(text, &style.text, &mut true),
+                    style.text.pre,
+                ),
                 style: style.text.clone(),
             },
             crate::dom::NodeKind::Element(el) if el.tag == "img" => Content::Image {

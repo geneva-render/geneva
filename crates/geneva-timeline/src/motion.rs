@@ -10,10 +10,10 @@
 //! renderer to composite the element with.
 
 use geneva_anim::Easing;
-use geneva_color::{Color, LinearRgba, Transfer};
-use geneva_html::{Computed, Extent, Overrides, Shadow, extent_of};
+use geneva_color::Color;
+use geneva_html::{Background, Computed, Extent, Overrides, Shadow, extent_of};
 
-use crate::animation::{Animation, Shift, TextShadow, Values};
+use crate::animation::{Animation, Edge, Place, Shift, TextShadow, Values};
 
 /// One animation of the list, with its rule's keyframes by offset.
 #[derive(Debug, Clone)]
@@ -108,6 +108,17 @@ pub fn step_moments(motion: &[NodeMotion], horizon: f64) -> Option<Vec<f64>> {
     Some(out)
 }
 
+/// What `anchor()` is worked out against in one frame: the boxes it can
+/// name, and the corner of the animated element's containing block that
+/// its `left` and `top` are measured from.
+#[derive(Debug, Clone, Copy)]
+pub struct AnchorFrame<'a> {
+    /// The frame's boxes by name.
+    pub anchors: &'a geneva_html::Anchors,
+    /// The containing block's padding-box corner, in the surface's pixels.
+    pub origin: (f32, f32),
+}
+
 /// An element's animations.
 #[derive(Debug, Clone)]
 pub struct NodeMotion {
@@ -192,15 +203,62 @@ impl NodeMotion {
             .any(|p| p.frames.iter().any(|(_, v)| v.moves_layout()))
     }
 
+    /// Whether a keyframe names another box (`anchor()`), so that the
+    /// frame's layout has to be known before this is sampled.
+    #[must_use]
+    pub fn uses_anchors(&self) -> bool {
+        self.plays.iter().any(|p| {
+            p.frames.iter().any(|(_, v)| {
+                [&v.left, &v.top, &v.width]
+                    .iter()
+                    .any(|x| x.as_ref().is_some_and(Place::is_anchor))
+            })
+        })
+    }
+
     /// The element's animations at `t` seconds into the clip, over the
     /// style it has without them. `box_size` is the element's border
     /// box, which a percentage in a translation is a share of.
     #[must_use]
     pub fn sample(&self, t: f64, base: &Computed, box_size: (f64, f64)) -> Sampled {
+        self.sample_anchored(t, base, box_size, None)
+    }
+
+    /// [`sample`](Self::sample), with the boxes `anchor()` names. Without
+    /// them a keyframe that names a box leaves the property alone.
+    #[must_use]
+    pub fn sample_anchored(
+        &self,
+        t: f64,
+        base: &Computed,
+        box_size: (f64, f64),
+        anchors: Option<&AnchorFrame<'_>>,
+    ) -> Sampled {
         let plays = &self.plays;
         let ext = |s: Shift| match s {
             Shift::Px(p) => Extent::Px(p),
             Shift::Percent(p) => Extent::Percent(p),
+        };
+        let at = |p: &Place, across: bool| -> Option<Extent> {
+            match p {
+                Place::Length(s) => Some(ext(*s)),
+                Place::Anchor { name, edge } => {
+                    let frame = anchors?;
+                    let r = frame.anchors.get(name)?;
+                    let [x, y, w, h] = r.map(f64::from);
+                    let (ox, oy) = (f64::from(frame.origin.0), f64::from(frame.origin.1));
+                    Some(Extent::Px(match edge {
+                        Edge::Left => x - ox,
+                        Edge::Right => x + w - ox,
+                        Edge::Top => y - oy,
+                        Edge::Bottom => y + h - oy,
+                        Edge::Center if across => x + w / 2.0 - ox,
+                        Edge::Center => y + h / 2.0 - oy,
+                        Edge::Width => w,
+                        Edge::Height => h,
+                    }))
+                }
+            }
         };
         let overrides = Overrides {
             opacity: stacked(plays, t, base.paint.opacity, |v| v.opacity, lerp),
@@ -235,7 +293,7 @@ impl NodeMotion {
                 plays,
                 t,
                 extent_of(base.layout.size.width),
-                |v| v.width.map(ext),
+                |v| v.width.as_ref().and_then(|p| at(p, true)),
                 extent_lerp,
             ),
             height: stacked(
@@ -277,11 +335,73 @@ impl NodeMotion {
                 },
                 polygon_lerp,
             ),
+            left: stacked(
+                plays,
+                t,
+                geneva_html::inset_extent(base.layout.inset.left),
+                |v| v.left.as_ref().and_then(|p| at(p, true)),
+                extent_lerp,
+            ),
+            top: stacked(
+                plays,
+                t,
+                geneva_html::inset_extent(base.layout.inset.top),
+                |v| v.top.as_ref().and_then(|p| at(p, false)),
+                extent_lerp,
+            ),
+            background_color: stacked(
+                plays,
+                t,
+                match base.paint.background {
+                    Some(Background::Color(c)) => c,
+                    _ => Color::TRANSPARENT,
+                },
+                |v| v.background_color,
+                color_lerp,
+            ),
+            border_color: std::array::from_fn(|side| {
+                stacked(
+                    plays,
+                    t,
+                    base.paint.border_color[side],
+                    |v| v.border_color[side],
+                    color_lerp,
+                )
+            }),
+            mask_position: stacked(
+                plays,
+                t,
+                base.paint.mask_position,
+                |v| v.mask_position.map(|[x, y]| (ext(x), ext(y))),
+                |a, b, u| (extent_lerp(a.0, b.0, u), extent_lerp(a.1, b.1, u)),
+            ),
+            mask_size: stacked(
+                plays,
+                t,
+                base.paint.mask_size,
+                |v| v.mask_size.map(|[x, y]| (ext(x), ext(y))),
+                |a, b, u| (extent_lerp(a.0, b.0, u), extent_lerp(a.1, b.1, u)),
+            ),
+            box_shadow: stacked(
+                plays,
+                t,
+                base.paint.shadow.clone(),
+                |v| {
+                    v.box_shadow
+                        .as_ref()
+                        .map(|list| list.iter().copied().map(shadow_of).collect())
+                },
+                shadows_lerp,
+            ),
         };
         let transform = stacked(
             plays,
             t,
-            Transform::IDENTITY,
+            base.paint
+                .transform
+                .as_deref()
+                .and_then(|raw| static_transform(raw, box_size))
+                .unwrap_or(Transform::IDENTITY),
             |v| transform_of(v, box_size),
             transform_lerp,
         );
@@ -370,25 +490,22 @@ fn lerp(a: f64, b: f64, u: f64) -> f64 {
     a + (b - a) * u
 }
 
-/// Colours mix in linear light, as everything else here does.
+/// Colours mix as a browser mixes them: their sRGB-encoded channels,
+/// premultiplied by alpha, so a colour fading in from `transparent` does
+/// not pass through black.
 fn color_lerp(a: Color, b: Color, u: f64) -> Color {
-    let (la, lb) = (a.to_linear(), b.to_linear());
     let k = u as f32;
-    let m = LinearRgba {
-        r: la.r + (lb.r - la.r) * k,
-        g: la.g + (lb.g - la.g) * k,
-        b: la.b + (lb.b - la.b) * k,
-        a: la.a + (lb.a - la.a) * k,
-    };
-    if m.a <= 0.0 {
+    let mix = |x: f32, y: f32| x + (y - x) * k;
+    let alpha = mix(a.a, b.a);
+    if alpha <= 0.0 {
         return Color::TRANSPARENT;
     }
-    let enc = |v: f32| Transfer::Srgb.from_linear(f64::from(v / m.a)) as f32;
+    let channel = |x: f32, y: f32| (mix(x * a.a, y * b.a) / alpha).clamp(0.0, 1.0);
     Color {
-        r: enc(m.r),
-        g: enc(m.g),
-        b: enc(m.b),
-        a: m.a,
+        r: channel(a.r, b.r),
+        g: channel(a.g, b.g),
+        b: channel(a.b, b.b),
+        a: alpha,
     }
 }
 
@@ -442,6 +559,14 @@ fn extent_lerp(a: Extent, b: Extent, u: f64) -> Extent {
 /// first half, the second for the rest.
 fn step<V>(a: V, b: V, u: f64) -> V {
     if u < 0.5 { a } else { b }
+}
+
+/// A static `transform` as written in a style, on a box of `box_size`;
+/// `None` when it does not parse or changes nothing.
+#[must_use]
+pub fn static_transform(raw: &str, box_size: (f64, f64)) -> Option<Transform> {
+    let values = crate::animation::parse_declarations(&format!("transform: {raw}")).ok()?;
+    transform_of(&values, box_size).filter(|tr| !tr.is_identity())
 }
 
 /// A keyframe's transform, complete: a function it does not name is the
@@ -658,6 +783,53 @@ mod tests {
     }
 
     #[test]
+    fn box_colours_mix_from_the_style_and_anchors_need_the_frame() {
+        let p = geneva_html::prepare(
+            "<style>div { background: #000000; border: 2px solid #ffffff; position: absolute; left: 5px }</style>\
+             <div></div>",
+            "",
+            &std::collections::BTreeMap::new(),
+        )
+        .unwrap();
+        let base = p.styles[p.doc.children(p.doc.root)[0]].clone();
+        let v = Values {
+            background_color: Some(Color::from_rgba8(255, 255, 255, 255)),
+            border_color: [None, None, Some(Color::from_rgba8(0, 0, 0, 255)), None],
+            left: Some(Place::Anchor {
+                name: "--a".to_owned(),
+                edge: Edge::Right,
+            }),
+            ..Values::default()
+        };
+        let m = NodeMotion {
+            node: 0,
+            plays: vec![play(0.0, 1.0, Fill::Forwards, vec![(1.0, v)])],
+        };
+        assert!(m.uses_anchors());
+        let half = m.sample(0.5, &base, (1.0, 1.0)).overrides;
+        let bg = half.background_color.expect("mixed");
+        assert!(
+            (bg.r - 0.5).abs() < 0.01,
+            "sRGB-encoded, as a browser: {bg:?}"
+        );
+        assert!(half.border_color[0].is_none());
+        assert!(half.border_color[2].unwrap().r < 1.0);
+        // No frame: the keyframe naming a box is passed over, and the
+        // style's own `left` stands.
+        assert_eq!(half.left, None);
+        let anchors = geneva_html::Anchors::default();
+        let frame = AnchorFrame {
+            anchors: &anchors,
+            origin: (0.0, 0.0),
+        };
+        // `--a` is not in this document: still left alone.
+        let none = m
+            .sample_anchored(0.5, &base, (1.0, 1.0), Some(&frame))
+            .overrides;
+        assert_eq!(none.left, None);
+    }
+
+    #[test]
     fn a_width_animates_from_the_style_it_had() {
         // A style with `width: 0`, read the way the renderer reads one.
         let p = geneva_html::prepare(
@@ -668,7 +840,7 @@ mod tests {
         .unwrap();
         let base = p.styles[p.doc.children(p.doc.root)[0]].clone();
         let v = Values {
-            width: Some(Shift::Px(40.0)),
+            width: Some(Place::Length(Shift::Px(40.0))),
             ..Values::default()
         };
         let m = NodeMotion {

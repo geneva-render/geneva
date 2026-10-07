@@ -10,6 +10,28 @@ versions changed the format freely.
 
 ### Added
 
+- **Masks in markup**: `mask-image` with `linear-gradient()` or
+  `radial-gradient()`, `mask-size`, `mask-position` and `mask-repeat`
+  (`-webkit-` too), with `mask-position` and `mask-size` animatable: a
+  word painted on left to right with a soft edge. Documents using one
+  render on the CPU.
+- **More animatable properties in markup keyframes**:
+  `background-color` (or a one-colour `background`), `border-color` and
+  the `border-*-color` longhands, `box-shadow` (mixed shadow by shadow),
+  `left` and `top`.
+- **`anchor()` and `anchor-size()` in keyframes** on `left`, `top` and
+  `width`, naming a box by `anchor-name` or id: an underline that glides
+  from the spoken word to the next, without measuring the words
+  beforehand.
+- **`direction` and the `dir` attribute** (`ltr`, `rtl`, `auto`):
+  paragraphs run right to left, `text-align: start` and `end` follow the
+  direction, and flex rows run from the right.
+- **`text-transform`** (`uppercase`, `lowercase`, `capitalize`), with
+  Turkish and Azeri casing under `lang="tr"` or `"az"`.
+- **A static `transform` in markup**, with the functions keyframes
+  take. It was W450.
+- **`calc()`, `min()`, `max()` and `clamp()`** in lengths, over `px`,
+  `em`, `rem` and numbers.
 - **Text stroke in markup.** `-webkit-text-stroke` (and its `-width` and
   `-color` longhands) and `paint-order`, inherited like `color`: a
   stroke centred on the outline with mitred joins, over the fill by
@@ -49,6 +71,11 @@ versions changed the format freely.
 
 ### Changed
 
+- **Moving markup is cheaper to draw.** Text is measured once per clip
+  rather than every frame; `filter: blur()` radii are rounded to 0.25 px
+  so frames share a blurred picture of an element whose content holds
+  still, and a radius over 8 px is blurred at a half to a quarter of
+  the size and scaled back (within a code of the full blur).
 - **A timeline with thousands of markup clips renders in the memory of
   the few on screen.** Each markup clip's prepared document and picture
   were kept for the whole render, about 33 MB a clip at 1080p; they are
@@ -94,6 +121,18 @@ versions changed the format freely.
   stroke also follows a variable font's weight.
 
 ### Fixed
+
+- **Markup with a box wholly below its picture panicked** while painting
+  that box. It is left out, as everything else outside the picture is.
+- **A `box-shadow` showed through its own translucent box.** It is drawn
+  only outside the border box, as CSS has it.
+- **Animated colours in markup mixed in linear light**; they mix as a
+  browser mixes them, in sRGB-encoded values premultiplied by alpha, so a
+  colour halfway between two matches Chromium's.
+- **Lines in markup ignored the first family of the list unless it drew
+  a glyph.** Every line holds its metrics (CSS's strut), so a Latin line
+  under `font-family: "Noto Sans Arabic", Inter` is as tall as in a
+  browser.
 
 - **A `transform` list was collected rather than composed in order**, so
   `scale(0.5) translateX(20px)` moved 20 px where CSS moves 10. A

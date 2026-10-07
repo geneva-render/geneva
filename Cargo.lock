@@ -741,6 +741,7 @@ version = "1.1.0"
 dependencies = [
  "geneva-color",
  "taffy",
+ "unicode-bidi",
 ]
 
 [[package]]

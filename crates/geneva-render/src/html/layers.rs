@@ -211,7 +211,7 @@ pub fn render_layers<'c>(
     cache: &'c mut GroupCache,
     salt: u64,
 ) -> Result<MarkupLayers<'c>, String> {
-    let (laid, transforms) = lay_out(html, prepared, text, images, t)?;
+    let (laid, transforms) = lay_out(html, prepared, text, images, t, &mut cache.measured)?;
     let width = laid.size.0.ceil().max(1.0) as u32;
     let height = laid.size.1.ceil().max(1.0) as u32;
     let (own, placed, natural) =
@@ -544,6 +544,7 @@ fn flatten_into(items: &[MarkupItem<'_>], dst: &mut Image, dst_origin: (i64, i64
                     clip: None,
                     clip_path: None,
                     blend: geneva_html::Blend::Normal,
+                    mask: None,
                 };
                 composite(dst, dst_origin, layer, &straight, None, None);
             }
@@ -574,6 +575,7 @@ fn flatten_into(items: &[MarkupItem<'_>], dst: &mut Image, dst_origin: (i64, i64
                     clip: group.clip,
                     clip_path: group.clip_path.clone(),
                     blend: group.blend,
+                    mask: None,
                 };
                 composite(
                     dst,

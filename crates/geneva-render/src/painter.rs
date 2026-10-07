@@ -101,6 +101,12 @@ pub struct Painter<A: AssetSource> {
     html_cache: HashMap<u64, Scene>,
     /// `@font-face` files registered so far: family, path, weight, style.
     font_faces: std::collections::HashSet<(String, String, Option<u16>, Option<bool>)>,
+    /// The buffer of a markup picture drawn fresh for the last frame,
+    /// handed back once laid on, for the next: a picture is the size of
+    /// the clip's box, and allocating and clearing one per frame was most
+    /// of what a moving caption cost at 3840x2160. Only what it marked
+    /// (its content rectangle) is cleared for reuse.
+    markup_spare: Option<Image>,
     /// What the painter has to tell the reader about the render itself,
     /// deduplicated: a group cut down to the buffer bound does it on
     /// most of a clip's frames, and saying so once is the useful number.
@@ -148,6 +154,12 @@ impl<A: AssetSource> Painter<A> {
         std::mem::take(&mut self.warnings).into_iter().collect()
     }
 
+    /// Takes back the buffer of a markup picture [`paint`](Self::paint)
+    /// drew fresh, once it has been laid on, to draw the next one in.
+    pub fn recycle_markup(&mut self, image: Image) {
+        self.markup_spare = Some(image);
+    }
+
     /// A painter reading from `assets`.
     pub fn new(assets: A) -> Self {
         Self {
@@ -157,6 +169,7 @@ impl<A: AssetSource> Painter<A> {
             word_text: Vec::new(),
             html_cache: HashMap::new(),
             font_faces: std::collections::HashSet::new(),
+            markup_spare: None,
             warnings: std::collections::BTreeSet::new(),
         }
     }
@@ -298,6 +311,11 @@ impl<A: AssetSource> Painter<A> {
         // Markup that only steps is drawn whole once per interval by
         // `paint`, which a renderer then keeps as one picture.
         if !matches!(scene.step(html, clip, local), Step::Moving) {
+            return Ok(None);
+        }
+        // A mask is applied on the CPU only: markup with one is drawn
+        // whole and handed over as one picture.
+        if scene.prepared.styles.iter().any(|s| s.paint.mask.is_some()) {
             return Ok(None);
         }
         let layers = crate::html::render_layers(
@@ -442,13 +460,14 @@ impl<A: AssetSource> Painter<A> {
                         backdrops.clone_from(kept);
                         Paint::Image(Cow::Borrowed(image))
                     } else {
-                        let (drawn, now) = crate::html::render(
+                        let (drawn, now) = crate::html::render_into(
                             html,
                             &scene.prepared,
                             &mut self.text,
                             &scene.images,
                             local,
                             &mut scene.groups,
+                            self.markup_spare.take(),
                         )
                         .map_err(failed)?;
                         backdrops = now;

@@ -139,7 +139,11 @@ pub struct Values {
     /// `letter-spacing`.
     pub letter_spacing: Option<Spacing>,
     /// `width`.
-    pub width: Option<Shift>,
+    pub width: Option<Place>,
+    /// `left`.
+    pub left: Option<Place>,
+    /// `top`.
+    pub top: Option<Place>,
     /// `height`.
     pub height: Option<Shift>,
     /// `max-width`.
@@ -150,9 +154,103 @@ pub struct Values {
     pub background_position: Option<[Shift; 2]>,
     /// `clip-path`: a polygon's points, or empty for `none`.
     pub clip_path: Option<Vec<[Shift; 2]>>,
+    /// `background-color`, or a `background` that is only a colour.
+    pub background_color: Option<Color>,
+    /// The `border-*-color` longhands, top, right, bottom, left; each
+    /// side `None` when the block leaves it alone.
+    pub border_color: [Option<Color>; 4],
+    /// `box-shadow`: the list front to back, empty for `none`.
+    pub box_shadow: Option<Vec<TextShadow>>,
+    /// `mask-position`.
+    pub mask_position: Option<[Shift; 2]>,
+    /// `mask-size`: a width and a height; one value is the width, with
+    /// the height the box's.
+    pub mask_size: Option<[Shift; 2]>,
 }
 
-/// A `text-shadow` in a keyframe.
+/// A length in a keyframe that may be another box's edge or size:
+/// `anchor(<name> <side>)` or `anchor-size(<name> width|height)`, worked
+/// out against the frame's layout before the keyframes are mixed.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Place {
+    /// A length or a percentage.
+    Length(Shift),
+    /// An edge or the size of the box named: by its `anchor-name`
+    /// (`--name`) or its id.
+    Anchor {
+        /// The name as written.
+        name: String,
+        /// Which edge, or which size.
+        edge: Edge,
+    },
+}
+
+/// What `anchor()` and `anchor-size()` read from a box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edge {
+    /// The left edge.
+    Left,
+    /// The right edge.
+    Right,
+    /// The top edge.
+    Top,
+    /// The bottom edge.
+    Bottom,
+    /// The middle, across for `left` and `width`, down for `top`.
+    Center,
+    /// `anchor-size(... width)`.
+    Width,
+    /// `anchor-size(... height)`.
+    Height,
+}
+
+impl Place {
+    /// Whether it names another box.
+    #[must_use]
+    pub fn is_anchor(&self) -> bool {
+        matches!(self, Self::Anchor { .. })
+    }
+}
+
+/// A length, `anchor()` or `anchor-size()` in a keyframe.
+fn place(value: &str) -> Result<Place, String> {
+    let anchor = |args: Vec<&str>, sizes: bool| -> Result<Place, String> {
+        // A fallback after a comma is not read: the box is always there.
+        let words: Vec<&str> = args.first().map(|a| tokens(a)).unwrap_or_default();
+        let [name, edge] = words.as_slice() else {
+            return Err(format!(
+                "{value:?}: write a name and a side, like anchor(--word left)"
+            ));
+        };
+        let edge = match (*edge, sizes) {
+            ("left", false) => Edge::Left,
+            ("right", false) => Edge::Right,
+            ("top", false) => Edge::Top,
+            ("bottom", false) => Edge::Bottom,
+            ("center", false) => Edge::Center,
+            ("width", true) => Edge::Width,
+            ("height", true) => Edge::Height,
+            _ => {
+                return Err(format!(
+                    "{value:?}: anchor() takes left, right, top, bottom or center; anchor-size() width or height"
+                ));
+            }
+        };
+        Ok(Place::Anchor {
+            name: (*name).to_owned(),
+            edge,
+        })
+    };
+    if let Some(args) = call(value, "anchor") {
+        return anchor(args, false);
+    }
+    if let Some(args) = call(value, "anchor-size") {
+        return anchor(args, true);
+    }
+    pixels(value).map(Place::Length)
+}
+
+/// A `text-shadow` or `box-shadow` in a keyframe.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextShadow {
     /// Horizontal offset in pixels.
@@ -181,12 +279,19 @@ impl Values {
             || self.moves_layout()
             || self.background_position.is_some()
             || self.clip_path.is_some()
+            || self.background_color.is_some()
+            || self.border_color.iter().any(Option::is_some)
+            || self.box_shadow.is_some()
+            || self.mask_position.is_some()
+            || self.mask_size.is_some()
     }
 
     /// Whether it changes where boxes land, so the markup is laid out
     /// again at each frame it plays.
     pub fn moves_layout(&self) -> bool {
         self.letter_spacing.is_some()
+            || self.left.is_some()
+            || self.top.is_some()
             || self.width.is_some()
             || self.height.is_some()
             || self.max_width.is_some()
@@ -839,8 +944,47 @@ pub fn parse_declarations(block: &str) -> Result<Values, String> {
                     Some(Color::from_str(value).map_err(|_| format!("{value:?} is not a colour"))?);
             }
             "text-shadow" => v.text_shadow = Some(text_shadow(value)?),
+            "box-shadow" => v.box_shadow = Some(text_shadow(value)?),
+            "background-color" => v.background_color = Some(colour(value)?),
+            "background" => {
+                v.background_color =
+                    Some(Color::from_str(value).map_err(|_| {
+                        format!("{value:?}: a background in a keyframe is one colour")
+                    })?);
+            }
+            "border-color" => {
+                let c: Vec<Color> = tokens(value)
+                    .into_iter()
+                    .map(colour)
+                    .collect::<Result<_, _>>()?;
+                // One to four values, as for any box side shorthand.
+                let [top, right, bottom, left] = match c.as_slice() {
+                    [a] => [*a; 4],
+                    [a, b] => [*a, *b, *a, *b],
+                    [a, b, d] => [*a, *b, *d, *b],
+                    [a, b, d, e] => [*a, *b, *d, *e],
+                    _ => return Err(format!("{value:?}: border-color takes one to four colours")),
+                };
+                v.border_color = [Some(top), Some(right), Some(bottom), Some(left)];
+            }
+            "mask-position" | "-webkit-mask-position" => {
+                v.mask_position = Some(position_pair(value)?);
+            }
+            "mask-size" | "-webkit-mask-size" => {
+                v.mask_size = Some(match tokens(value).as_slice() {
+                    [w] => [pixels(w)?, Shift::Percent(100.0)],
+                    [w, h] => [pixels(w)?, pixels(h)?],
+                    _ => return Err(format!("{value:?}: a mask-size is one or two lengths")),
+                });
+            }
+            "border-top-color" => v.border_color[0] = Some(colour(value)?),
+            "border-right-color" => v.border_color[1] = Some(colour(value)?),
+            "border-bottom-color" => v.border_color[2] = Some(colour(value)?),
+            "border-left-color" => v.border_color[3] = Some(colour(value)?),
             "letter-spacing" => v.letter_spacing = Some(spacing(value)?),
-            "width" => v.width = Some(pixels(value)?),
+            "width" => v.width = Some(place(value)?),
+            "left" => v.left = Some(place(value)?),
+            "top" => v.top = Some(place(value)?),
             "height" => v.height = Some(pixels(value)?),
             "max-width" => v.max_width = Some(pixels(value)?),
             "min-width" => v.min_width = Some(pixels(value)?),
@@ -850,7 +994,8 @@ pub fn parse_declarations(block: &str) -> Result<Values, String> {
                 return Err(format!(
                     "{property:?} cannot be animated; a keyframe sets transform, translate, \
 scale, rotate, opacity, filter, color, -webkit-text-stroke-color, text-shadow, \
-letter-spacing, width, height, max-width, min-width, background-position or clip-path"
+letter-spacing, width, height, max-width, min-width, left, top, background-position, clip-path, \
+background-color, border-color (and its sides), box-shadow, mask-position or mask-size"
                 ));
             }
         }
@@ -858,8 +1003,13 @@ letter-spacing, width, height, max-width, min-width, background-position or clip
     Ok(v)
 }
 
-/// `text-shadow` in a keyframe: `none`, or a list of shadows, each two or
-/// three lengths and a colour in any order.
+/// A colour in a keyframe.
+fn colour(value: &str) -> Result<Color, String> {
+    Color::from_str(value).map_err(|_| format!("{value:?} is not a colour"))
+}
+
+/// `text-shadow` or `box-shadow` in a keyframe: `none`, or a list of
+/// shadows, each two or three lengths and a colour in any order.
 fn text_shadow(value: &str) -> Result<Vec<TextShadow>, String> {
     if value == "none" {
         return Ok(Vec::new());
@@ -897,7 +1047,7 @@ fn one_text_shadow(value: &str) -> Result<TextShadow, String> {
             }),
         }),
         _ => Err(format!(
-            "{value:?}: a text-shadow is \"<x> <y> [blur] [color]\", a list of them, or none"
+            "{value:?}: a shadow is \"<x> <y> [blur] [color]\", a list of them, or none"
         )),
     }
 }
@@ -1273,6 +1423,46 @@ mod tests {
             Some(Vec::new())
         );
         assert!(parse_declarations("text-shadow: 1px").is_err());
+    }
+
+    #[test]
+    fn box_colours_shadows_masks_and_anchors_are_keyframe_values() {
+        let v = parse_declarations(
+            "background-color: #e03030; border-color: red blue; border-left-color: #0f0; \
+             box-shadow: 0 4px 24px #ffd400cc; mask-position: 100% 0; mask-size: 220%; \
+             left: anchor(--w1 left); top: 3px; width: anchor-size(#w3 width, 10px)",
+        )
+        .unwrap();
+        assert_eq!(v.background_color.unwrap().to_hex(), "#e03030");
+        let sides: Vec<String> = v.border_color.iter().map(|c| c.unwrap().to_hex()).collect();
+        assert_eq!(sides, ["#ff0000", "#0000ff", "#ff0000", "#00ff00"]);
+        assert_eq!(v.box_shadow.as_ref().unwrap()[0].blur, 24.0);
+        assert_eq!(
+            v.mask_position,
+            Some([Shift::Percent(100.0), Shift::Px(0.0)])
+        );
+        assert_eq!(
+            v.mask_size,
+            Some([Shift::Percent(220.0), Shift::Percent(100.0)])
+        );
+        assert_eq!(
+            v.left,
+            Some(Place::Anchor {
+                name: "--w1".to_owned(),
+                edge: Edge::Left
+            })
+        );
+        assert_eq!(v.top, Some(Place::Length(Shift::Px(3.0))));
+        assert_eq!(
+            v.width,
+            Some(Place::Anchor {
+                name: "#w3".to_owned(),
+                edge: Edge::Width
+            })
+        );
+        assert!(v.beyond_a_clip() && v.moves_layout());
+        assert!(parse_declarations("left: anchor(--w1 width)").is_err());
+        assert!(parse_declarations("background: linear-gradient(red, blue)").is_err());
     }
 
     #[test]

@@ -315,7 +315,13 @@ impl TextEngine {
         // which would set a caption that starts with an Arabic word right
         // to left. A left-to-right mark (invisible) before such a
         // paragraph keeps it left to right; other paragraphs are left as
-        // they are.
+        // they are. Right-to-left text is the mirror: a right-to-left
+        // mark before a paragraph that starts in a left-to-right script.
+        let (against, mark) = if text.rtl {
+            (unicode_bidi::BidiClass::L, RTL_MARK)
+        } else {
+            (unicode_bidi::BidiClass::R, LTR_MARK)
+        };
         let mut first_strong_pending = true;
         let mut mark_at: Option<(usize, usize)> = None;
         let mut marks: Vec<(usize, usize)> = Vec::new();
@@ -331,19 +337,23 @@ impl TextEngine {
                 }
                 if first_strong_pending {
                     use unicode_bidi::BidiClass;
-                    match unicode_bidi::bidi_class(ch) {
-                        BidiClass::R | BidiClass::AL => {
-                            marks.extend(mark_at);
-                            first_strong_pending = false;
-                        }
-                        BidiClass::L => first_strong_pending = false,
-                        _ => {}
+                    let class = unicode_bidi::bidi_class(ch);
+                    let class = if class == BidiClass::AL {
+                        BidiClass::R
+                    } else {
+                        class
+                    };
+                    if class == against {
+                        marks.extend(mark_at);
+                        first_strong_pending = false;
+                    } else if matches!(class, BidiClass::L | BidiClass::R) {
+                        first_strong_pending = false;
                     }
                 }
             }
         }
         for (index, at) in marks.into_iter().rev() {
-            spans[index].0.insert(at, LTR_MARK);
+            spans[index].0.insert(at, mark);
         }
         // `origin[i]` is the style `styles[i]` was made from: a piece in a
         // fallback family gets a style of its own, which keeps its colour
@@ -696,14 +706,17 @@ impl TextEngine {
                     fonts.push((g.font_id, g.font_weight, g.font_size, height));
                 }
             }
-            // A line with nothing on it takes the first font's metrics.
-            if fonts.is_empty() {
-                let family = base
-                    .family
-                    .clone()
-                    .unwrap_or_else(|| "sans-serif".to_owned());
-                if let Some(id) = self.face_of(&family, base.weight, base.italic) {
-                    fonts.push((id, Weight(base.weight), base.size, run.line_height));
+            // Every line also holds the first available family of the
+            // list at the block's own size (CSS's strut), whether or not
+            // a glyph of it is drawn: a Latin line in a list that starts
+            // with an Arabic family is as tall as the Arabic one makes it.
+            // A line with nothing on it takes only that.
+            if let Some((id, weight)) = self.strut(base) {
+                if !fonts
+                    .iter()
+                    .any(|f| f.0 == id && f.2 == base.size && f.3 == run.line_height)
+                {
+                    fonts.push((id, weight, base.size, run.line_height));
                 }
             }
             let (mut above, mut below) = (0.0f32, 0.0f32);
@@ -730,6 +743,27 @@ impl TextEngine {
             top += above + below;
         }
         (baselines, top)
+    }
+
+    /// The face whose metrics every line holds: the first family of the
+    /// base style's list that is there, in the weight it snaps to.
+    fn strut(&mut self, base: &Resolved) -> Option<(cosmic_text::fontdb::ID, Weight)> {
+        let (weight, italic) = base.asked;
+        let mut names: Vec<String> = base.families.clone();
+        if names.is_empty() {
+            names.push(
+                base.family
+                    .clone()
+                    .unwrap_or_else(|| "sans-serif".to_owned()),
+            );
+        }
+        for family in &names {
+            let (w, it) = self.available_face(Some(family), weight, italic);
+            if let Some(id) = self.face_of(family, w, it) {
+                return Some((id, Weight(w)));
+            }
+        }
+        None
     }
 
     /// Whether a face has a glyph for a character.
@@ -1040,6 +1074,9 @@ struct Resolved {
 
 /// U+200E, which makes a paragraph that starts with it left to right.
 const LTR_MARK: char = '\u{200e}';
+
+/// U+200F, which makes a paragraph that starts with it right to left.
+const RTL_MARK: char = '\u{200f}';
 
 /// A family name as the font database takes it: CSS's generic names
 /// are the database's generic families.
