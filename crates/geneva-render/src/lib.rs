@@ -35,7 +35,7 @@ pub use frame::Frame;
 pub use html::{MarkupGroup, MarkupItem, MarkupLayers, MarkupRun, blend_mode};
 pub use painter::{Paint, Painted, Painter};
 pub use placement::{Placement, SUBSAMPLES, crop_window};
-pub use text::{TextEngine, declared_family};
+pub use text::{TextEngine, declared_family, sfnt_bytes};
 pub use transitions::{fade_veil, transition_gain};
 
 /// Errors that prevent a frame from being rendered.

@@ -99,6 +99,8 @@ pub struct Painter<A: AssetSource> {
     /// document and its pictures, and the drawn box when nothing in the
     /// markup moves, which is then the same picture at every time.
     html_cache: HashMap<u64, Scene>,
+    /// `@font-face` files registered so far: family, path, weight, style.
+    font_faces: std::collections::HashSet<(String, String, Option<u16>, Option<bool>)>,
     /// What the painter has to tell the reader about the render itself,
     /// deduplicated: a group cut down to the buffer bound does it on
     /// most of a clip's frames, and saying so once is the useful number.
@@ -154,6 +156,7 @@ impl<A: AssetSource> Painter<A> {
             text_cache: HashMap::new(),
             word_text: Vec::new(),
             html_cache: HashMap::new(),
+            font_faces: std::collections::HashSet::new(),
             warnings: std::collections::BTreeSet::new(),
         }
     }
@@ -215,6 +218,32 @@ impl<A: AssetSource> Painter<A> {
                 id: clip.path.clone(),
                 reason,
             })?;
+            // `@font-face` files, relative to the markup, registered once
+            // under the family the rule gives them.
+            for face in &prepared.font_faces {
+                let path = if html.base.is_empty() {
+                    face.src.clone()
+                } else {
+                    format!("{}/{}", html.base.trim_end_matches('/'), face.src)
+                };
+                let mark = (face.family.clone(), path.clone(), face.weight, face.italic);
+                if self.font_faces.contains(&mark) {
+                    continue;
+                }
+                let data = self.assets.font_at(&path)?;
+                if !self.text.add_font_face(
+                    &face.family,
+                    data.as_ref().clone(),
+                    face.weight,
+                    face.italic,
+                ) {
+                    return Err(RenderError::Asset {
+                        id: path,
+                        reason: "not a usable font file".to_owned(),
+                    });
+                }
+                self.font_faces.insert(mark);
+            }
             // A picture in markup is a path relative to the markup, as
             // it is on a page; the resolver has already checked the
             // shape and that the file is there.

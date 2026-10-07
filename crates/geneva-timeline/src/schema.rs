@@ -581,7 +581,7 @@ impl AssetKind {
             "mp4" | "mov" | "mkv" | "webm" | "m4v" | "mxf" | "ts" | "avi" => Some(Self::Video),
             "png" | "jpg" | "jpeg" | "webp" | "bmp" | "gif" => Some(Self::Image),
             "wav" | "mp3" | "aac" | "m4a" | "flac" | "ogg" | "opus" | "oga" => Some(Self::Audio),
-            "ttf" | "otf" | "ttc" => Some(Self::Font),
+            "ttf" | "otf" | "ttc" | "woff" | "woff2" => Some(Self::Font),
             "html" | "htm" => Some(Self::Html),
             "srt" | "vtt" => Some(Self::Subtitle),
             "json" => Some(Self::Captions),

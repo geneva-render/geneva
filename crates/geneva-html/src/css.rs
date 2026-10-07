@@ -185,6 +185,76 @@ pub struct Stylesheet {
     /// `@keyframes` rules by name. Nothing here interprets them: they are
     /// handed on to whatever plays the animation.
     pub keyframes: BTreeMap<String, KeyframesRule>,
+    /// `@font-face` rules, in source order.
+    pub font_faces: Vec<FontFace>,
+}
+
+/// A `@font-face` rule: a font file the markup names a family for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FontFace {
+    /// `font-family`: the name the markup uses for it.
+    pub family: String,
+    /// The first `url()` of `src`, as written: relative to the stylesheet
+    /// it is in.
+    pub src: String,
+    /// `font-weight`, when given: the weight the face answers to.
+    pub weight: Option<u16>,
+    /// `font-style: italic` (or `oblique`), when given.
+    pub italic: Option<bool>,
+}
+
+/// Reads a `@font-face` block. `src` takes the first `url()`; `local()`
+/// names and `format()` hints are not read.
+fn parse_font_face(body: &str) -> Result<FontFace, String> {
+    let mut family = None;
+    let mut src = None;
+    let mut weight = None;
+    let mut italic = None;
+    for d in parse_declarations(body) {
+        let v = d.value.trim();
+        match d.property.as_str() {
+            "font-family" => family = Some(v.trim_matches(['"', '\'']).trim().to_owned()),
+            "src" => {
+                let at = v
+                    .find("url(")
+                    .ok_or_else(|| format!("@font-face src {v:?} has no url()"))?;
+                let rest = &v[at + 4..];
+                let close = rest
+                    .find(')')
+                    .ok_or_else(|| format!("@font-face src {v:?}: url( is never closed"))?;
+                src = Some(rest[..close].trim().trim_matches(['"', '\'']).to_owned());
+            }
+            "font-weight" => {
+                weight = Some(match v.to_ascii_lowercase().as_str() {
+                    "normal" => 400,
+                    "bold" => 700,
+                    other => other
+                        .split_whitespace()
+                        .next()
+                        .and_then(|w| w.parse::<u16>().ok())
+                        .filter(|w| (1..=1000).contains(w))
+                        .ok_or_else(|| format!("@font-face font-weight {v:?} is not a weight"))?,
+                });
+            }
+            "font-style" => {
+                italic = Some(matches!(
+                    v.to_ascii_lowercase().as_str(),
+                    "italic" | "oblique"
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(FontFace {
+        family: family
+            .filter(|f| !f.is_empty())
+            .ok_or("@font-face has no font-family")?,
+        src: src
+            .filter(|s| !s.is_empty())
+            .ok_or("@font-face has no src url()")?,
+        weight,
+        italic,
+    })
 }
 
 /// Why a stylesheet did not parse.
@@ -240,6 +310,7 @@ pub fn parse_stylesheet(source: &str) -> Result<Stylesheet, CssError> {
     let source = strip_comments(source);
     let mut rules = Vec::new();
     let mut keyframes: BTreeMap<String, KeyframesRule> = BTreeMap::new();
+    let mut font_faces = Vec::new();
     let mut rest = source.as_str();
     let mut consumed = 0usize;
     while !rest.trim().is_empty() {
@@ -252,6 +323,27 @@ pub fn parse_stylesheet(source: &str) -> Result<Stylesheet, CssError> {
                 .chars()
                 .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
                 .collect();
+            if name == "font-face" {
+                let after = &rest[1 + name.len()..];
+                let open = after.find('{').ok_or_else(|| CssError {
+                    message: "@font-face has no block".to_owned(),
+                    line: line(),
+                })?;
+                let close = after[open..].find('}').ok_or_else(|| CssError {
+                    message: "@font-face is never closed".to_owned(),
+                    line: line(),
+                })? + open;
+                font_faces.push(parse_font_face(&after[open + 1..close]).map_err(|message| {
+                    CssError {
+                        message,
+                        line: line(),
+                    }
+                })?);
+                let used = 1 + name.len() + close + 1;
+                consumed += used;
+                rest = &rest[used..];
+                continue;
+            }
             if name != "keyframes" {
                 return Err(CssError {
                     message: format!("@{name} is not supported"),
@@ -309,7 +401,11 @@ pub fn parse_stylesheet(source: &str) -> Result<Stylesheet, CssError> {
         consumed += close + 1;
         rest = &rest[close + 1..];
     }
-    Ok(Stylesheet { rules, keyframes })
+    Ok(Stylesheet {
+        rules,
+        keyframes,
+        font_faces,
+    })
 }
 
 /// Parses the name and body of a `@keyframes` rule, given the text just
@@ -518,6 +614,27 @@ fn split_top_level(text: &str, sep: char) -> Vec<&str> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn font_face_rules_give_a_family_its_file() {
+        let sheet = parse_stylesheet(
+            "@font-face { font-family: 'Caption Web'; src: local(Inter), url(\"fonts/a.woff2\") format('woff2'), url(a.woff); font-weight: bold; font-style: italic }\n\
+             p { font-family: 'Caption Web' }",
+        )
+        .unwrap();
+        assert_eq!(
+            sheet.font_faces,
+            [FontFace {
+                family: "Caption Web".to_owned(),
+                src: "fonts/a.woff2".to_owned(),
+                weight: Some(700),
+                italic: Some(true),
+            }]
+        );
+        assert_eq!(sheet.rules.len(), 1);
+        let err = parse_stylesheet("@font-face { font-family: X }").unwrap_err();
+        assert!(err.message.contains("src"), "{err}");
+    }
     use super::*;
 
     #[test]

@@ -4078,10 +4078,37 @@ be; write the distance in pixels, or give the source a size",
                         );
                     }
                 }
+                // Font files the markup's `@font-face` rules load: checked
+                // here, registered when it is drawn.
+                for face in &p.font_faces {
+                    let Some(path) = self.markup_path(&base, &face.src, spath, "font") else {
+                        continue;
+                    };
+                    if self.info.exists(&path) == Some(false) {
+                        self.push(
+                            Diagnostic::error(
+                                "E452",
+                                spath.clone(),
+                                format!(
+                                    "the font {:?} that @font-face gives {:?} is not there",
+                                    face.src, face.family
+                                ),
+                            )
+                            .with_value(path)
+                            .with_help(
+                                "the path is relative to the stylesheet, as it is in a browser",
+                            ),
+                        );
+                    }
+                }
                 // Families the markup's CSS names, checked the same way as
                 // a text source's `font`. The path is the source rather
-                // than a field of it, since the family is in the markup.
+                // than a field of it, since the family is in the markup. A
+                // family the markup's own `@font-face` defines is there.
                 for family in geneva_html::font_families(&p) {
+                    if p.font_faces.iter().any(|f| f.family == family) {
+                        continue;
+                    }
                     self.check_font(Some(&family), spath, assets, true);
                 }
                 // Animations on elements inside: each is the renderer's

@@ -226,6 +226,15 @@ pub trait AssetSource {
         })
     }
 
+    /// Returns the bytes of a font file by its path under the asset root,
+    /// for markup's `@font-face`.
+    fn font_at(&mut self, path: &str) -> Result<Arc<Vec<u8>>, RenderError> {
+        Err(RenderError::Asset {
+            id: path.to_owned(),
+            reason: "this asset source cannot load fonts by path".to_owned(),
+        })
+    }
+
     /// The planes of the frame of a video asset shown at `source_time`,
     /// when the decoder holds it in the layout [`VideoPlanes`] describes;
     /// `None` when it does not, and the frame is to be taken as a picture
@@ -343,6 +352,20 @@ impl AssetSource for FileAssets {
         })?;
         let data = Arc::new(data);
         self.fonts.insert(id.to_owned(), Arc::clone(&data));
+        Ok(data)
+    }
+
+    fn font_at(&mut self, path: &str) -> Result<Arc<Vec<u8>>, RenderError> {
+        let key = format!("path:{path}");
+        if let Some(data) = self.fonts.get(&key) {
+            return Ok(Arc::clone(data));
+        }
+        let full = self.root.join(path);
+        let data = Arc::new(std::fs::read(&full).map_err(|e| RenderError::Asset {
+            id: path.to_owned(),
+            reason: format!("{} ({e})", full.display()),
+        })?);
+        self.fonts.insert(key, Arc::clone(&data));
         Ok(data)
     }
 

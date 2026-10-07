@@ -79,6 +79,10 @@ impl AssetSource for MediaAssets {
         self.images.font(comp, id)
     }
 
+    fn font_at(&mut self, path: &str) -> Result<std::sync::Arc<Vec<u8>>, RenderError> {
+        self.images.font_at(path)
+    }
+
     fn video_planes(
         &mut self,
         comp: &Composition,

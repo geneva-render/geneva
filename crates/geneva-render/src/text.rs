@@ -49,12 +49,24 @@ impl Default for TextEngine {
     }
 }
 
+/// A font file's bytes as TrueType or OpenType: a WOFF or WOFF2 file, as
+/// web fonts ship, is unpacked; anything else is returned as it is.
+pub fn sfnt_bytes(data: Vec<u8>) -> Result<Vec<u8>, String> {
+    match data.get(..4) {
+        Some(b"wOFF") => wuff::decompress_woff1(&data)
+            .map_err(|e| format!("a WOFF file that does not unpack: {e:?}")),
+        Some(b"wOF2") => wuff::decompress_woff2(&data)
+            .map_err(|e| format!("a WOFF2 file that does not unpack: {e:?}")),
+        _ => Ok(data),
+    }
+}
+
 /// The family a font file declares (its first face's), read without the
 /// machine's fonts; `None` when the file has no usable face.
 #[must_use]
 pub fn declared_family(data: Vec<u8>) -> Option<String> {
     let mut db = cosmic_text::fontdb::Database::new();
-    db.load_font_data(data);
+    db.load_font_data(sfnt_bytes(data).ok()?);
     let face = db.faces().next()?;
     face.families.first().map(|(name, _)| name.clone())
 }
@@ -120,6 +132,7 @@ impl TextEngine {
     /// Registers a font file's bytes under an asset id. Returns the family
     /// name the file declares, or `None` if it contains no usable face.
     pub fn add_font(&mut self, asset_id: &str, data: Vec<u8>) -> Option<String> {
+        let data = sfnt_bytes(data).ok()?;
         let db = self.fonts.db_mut();
         let before: Vec<cosmic_text::fontdb::ID> = db.faces().map(|f| f.id).collect();
         db.load_font_data(data);
@@ -158,6 +171,60 @@ impl TextEngine {
         self.asset_faces.insert(asset_id.to_owned(), loaded);
         self.faces.clear();
         Some(family)
+    }
+
+    /// Registers a font file under a family the markup gives it with
+    /// `@font-face`, whatever family the file declares, with the weight
+    /// and style the rule gives (the file's own otherwise). As with a
+    /// font asset, the machine's faces of that family are set aside.
+    /// Whether the file had a usable face.
+    pub fn add_font_face(
+        &mut self,
+        family: &str,
+        data: Vec<u8>,
+        weight: Option<u16>,
+        italic: Option<bool>,
+    ) -> bool {
+        let Ok(data) = sfnt_bytes(data) else {
+            return false;
+        };
+        let db = self.fonts.db_mut();
+        let before: HashSet<cosmic_text::fontdb::ID> = db.faces().map(|f| f.id).collect();
+        db.load_font_data(data);
+        let fresh: Vec<cosmic_text::fontdb::FaceInfo> = db
+            .faces()
+            .filter(|f| !before.contains(&f.id))
+            .cloned()
+            .collect();
+        if fresh.is_empty() {
+            return false;
+        }
+        let strangers: Vec<cosmic_text::fontdb::ID> = db
+            .faces()
+            .filter(|f| before.contains(&f.id) && !self.asset_ids.contains(&f.id))
+            .filter(|f| f.families.iter().any(|(n, _)| n == family))
+            .map(|f| f.id)
+            .collect();
+        for id in strangers {
+            db.remove_face(id);
+        }
+        for mut info in fresh {
+            db.remove_face(info.id);
+            info.families = vec![(
+                family.to_owned(),
+                cosmic_text::fontdb::Language::English_UnitedStates,
+            )];
+            if let Some(w) = weight {
+                info.weight = Weight(w);
+            }
+            if let Some(i) = italic {
+                info.style = if i { Style::Italic } else { Style::Normal };
+            }
+            let id = db.push_face_info(info);
+            self.asset_ids.insert(id);
+        }
+        self.faces.clear();
+        true
     }
 
     /// Renders a text source at clip-local time `t` seconds into an image
@@ -1312,6 +1379,25 @@ mod face_tests {
             LinearRgba::TRANSPARENT,
         );
         assert_eq!(engine.split_by_family(text, &one), [(0..text.len(), 0)]);
+    }
+
+    /// A WOFF2 file given a family by `@font-face` answers to that family,
+    /// at the weight the rule gives, whatever the file declares.
+    #[test]
+    fn a_font_face_answers_to_the_family_the_rule_gives() {
+        let mut engine = TextEngine::new();
+        let woff2 =
+            std::fs::read("../../tests/golden/markup-fontface/fonts/LiberationSans-Subset.woff2")
+                .expect("the golden root ships it");
+        assert!(sfnt_bytes(woff2.clone()).is_ok_and(|ttf| ttf.get(..4) == Some(&[0, 1, 0, 0][..])));
+        assert!(engine.add_font_face("Caption Web", woff2, Some(500), None));
+        assert!(engine.family_is_available("Caption Web"));
+        let id = engine
+            .face_of("Caption Web", 500, false)
+            .expect("found by its new name");
+        let face = engine.fonts.db().face(id).expect("in the database");
+        assert_eq!(face.weight, Weight(500));
+        assert_eq!(face.families[0].0, "Caption Web");
     }
 
     /// A family nobody shipped is left to the machine, which is what

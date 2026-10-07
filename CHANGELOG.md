@@ -27,6 +27,11 @@ versions changed the format freely.
   its baseline (`50% 72%`) or a line shrinking towards its corner
   (`0 100%`). Transforms turned about the box's centre only. Compared
   with Chromium frame by frame.
+- **WOFF and WOFF2 fonts, and `@font-face` in markup.** A `font` asset
+  can be a `.woff` or `.woff2` file, as web font packages ship them, and
+  markup can load one with `@font-face { font-family: ...; src: url(...) }`
+  relative to its stylesheet, with `font-weight` and `font-style`. The
+  `wuff` crate (MIT) unpacks them.
 - **Font fallback through `font-family` lists.** Markup's
   `font-family: Inter, "Noto Sans Arabic", "Noto Sans JP"` (and a text
   source's `font` written as a list) draws each character in the first

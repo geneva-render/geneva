@@ -24,7 +24,7 @@ pub mod style;
 
 use std::fmt;
 
-pub use css::{CssError, KeyframesRule, Stylesheet};
+pub use css::{CssError, FontFace, KeyframesRule, Stylesheet};
 pub use dom::{Document, Element, HtmlError, Node, NodeId, NodeKind};
 pub use layout::{Content, Group, Laid, Measure, Painted};
 pub use style::{
@@ -96,6 +96,9 @@ pub struct Prepared {
     pub inert: Vec<String>,
     /// `@keyframes` rules from the stylesheet, untouched.
     pub keyframes: std::collections::BTreeMap<String, KeyframesRule>,
+    /// `@font-face` rules, their `src` relative to the markup (a linked
+    /// stylesheet's are rebased from the stylesheet's directory).
+    pub font_faces: Vec<css::FontFace>,
     /// The `animation` on the outermost element, when the document has
     /// one: the root's single element child, which is the whole picture.
     /// Layout and paint do not play it; it is what the clip drawing this
@@ -244,6 +247,18 @@ pub fn prepare(
             let more = css::parse_shared(text).map_err(Error::Css)?;
             sheet.rules.extend(more.rules.iter().cloned());
             sheet.keyframes.extend(more.keyframes.clone());
+            // A url in a stylesheet is relative to the stylesheet.
+            let dir = href.rsplit_once('/').map_or("", |(d, _)| d);
+            sheet
+                .font_faces
+                .extend(more.font_faces.iter().map(|f| css::FontFace {
+                    src: if dir.is_empty() || f.src.starts_with('/') {
+                        f.src.clone()
+                    } else {
+                        format!("{dir}/{}", f.src)
+                    },
+                    ..f.clone()
+                }));
         }
     }
     // Where this document's own <style> rules sit in the sheet, so that a
@@ -253,6 +268,7 @@ pub fn prepare(
     let own = css::parse_shared(&doc.style).map_err(Error::Css)?;
     sheet.rules.extend(own.rules.iter().cloned());
     sheet.keyframes.extend(own.keyframes.clone());
+    sheet.font_faces.extend(own.font_faces.iter().cloned());
     let own_to = sheet.rules.len();
     if !extra.trim().is_empty() {
         let more = css::parse_shared(extra).map_err(Error::Css)?;
@@ -260,6 +276,7 @@ pub fn prepare(
         // A rule of the same name replaces the markup's, as the field is
         // applied after it.
         sheet.keyframes.extend(more.keyframes.clone());
+        sheet.font_faces.extend(more.font_faces.iter().cloned());
     }
     let (styles, problems, used) = style::cascade(&doc, &sheet);
     // CSS honours z-index on a positioned box or a flex item and ignores
@@ -346,6 +363,7 @@ nothing here; a browser ignores it too"
         unmatched,
         inert,
         keyframes: sheet.keyframes,
+        font_faces: sheet.font_faces,
         animation,
         animated_node,
         animated,
