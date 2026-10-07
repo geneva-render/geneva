@@ -6,7 +6,7 @@ version it was written for; within 1.x the format only gains optional
 fields, so a document keeps meaning what it meant. Before 1.0, minor
 versions changed the format freely.
 
-## Unreleased
+## 1.2.0 (2026-10-07)
 
 ### Added
 
