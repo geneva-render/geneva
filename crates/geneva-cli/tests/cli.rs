@@ -657,17 +657,18 @@ fn convert_flags_set_a_bitrate_ceiling_and_the_audio_format() {
         &[&capped, &clip],
     );
     assert_ne!(doc["mode"], "copy");
-    // Without x264 the bundled OpenH264 runs at a pinned quantizer, which
-    // cannot hold a ceiling; it has to say so, and there is nothing to
-    // measure.
+    // Without x264 the encoder may not hold a ceiling: the bundled
+    // OpenH264 runs at a pinned quantizer and VideoToolbox (a Mac with no
+    // x264) at constant quality. Either has to say so, and there is
+    // nothing to measure.
     let notes = doc["diagnostics"].to_string();
-    if notes.contains("OpenH264") {
+    if notes.contains("OpenH264") || notes.contains("VideoToolbox") {
         assert!(notes.contains("ceiling is not applied"), "{notes}");
     } else {
         // 100 kb/s over 2 s is 25 kB, and the buffer the ceiling is held
         // over is two seconds of it, which a clip this short can spend on
         // top: 50 kB at most.
-        assert!(size(&capped) < 50_000, "{} bytes", size(&capped));
+        assert!(size(&capped) < 50_000, "{} bytes; {notes}", size(&capped));
         assert!(
             size(&capped) * 3 < size(&open),
             "{} against {}",
