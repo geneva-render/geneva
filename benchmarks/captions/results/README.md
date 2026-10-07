@@ -16,3 +16,8 @@ are the same captions through `subtitles --burn`, as an .srt on a plate
 and as word times with the spoken word lit; the others are an html clip
 per caption (`make-jobs.py` has the markup). Lengths in the markup are
 scaled with the frame's width.
+
+`b94d549-jobs.txt` and `66ae2bf-many.txt`: the same modes after release 3
+of the markup captions work (the numbers in `docs/benchmarks.md`). The
+many mode was run at 66ae2bf; b94d549 changes nothing a still caption
+does.

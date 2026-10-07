@@ -18,8 +18,8 @@ an Intel Xeon at 2.1 GHz, 16 GB of RAM, Ubuntu 24.04 and no GPU.
 
 Contents: [the jobs](#the-jobs), [results](#results),
 [what it says](#what-it-says), [how it was run](#how-it-was-run),
-[the smaller test](#the-smaller-test), [caveats](#caveats),
-[running it yourself](#running-it-yourself).
+[the smaller test](#the-smaller-test), [styled captions](#styled-captions),
+[caveats](#caveats), [running it yourself](#running-it-yourself).
 
 ## The jobs
 
@@ -172,6 +172,65 @@ it is 0.1 s for geneva, 0.5 s for Playwright and 2.1 s for Remotion, so
 the per-frame costs on the captioned job are about 15 ms, 59 ms and 46 ms,
 and the ratios are not a start-up effect.
 
+## Styled captions
+
+geneva alone, on the same machine: what an html clip per caption costs
+against geneva's own caption paths, at two sizes, and how a long
+timeline of them behaves. Everything is in
+[`benchmarks/captions`](../benchmarks/captions/).
+
+- **Footage:** Tears of Steel, H.264 at CRF 18: 2 minutes at 1920x800,
+  and 60 s of it at 3840x2160 (the film fitted, the bands above and
+  below filled with its blur). 24 fps.
+- **Captions:** two lines of about 13 words, on screen 2.5 s of every
+  2.7 s. In markup, one html clip per caption, lengths scaled to the
+  frame width (`make-jobs.py` has the markup). The native rows are the
+  same captions through `subtitles --burn`.
+- **Output:** H.264, x264 at preset medium, CRF 17. Wall and CPU
+  seconds and peak resident memory of the `geneva` process, one run
+  each; repeated runs vary by about 5%.
+
+| Job | 1920x800, 2 min | 3840x2160, 60 s |
+| --- | --- | --- |
+| `.srt` on a plate (`subtitles --burn`) | 114 s, 423 CPU-s, 0.62 GB | 226 s, 856 CPU-s, 2.30 GB |
+| Word times, spoken word lit (`--burn` with `--highlight`) | 113 s, 423 CPU-s, 0.65 GB | 235 s, 898 CPU-s, 2.58 GB |
+| Still captions on a plate (html) | 116 s, 437 CPU-s, 0.75 GB | 221 s, 838 CPU-s, 2.90 GB |
+| Words changing colour as spoken (`steps()`) | 115 s, 432 CPU-s, 0.79 GB | 234 s, 890 CPU-s, 3.04 GB |
+| Words blurring in (blur 11 px to 0, fade, rise) | 122 s, 462 CPU-s, 0.65 GB | 239 s, 911 CPU-s, 2.44 GB |
+| Glow pulsing on the spoken word (`text-shadow` 20 px) | 117 s, 434 CPU-s, 0.64 GB | 241 s, 922 CPU-s, 2.40 GB |
+| Stroke 0.1 em and two shadows | 119 s, 449 CPU-s, 0.74 GB | |
+| Frosted plate (`backdrop-filter: blur(9px) saturate(115%)`) | 125 s, 472 CPU-s, 0.70 GB | |
+
+- **Markup costs what the built-in captions cost.** Still captions in
+  html are within a few percent of an `.srt` burned on a plate;
+  word-by-word colour within 2% of `--highlight`.
+- **Moving captions** cost 1.06x still ones at 1920x800 and 1.09x at
+  3840x2160 for words blurring in, about the same for a pulsing glow. A
+  word's picture is painted once and only composited per frame, its
+  blurred copies are kept by radius, and wide blurs are computed small.
+- **The encoder is the cost.** x264 is most of the CPU in every row; a
+  profile of the blur-in job at 4K shows the rest well under a tenth.
+- **4K memory** is mostly frames queued for the encoder and the
+  decoder's (2.3 GB for the native rows). Markup adds up to 0.7 GB: a
+  still or stepped caption keeps its picture, and a few encoded copies,
+  at the frame's size, 133 MB each at 3840x2160.
+
+**A two-hour timeline** of 2,666 html captions at 1920x1080 over a
+solid, 6 fps, x264 ultrafast (what it measures is geneva, not the
+encoder):
+
+| | Wall | CPU | Peak memory |
+| --- | --- | --- | --- |
+| `validate` | 0.12 s | | |
+| 2 minutes, 45 captions | 14 s | 47 s | 0.34 GB |
+| 2 hours, 2,666 captions | 793 s | 2,637 s | 0.41 GB |
+
+Memory stays near that of the two-minute version: a caption's parsed
+document and picture are dropped once it has ended. Over a solid,
+markup is laid on in sRGB-encoded values as a browser lays a page over
+a video, which converts the frame under each caption both ways; that
+conversion is most of geneva's own time here.
+
 ## Caveats
 
 - **One machine.** The seconds are this 4-core machine's; the ratios are
@@ -205,6 +264,15 @@ set1/prepare.sh && set2/prepare.sh           # cuts the film, installs Remotion 
 (cd set1/pw && npx playwright install chromium) && (cd set2/pw && npx playwright install chromium)
 GENEVA=geneva set1/bench.sh 3                # social, broadcast, opening; three rounds
 GENEVA=geneva set2/bench.sh 3                # intro, kinetic, captions, dynamic
+```
+
+The styled captions:
+
+```sh
+cd benchmarks/captions
+./fetch.sh                                   # the film, cut to 1920x800 and 3840x2160; Inter
+./bench.sh                                   # the table above, into results/
+./bench.sh many many                         # the two-hour timeline
 ```
 
 It needs Linux (for `/proc/stat`), Node 22, ffmpeg with `libx264`, and
