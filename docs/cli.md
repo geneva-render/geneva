@@ -90,8 +90,10 @@ for pictures and video. A sprite sheet's `.vtt` is its own row (`kind`
 ### `geneva probe <file>`
 
 Container, duration, streams, sizes, rates and colour tags, with the
-tags that had to be assumed. Sizes are as displayed; `rotation` (0, 90,
-180, 270, clockwise) and the stored size are reported beside them.
+tags that had to be assumed. Sizes are as displayed: after the pixel
+aspect and the rotation. `sample_aspect_ratio` (`"32:27"`; `"1:1"` for
+square pixels), `rotation` (0, 90, 180, 270, clockwise) and the stored
+size (`stored_width`, `stored_height`) are reported beside them.
 
 ### `geneva schema`
 

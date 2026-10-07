@@ -117,6 +117,14 @@ impl AssetSource for MediaAssets {
         Ok(Some((reader.width(), reader.height())))
     }
 
+    fn video_display_size(
+        &mut self,
+        comp: &Composition,
+        id: &str,
+    ) -> Result<Option<(f64, f64)>, RenderError> {
+        Ok(Some(self.video(comp, id)?.display_size()))
+    }
+
     fn video_frame_shrunk(
         &mut self,
         comp: &Composition,

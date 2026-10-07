@@ -50,10 +50,12 @@ pub fn probe(path: &Path) -> Result<MediaInfo, MediaError> {
         let fps = frame_rate(ratio(stream.avg_frame_rate()), ratio(stream.rate()))
             .unwrap_or(Ratio::from_int(25));
         let rotation = super::ffi::display_rotation(&stream.parameters());
+        let aspect = super::ffi::sample_aspect_ratio(&stream);
+        let (shown_w, shown_h) = aspect.display_size(decoder.width(), decoder.height());
         let (width, height) = if rotation % 180 == 90 {
-            (decoder.height(), decoder.width())
+            (shown_h, shown_w)
         } else {
-            (decoder.width(), decoder.height())
+            (shown_w, shown_h)
         };
         Some(VideoInfo {
             index: stream.index(),
@@ -63,6 +65,9 @@ pub fn probe(path: &Path) -> Result<MediaInfo, MediaError> {
                 .unwrap_or_default(),
             width,
             height,
+            stored_width: decoder.width(),
+            stored_height: decoder.height(),
+            sample_aspect_ratio: aspect,
             rotation,
             fps,
             duration: (stream.duration() > 0)

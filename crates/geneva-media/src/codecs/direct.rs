@@ -161,8 +161,10 @@ impl DirectSource {
                 .map(|a| a.color)
                 .unwrap_or_default();
             let reader = VideoReader::open(&clip.path, overrides)?;
-            // A rotated source is turned upright by the compositor.
-            if reader.rotation() != 0 {
+            // A rotated source is turned upright by the compositor, and one
+            // with non-square pixels stretched to its display aspect: the
+            // raw frames this path scales keep neither.
+            if reader.rotation() != 0 || !reader.sample_aspect_ratio().is_square() {
                 return Ok(None);
             }
             let source = reader.tags();

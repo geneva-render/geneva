@@ -2209,6 +2209,21 @@ mod imp {
         CpuRenderer::new(MediaAssets::new(root))
     }
 
+    /// How a video is stored when that differs from how it is shown: with
+    /// non-square pixels, a rotation, or both; empty otherwise.
+    fn stored_as(v: &geneva_media::VideoInfo) -> String {
+        let square = v.sample_aspect_ratio.is_square();
+        let pixels = format!("{} pixels", v.sample_aspect_ratio);
+        let size = format!("{}×{}", v.stored_width, v.stored_height);
+        match (square, v.rotation) {
+            (true, 0) => String::new(),
+            (true, r) if r % 180 == 90 => format!(", stored as {size} with a {r}° rotation"),
+            (true, r) => format!(", with a {r}° rotation"),
+            (false, 0) => format!(", stored as {size} with {pixels}"),
+            (false, r) => format!(", stored as {size} with {pixels} and a {r}° rotation"),
+        }
+    }
+
     /// Human-readable probe output.
     pub fn describe(path: &Path, info: &MediaInfo) -> String {
         use std::fmt::Write as _;
@@ -2226,12 +2241,7 @@ mod imp {
                 geneva_timeline::Fps(v.fps),
                 v.pixel_format,
                 if v.has_alpha { " with alpha" } else { "" },
-                match v.rotation {
-                    0 => String::new(),
-                    r if r % 180 == 90 =>
-                        format!(", stored as {}×{} with a {r}° rotation", v.height, v.width),
-                    r => format!(", with a {r}° rotation"),
-                }
+                stored_as(v)
             );
             let tags = serde_json::to_value(v.color).unwrap_or_default();
             let tag = |name: &str| match tags.get(name).and_then(|t| t.as_str()) {
@@ -2246,7 +2256,7 @@ mod imp {
                 tag("matrix"),
                 tag("range"),
             );
-            let (resolved, notes) = geneva_color::infer(v.color, v.width, v.height);
+            let (resolved, notes) = geneva_color::infer(v.color, v.stored_width, v.stored_height);
             if !notes.is_empty() {
                 let _ = writeln!(
                     s,

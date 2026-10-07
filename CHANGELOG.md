@@ -6,6 +6,20 @@ version it was written for; within 1.x the format only gains optional
 fields, so a document keeps meaning what it meant. Before 1.0, minor
 versions changed the format freely.
 
+## Unreleased
+
+### Added
+
+- **Non-square pixels**: a video whose pixels are not square (DV and
+  MPEG-2 material, 720×480 at 32:27 shown as 16:9) is drawn at its
+  display aspect under every `fit`, as a browser's `<video>` is; before,
+  it was drawn at its stored size, squeezed. `probe` reports the size as
+  displayed (853×480), `sample_aspect_ratio` and the stored size, and the
+  verbs that size their output from the source size it as displayed, in
+  square pixels (`convert` makes 854×480). Such a source is not stream-
+  copied or smart-cut into an output of another shape, and the direct
+  path and the GPU's own plane upload leave it to the compositor.
+
 ## 1.2.2 (2026-10-07)
 
 ### Fixed

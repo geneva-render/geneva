@@ -281,6 +281,74 @@ fn probe_describes_a_file_in_both_formats() {
     assert_eq!(doc["video"]["color"]["matrix"], "bt709");
 }
 
+/// A file whose pixels are not square (`tests/media/sar-32x27.mp4`, a
+/// solid 72×48 picture at 32:27, made with `ffmpeg -f lavfi -i
+/// color=c=0x2060a0:s=72x48:r=25:d=0.4 -vf setsar=32/27 -c:v libx264
+/// -pix_fmt yuv420p -bf 0`) is probed at its display size and drawn at
+/// its display aspect, as a browser's `<video>` shows it.
+#[test]
+#[cfg(feature = "media")]
+fn non_square_pixels_are_shown_at_their_display_aspect() {
+    let src = media_dir().join("sar-32x27.mp4");
+    let info = run_json(&["probe"], &[&src]);
+    let video = &info["video"];
+    assert_eq!(video["sample_aspect_ratio"], "32:27");
+    assert_eq!(
+        (&video["width"], &video["height"]),
+        (&85.into(), &48.into())
+    );
+    assert_eq!(
+        (&video["stored_width"], &video["stored_height"]),
+        (&72.into(), &48.into())
+    );
+    geneva()
+        .args(["probe"])
+        .arg(&src)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "85×48 @ 25 fps, yuv420p, stored as 72×48 with 32:27 pixels",
+        ));
+
+    // 16:9 at 96×54 with `contain`: the picture fills the frame. Drawn
+    // at its stored 3:2 it left 7.5 px bars at both sides. (The outermost
+    // column is softened, as for any picture drawn larger, so the check
+    // is one in from each edge.)
+    let dir = tempfile::tempdir().unwrap();
+    let timeline = dir.path().join("t.json");
+    std::fs::write(
+        &timeline,
+        r##"{"geneva":"1.0","output":{"width":96,"height":54,"fps":25,"duration":"0.4s","background":"#ff00ff"},
+            "assets":{"v":{"src":"sar-32x27.mp4"}},
+            "layers":[{"clips":[{"source":{"kind":"video","asset":"v"},"fit":"contain","duration":"0.4s"}]}]}"##,
+    )
+    .unwrap();
+    let png = dir.path().join("f.png");
+    geneva()
+        .args(["frame"])
+        .arg(&timeline)
+        .args(["--at", "0.2s", "--assets"])
+        .arg(media_dir())
+        .arg("-o")
+        .arg(&png)
+        .assert()
+        .success();
+    let decoded = image::open(&png).unwrap().to_rgb8();
+    for x in [1, 94] {
+        let p = decoded.get_pixel(x, 27);
+        assert!(p[1] > 90 && p[0] < 60, "a bar at x {x}: {p:?}");
+    }
+
+    // A verb that sizes its output from the source sizes it as shown,
+    // in square pixels.
+    let out = dir.path().join("c.mp4");
+    run_json(&["convert", "-o"], &[&out, &src]);
+    let converted = run_json(&["probe"], &[&out]);
+    assert_eq!(converted["video"]["width"], 86);
+    assert_eq!(converted["video"]["height"], 48);
+    assert_eq!(converted["video"]["sample_aspect_ratio"], "1:1");
+}
+
 #[test]
 #[cfg(feature = "media")]
 fn render_writes_a_playable_file_with_audio() {

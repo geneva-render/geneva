@@ -193,6 +193,12 @@ pub struct VideoReader {
     /// Rotation the file asks for, in degrees clockwise, applied to the
     /// converted frames; raw frames keep the coded orientation.
     rotation: u16,
+    /// How wide a stored pixel is shown. Converted frames are stretched
+    /// to `shown` by it; raw frames keep the coded size.
+    aspect: crate::PixelAspect,
+    /// The coded picture at its display aspect, before the rotation:
+    /// the size converted frames have, rotated.
+    shown: (u32, u32),
     /// A buffer for the unrotated conversion when a rotation applies.
     unrotated: Option<Image>,
     /// How many times a frame request has seeked.
@@ -283,14 +289,18 @@ impl VideoReader {
         ) {
             tags.range = geneva_color::Range::Limited;
         }
+        // Non-square pixels are stretched to their display aspect as the
+        // frame is widened, as a browser's `<video>` shows them.
+        let aspect = super::ffi::sample_aspect_ratio(&stream);
+        let shown = aspect.display_size(decoder.width(), decoder.height());
         let dst = if rgb { Pixel::RGBA } else { Pixel::YUV444P16LE };
         let scaler = scaling::Context::get(
             decoder.format(),
             decoder.width(),
             decoder.height(),
             dst,
-            decoder.width(),
-            decoder.height(),
+            shown.0,
+            shown.1,
             scaling::Flags::BICUBIC,
         )
         .map_err(|e| codec_error(format!("{}: pixel format conversion", path.display()), e))?;
@@ -324,6 +334,8 @@ impl VideoReader {
             pending: None,
             position: None,
             rotation,
+            aspect,
+            shown,
             unrotated: None,
             spare: None,
             seeks: 0,
@@ -350,22 +362,46 @@ impl VideoReader {
     }
 
     /// Width in pixels of the frames [`frame_at`](Self::frame_at) returns:
-    /// as displayed, after the file's rotation.
+    /// as displayed, stretched by the pixel aspect and after the file's
+    /// rotation.
     pub fn width(&self) -> u32 {
         if self.rotation % 180 == 90 {
-            self.decoder.height()
+            self.shown.1
         } else {
-            self.decoder.width()
+            self.shown.0
         }
     }
 
     /// Height in pixels of the displayed frames.
     pub fn height(&self) -> u32 {
         if self.rotation % 180 == 90 {
-            self.decoder.width()
+            self.shown.0
         } else {
-            self.decoder.height()
+            self.shown.1
         }
+    }
+
+    /// The size the picture is shown at, unrounded: [`width`](Self::width)
+    /// and [`height`](Self::height) before the stretched side is rounded
+    /// to whole pixels (853.33×480 for 720×480 at 32:27), for placing
+    /// the frame at its exact aspect.
+    pub fn display_size(&self) -> (f64, f64) {
+        let (w, h) = (
+            f64::from(self.decoder.width()),
+            f64::from(self.decoder.height()),
+        );
+        let w = w * f64::from(self.aspect.num) / f64::from(self.aspect.den);
+        if self.rotation % 180 == 90 {
+            (h, w)
+        } else {
+            (w, h)
+        }
+    }
+
+    /// How wide a stored pixel is shown. [`frame_at`](Self::frame_at)
+    /// applies it; [`raw_frame_at`](Self::raw_frame_at) does not.
+    pub fn sample_aspect_ratio(&self) -> crate::PixelAspect {
+        self.aspect
     }
 
     /// Rotation the file asks for, in degrees clockwise (0, 90, 180 or
@@ -441,7 +477,11 @@ impl VideoReader {
         t: Ratio,
     ) -> Result<Option<(Planes420<'_>, u32, u32, ResolvedTags)>, MediaError> {
         self.advance_to(t)?;
-        if self.rotation != 0 || self.hdr.is_some() || self.tags.matrix == Matrix::Identity {
+        if self.rotation != 0
+            || !self.aspect.is_square()
+            || self.hdr.is_some()
+            || self.tags.matrix == Matrix::Identity
+        {
             return Ok(None);
         }
         let raw = &self
@@ -603,6 +643,7 @@ impl VideoReader {
         if matches!(raw.format(), Pixel::YUV420P | Pixel::YUVJ420P)
             && self.tags.matrix != Matrix::Identity
             && self.hdr.is_none()
+            && self.aspect.is_square()
         {
             let mut tags = self.tags;
             if raw.format() == Pixel::YUVJ420P {

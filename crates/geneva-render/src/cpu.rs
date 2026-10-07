@@ -280,7 +280,14 @@ impl<A: AssetSource> CpuRenderer<A> {
         let Some((w, h)) = self.painter.assets_mut().video_size(comp, asset)? else {
             return Ok(None);
         };
-        let size = (f64::from(w), f64::from(h));
+        // The clip is placed by the picture's exact display size, which
+        // with non-square pixels is not quite its frames' (853.33 against
+        // 853 wide), and carried over to the frames' texels.
+        let size = self
+            .painter
+            .assets_mut()
+            .video_display_size(comp, asset)?
+            .unwrap_or((f64::from(w), f64::from(h)));
         let Some(window) = crop_window(clip, size) else {
             return Ok(None);
         };
@@ -292,11 +299,17 @@ impl<A: AssetSource> CpuRenderer<A> {
         } else {
             ZOOM_STEPS
         };
-        let fetched = [
-            shrunk_len(w, place.scale[0].abs() / reduce, steps),
-            shrunk_len(h, place.scale[1].abs() / reduce, steps),
+        // The scale from the frames' own pixels to the output's.
+        let texel = [
+            place.scale[0].abs() * size.0 / f64::from(w),
+            place.scale[1].abs() * size.1 / f64::from(h),
         ];
-        Ok((fetched != [w, h]).then_some(Shrunk {
+        let fetched = [
+            shrunk_len(w, texel[0] / reduce, steps),
+            shrunk_len(h, texel[1] / reduce, steps),
+        ];
+        let exact = size == (f64::from(w), f64::from(h));
+        Ok((fetched != [w, h] || !exact).then_some(Shrunk {
             full: size,
             size: fetched,
         }))

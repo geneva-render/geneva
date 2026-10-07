@@ -273,7 +273,7 @@ number of times, each with its own timing and transform.
 | `transition` | no | | Arrival from the previous clip; see [Transitions](#transitions). |
 | `transition_out` | no | | Exit of a layer's last clip. |
 | `crop` | no | whole source | See [`crop`](#crop). |
-| `fit` | no | `contain` for video, `none` otherwise | `none`, `contain`, `cover`, `fill`: sizing to the frame before the transform. W404 flags a picture larger than the frame or a video left in a corner. |
+| `fit` | no | `contain` for video, `none` otherwise | `none`, `contain`, `cover`, `fill`: sizing to the frame before the transform. W404 flags a picture larger than the frame or a video left in a corner. A video's size is as displayed: turned by the rotation its file asks for, and with non-square pixels stretched to its display aspect (720×480 at 32:27 is 853.33×480), as a browser's `<video>` shows it. |
 | `effects` | no | `[]` | See [`effects`](#effects). |
 | `mask` | no | | See [`mask`](#mask). |
 | `speed` | no | `1` | `2` twice as fast, `0.5` half. Length is the source range divided by the speed; audio resampled (pitch follows); clip keyframes stay in output time. Always composited. |

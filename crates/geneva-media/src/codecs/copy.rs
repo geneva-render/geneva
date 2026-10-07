@@ -646,6 +646,8 @@ struct StreamShape {
     codec_id: codec::Id,
     width: u32,
     height: u32,
+    /// How wide a stored pixel is shown; `width` already counts it.
+    aspect: crate::PixelAspect,
     fps: Ratio,
     format: ffmpeg_next::util::format::Pixel,
     extradata: Vec<u8>,
@@ -680,12 +682,16 @@ impl StreamShape {
         )
         .unwrap_or(Ratio::from_int(25));
         // The picture as displayed: a rotated source is compared to the
-        // composition at its upright size, and copied with its matrix.
+        // composition at its upright size, and copied with its matrix; one
+        // with non-square pixels at its display size, and copied with its
+        // pixel aspect (the codec parameters carry it).
         let rotation = ffi::display_rotation(&params);
+        let aspect = ffi::sample_aspect_ratio(&video);
+        let (shown_w, shown_h) = aspect.display_size(decoder.width(), decoder.height());
         let (width, height) = if rotation % 180 == 90 {
-            (decoder.height(), decoder.width())
+            (shown_h, shown_w)
         } else {
-            (decoder.width(), decoder.height())
+            (shown_w, shown_h)
         };
         let audio = ictx.streams().best(Type::Audio);
         Ok(Self {
@@ -703,6 +709,7 @@ impl StreamShape {
             codec_id: params.id(),
             width,
             height,
+            aspect,
             fps,
             format: decoder.format(),
             extradata: ffi::extradata(&params),
@@ -719,6 +726,7 @@ impl StreamShape {
         self.codec_id == other.codec_id
             && self.width == other.width
             && self.height == other.height
+            && self.aspect == other.aspect
             && self.format == other.format
             && self.extradata == other.extradata
             && self.audio_id == other.audio_id
@@ -731,6 +739,8 @@ impl StreamShape {
             "video codec"
         } else if self.width != other.width || self.height != other.height {
             "picture size"
+        } else if self.aspect != other.aspect {
+            "pixel aspect"
         } else if self.format != other.format {
             "pixel format"
         } else if self.extradata != other.extradata {

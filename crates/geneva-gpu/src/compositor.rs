@@ -1253,6 +1253,9 @@ impl Compositor {
                 let mut planes = None;
                 let mut transfer = Transfer::Srgb;
                 let mut picture: Option<(f64, f64, Option<[u32; 4]>)> = None;
+                // A video's exact display size, which its frames round
+                // when its pixels are not square.
+                let mut shown: Option<(f64, f64)> = None;
                 match &clip.source {
                     ResolvedSource::Composition(nested) => {
                         let texture = self.acquire(gpu, nested.width, nested.height);
@@ -1276,6 +1279,7 @@ impl Compositor {
                         // the one layout the shader converts; its
                         // picture otherwise, through the painter.
                         let source_time = *in_ + (t - clip.start) * clip.speed;
+                        shown = painter.assets_mut().video_display_size(comp, asset)?;
                         let held = painter
                             .assets_mut()
                             .video_planes(comp, asset, source_time)?;
@@ -1351,7 +1355,11 @@ impl Compositor {
                     continue;
                 };
                 let size = (w, h);
-                let Some(window) = crop_window(clip, size) else {
+                // Placed by the exact display size and carried over to the
+                // texels, as the CPU does; a mask is laid out on the
+                // texels themselves.
+                let full = shown.filter(|_| clip.mask.is_none()).unwrap_or(size);
+                let Some(window) = crop_window(clip, full) else {
                     continue;
                 };
                 let content = content
@@ -1359,6 +1367,14 @@ impl Compositor {
                 let Some(place) = Placement::new(width, height, clip, local, window, content, None)
                 else {
                     continue;
+                };
+                let place = if full == size {
+                    place
+                } else {
+                    let Some(place) = place.in_texels([full.0 / w, full.1 / h]) else {
+                        continue;
+                    };
+                    place
                 };
                 let mut mask = Tex::Blank;
                 if let Some(m) = &clip.mask {

@@ -152,7 +152,8 @@ per output. The report names the mode.
 ### Stream copy
 
 One layer of video clips shown as they are (natural size, centred, full
-opacity, no rotation, transitions or overlays), output size and rate
+opacity, no rotation, transitions or overlays), output size (as
+displayed, after the pixel aspect; the copy keeps the source's) and rate
 equal to the sources', one codec with identical coded parameters, and
 audio absent, the sources' own, or one untouched track. No setting asks
 for a re-encode (quality, bitrate, keyframes, or audio that differs

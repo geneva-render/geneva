@@ -51,7 +51,7 @@ impl Input {
         let color = info
             .video
             .as_ref()
-            .map(|v| geneva_color::infer(v.color, v.width, v.height).0);
+            .map(|v| geneva_color::infer(v.color, v.stored_width, v.stored_height).0);
         let duration = info
             .video
             .as_ref()

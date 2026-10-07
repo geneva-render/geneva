@@ -261,6 +261,21 @@ pub trait AssetSource {
         Ok(None)
     }
 
+    /// The size a video asset is shown at, unrounded: a picture with
+    /// non-square pixels is stretched to a width that need not be whole
+    /// (853.33 for 720×480 at 32:27), while its frames have the rounded
+    /// [`video_size`](Self::video_size). A clip is placed by this one, so
+    /// it keeps its exact aspect. The default is `video_size`.
+    fn video_display_size(
+        &mut self,
+        comp: &Composition,
+        id: &str,
+    ) -> Result<Option<(f64, f64)>, RenderError> {
+        Ok(self
+            .video_size(comp, id)?
+            .map(|(w, h)| (f64::from(w), f64::from(h))))
+    }
+
     /// The frame of a video asset shown at `source_time`, made smaller to
     /// `size` (as displayed) by whatever is cheapest before it is
     /// converted to linear light. For a picture drawn smaller than it

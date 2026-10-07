@@ -398,6 +398,26 @@ pub fn hdr_metadata(params: &Parameters) -> Option<HdrMetadata> {
     (meta.mastering.is_some() || meta.light.is_some()).then_some(meta)
 }
 
+/// The pixel aspect a stream is shown with: the container's (an MP4
+/// `pasp` box, Matroska's display size) when it has one, else the
+/// codec's, as libav's `av_guess_sample_aspect_ratio` picks it.
+#[allow(unsafe_code)]
+pub fn sample_aspect_ratio(stream: &ffmpeg_next::format::stream::Stream) -> crate::PixelAspect {
+    // SAFETY: `stream` wraps a valid `AVStream` whose `codecpar` is set
+    // for as long as the input it came from is open; both are read only.
+    let (container, codec) = unsafe {
+        let raw = &*stream.as_ptr();
+        (raw.sample_aspect_ratio, (*raw.codecpar).sample_aspect_ratio)
+    };
+    let usable = |r: ffmpeg_next::ffi::AVRational| r.num > 0 && r.den > 0;
+    let r = if usable(container) { container } else { codec };
+    if usable(r) {
+        crate::PixelAspect::new(r.num.unsigned_abs(), r.den.unsigned_abs())
+    } else {
+        crate::PixelAspect::SQUARE
+    }
+}
+
 /// The display matrix a stream carries, as its 36 bytes, if any.
 #[allow(unsafe_code)]
 pub fn display_matrix(params: &Parameters) -> Option<Vec<u8>> {
