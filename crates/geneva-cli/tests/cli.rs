@@ -110,6 +110,59 @@ fn missing_media_assets_are_reported_before_rendering() {
         .stderr(predicate::str::contains("/assets/main/src"));
 }
 
+/// With only the document's fonts, letters none of them has are boxes
+/// on every machine, and the report names them with their counts and
+/// the clip.
+#[test]
+fn letters_no_declared_font_has_are_named() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("page.html"),
+        r#"<div style="font-family: 'Arial', 'Noto Sans'; font-size: 48px">Hi বাংলা 👍🏽</div>"#,
+    )
+    .unwrap();
+    let path = dir.path().join("t.json");
+    std::fs::write(
+        &path,
+        r#"{"geneva":"1.1","output":{"width":400,"height":80,"fps":30,"duration":"1s"},
+            "assets":{"page":{"src":"page.html"}},
+            "layers":[{"clips":[{"source":{"kind":"html","asset":"page"}}]}]}"#,
+    )
+    .unwrap();
+    let out = geneva()
+        .args(["--no-system-fonts", "--format", "json", "frame"])
+        .arg(&path)
+        .arg("-o")
+        .arg(dir.path().join("f.png"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let doc: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    let w407: Vec<&serde_json::Value> = doc["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["code"] == "W407")
+        .collect();
+    assert_eq!(w407.len(), 1, "{doc}");
+    assert_eq!(w407[0]["path"], "/layers/0/clips/0");
+    let message = w407[0]["message"].as_str().unwrap();
+    for letter in [
+        "ব (U+09AC) x1",
+        "া (U+09BE) x2",
+        "👍 (U+1F44D) x1",
+        "🏽 (U+1F3FD) x1",
+    ] {
+        assert!(message.contains(letter), "{message}");
+    }
+    assert!(
+        !message.contains("(U+0048)"),
+        "H is in Liberation Sans: {message}"
+    );
+}
+
 #[test]
 fn schema_prints_json_schema() {
     geneva()

@@ -154,6 +154,17 @@ impl<A: AssetSource> Painter<A> {
         std::mem::take(&mut self.warnings).into_iter().collect()
     }
 
+    /// The letters no font had a glyph for, drawn as a box, by clip
+    /// path, with how many: the most one frame of the clip drew. Taken
+    /// and cleared.
+    pub fn take_missing_glyphs(&mut self) -> Vec<(String, Vec<(char, usize)>)> {
+        self.text
+            .take_missing()
+            .into_iter()
+            .map(|(clip, letters)| (clip, letters.into_iter().collect()))
+            .collect()
+    }
+
     /// Takes back the buffer of a markup picture [`paint`](Self::paint)
     /// drew fresh, once it has been laid on, to draw the next one in.
     pub fn recycle_markup(&mut self, image: Image) {
@@ -306,6 +317,7 @@ impl<A: AssetSource> Painter<A> {
         if html.motion.is_empty() {
             return Ok(None);
         }
+        self.text.begin_paint(&clip.path);
         let scene_key = self.scene(comp, clip, html)?;
         let scene = self.html_cache.get_mut(&scene_key).expect("inserted above");
         // Markup that only steps is drawn whole once per interval by
@@ -358,6 +370,7 @@ impl<A: AssetSource> Painter<A> {
         local: f64,
         size: Option<[u32; 2]>,
     ) -> Result<Painted<'_>, RenderError> {
+        self.text.begin_paint(&clip.path);
         let mut key = None;
         let mut backdrops = Vec::new();
         let paint = match &clip.source {

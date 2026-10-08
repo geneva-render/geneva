@@ -42,6 +42,11 @@ struct Cli {
     /// also `GENEVA_MEMORY_BUDGET`. A target, not a hard limit.
     #[arg(long, global = true, value_name = "SIZE")]
     memory_budget: Option<String>,
+    /// Draw text only in the fonts the document ships (font assets,
+    /// `@font-face`) and the built-in Liberation Sans, so the picture is
+    /// the same on every machine; also `GENEVA_NO_SYSTEM_FONTS=1`.
+    #[arg(long, global = true)]
+    no_system_fonts: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -504,6 +509,11 @@ fn apply_limits(cli: &Cli) -> Result<()> {
             .build_global()
             .map_err(|e| anyhow::anyhow!("could not start {n} threads: {e}"))?;
     }
+    if cli.no_system_fonts
+        || std::env::var("GENEVA_NO_SYSTEM_FONTS").is_ok_and(|v| !v.is_empty() && v != "0")
+    {
+        geneva_render::set_system_fonts(false);
+    }
     let budget = match &cli.memory_budget {
         Some(s) => Some(s.clone()),
         None => std::env::var("GENEVA_MEMORY_BUDGET")
@@ -515,6 +525,34 @@ fn apply_limits(cli: &Cli) -> Result<()> {
         geneva_render::limits::set_memory_budget(bytes);
     }
     Ok(())
+}
+
+/// W407 for each clip that drew letters no font had, as boxes: the
+/// letters, their code points and how many one frame drew.
+fn missing_glyph_warnings(missing: &[(String, Vec<(char, usize)>)]) -> Vec<Diagnostic> {
+    missing
+        .iter()
+        .map(|(clip, letters)| {
+            let listed: Vec<String> = letters
+                .iter()
+                .map(|(ch, n)| format!("{ch} (U+{:04X}) x{n}", u32::from(*ch)))
+                .collect();
+            let fonts = if geneva_render::system_fonts() {
+                "the document's fonts or the machine's"
+            } else {
+                "the document's fonts"
+            };
+            Diagnostic::warning(
+                "W407",
+                clip.clone(),
+                format!(
+                    "no font among {fonts} has these letters, so they are drawn as boxes: {}",
+                    listed.join(", ")
+                ),
+            )
+            .with_help("add a font asset that covers them, and name it in the font list")
+        })
+        .collect()
 }
 
 fn run(cli: Cli) -> Result<ExitCode> {
@@ -589,6 +627,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let mut diagnostics = loaded.diagnostics.clone();
             match renderer.render_frame(comp, time) {
                 Ok(frame) => {
+                    diagnostics.extend(missing_glyph_warnings(&renderer.take_missing_glyphs()));
                     let (width, height) =
                         picture_size(comp.width, comp.height, args.width, args.height);
                     let rgba = media::scale_picture(
@@ -1046,6 +1085,7 @@ fn render_to(
             for warning in &stats.warnings {
                 diagnostics.push(Diagnostic::warning("W455", "", warning.clone()));
             }
+            diagnostics.extend(missing_glyph_warnings(&stats.missing_glyphs));
             if let Some((target, max)) = size_limit {
                 let written = std::fs::metadata(output).map_or(0, |m| m.len());
                 if written > *max {
@@ -1144,6 +1184,7 @@ fn render_outputs_to(
             for warning in &stats.warnings {
                 diagnostics.push(Diagnostic::warning("W455", "", warning.clone()));
             }
+            diagnostics.extend(missing_glyph_warnings(&stats.missing_glyphs));
             if let Some((target, max)) = size_limit {
                 for o in outputs
                     .iter()

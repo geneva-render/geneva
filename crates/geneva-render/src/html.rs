@@ -198,7 +198,7 @@ impl Measure for Context<'_> {
         }
         let plain = plain_for_measure(style);
         let source = as_text_source(text, &plain, f64::from(limit));
-        let image = self.text.render(&source, 0.0);
+        let image = self.text.uncounted(|e| e.render(&source, 0.0));
         let size = (image.width as f32, image.height as f32);
         self.memo.insert(key, size);
         size
@@ -227,7 +227,8 @@ impl Measure for Context<'_> {
         }
         let plain = plain_for_measure(style);
         let source = as_text_source("", &plain, f64::from(limit));
-        let image = self.text.render_runs(&source, &engine_runs(runs), 0.0);
+        let runs = engine_runs(runs);
+        let image = self.text.uncounted(|e| e.render_runs(&source, &runs, 0.0));
         let size = (image.width as f32, image.height as f32);
         self.memo.insert(key, size);
         size
@@ -2453,7 +2454,7 @@ fn paint_text(
         // the other. A left-aligned run has no slack to measure.
         let along = match style.align {
             geneva_html::TextAlign::Left => 0.0,
-            _ => shift(f64::from(draw(engine, &source).width)),
+            _ => shift(f64::from(engine.uncounted(|e| draw(e, &source)).width)),
         };
         source.fill = Some(fill_track(fill, b.content_rect, along));
     }

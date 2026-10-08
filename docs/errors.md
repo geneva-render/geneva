@@ -119,6 +119,7 @@ result is not what was intended. Notes are informational.
 | N404 | (note) A burned-in subtitle cue lies outside the title-safe area (`--safe`, 5% in from each edge by default). |
 | N405 | (note) A burned-in subtitle cue was shrunk to fit (`--fit`); the message gives the sizes. |
 | W405 | A document names a font family this machine has no face of, in the `font` of a text or captions source or in a markup `font-family`. The text still draws, in whatever the shaper falls back to, which is a different picture on a machine with different fonts; add the file as an asset of kind `font`, which a text source names by its asset id and markup by the family the file declares. A family a font asset of the document declares counts as present, so carrying the font is enough to silence it. |
+| W407 | (`render`, `frame`) A clip drew letters that no font it could use has a glyph for, so they are boxes. The message lists each letter, its code point and how many one frame drew; the path names the clip. On another machine the installed fonts may cover them; with `--no-system-fonts`, the boxes are the same everywhere. Add a font asset that covers them. |
 | W406 | An `outputs` entry gives both `width` and `height` in a shape other than the canvas's. The whole canvas is stretched into it; give one of the two to keep the shape. |
 | N410 | (note) What `--for TARGET` chose and why: size, codec and level, quality, caps, keyframes, audio. |
 | W411 | The video is longer than the `--for` target allows. Geneva never shortens a video on its own. |

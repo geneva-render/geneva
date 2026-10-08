@@ -40,6 +40,16 @@ versions changed the format freely.
   no synthesis. Italic text gets room for glyphs that lean past their
   advances, so the last letter is no longer cut off.
 
+- **Only the document's fonts** with `--no-system-fonts` (or
+  `GENEVA_NO_SYSTEM_FONTS=1`): text is drawn in the font assets and
+  `@font-face` files and the built-in Liberation Sans, never the
+  machine's, so a timeline is the same picture on a desktop and a bare
+  server image.
+- **Missing letters reported** (W407, `render` and `frame`): a clip that
+  draws letters no font has, as boxes, is named with each letter, its
+  code point and how many one frame drew. Before, a render on a machine
+  without the right fonts drew boxes and said nothing.
+
 ### Fixed
 
 - **Memory grew with the source file.** Every packet a decoder read and

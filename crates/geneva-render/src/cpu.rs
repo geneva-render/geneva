@@ -106,6 +106,10 @@ impl<A: AssetSource> Renderer for CpuRenderer<A> {
         self.painter.take_warnings()
     }
 
+    fn take_missing_glyphs(&mut self) -> Vec<(String, Vec<(char, usize)>)> {
+        self.painter.take_missing_glyphs()
+    }
+
     fn render_into(
         &mut self,
         comp: &Composition,

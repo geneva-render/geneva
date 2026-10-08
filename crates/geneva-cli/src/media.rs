@@ -350,6 +350,9 @@ pub struct RenderStats {
     /// as warnings rather than notes: something asked for is not in the
     /// output.
     pub warnings: Vec<String>,
+    /// Letters no font had a glyph for, drawn as a box, by clip path,
+    /// with how many one frame drew.
+    pub missing_glyphs: Vec<(String, Vec<(char, usize)>)>,
     pub seconds: f64,
 }
 
@@ -1666,7 +1669,8 @@ mod imp {
                 duration: comp.duration,
                 mode: RenderMode::Render,
                 notes,
-                warnings: Vec::new(),
+                warnings: renderer.take_warnings(),
+                missing_glyphs: renderer.take_missing_glyphs(),
                 seconds: started.elapsed().as_secs_f64(),
             },
         ))
@@ -1990,6 +1994,7 @@ mod imp {
             },
             notes,
             warnings: Vec::new(),
+            missing_glyphs: Vec::new(),
             seconds: started.elapsed().as_secs_f64(),
         })
     }
@@ -2535,6 +2540,7 @@ mod imp {
                     },
                     notes,
                     warnings: Vec::new(),
+                    missing_glyphs: Vec::new(),
                     seconds: started.elapsed().as_secs_f64(),
                 });
             }
@@ -2946,6 +2952,10 @@ mod imp {
             warnings: renderer
                 .as_mut()
                 .map(|r| r.take_warnings())
+                .unwrap_or_default(),
+            missing_glyphs: renderer
+                .as_mut()
+                .map(|r| r.take_missing_glyphs())
                 .unwrap_or_default(),
             seconds: started.elapsed().as_secs_f64(),
         })

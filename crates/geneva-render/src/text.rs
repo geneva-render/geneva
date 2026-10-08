@@ -6,7 +6,8 @@
 //! every other source. A text source renders to an image that is then
 //! placed like any other box.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use cosmic_text::fontdb::Weight;
 use cosmic_text::{
@@ -47,6 +48,33 @@ pub struct TextEngine {
     /// Glyphs drawn synthetically bold or oblique, which the shaper's
     /// own cache would draw plain.
     synthetic: HashMap<cosmic_text::CacheKey, Option<SwashImage>>,
+    /// Letters drawn as a missing-glyph box by the paint under way,
+    /// summed over its draws, and whose paint it is.
+    missing_now: (String, BTreeMap<char, usize>),
+    /// Letters drawn as a box, by what painted them: the most any one
+    /// paint drew.
+    missing: BTreeMap<String, BTreeMap<char, usize>>,
+    /// Whether draws count their missing letters: not while text is only
+    /// measured.
+    counting: bool,
+}
+
+/// Whether engines made from now on read the machine's fonts.
+static SYSTEM_FONTS: AtomicBool = AtomicBool::new(true);
+
+/// Whether engines made from now on read the machine's fonts. Off, text
+/// is drawn only in the fonts a document ships and the built-in
+/// Liberation Sans, which every generic family names, so a timeline is
+/// the same picture on every machine: a letter none of them has is a
+/// missing-glyph box everywhere, where the machine's fonts would have
+/// drawn it on one machine and not on another.
+pub fn set_system_fonts(on: bool) {
+    SYSTEM_FONTS.store(on, Ordering::Relaxed);
+}
+
+/// Whether engines read the machine's fonts.
+pub fn system_fonts() -> bool {
+    SYSTEM_FONTS.load(Ordering::Relaxed)
 }
 
 /// A glyph flag of geneva's own, beside cosmic-text's: drawn
@@ -126,7 +154,20 @@ const LAST_RESORT_FONT: &[u8] =
 impl TextEngine {
     /// Creates an engine with the system fonts available for fallback.
     pub fn new() -> Self {
-        Self::with_fonts(FontSystem::new())
+        if system_fonts() {
+            Self::with_fonts(FontSystem::new())
+        } else {
+            let mut engine = Self::with_fonts(FontSystem::new_with_locale_and_db(
+                "en-US".to_owned(),
+                cosmic_text::fontdb::Database::new(),
+            ));
+            let db = engine.fonts.db_mut();
+            db.set_serif_family("Liberation Sans");
+            db.set_monospace_family("Liberation Sans");
+            db.set_cursive_family("Liberation Sans");
+            db.set_fantasy_family("Liberation Sans");
+            engine
+        }
     }
 
     fn with_fonts(mut fonts: FontSystem) -> Self {
@@ -143,7 +184,49 @@ impl TextEngine {
             asset_ids: HashSet::new(),
             faces: HashMap::new(),
             synthetic: HashMap::new(),
+            missing_now: (String::new(), BTreeMap::new()),
+            missing: BTreeMap::new(),
+            counting: true,
         }
+    }
+
+    /// Starts a paint for `label` (a clip's path): letters drawn as a box
+    /// from now on are counted for it, summed over the paint's draws, a
+    /// markup box's several runs of text among them.
+    pub fn begin_paint(&mut self, label: &str) {
+        self.end_paint();
+        label.clone_into(&mut self.missing_now.0);
+    }
+
+    fn end_paint(&mut self) {
+        let now = std::mem::take(&mut self.missing_now.1);
+        if now.is_empty() {
+            return;
+        }
+        let kept = self.missing.entry(self.missing_now.0.clone()).or_default();
+        for (ch, n) in now {
+            let most = kept.entry(ch).or_insert(0);
+            *most = (*most).max(n);
+        }
+    }
+
+    /// The letters no font had a glyph for, drawn as a box, by the label
+    /// of the paint that drew them, with how many: the most any one
+    /// paint drew, so a caption drawn on every frame counts its own
+    /// letters once. Taken and cleared.
+    pub fn take_missing(&mut self) -> BTreeMap<String, BTreeMap<char, usize>> {
+        self.end_paint();
+        std::mem::take(&mut self.missing)
+    }
+
+    /// Runs `f` with draws not counting their missing letters: a draw
+    /// that only measures text, which a markup layout does several times
+    /// over for one drawn box.
+    pub fn uncounted<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let was = std::mem::replace(&mut self.counting, false);
+        let result = f(self);
+        self.counting = was;
+        result
     }
 
     /// Whether the font asset has been registered.
@@ -448,6 +531,28 @@ impl TextEngine {
             buffer.set_rich_text(rich, &default_attrs, Shaping::Advanced, Some(align));
         }
         buffer.shape_until_scroll(&mut self.fonts, true);
+        // Letters no font had a glyph for: the shaper draws the first
+        // font's missing-glyph box. Spaces and invisible characters
+        // (joiners, direction marks, variation selectors) are not letters.
+        // A cluster drawn as several boxes gives each its whole range, so
+        // each cluster is counted once.
+        for run in buffer.layout_runs().filter(|_| self.counting) {
+            let mut clusters: Vec<(usize, usize)> = run
+                .glyphs
+                .iter()
+                .filter(|g| g.glyph_id == 0)
+                .map(|g| (g.start, g.end))
+                .collect();
+            clusters.sort_unstable();
+            clusters.dedup();
+            for (start, end) in clusters {
+                for ch in run.text.get(start..end).unwrap_or("").chars() {
+                    if !is_invisible(ch) {
+                        *self.missing_now.1.entry(ch).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
 
         // Tight bounds of all glyphs, in buffer coordinates.
         let mut min_x = f32::INFINITY;
@@ -1341,6 +1446,16 @@ fn family_of(name: &str) -> Family<'_> {
         "fantasy" => Family::Fantasy,
         _ => Family::Name(name),
     }
+}
+
+/// Whether a character draws nothing of its own: a space, a joiner, a
+/// direction mark, a variation selector.
+fn is_invisible(ch: char) -> bool {
+    use unicode_general_category::{GeneralCategory as G, get_general_category};
+    ch.is_whitespace()
+        || matches!(get_general_category(ch), G::Format | G::Control)
+        || ('\u{fe00}'..='\u{fe0f}').contains(&ch)
+        || ('\u{e0100}'..='\u{e01ef}').contains(&ch)
 }
 
 /// Whether a character goes with the text around it rather than choosing
