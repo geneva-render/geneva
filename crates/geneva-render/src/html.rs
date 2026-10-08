@@ -117,6 +117,7 @@ fn text_style_of(style: &Text) -> TextStyle {
             weight: style.synthesis.0,
             style: style.synthesis.1,
         },
+        space_all: style.space_all,
     }
 }
 
@@ -167,13 +168,20 @@ fn style_key(style: &Text) -> String {
 }
 
 impl Context<'_> {
-    /// The min-content width of some pieces of text: the widest word,
-    /// since a line breaks between words and not inside one.
+    /// The min-content width of some pieces of text: the widest stretch
+    /// between two places a line may break (Unicode's line breaking:
+    /// spaces, after a hyphen, and between Chinese or Japanese
+    /// characters, which a line breaks between with no space at all).
     fn longest_word<'a>(&mut self, pieces: impl Iterator<Item = (&'a str, &'a Text)>) -> f32 {
         let mut widest = 0.0f32;
         for (piece, style) in pieces {
-            for word in piece.split_whitespace() {
-                widest = widest.max(self.text(word, style, None).0);
+            let mut start = 0usize;
+            for (end, _) in unicode_linebreak::linebreaks(piece) {
+                let word = piece[start..end].trim();
+                if !word.is_empty() {
+                    widest = widest.max(self.text(word, style, None).0);
+                }
+                start = end;
             }
         }
         widest

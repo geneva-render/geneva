@@ -6,7 +6,7 @@
 //! every other source. A text source renders to an image that is then
 //! placed like any other box.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cosmic_text::fontdb::Weight;
@@ -57,6 +57,66 @@ pub struct TextEngine {
     /// Whether draws count their missing letters: not while text is only
     /// measured.
     counting: bool,
+    /// How full-width punctuation sits in each face, by face and mark.
+    punct: HashMap<(cosmic_text::fontdb::ID, char), Punct>,
+}
+
+/// Where a full-width punctuation mark sits in its em, which decides what
+/// `text-spacing-trim` takes off it: the space before an opening mark,
+/// after a closing one; a centred mark keeps both, but its neighbours
+/// lose theirs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Punct {
+    Open,
+    Close,
+    Middle,
+    Other,
+}
+
+/// U+3000, which counts as a centred mark for its neighbours.
+const IDEOGRAPHIC_SPACE: char = '\u{3000}';
+
+/// The marks a face's half-width forms may trim: brackets and quotes,
+/// commas and stops, colon, semicolon, middle dot.
+const FULLWIDTH_PUNCTUATION: &str =
+    "「『（【〈《〔〖〘〚［｛｟‘“」』）】〉》〕〗〙〛］｝｠’”、。，．：；・";
+
+/// The characters (byte offsets into the pieces joined) that start or
+/// end a line as `buffer` laid them out.
+fn line_edges(buffer: &Buffer, pieces: &[(String, usize, bool)]) -> BTreeSet<usize> {
+    // Where each of the shaper's lines (paragraphs) starts.
+    let mut paragraphs = vec![0usize];
+    let mut at = 0usize;
+    for (piece, _, _) in pieces {
+        paragraphs.extend(piece.match_indices('\n').map(|(i, _)| at + i + 1));
+        at += piece.len();
+    }
+    let mut edges = BTreeSet::new();
+    for run in buffer.layout_runs() {
+        let Some(&base) = paragraphs.get(run.line_i) else {
+            continue;
+        };
+        let visible = |g: &&cosmic_text::LayoutGlyph| {
+            run.text
+                .get(g.start..g.end)
+                .is_some_and(|t| t.chars().any(|ch| !is_invisible(ch)))
+        };
+        if let Some(first) = run.glyphs.iter().filter(visible).map(|g| g.start).min() {
+            edges.insert(base + first);
+        }
+        if let Some(last) = run.glyphs.iter().filter(visible).map(|g| g.start).max() {
+            edges.insert(base + last);
+        }
+    }
+    edges
+}
+
+/// How a draw lays its text out.
+struct Layout {
+    line_height: f32,
+    wrap_width: f32,
+    align: Align,
+    nowrap: bool,
 }
 
 /// Whether engines made from now on read the machine's fonts.
@@ -187,6 +247,7 @@ impl TextEngine {
             missing_now: (String::new(), BTreeMap::new()),
             missing: BTreeMap::new(),
             counting: true,
+            punct: HashMap::new(),
         }
     }
 
@@ -499,38 +560,28 @@ impl TextEngine {
                 pieces.push((piece[range].to_owned(), styles.len() - 1, own_metrics));
             }
         }
-        let mut buffer = Buffer::new(
-            &mut self.fonts,
-            Metrics::new(base.size, base.size * line_height),
-        );
-        // Lines break between words; a word longer than the line breaks
-        // inside rather than running past the edge.
-        buffer.set_wrap(if text.nowrap {
-            Wrap::None
+        // Full-width punctuation next to punctuation is set half-width,
+        // as Chromium's `text-spacing-trim: normal` sets it. Chromium
+        // (1194) trims nothing at the start or end of a line, wrapped or
+        // after a break, even beside a mark across the break, so a mark
+        // the lines put at an edge is set full again.
+        let layout = Layout {
+            line_height,
+            wrap_width,
+            align,
+            nowrap: text.nowrap,
+        };
+        let mut halts = if base.trim {
+            self.adjacent_trims(&pieces, &styles)
         } else {
-            Wrap::WordOrGlyph
-        });
-        buffer.set_size(Some(wrap_width), None);
-        let default_attrs = attrs_for(&base, 0);
-        if pieces.len() == 1 && pieces[0].1 == 0 {
-            buffer.set_text(&pieces[0].0, &default_attrs, Shaping::Advanced, Some(align));
-        } else {
-            // A run's pieces carry their own metrics: a line is as tall as
-            // the tallest piece on it, but only pieces with metrics count,
-            // so one `<small>` alone would shrink the line under the rest.
-            let rich = pieces.iter().map(|(piece, i, own_metrics)| {
-                let style = &styles[*i];
-                let attrs = attrs_for(style, *i);
-                let attrs = if *own_metrics {
-                    attrs.metrics(Metrics::new(style.size, style.size * line_height))
-                } else {
-                    attrs
-                };
-                (piece.as_str(), attrs)
-            });
-            buffer.set_rich_text(rich, &default_attrs, Shaping::Advanced, Some(align));
+            BTreeSet::new()
+        };
+        let mut buffer = self.lay_out(&pieces, &halts, &styles, &base, &layout);
+        let at_edges = line_edges(&buffer, &pieces);
+        if halts.iter().any(|h| at_edges.contains(h)) {
+            halts.retain(|h| !at_edges.contains(h));
+            buffer = self.lay_out(&pieces, &halts, &styles, &base, &layout);
         }
-        buffer.shape_until_scroll(&mut self.fonts, true);
         // Letters no font had a glyph for: the shaper draws the first
         // font's missing-glyph box. Spaces and invisible characters
         // (joiners, direction marks, variation selectors) are not letters.
@@ -718,6 +769,179 @@ impl TextEngine {
             mask.composite(&mut image, *color);
         }
         image
+    }
+
+    /// Shapes and lays out the pieces (text, style, whether it carries
+    /// its own metrics), the characters at `halts` (byte offsets into the
+    /// pieces joined) set with the face's half-width forms.
+    fn lay_out(
+        &mut self,
+        pieces: &[(String, usize, bool)],
+        halts: &BTreeSet<usize>,
+        styles: &[Resolved],
+        base: &Resolved,
+        layout: &Layout,
+    ) -> Buffer {
+        let mut buffer = Buffer::new(
+            &mut self.fonts,
+            Metrics::new(base.size, base.size * layout.line_height),
+        );
+        // Lines break between words; a word longer than the line breaks
+        // inside rather than running past the edge.
+        buffer.set_wrap(if layout.nowrap {
+            Wrap::None
+        } else {
+            Wrap::WordOrGlyph
+        });
+        buffer.set_size(Some(layout.wrap_width), None);
+        let default_attrs = attrs_for(base, 0);
+        if pieces.len() == 1 && pieces[0].1 == 0 && halts.is_empty() {
+            buffer.set_text(
+                &pieces[0].0,
+                &default_attrs,
+                Shaping::Advanced,
+                Some(layout.align),
+            );
+        } else {
+            // Each piece cut where the half-width forms start and stop.
+            let mut spans: Vec<(&str, usize, bool, bool)> = Vec::new();
+            let mut at = 0usize;
+            for (piece, i, own_metrics) in pieces {
+                let mut start = 0usize;
+                let mut half = false;
+                for (offset, _) in piece.char_indices() {
+                    let now = halts.contains(&(at + offset));
+                    if now != half {
+                        if offset > start {
+                            spans.push((&piece[start..offset], *i, *own_metrics, half));
+                        }
+                        start = offset;
+                        half = now;
+                    }
+                }
+                if start < piece.len() {
+                    spans.push((&piece[start..], *i, *own_metrics, half));
+                }
+                at += piece.len();
+            }
+            // A run's pieces carry their own metrics: a line is as tall as
+            // the tallest piece on it, but only pieces with metrics count,
+            // so one `<small>` alone would shrink the line under the rest.
+            let rich = spans.into_iter().map(|(piece, i, own_metrics, half)| {
+                let style = &styles[i];
+                let mut attrs = attrs_for(style, i);
+                if own_metrics {
+                    attrs =
+                        attrs.metrics(Metrics::new(style.size, style.size * layout.line_height));
+                }
+                if half {
+                    let mut features = cosmic_text::FontFeatures::new();
+                    features.enable(cosmic_text::FeatureTag::new(b"halt"));
+                    attrs = attrs.font_features(features);
+                }
+                (piece, attrs)
+            });
+            buffer.set_rich_text(rich, &default_attrs, Shaping::Advanced, Some(layout.align));
+        }
+        buffer.shape_until_scroll(&mut self.fonts, true);
+        buffer
+    }
+
+    /// The characters of the pieces joined (byte offsets) to set
+    /// half-width because of their neighbours: an opening mark after an
+    /// opening, closing or centred one (or an ideographic space), and a
+    /// closing mark before a closing or centred one.
+    fn adjacent_trims(
+        &mut self,
+        pieces: &[(String, usize, bool)],
+        styles: &[Resolved],
+    ) -> BTreeSet<usize> {
+        let mut marks: Vec<(usize, Punct)> = Vec::new();
+        let mut at = 0usize;
+        for (piece, i, _) in pieces {
+            for (offset, ch) in piece.char_indices() {
+                if is_invisible(ch) && ch != IDEOGRAPHIC_SPACE {
+                    continue;
+                }
+                marks.push((at + offset, self.punct_of(&styles[*i], ch)));
+            }
+            at += piece.len();
+        }
+        let mut halts = BTreeSet::new();
+        for (k, (offset, class)) in marks.iter().enumerate() {
+            let before = k.checked_sub(1).map(|j| marks[j].1);
+            let after = marks.get(k + 1).map(|m| m.1);
+            let trimmed = match class {
+                Punct::Open => matches!(before, Some(Punct::Open | Punct::Close | Punct::Middle)),
+                Punct::Close => matches!(after, Some(Punct::Close | Punct::Middle)),
+                Punct::Middle | Punct::Other => false,
+            };
+            if trimmed {
+                halts.insert(*offset);
+            }
+        }
+        halts
+    }
+
+    /// How a character sits in its em in the face `style` draws it in,
+    /// from what the face's `halt` (half-width forms) does to it: moved
+    /// left by all it loses, an opening mark; not moved, a closing mark;
+    /// by half, a centred one. A character `halt` leaves alone, or one
+    /// that is not full-width punctuation, is neither.
+    fn punct_of(&mut self, style: &Resolved, ch: char) -> Punct {
+        if ch == IDEOGRAPHIC_SPACE {
+            return Punct::Middle;
+        }
+        if !FULLWIDTH_PUNCTUATION.contains(ch) {
+            return Punct::Other;
+        }
+        let Some(family) = style.family.clone() else {
+            return Punct::Other;
+        };
+        let Some(id) = self.face_of(&family, style.weight, style.italic) else {
+            return Punct::Other;
+        };
+        if let Some(class) = self.punct.get(&(id, ch)) {
+            return *class;
+        }
+        let class = self.measure_punct(id, Weight(style.weight), ch);
+        self.punct.insert((id, ch), class);
+        class
+    }
+
+    fn measure_punct(&mut self, id: cosmic_text::fontdb::ID, weight: Weight, ch: char) -> Punct {
+        let Some(font) = self.fonts.get_font(id, weight) else {
+            return Punct::Other;
+        };
+        let shape = |features: &[(&str, u16)]| {
+            let mut context = swash::shape::ShapeContext::new();
+            let mut shaper = context
+                .builder(font.as_swash())
+                .script(swash::text::Script::Han)
+                .features(features.iter().copied())
+                .build();
+            let mut buf = [0u8; 4];
+            shaper.add_str(ch.encode_utf8(&mut buf));
+            let mut out = (0.0f32, 0.0f32);
+            shaper.shape_with(|cluster| {
+                for g in cluster.glyphs {
+                    out = (g.advance, g.x);
+                }
+            });
+            out
+        };
+        let (full, _) = shape(&[]);
+        let (half, x) = shape(&[("halt", 1)]);
+        let lost = full - half;
+        if full <= 0.0 || lost < full * 0.25 {
+            Punct::Other
+        } else if x <= -0.75 * lost {
+            Punct::Open
+        } else if x.abs() <= 0.25 * lost {
+            Punct::Close
+        } else {
+            Punct::Middle
+        }
     }
 
     /// The style and weight to ask for, snapped to what the family
@@ -1058,6 +1282,7 @@ impl TextEngine {
             synthesis,
             fake_bold,
             fake_italic,
+            trim: !s.space_all,
             size: pick(&|s| s.size).unwrap_or(DEFAULT_SIZE).max(1.0) as f32,
             weight,
             italic,
@@ -1359,6 +1584,8 @@ struct LoadedFace {
 }
 
 /// A style block with defaults applied.
+// Flags of one style each, read where text is laid out and drawn.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 struct Resolved {
     family: Option<String>,
@@ -1374,6 +1601,8 @@ struct Resolved {
     synthesis: FontSynthesis,
     fake_bold: bool,
     fake_italic: bool,
+    /// Whether full-width punctuation is trimmed (`text-spacing-trim`).
+    trim: bool,
     size: f32,
     weight: u16,
     italic: bool,
@@ -1685,6 +1914,51 @@ mod face_tests {
             std::fs::read(format!("{root}/LiberationSans-Bold.ttf"))
                 .expect("the golden root ships it"),
         )
+    }
+
+    /// Full-width punctuation beside punctuation is set half-width, as
+    /// Chromium sets this line in Noto Sans TC: the bracket after the
+    /// colon and the one after the closing bracket lose their leading
+    /// half; `space-all` keeps every mark whole.
+    #[test]
+    fn punctuation_beside_punctuation_is_set_half_width() {
+        let mut engine = TextEngine::new();
+        let data = std::fs::read("../../tests/golden/fonts/NotoSansTC-Subset.ttf")
+            .expect("the golden root ships it");
+        engine.add_font("tc", data).expect("a usable face");
+        let advances = |engine: &mut TextEngine, space_all: bool| {
+            let asked = TextStyle {
+                font: Some("tc".to_owned()),
+                size: Some(40.0),
+                space_all,
+                ..TextStyle::default()
+            };
+            let style = engine.style(&asked, None, LinearRgba::TRANSPARENT);
+            let pieces = vec![("他說：「好的…」（真的？）".to_owned(), 0usize, false)];
+            let styles = vec![style.clone()];
+            let halts = if style.trim {
+                engine.adjacent_trims(&pieces, &styles)
+            } else {
+                BTreeSet::new()
+            };
+            let layout = Layout {
+                line_height: 1.2,
+                wrap_width: 2000.0,
+                align: Align::Left,
+                nowrap: true,
+            };
+            let buffer = engine.lay_out(&pieces, &halts, &styles, &style, &layout);
+            let run = buffer.layout_runs().next().expect("one line");
+            run.glyphs
+                .iter()
+                .map(|g| g.w.round() as i32)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            advances(&mut engine, false),
+            [40, 40, 40, 20, 40, 40, 40, 40, 20, 40, 40, 40, 40]
+        );
+        assert_eq!(advances(&mut engine, true), [40; 13]);
     }
 
     /// Chromium's rule for a face the document ships: bold is drawn when

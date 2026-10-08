@@ -325,6 +325,9 @@ pub struct Text {
     /// `font-synthesis`: whether a bold, then an oblique, may be drawn
     /// synthetically where the family has no such face.
     pub synthesis: (bool, bool),
+    /// `text-spacing-trim: space-all`: full-width punctuation keeps its
+    /// full width; `normal` (the default) halves it beside other marks.
+    pub space_all: bool,
     /// Multiple of the font size; `None` for `normal`, the font's own
     /// spacing.
     pub line_height: Option<f64>,
@@ -510,6 +513,7 @@ impl Default for Text {
             weight: 400,
             italic: false,
             synthesis: (true, true),
+            space_all: false,
             line_height: None,
             letter_spacing: 0.0,
             align: TextAlign::Left,
@@ -1318,6 +1322,13 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
                 return unsupported(v, "none, or weight and/or style");
             }
             c.text.synthesis = (words.contains(&"weight"), words.contains(&"style"));
+        }
+        "text-spacing-trim" => {
+            c.text.space_all = match l {
+                "normal" | "auto" | "space-first" => false,
+                "space-all" => true,
+                _ => return unsupported(v, "normal or space-all"),
+            };
         }
         "font-synthesis-weight" | "font-synthesis-style" => {
             let on = match l {

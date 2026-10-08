@@ -784,6 +784,7 @@ dependencies = [
  "thiserror",
  "unicode-bidi",
  "unicode-general-category",
+ "unicode-linebreak",
  "wuff",
 ]
 

@@ -48,6 +48,7 @@ serde_path_to_error = "0.1"
 thiserror = "2.0"
 unicode-bidi = "0.3"
 unicode-general-category = "1.1"
+unicode-linebreak = "0.1"
 wuff = "0.2"
 cosmic-text = { version = "0.19", default-features = false, features = ["std", "swash"] }
 swash = "0.2"

@@ -20,6 +20,7 @@ swash = { workspace = true }
 thiserror = { workspace = true }
 unicode-bidi = { workspace = true }
 unicode-general-category = { workspace = true }
+unicode-linebreak = { workspace = true }
 wuff = { workspace = true }
 
 [lints]

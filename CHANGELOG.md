@@ -40,6 +40,13 @@ versions changed the format freely.
   no synthesis. Italic text gets room for glyphs that lean past their
   advances, so the last letter is no longer cut off.
 
+- **`text-spacing-trim`** with Chromium's default, `normal`: full-width
+  punctuation beside punctuation is set half-width with the font's
+  `halt` forms, so `他說：「好的…」（真的？）` is an em narrower, as in
+  Chromium, in Noto Sans TC, SC and JP (glyph positions within a pixel).
+  The font decides which side a mark's space is on, and nothing is
+  trimmed at a line's start or end, as in Chromium. `space-all` keeps
+  every mark whole.
 - **Only the document's fonts** with `--no-system-fonts` (or
   `GENEVA_NO_SYSTEM_FONTS=1`): text is drawn in the font assets and
   `@font-face` files and the built-in Liberation Sans, never the
@@ -52,6 +59,10 @@ versions changed the format freely.
 
 ### Fixed
 
+- **Chinese and Japanese markup did not wrap.** A box's min-content
+  width took a run with no spaces as one word, so a caption in a
+  200 px box drew on one line far past it. Min-content now breaks where
+  Unicode allows, between ideographs among others, as a browser does.
 - **Memory grew with the source file.** Every packet a decoder read and
   skipped (another stream's) leaked: the demuxer overwrites the packet
   it is given without releasing the old one. The audio reader skips all

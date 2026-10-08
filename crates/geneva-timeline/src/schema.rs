@@ -1394,6 +1394,11 @@ pub struct TextStyle {
     /// synthesises both, as a browser does by default.
     #[serde(skip)]
     pub synthesis: FontSynthesis,
+    /// Markup's `text-spacing-trim: space-all`: full-width punctuation
+    /// keeps its full width beside other punctuation. Not part of the
+    /// format: a text source trims, as a browser does by default.
+    #[serde(skip)]
+    pub space_all: bool,
 }
 
 /// What may be drawn synthetically where a family has no face for it,
