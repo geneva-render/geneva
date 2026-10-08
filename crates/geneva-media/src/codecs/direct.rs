@@ -167,6 +167,12 @@ impl DirectSource {
             if reader.rotation() != 0 || !reader.sample_aspect_ratio().is_square() {
                 return Ok(None);
             }
+            // An interlaced source is woven by the compositor's conversion;
+            // this path hands its fields on as they are.
+            let mut reader = reader;
+            if reader.raw_frame_at(clip.in_)?.is_interlaced() {
+                return Ok(None);
+            }
             let source = reader.tags();
             let pixel = reader.pixel_format();
             let transfer_lut = if to_rgb {

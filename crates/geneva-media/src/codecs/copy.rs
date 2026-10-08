@@ -658,7 +658,11 @@ struct StreamShape {
 
 impl StreamShape {
     fn read(path: &Path) -> Result<Self, MediaError> {
-        let ictx = ffmpeg_next::format::input(path).map_err(|e| open_error(path, e))?;
+        let mut ictx = ffmpeg_next::format::input(path).map_err(|e| open_error(path, e))?;
+        // The same reconciliation as the probe, so that a file whose
+        // timestamps jitter (a phone recording) compares equal to the
+        // rate the composition was built at.
+        let fps = super::probe::video_frame_rate(&mut ictx).unwrap_or(Ratio::from_int(25));
         let video = ictx
             .streams()
             .best(Type::Video)
@@ -673,14 +677,6 @@ impl StreamShape {
         let decoder = ctx.decoder().video().map_err(|e| {
             super::codec_error(format!("{}: reading stream parameters", path.display()), e)
         })?;
-        // The same reconciliation as the probe, so that a file whose
-        // timestamps jitter (a phone recording) compares equal to the
-        // rate the composition was built at.
-        let fps = super::probe::frame_rate(
-            super::probe::ratio(video.avg_frame_rate()),
-            super::probe::ratio(video.rate()),
-        )
-        .unwrap_or(Ratio::from_int(25));
         // The picture as displayed: a rotated source is compared to the
         // composition at its upright size, and copied with its matrix; one
         // with non-square pixels at its display size, and copied with its

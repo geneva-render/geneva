@@ -16,6 +16,24 @@ pub struct MediaInfo {
     /// Subtitle streams, in container order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subtitles: Vec<SubtitleInfo>,
+    /// The video or audio streams the file has and this build cannot
+    /// decode, so that a file whose picture cannot be read is told apart
+    /// from one with none (`video` is `None` for both).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub undecodable: Vec<UndecodableStream>,
+}
+
+/// A stream the file has and this build cannot decode.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UndecodableStream {
+    /// Index of the stream in the container.
+    pub index: usize,
+    /// `"video"` or `"audio"`.
+    pub kind: &'static str,
+    /// The codec's name, as libav knows it.
+    pub codec: String,
+    /// Why it cannot be decoded.
+    pub reason: String,
 }
 
 /// A subtitle stream.

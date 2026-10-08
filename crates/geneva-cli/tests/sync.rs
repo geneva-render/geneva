@@ -462,3 +462,46 @@ fn a_length_that_ends_mid_frame_adds_no_frame() {
     }
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
+
+/// The legacy corpus (`tests/media/legacy`, `scripts/make-legacy-corpus.sh`):
+/// DV, MPEG-2 in a program and a transport stream, MS-MPEG4 v3, Motion
+/// JPEG and QuickTime RLE, each with a white frame at 0.5 s and a tone
+/// from 0.5 s. Converted, each keeps every frame (as ffmpeg counts them)
+/// and both marks.
+#[test]
+fn legacy_sources_keep_their_frames_and_marks() {
+    let legacy = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/media/legacy");
+    let dir = tempfile::tempdir().unwrap();
+    let mut problems = Vec::new();
+    for (name, frames, flash_frame) in [
+        ("dv-ntsc.dv", 20, 15),
+        ("dv-pal.dv", 17, 13),
+        ("mpeg2.mpg", 25, 13),
+        ("mpeg2.ts", 30, 15),
+        ("msmpeg4v3.avi", 25, 13),
+        ("mjpeg.avi", 25, 13),
+        ("qtrle.mov", 25, 13),
+    ] {
+        let out = dir.path().join(format!("{name}.mp4"));
+        run(&[
+            "convert",
+            legacy.join(name).to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--crf",
+            "16",
+            "--preset",
+            "ultrafast",
+        ]);
+        let written = probe(&out).unwrap().video.unwrap().frames;
+        if written != Some(frames) {
+            problems.push(format!("{name}: {written:?} frames (wanted {frames})"));
+        }
+        let want = Marks {
+            flash_frame,
+            tone_secs: 0.5,
+        };
+        problems.extend(check("convert", name, &out, &want));
+    }
+    assert!(problems.is_empty(), "\n{}", problems.join("\n"));
+}

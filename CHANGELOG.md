@@ -6,6 +6,37 @@ version it was written for; within 1.x the format only gains optional
 fields, so a document keeps meaning what it meant. Before 1.0, minor
 versions changed the format freely.
 
+## Unreleased
+
+### Added
+
+- **Older video formats**: DV (NTSC and PAL), MPEG-1 and MPEG-2 in
+  program and transport streams (`.mpg`, `.vob`, `.ts`, `.m2ts`), WMV 1
+  to 3 and VC-1 in ASF, MS-MPEG4 v1 to v3, Motion JPEG, QuickTime RLE
+  and Canopus HQ/HQA/HQX, with their usual audio (MP1/MP2, WMA, DVD and
+  Blu-ray PCM, A-law, mu-law, IMA ADPCM). These extensions are taken as
+  video assets. An ASF file's rate, declared as its 1000 fps time base,
+  is measured from its timestamps; MPEG frames that carry no timestamp
+  are timed from the frame before, and the length of an MPEG stream is
+  measured from its last frames, so none are lost at the end.
+- **Deinterlacing**: an interlaced frame (DV, most MPEG-2) is drawn at
+  its first field, with the lines of the second rebuilt where they comb,
+  in place of the woven frame.
+- **Undecodable streams named**: `probe` lists a stream it cannot decode
+  under `undecodable` (codec and reason), and the human output says so;
+  a verb that needs the stream stops with `its video stream (cinepak)
+  cannot be decoded` rather than "has no video".
+
+### Fixed
+
+- **Bengali ra-phala and ba-phala** (`ক্র`, `ন্ত্র`, `স্ক্র`, `ন্দ্র`
+  in Noto Sans Bengali) were drawn as a visible hasant and a full
+  letter. The shaper (harfrust 0.5.2, under cosmic-text) never matched
+  format-3 context rules when asking whether a below-base form applies;
+  it is patched in `vendor/harfrust` until cosmic-text moves to a
+  version with the fix. Devanagari, Gurmukhi and Odia conjuncts (`क्र`,
+  `प्र`, `ਪ੍ਰ`, `କ୍ର`) were checked against Chromium.
+
 ## 1.3.0 (2026-10-07)
 
 ### Added

@@ -578,9 +578,13 @@ impl AssetKind {
     /// Guesses the kind from a file extension.
     pub fn from_extension(ext: &str) -> Option<Self> {
         match ext.to_ascii_lowercase().as_str() {
-            "mp4" | "mov" | "mkv" | "webm" | "m4v" | "mxf" | "ts" | "avi" => Some(Self::Video),
+            "mp4" | "mov" | "mkv" | "webm" | "m4v" | "mxf" | "ts" | "avi" | "dv" | "mpg"
+            | "mpeg" | "vob" | "m2v" | "m2ts" | "mts" | "wmv" | "asf" | "3gp" | "3g2" | "ogv"
+            | "qt" => Some(Self::Video),
             "png" | "jpg" | "jpeg" | "webp" | "bmp" | "gif" => Some(Self::Image),
-            "wav" | "mp3" | "aac" | "m4a" | "flac" | "ogg" | "opus" | "oga" => Some(Self::Audio),
+            "wav" | "mp3" | "aac" | "m4a" | "flac" | "ogg" | "opus" | "oga" | "wma" => {
+                Some(Self::Audio)
+            }
             "ttf" | "otf" | "ttc" | "woff" | "woff2" => Some(Self::Font),
             "html" | "htm" => Some(Self::Html),
             "srt" | "vtt" => Some(Self::Subtitle),

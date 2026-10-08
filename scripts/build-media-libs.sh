@@ -292,13 +292,16 @@ if ! done_marker ffmpeg; then
       --extra-cflags="-I$prefix/include" --extra-ldflags="-L$prefix/lib" \
       --enable-protocol=file,pipe \
       --enable-demuxer=mov,matroska,mp3,wav,aac,flac,ogg,image2,mpegts,avi,gif,mxf,srt,webvtt \
+      --enable-demuxer=dv,mpegps,mpegvideo,asf \
       --enable-muxer=mp4,mov,matroska,webm,wav,flac,ogg,opus,adts,image2,mxf,mp3,srt,webvtt \
       --enable-decoder=h264,hevc,vp8,vp9,libdav1d,mpeg4,mpeg2video,mjpeg,png,prores,dnxhd,rawvideo,gif \
+      --enable-decoder=dvvideo,mpeg1video,wmv1,wmv2,wmv3,vc1,msmpeg4v1,msmpeg4v2,msmpeg4v3,qtrle,hqx,hq_hqa,mjpegb \
       --enable-decoder=aac,mp3,flac,vorbis,libopus,alac,ac3,eac3,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,pcm_s16be,pcm_u8 \
+      --enable-decoder=mp1,mp2,wmav1,wmav2,wmapro,pcm_dvd,pcm_bluray,pcm_alaw,pcm_mulaw,adpcm_ima_qt \
       --enable-decoder=subrip,webvtt,mov_text \
       --enable-encoder=libopenh264,libvpx_vp9,libsvtav1,prores_ks,dnxhd,png,mjpeg,rawvideo \
       --enable-encoder=aac,libopus,flac,alac,ac3,libmp3lame,libvorbis,pcm_s16le,pcm_s24le,pcm_f32le \
-      --enable-parser=h264,hevc,vp8,vp9,av1,aac,mpeg4video,mpegvideo,mjpeg,png,flac,vorbis,opus,mpegaudio,ac3,dnxhd \
+      --enable-parser=h264,hevc,vp8,vp9,av1,aac,mpeg4video,mpegvideo,mjpeg,png,flac,vorbis,opus,mpegaudio,ac3,dnxhd,vc1,dvaudio \
       --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc,extract_extradata,vp9_superframe,null \
       $extra >"$src/ffmpeg-configure.log" 2>&1 || { tail -30 "$src/ffmpeg-configure.log"; exit 1; }
    make -j"$jobs" >"$src/ffmpeg-build.log" 2>&1 || { tail -30 "$src/ffmpeg-build.log"; exit 1; }

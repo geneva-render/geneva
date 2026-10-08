@@ -1240,10 +1240,94 @@ pub fn backdrop_planes(
     }
 }
 
+/// Weaves an interlaced frame into one picture at the time of its first
+/// field. The first field's lines are kept; on each line of the second,
+/// a pixel that combs (lies outside both lines around it, by more than a
+/// little, as where something moved between the fields) is rebuilt from
+/// those lines, and the rest keeps the second field's own detail. Judged
+/// on a square-root of luminance, near how brightness is seen; rebuilt
+/// in linear light.
+pub fn deinterlace(image: &mut Image, top_first: bool) {
+    // The difference that counts as combing, in that square-root scale
+    // (about 3 percent of the way from black to white).
+    const COMB: f32 = 0.015;
+    let (w, h) = (image.width as usize, image.height as usize);
+    if h < 3 {
+        return;
+    }
+    let level = |p: LinearRgba| (0.2126 * p.r + 0.7152 * p.g + 0.0722 * p.b).max(0.0).sqrt();
+    let second = usize::from(top_first);
+    let source = image.pixels.clone();
+    for y in (second..h).step_by(2) {
+        let above = if y == 0 { y + 1 } else { y - 1 };
+        let below = if y + 1 >= h { y - 1 } else { y + 1 };
+        for x in 0..w {
+            let (a, b, c) = (
+                source[above * w + x],
+                source[below * w + x],
+                source[y * w + x],
+            );
+            let (la, lb, lc) = (level(a), level(b), level(c));
+            if (lc - la) * (lc - lb) > COMB * COMB {
+                image.pixels[y * w + x] = LinearRgba {
+                    r: f32::midpoint(a.r, b.r),
+                    g: f32::midpoint(a.g, b.g),
+                    b: f32::midpoint(a.b, b.b),
+                    a: f32::midpoint(a.a, b.a),
+                };
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use geneva_color::Color;
+
+    /// A block that moved between the fields combs on the second field's
+    /// lines; woven, those pixels take the first field's, and the rest of
+    /// the second field (still detail) and the whole first field stay.
+    #[test]
+    fn an_interlaced_frame_is_woven_at_its_first_field() {
+        let grey = |v: f32| LinearRgba {
+            r: v,
+            g: v,
+            b: v,
+            a: 1.0,
+        };
+        let (w, h) = (8u32, 8u32);
+        let mut pixels = vec![grey(0.2); (w * h) as usize];
+        for y in (1..h).step_by(2) {
+            // Odd lines are the second field (top field first): a bright
+            // block where something was a field earlier, and a faint
+            // still line detail at x = 7.
+            for x in 2..5 {
+                pixels[(y * w + x) as usize] = grey(0.9);
+            }
+            pixels[(y * w + 7) as usize] = grey(0.205);
+        }
+        let mut image = Image {
+            width: w,
+            height: h,
+            pixels: pixels.clone(),
+            content: None,
+        };
+        super::deinterlace(&mut image, true);
+        for y in 0..h {
+            for x in 0..w {
+                let (got, was) = (
+                    image.pixels[(y * w + x) as usize],
+                    pixels[(y * w + x) as usize],
+                );
+                if y % 2 == 0 || x == 7 || !(2..5).contains(&x) {
+                    assert_eq!(got, was, "({x}, {y}) kept");
+                } else {
+                    assert!((got.r - 0.2).abs() < 1e-6, "({x}, {y}) woven: {got:?}");
+                }
+            }
+        }
+    }
 
     #[test]
     fn white_and_black_hit_the_limited_range_anchors() {

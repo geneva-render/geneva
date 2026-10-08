@@ -84,7 +84,8 @@ transition logic and the painter are shared Rust.
 a software one too; both fall back to the CPU with a note. `frame` and
 the overlays on a direct-path picture always use the CPU.
 
-**Text**: shaping, bidi, line breaking and fallback by `cosmic-text`,
+**Text**: shaping, bidi, line breaking and fallback by `cosmic-text`
+(its shaper, harfrust, patched in `vendor/` for Indic below-base forms),
 rasterized by `swash` into coverage masks, composited in linear light
 with box, outline and shadow, placed like an image.
 
@@ -293,6 +294,14 @@ the source rather than treating a set field as a change.
 - `AssetSource` resolves `assets.<id>.src` under one root; validation
   has already rejected absolute paths and `..`. One decoder is kept open
   per asset so sequential frames decode once.
+- Older files: a rate that is missing or absurd (ASF declares its
+  millisecond time base, so 1000 fps) is measured from the first 120
+  packets' timestamps and snapped to a standard rate within 1%. MPEG
+  program and transport streams time only some frames, so a frame with
+  no timestamp, or one not after the last, follows the frame before by
+  one frame duration, and the length is measured by decoding the last
+  seconds. Interlaced frames are deinterlaced on conversion
+  (`convert::deinterlace`), which keeps them off the direct path.
 
 ## Tests
 
@@ -310,6 +319,11 @@ the source rather than treating a set field as a change.
   3 ms. Time zero is a file's first video frame, for picture and sound;
   MPEG-TS AAC starts 21 ms late, as in ffmpeg, since TS carries no
   priming.
+- **Legacy corpus**: `tests/media/legacy/`, from
+  `scripts/make-legacy-corpus.sh`: DV NTSC and PAL, MPEG-2 in PS and TS,
+  MS-MPEG4 v3, Motion JPEG, QuickTime RLE, each a flash and a tone at
+  0.5 s, which must keep their frame count and marks through `convert`;
+  and a Cinepak file, which `probe` must name as undecodable.
 
 ## Vulkan in a container
 

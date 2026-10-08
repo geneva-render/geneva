@@ -2273,6 +2273,13 @@ mod imp {
                 s.push_str("    note: HDR material; tone-mapped to SDR (BT.2446 method A) unless the output is HDR\n");
             }
         }
+        for u in &info.undecodable {
+            let _ = writeln!(
+                s,
+                "  {}: {} (stream {}), which cannot be decoded: {}",
+                u.kind, u.codec, u.index, u.reason
+            );
+        }
         if let Some(a) = &info.audio {
             let _ = writeln!(
                 s,

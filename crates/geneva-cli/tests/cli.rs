@@ -349,6 +349,42 @@ fn non_square_pixels_are_shown_at_their_display_aspect() {
     assert_eq!(converted["video"]["sample_aspect_ratio"], "1:1");
 }
 
+/// A stream the build has no decoder for is named by the probe, codec
+/// and reason, rather than reported as no video; a verb that needs the
+/// picture says why it cannot read it.
+#[test]
+#[cfg(feature = "media")]
+fn a_stream_with_no_decoder_is_named() {
+    let src = media_dir().join("legacy/cinepak.avi");
+    let info = run_json(&["probe"], &[&src]);
+    assert!(info["video"].is_null());
+    assert_eq!(info["undecodable"][0]["kind"], "video");
+    assert_eq!(info["undecodable"][0]["codec"], "cinepak");
+    assert_eq!(
+        info["undecodable"][0]["reason"],
+        "no decoder for it in this build"
+    );
+    geneva()
+        .args(["probe"])
+        .arg(&src)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "video: cinepak (stream 0), which cannot be decoded: no decoder for it in this build",
+        ));
+    let dir = tempfile::tempdir().unwrap();
+    geneva()
+        .args(["convert"])
+        .arg(&src)
+        .arg("-o")
+        .arg(dir.path().join("out.mp4"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "its video stream (cinepak) cannot be decoded",
+        ));
+}
+
 #[test]
 #[cfg(feature = "media")]
 fn render_writes_a_playable_file_with_audio() {

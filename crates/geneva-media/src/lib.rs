@@ -42,7 +42,7 @@ pub use codecs::{
     read_subtitles, set_decoder_threads_for_this_thread, stream_copy, stream_copy_mixing_audio,
     subtitle_streams, system_x264, system_x264_error,
 };
-pub use info::{AudioInfo, MediaInfo, PixelAspect, SubtitleInfo, VideoInfo};
+pub use info::{AudioInfo, MediaInfo, PixelAspect, SubtitleInfo, UndecodableStream, VideoInfo};
 #[cfg(feature = "media")]
 pub use levels::measure_audio;
 pub use render::{FramePacker, PlaneRenderer, PlaneTarget};

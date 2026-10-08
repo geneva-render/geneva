@@ -94,6 +94,10 @@ tags that had to be assumed. Sizes are as displayed: after the pixel
 aspect and the rotation. `sample_aspect_ratio` (`"32:27"`; `"1:1"` for
 square pixels), `rotation` (0, 90, 180, 270, clockwise) and the stored
 size (`stored_width`, `stored_height`) are reported beside them.
+A stream that cannot be decoded (no decoder for its codec in this build,
+or one that would not open) is listed under `undecodable` as
+`{"index", "kind", "codec", "reason"}`, and a verb that needs it stops
+with that codec and reason.
 
 ### `geneva schema`
 
@@ -416,5 +420,19 @@ Subtitle streams: MP4, MOV, MKV, WebM.
 | PNG | 8-bit RGBA | Lossless, keeps alpha. |
 | Motion JPEG | 8-bit 4:2:0, full range | `--crf` maps to JPEG quality (0 best). |
 
-Also read, not written: VP8, MPEG-2, MPEG-4 part 2, DNxHD, raw video,
-GIF, E-AC-3, MPEG-TS, AVI.
+Also read, not written:
+
+- Containers: AVI, MPEG-TS (`.ts`, `.m2ts`, `.mts`), MPEG program
+  streams (`.mpg`, `.mpeg`, `.vob`, `.m2v`), DV (`.dv`), ASF (`.wmv`,
+  `.asf`, `.wma`), 3GP, Ogg video.
+- Video: VP8, MPEG-1, MPEG-2, MPEG-4 part 2, DV, WMV 1 to 3, VC-1,
+  MS-MPEG4 v1 to v3, Motion JPEG, QuickTime RLE, Canopus HQ/HQA/HQX,
+  DNxHD, raw video, GIF.
+- Audio: E-AC-3, MP1, MP2, WMA 1, 2 and Pro, DVD and Blu-ray PCM,
+  A-law, mu-law, IMA ADPCM.
+
+An interlaced frame is drawn at the time of its first field: that
+field's lines are kept, and on the other field's lines a pixel that
+combs against the lines around it (something moved between the fields)
+is rebuilt from them, as a browser's deinterlacer does. A stream with
+no decoder in the build is named by `probe`.

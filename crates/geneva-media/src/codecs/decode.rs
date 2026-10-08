@@ -12,7 +12,7 @@ use geneva_color::{ColorTags, Matrix, ResolvedTags};
 use geneva_render::Image;
 use geneva_timeline::Ratio;
 
-use super::probe::{ratio, ts_to_secs};
+use super::probe::ts_to_secs;
 use super::{codec_error, ffi, init, open_error, tags};
 use crate::MediaError;
 use crate::convert::{Planes16, Planes420, rgba8_into, ycbcr16_into, yuv420p8_into};
@@ -43,11 +43,7 @@ impl StreamDecoder {
             .best(kind)
             .ok_or_else(|| MediaError::NoStream {
                 path: path.to_owned(),
-                kind: if kind == Type::Video {
-                    "video"
-                } else {
-                    "audio"
-                },
+                kind: kind_name(kind),
             })?;
         let stream_index = stream.index();
         let time_base = stream.time_base();
@@ -67,6 +63,17 @@ impl StreamDecoder {
             Some(video) => zero_of(&video),
             None => zero_of(&stream).max(Ratio::ZERO),
         };
+        let id = stream.parameters().id();
+        if ffmpeg_next::decoder::find(id).is_none() {
+            return Err(MediaError::Codec {
+                context: format!(
+                    "{}: decoding its {} stream",
+                    path.display(),
+                    kind_name(kind)
+                ),
+                reason: format!("no decoder for {} in this build", id.name()),
+            });
+        }
         let mut ctx = codec::context::Context::from_parameters(stream.parameters())
             .map_err(|e| codec_error(format!("{}: decoder setup", path.display()), e))?;
         // A share set for this thread, else the process's cap, else all.
@@ -257,12 +264,12 @@ impl VideoReader {
         let decoder = decoder
             .video()
             .map_err(|e| codec_error(format!("{}: opening video decoder", path.display()), e))?;
+        let mut inner = inner;
+        let fps = super::probe::video_frame_rate(&mut inner.ictx).unwrap_or(Ratio::from_int(25));
         let stream = inner
             .ictx
             .stream(inner.stream_index)
             .expect("stream exists");
-        let fps = super::probe::frame_rate(ratio(stream.avg_frame_rate()), ratio(stream.rate()))
-            .unwrap_or(Ratio::from_int(25));
         let file_tags = tags::from_codec_tags(
             decoder.color_space(),
             decoder.color_range(),
@@ -447,6 +454,11 @@ impl VideoReader {
             return self.frame_at(t);
         }
         self.advance_to(t)?;
+        // An interlaced frame is woven whole before it is made smaller;
+        // shrinking the fields together would blur the combing in.
+        if self.current.as_ref().is_some_and(|c| c.raw.is_interlaced()) {
+            return self.frame_at(t);
+        }
         let mut current = self.current.take().expect("advance_to leaves a frame");
         let found = current.shrunk.iter().position(|(s, _)| *s == size);
         let index = match found {
@@ -489,7 +501,7 @@ impl VideoReader {
             .as_ref()
             .expect("advance_to leaves a frame")
             .raw;
-        if !matches!(raw.format(), Pixel::YUV420P | Pixel::YUVJ420P) {
+        if !matches!(raw.format(), Pixel::YUV420P | Pixel::YUVJ420P) || raw.is_interlaced() {
             return Ok(None);
         }
         let mut tags = self.tags;
@@ -567,7 +579,16 @@ impl VideoReader {
                     if !self.inner.next_frame(&mut self.decoder, &mut raw)? {
                         break;
                     }
-                    let pts = self.inner.secs(&raw);
+                    // A frame the decoder could not time, or timed before
+                    // the one shown last (a program stream's reference
+                    // frames carry only a decode time), follows it.
+                    let own = raw.timestamp().or(raw.pts()).map(|_| self.inner.secs(&raw));
+                    let pts = match (own, self.position) {
+                        (Some(t), Some(p)) if t <= p => p + self.frame_duration,
+                        (Some(t), _) => t,
+                        (None, Some(p)) => p + self.frame_duration,
+                        (None, None) => Ratio::ZERO,
+                    };
                     self.position = Some(pts);
                     (pts, raw)
                 }
@@ -623,10 +644,18 @@ impl VideoReader {
 
     fn convert(&mut self, raw: &frame::Video, into: &mut Image) -> Result<(), MediaError> {
         if self.rotation == 0 {
-            return self.convert_unrotated(raw, into);
+            self.convert_unrotated(raw, into)?;
+            if raw.is_interlaced() {
+                crate::convert::deinterlace(into, raw.is_top_first());
+            }
+            return Ok(());
         }
         let mut flat = self.unrotated.take().unwrap_or_default();
         self.convert_unrotated(raw, &mut flat)?;
+        // Fields are lines of the picture as coded, before it is turned.
+        if raw.is_interlaced() {
+            crate::convert::deinterlace(&mut flat, raw.is_top_first());
+        }
         rotate_into(&flat, self.rotation, into);
         self.unrotated = Some(flat);
         Ok(())
@@ -1084,4 +1113,13 @@ fn copy_samples(frame: &frame::Audio, pos: &mut i64, out: &mut [f32]) {
         }
     }
     *pos += n as i64;
+}
+
+/// `video` or `audio`, for messages.
+fn kind_name(kind: Type) -> &'static str {
+    if kind == Type::Video {
+        "video"
+    } else {
+        "audio"
+    }
 }

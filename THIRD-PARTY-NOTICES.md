@@ -26,7 +26,8 @@ libraries can be modified and the program relinked as the LGPL provides.
 
 Rust crates used by Geneva are listed with their licenses by
 `cargo license` and are all MIT or Apache-2.0 licensed unless noted in
-their manifests.
+their manifests. One is built from a copy in `vendor/`: harfrust 0.5.2
+(MIT), with one function changed, described in `vendor/README.md`.
 
 ## Not included: x264
 

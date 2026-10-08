@@ -1,5 +1,7 @@
 [workspace]
 resolver = "2"
+# Vendored crates are patched in, not built as workspace members.
+exclude = ["vendor"]
 members = [
     "crates/geneva-anim",
     "crates/geneva-audio",
@@ -89,3 +91,8 @@ codegen-units = 1
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# harfrust 0.5.2 (cosmic-text's shaper) with one fix, until cosmic-text
+# moves to a harfrust that has it: see vendor/README.md.
+[patch.crates-io]
+harfrust = { path = "vendor/harfrust" }

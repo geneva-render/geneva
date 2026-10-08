@@ -1526,6 +1526,39 @@ mod face_tests {
         assert_eq!(xs, glyphs.iter().map(|(_, x)| *x).collect::<Vec<_>>());
     }
 
+    /// A Bengali consonant followed by hasant and ra takes the font's
+    /// ra-phala, with no hasant drawn, as HarfBuzz shapes it: the glyphs
+    /// are HarfBuzz's for the same subset of Noto Sans Bengali. Its
+    /// below-base forms are format-3 context rules, which the vendored
+    /// harfrust tests rightly (vendor/README.md).
+    #[test]
+    fn a_bengali_ra_phala_is_formed_as_harfbuzz_forms_it() {
+        let mut engine = TextEngine::new();
+        let data = std::fs::read("../../tests/golden/fonts/NotoSansBengali-Subset.ttf")
+            .expect("the golden root ships it");
+        let family = engine.add_font("bengali", data).expect("a usable face");
+        let shaped = |engine: &mut TextEngine, text: &str| {
+            let mut buffer = Buffer::new(&mut engine.fonts, Metrics::new(72.0, 90.0));
+            buffer.set_size(Some(1000.0), None);
+            let attrs = Attrs::new()
+                .family(Family::Name(&family))
+                .weight(Weight(600));
+            buffer.set_text(text, &attrs, Shaping::Advanced, None);
+            buffer.shape_until_scroll(&mut engine.fonts, true);
+            let run = buffer.layout_runs().next().expect("one line");
+            run.glyphs.iter().map(|g| g.glyph_id).collect::<Vec<u16>>()
+        };
+        // Glyph 11 is the hasant drawn on its own.
+        for (text, harfbuzz) in [
+            ("ক্র", vec![17, 71, 67]),
+            ("ন্ত্র", vec![31, 60]),
+            ("স্ক্র", vec![39, 60, 67, 71]),
+            ("ন্দ্র", vec![74, 27, 69, 47]),
+        ] {
+            assert_eq!(shaped(&mut engine, text), harfbuzz, "{text}");
+        }
+    }
+
     /// A WOFF2 file given a family by `@font-face` answers to that family,
     /// at the weight the rule gives, whatever the file declares.
     #[test]
