@@ -81,7 +81,33 @@ impl StreamDecoder {
             0 => geneva_render::limits::threads_set().map_or(0, |n| n as u32),
             n => n,
         };
-        ffi::set_threads(&mut ctx, threads);
+        let slices = ffmpeg_next::decoder::find(id).is_some_and(|c| {
+            c.capabilities()
+                .contains(codec::Capabilities::SLICE_THREADS)
+        });
+        if kind == Type::Video && slices && ffi::is_intra_only(id) {
+            // Frames that stand alone split into slices as well as frame
+            // threads would split them, without a frame in flight a thread.
+            ffi::set_slice_threads(&mut ctx, threads);
+        } else if kind == Type::Video {
+            // Frame threading holds about two and a half frames a thread
+            // (measured: H.264, MPEG-4 part 2); the decoders take a quarter
+            // of a memory budget between them.
+            let (width, height, format) = ffi::video_shape(&ctx);
+            let per_thread = frame_bytes(width, height, format) * 5 / 2;
+            let threads = match geneva_render::limits::threads_within_budget(per_thread, 0.25) {
+                Some(fit)
+                    if fit < geneva_render::limits::threads()
+                        && (threads == 0 || fit < threads as usize) =>
+                {
+                    fit as u32
+                }
+                _ => threads,
+            };
+            ffi::set_threads(&mut ctx, threads);
+        } else {
+            ffi::set_threads(&mut ctx, threads);
+        }
         Ok((
             Self {
                 path: path.to_owned(),
@@ -136,7 +162,7 @@ impl StreamDecoder {
             let mut fed = false;
             let mut packet = Packet::empty();
             loop {
-                match packet.read(&mut self.ictx) {
+                match super::read_packet(&mut packet, &mut self.ictx) {
                     Ok(()) => {}
                     // A demuxer may have nothing ready yet without being at
                     // the end; only the end of the file ends the stream.
@@ -1116,6 +1142,27 @@ fn copy_samples(frame: &frame::Audio, pos: &mut i64, out: &mut [f32]) {
 }
 
 /// `video` or `audio`, for messages.
+/// Bytes of one decoded picture of `width` by `height` in `format`, with
+/// samples deeper than 8 bits in two bytes; four a pixel when the format
+/// is not known yet.
+fn frame_bytes(width: u32, height: u32, format: Pixel) -> u64 {
+    let pixels = u64::from(width.max(1)) * u64::from(height.max(1));
+    let Some(d) = format.descriptor() else {
+        return pixels * 4;
+    };
+    let components = f64::from(d.nb_components());
+    let chroma = 1.0 / f64::from(1u32 << (d.log2_chroma_w() + d.log2_chroma_h()));
+    // Samples a pixel: luma, chroma at its subsampling, alpha.
+    let samples = if components >= 3.0 {
+        1.0 + 2.0 * chroma + (components - 3.0)
+    } else {
+        components.max(1.0)
+    };
+    let depth = f64::from(d.bits_per_pixel().max(8)) / samples;
+    let bytes = samples * if depth > 8.0 { 2.0 } else { 1.0 };
+    (pixels as f64 * bytes).ceil() as u64
+}
+
 fn kind_name(kind: Type) -> &'static str {
     if kind == Type::Video {
         "video"

@@ -1,0 +1,3 @@
+disallowed-methods = [
+    { path = "ffmpeg_next::codec::packet::Packet::read", reason = "leaks the packet's previous buffer; use codecs::read_packet" },
+]

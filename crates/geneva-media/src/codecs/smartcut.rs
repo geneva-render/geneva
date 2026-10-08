@@ -461,7 +461,7 @@ fn index_source(
     // with, shown first.
     let mut packet = Packet::empty();
     let mut first_pts = None;
-    while packet.read(&mut ictx).is_ok() {
+    while super::read_packet(&mut packet, &mut ictx).is_ok() {
         if packet.stream() == stream_index {
             first_pts = packet.pts().or(packet.dts());
             break;
@@ -478,7 +478,7 @@ fn index_source(
     let mut packets: Vec<IndexedPacket> = Vec::new();
     let mut base: Option<usize> = None;
     let mut reorder = 0i64;
-    while packet.read(&mut ictx).is_ok() {
+    while super::read_packet(&mut packet, &mut ictx).is_ok() {
         if packet.stream() != stream_index {
             continue;
         }
@@ -561,7 +561,7 @@ pub fn read_copied(
     .map_err(|e| codec_error(format!("{}: seeking", path.display()), e))?;
     let mut packet = Packet::empty();
     let mut index = None;
-    while packet.read(&mut ictx).is_ok() {
+    while super::read_packet(&mut packet, &mut ictx).is_ok() {
         if packet.stream() != source.stream_index {
             continue;
         }
@@ -666,7 +666,7 @@ pub fn read_copied_audio(
     }
     let mut packet = Packet::empty();
     let mut placing = false;
-    while packet.read(&mut ictx).is_ok() {
+    while super::read_packet(&mut packet, &mut ictx).is_ok() {
         if packet.stream() != index {
             continue;
         }

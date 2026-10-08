@@ -294,6 +294,14 @@ the source rather than treating a set field as a change.
 - `AssetSource` resolves `assets.<id>.src` under one root; validation
   has already rejected absolute paths and `..`. One decoder is kept open
   per asset so sequential frames decode once.
+- Decoders: a codec whose frames stand alone (ProRes, DNxHD, DV) is
+  threaded by slice, with no frame in flight per thread; others by
+  frame, on as many threads as a quarter of `--memory-budget` holds at
+  two and a half pictures a thread. Software encoders take another
+  quarter at twelve pictures a thread (x264, measured). Every packet is
+  read through `codecs::read_packet`, which releases the one before;
+  `Packet::read` is disallowed in `clippy.toml`, since the demuxer
+  overwrote a packet without releasing it.
 - Older files: a rate that is missing or absurd (ASF declares its
   millisecond time base, so 1000 fps) is measured from the first 120
   packets' timestamps and snapped to a standard rate within 1%. MPEG

@@ -321,7 +321,7 @@ pub(super) fn seek_before(
     // seek below.
     let mut packet = ffmpeg_next::Packet::empty();
     let mut landed = None;
-    while packet.read(ictx).is_ok() {
+    while super::read_packet(&mut packet, ictx).is_ok() {
         if packet.stream() == stream_index {
             landed = packet.pts().or(packet.dts());
             break;

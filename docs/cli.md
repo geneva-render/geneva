@@ -10,7 +10,7 @@ it instead).
 | --- | --- |
 | `--format human\|json` | `json` prints one JSON document on stdout. In `human` mode diagnostics go to stderr. |
 | `--threads N` | Threads every pool may use: decoding, scaling, rendering, and the encoder's own. Default: as many as the operating system lets this process use, which on Linux follows a cgroup CPU quota. Also `GENEVA_THREADS`. Stages overlap, so a run can use a little more than `N` cores at moments. |
-| `--memory-budget SIZE` | `3G`, `512M`: what the caches and the frame queue between renderer and encoder may hold, each taking a share. A target, not a limit on the process: decoders and the encoder come on top. Also `GENEVA_MEMORY_BUDGET`. |
+| `--memory-budget SIZE` | `3G`, `512M`: what the caches, the frame queue between renderer and encoder, the decoders' frames in flight and the encoder's threads may hold, each taking a share: a decoder that threads by frame, and a software encoder, run on fewer threads where a quarter of the budget would not hold theirs. A target, not a hard limit on the process. Also `GENEVA_MEMORY_BUDGET`. |
 | Times | `1.5`, `1.5s`, `1500ms`, `45f` (frames at the source's rate), `00:00:01.5`. See [Times](timeline.md#times). |
 
 | Exit code | Meaning |

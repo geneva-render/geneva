@@ -1054,7 +1054,7 @@ fn copy_track(
             let mut packet = match queue.pop_front() {
                 Some(p) => p,
                 None => {
-                    if packet.read(&mut ictx).is_err() {
+                    if super::read_packet(&mut packet, &mut ictx).is_err() {
                         break;
                     }
                     if packet.stream() != in_idx {
@@ -1196,7 +1196,7 @@ fn decode_order_times(
     let mut pts_list = Vec::new();
     let mut started = false;
     let mut packet = Packet::empty();
-    while packet.read(ictx).is_ok() {
+    while super::read_packet(&mut packet, ictx).is_ok() {
         if packet.stream() != in_idx {
             continue;
         }

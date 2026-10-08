@@ -240,7 +240,7 @@ pub fn read_subtitles(path: &Path, nth: usize) -> Result<Vec<Cue>, MediaError> {
     };
     let mut cues: Vec<Cue> = Vec::new();
     let mut packet = Packet::empty();
-    while packet.read(&mut ictx).is_ok() {
+    while super::read_packet(&mut packet, &mut ictx).is_ok() {
         if packet.stream() != index {
             continue;
         }

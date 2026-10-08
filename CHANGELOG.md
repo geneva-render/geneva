@@ -29,6 +29,21 @@ versions changed the format freely.
 
 ### Fixed
 
+- **Memory grew with the source file.** Every packet a decoder read and
+  skipped (another stream's) leaked: the demuxer overwrites the packet
+  it is given without releasing the old one. The audio reader skips all
+  the video, so it leaked the whole video stream: 11 GB for a 4K ProRes
+  file, several GB for 1080p ProRes, MPEG-4 part 2 at high quality or
+  4K 120 fps H.264. Reads now release the previous packet, and a lint
+  keeps it so.
+- **`--memory-budget` counts decoders and encoders.** Intra-only codecs
+  (ProRes, DNxHD, DV) decode by slice, which holds no frame per thread
+  and is as fast; other decoders and software encoders run on fewer
+  threads where a quarter of the budget would not hold theirs. At 32
+  threads: 4K ProRes 422 Proxy 5.6 GB to 2.6 GB and 4K 120 fps H.264 at
+  60 fps 5.0 to 3.1 GB, under 4.8G; 1080p ProRes 0.9 GB and 1080p MPEG-4
+  1.1 GB, under 2.4G. A 2-minute 720p ProRes file holds 0.31 GB flat
+  where it climbed to 1.4 GB.
 - **Bengali ra-phala and ba-phala** (`ক্র`, `ন্ত্র`, `স্ক্র`, `ন্দ্র`
   in Noto Sans Bengali) were drawn as a visible hasant and a full
   letter. The shaper (harfrust 0.5.2, under cosmic-text) never matched

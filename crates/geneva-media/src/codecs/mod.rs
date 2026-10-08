@@ -56,6 +56,20 @@ fn init() {
     });
 }
 
+/// Reads the input's next packet into `packet`, releasing what it held
+/// first. The demuxer clears the packet it is given without releasing
+/// its buffer (libavcodec 61), so a packet reused across reads leaked
+/// every one it had held: a reader of one stream leaked all the others,
+/// as much as the file for an audio reader of a ProRes file.
+#[allow(clippy::disallowed_methods)]
+fn read_packet(
+    packet: &mut ffmpeg_next::Packet,
+    ictx: &mut ffmpeg_next::format::context::Input,
+) -> Result<(), ffmpeg_next::Error> {
+    *packet = ffmpeg_next::Packet::empty();
+    packet.read(ictx)
+}
+
 fn open_error(path: &Path, e: ffmpeg_next::Error) -> MediaError {
     MediaError::Open {
         path: path.to_owned(),

@@ -57,6 +57,28 @@ pub fn cache_budget(default: usize, share: f64) -> usize {
     })
 }
 
+/// Threads for a pool each of whose threads holds about `per_thread`
+/// bytes (a decoder's frames in flight, an encoder's frame threads),
+/// kept within `share` of the memory budget: the thread count, or fewer
+/// where the share would not hold them, at least one. `None` with no
+/// budget, where the pool keeps its own count.
+#[must_use]
+pub fn threads_within_budget(per_thread: u64, share: f64) -> Option<usize> {
+    Some(threads_fitting(
+        memory_budget()?,
+        per_thread,
+        share,
+        threads(),
+    ))
+}
+
+/// Of `threads`, how many fit in `share` of `budget` at `per_thread`
+/// bytes each; at least one.
+fn threads_fitting(budget: u64, per_thread: u64, share: f64, threads: usize) -> usize {
+    let fit = ((budget as f64 * share) / per_thread.max(1) as f64) as usize;
+    threads.min(fit.max(1))
+}
+
 /// The most memory this process has held at once, in bytes, where the
 /// operating system says: Linux (`VmHWM`) only, for now.
 #[must_use]
@@ -98,7 +120,7 @@ pub fn parse_size(text: &str) -> Result<u64, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_size;
+    use super::{parse_size, threads_fitting};
 
     #[test]
     fn sizes_read_as_people_write_them() {
@@ -108,5 +130,14 @@ mod tests {
         assert_eq!(parse_size("1000"), Ok(1000));
         assert!(parse_size("lots").is_err());
         assert!(parse_size("0").is_err());
+    }
+
+    #[test]
+    fn a_budget_share_caps_the_threads_that_fit_in_it() {
+        // A quarter of 1 GiB holds two 100 MiB threads; never fewer than
+        // one, never more than there are.
+        assert_eq!(threads_fitting(1 << 30, 100 << 20, 0.25, 32), 2);
+        assert_eq!(threads_fitting(1 << 30, 1 << 40, 0.25, 32), 1);
+        assert_eq!(threads_fitting(1 << 30, 1 << 20, 0.25, 8), 8);
     }
 }
