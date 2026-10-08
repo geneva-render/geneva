@@ -322,6 +322,9 @@ pub struct Text {
     pub weight: u16,
     /// Italic.
     pub italic: bool,
+    /// `font-synthesis`: whether a bold, then an oblique, may be drawn
+    /// synthetically where the family has no such face.
+    pub synthesis: (bool, bool),
     /// Multiple of the font size; `None` for `normal`, the font's own
     /// spacing.
     pub line_height: Option<f64>,
@@ -506,6 +509,7 @@ impl Default for Text {
             size: ROOT_FONT_SIZE,
             weight: 400,
             italic: false,
+            synthesis: (true, true),
             line_height: None,
             letter_spacing: 0.0,
             align: TextAlign::Left,
@@ -1304,6 +1308,29 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
             };
         }
         "font-style" => c.text.italic = l == "italic" || l == "oblique",
+        "font-synthesis" => {
+            let words: Vec<&str> = l.split_whitespace().collect();
+            if words != ["none"]
+                && !words
+                    .iter()
+                    .all(|w| matches!(*w, "weight" | "style" | "small-caps" | "position"))
+            {
+                return unsupported(v, "none, or weight and/or style");
+            }
+            c.text.synthesis = (words.contains(&"weight"), words.contains(&"style"));
+        }
+        "font-synthesis-weight" | "font-synthesis-style" => {
+            let on = match l {
+                "auto" => true,
+                "none" => false,
+                _ => return unsupported(v, "auto or none"),
+            };
+            if property == "font-synthesis-weight" {
+                c.text.synthesis.0 = on;
+            } else {
+                c.text.synthesis.1 = on;
+            }
+        }
         "font" => font_shorthand(v, em, c)?,
         "line-height" => {
             c.text.line_height = if let Some(p) = percent(v) {

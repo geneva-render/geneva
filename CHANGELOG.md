@@ -27,6 +27,19 @@ versions changed the format freely.
   a verb that needs the stream stops with `its video stream (cinepak)
   cannot be decoded` rather than "has no video".
 
+- **Synthetic bold and oblique** (`font-synthesis`), as Chromium draws
+  them: `font: 700 40px Anton` with only Anton's 400 face is emboldened,
+  italic in a family with no italic face is slanted, and `font: italic
+  600 Inter` with italic faces at 400 and 500 is the 500 italic made
+  bold. Bold follows Chromium's rule for web fonts (600 or more asked of
+  a face below 600) and Skia's stroke (an "I" at 240 px is 7.5 px wider,
+  half on each side, as in Chromium); the oblique is Skia's quarter
+  shear. `font-synthesis: none` (and the `-weight`, `-style` longhands)
+  turns either off. Measured against Chromium on Anton 700, Inter italic
+  600 and Manrope italic: the difference is that of the same text with
+  no synthesis. Italic text gets room for glyphs that lean past their
+  advances, so the last letter is no longer cut off.
+
 ### Fixed
 
 - **Memory grew with the source file.** Every packet a decoder read and

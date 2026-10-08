@@ -1390,6 +1390,30 @@ pub struct TextStyle {
     )]
     #[schemars(schema_with = "crate::pixels::opt_px_schema")]
     pub letter_spacing: Option<f64>,
+    /// Markup's `font-synthesis`. Not part of the format: a text source
+    /// synthesises both, as a browser does by default.
+    #[serde(skip)]
+    pub synthesis: FontSynthesis,
+}
+
+/// What may be drawn synthetically where a family has no face for it,
+/// as CSS `font-synthesis`: bold from a lighter face, oblique from an
+/// upright one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FontSynthesis {
+    /// Synthetic bold.
+    pub weight: bool,
+    /// Synthetic oblique.
+    pub style: bool,
+}
+
+impl Default for FontSynthesis {
+    fn default() -> Self {
+        Self {
+            weight: true,
+            style: true,
+        }
+    }
 }
 
 /// Horizontal text alignment.

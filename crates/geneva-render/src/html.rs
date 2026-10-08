@@ -14,7 +14,7 @@ use geneva_html::style::{Extent, TextFill};
 use geneva_html::{Content, Group, Laid, Measure, Painted, Prepared, Text};
 use geneva_timeline::motion::{NodeMotion, Transform};
 use geneva_timeline::schema::{
-    BlendMode, Shadow, Shadows, Stroke, TextAlign, TextSource, TextStyle,
+    BlendMode, FontSynthesis, Shadow, Shadows, Stroke, TextAlign, TextSource, TextStyle,
 };
 use geneva_timeline::{Animated, FillTrack, OutlinePaint, ResolvedHtml, ResolvedText};
 use rayon::prelude::*;
@@ -113,6 +113,10 @@ fn text_style_of(style: &Text) -> TextStyle {
         color: Some(Animated::Constant(style.color.into())),
         fill: None,
         letter_spacing: Some(style.letter_spacing),
+        synthesis: FontSynthesis {
+            weight: style.synthesis.0,
+            style: style.synthesis.1,
+        },
     }
 }
 
@@ -2432,7 +2436,7 @@ fn paint_text(
         Some(runs) => engine.render_runs(source, runs, 0.0),
         None => engine.render(source, 0.0),
     };
-    let inset = crate::text::inset_for(&source);
+    let inset = crate::text::inset_for(&source, pieces.as_deref());
     // Where the glyphs sit in the run's box: aligned text that is
     // narrower than its box is shifted along it by a share of the slack.
     let shift = |drawn_width: f64| {

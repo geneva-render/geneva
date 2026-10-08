@@ -14,10 +14,13 @@ use cosmic_text::{
     Style, SwashCache, SwashContent, Wrap,
 };
 use geneva_color::{Color, LinearRgba};
-use geneva_timeline::schema::{TextAlign, TextStyle};
+use geneva_timeline::schema::{FontSynthesis, TextAlign, TextStyle};
 use geneva_timeline::{FillTrack, OutlinePaint, ResolvedText};
 use swash::scale::ScaleContext;
-use swash::zeno::{Command, Format, Mask as ZenoMask, Origin, Vector, Verb};
+use swash::scale::image::Image as SwashImage;
+use swash::zeno::{
+    Angle, Command, Format, Mask as ZenoMask, Origin, PathData as _, Transform, Vector, Verb,
+};
 
 use crate::assets::Image;
 use crate::fill::Fill;
@@ -41,7 +44,18 @@ pub struct TextEngine {
     /// The face a family, weight and style comes to, for fallback
     /// through a family list.
     faces: HashMap<(String, u16, bool), Option<cosmic_text::fontdb::ID>>,
+    /// Glyphs drawn synthetically bold or oblique, which the shaper's
+    /// own cache would draw plain.
+    synthetic: HashMap<cosmic_text::CacheKey, Option<SwashImage>>,
 }
+
+/// A glyph flag of geneva's own, beside cosmic-text's: drawn
+/// synthetically bold. cosmic-text carries it through layout untouched.
+const FAKE_BOLD: CacheKeyFlags = CacheKeyFlags::from_bits_retain(1 << 16);
+
+/// The shear of a synthetic oblique, as Skia draws one: a quarter of the
+/// height (about 14 degrees).
+const SKEW: f32 = 0.25;
 
 impl Default for TextEngine {
     fn default() -> Self {
@@ -76,7 +90,7 @@ pub fn declared_family(data: Vec<u8>) -> Option<String> {
 /// alone would have gone subtracts this, and one that lays text out
 /// ignores it: neither a stroke nor a shadow changes where text sits.
 #[must_use]
-pub fn inset_for(text: &ResolvedText) -> f64 {
+pub fn inset_for(text: &ResolvedText, runs: Option<&[(String, TextStyle, LinearRgba)]>) -> f64 {
     let outline =
         text.spec.outline.as_ref().map_or(0.0, |o| o.width.max(0.0)) * text.outline_paint.reach();
     // A shadow's reach is its furthest over the whole clip, so a shadow
@@ -85,7 +99,22 @@ pub fn inset_for(text: &ResolvedText) -> f64 {
     // image on the page to a pixel, and with a fractional room the two
     // roundings add up differently as the room changes (a markup shadow
     // that animates gives a new one each frame), so the glyphs jumped.
-    (outline + text.shadow.iter().fold(0.0f64, |m, s| m.max(s.reach))).ceil()
+    (outline + text.shadow.iter().fold(0.0f64, |m, s| m.max(s.reach)) + slant_room(text, runs))
+        .ceil()
+}
+
+/// Room for italic glyphs, which lean past the advances the image is
+/// sized from: a synthetic oblique leans a quarter of the height, so the
+/// top of a last letter, or the tail of a first, would be cut off.
+fn slant_room(text: &ResolvedText, runs: Option<&[(String, TextStyle, LinearRgba)]>) -> f64 {
+    let spec = &text.spec;
+    let styles = std::iter::once(&spec.style)
+        .chain(spec.highlight.as_ref())
+        .chain(runs.into_iter().flatten().map(|(_, style, _)| style));
+    styles
+        .filter(|s| s.italic.unwrap_or(spec.style.italic.unwrap_or(false)))
+        .map(|s| s.size.or(spec.style.size).unwrap_or(DEFAULT_SIZE) * f64::from(SKEW) * 1.2)
+        .fold(0.0, f64::max)
 }
 
 /// Drawn with when the machine has no fonts at all (a bare container, a
@@ -113,6 +142,7 @@ impl TextEngine {
             asset_faces: HashMap::new(),
             asset_ids: HashSet::new(),
             faces: HashMap::new(),
+            synthetic: HashMap::new(),
         }
     }
 
@@ -375,10 +405,11 @@ impl TextEngine {
                 if family > 0 {
                     let name = style.families[family].clone();
                     let (weight, italic) = style.asked;
-                    let (weight, italic) = self.available_face(Some(&name), weight, italic);
+                    let got = self.available_face(Some(&name), weight, italic);
+                    (style.fake_bold, style.fake_italic) =
+                        self.synthesized(&name, style.asked, got, style.synthesis);
                     style.family = Some(name);
-                    style.weight = weight;
-                    style.italic = italic;
+                    (style.weight, style.italic) = got;
                 }
                 styles.push(style);
                 origin.push(origin[index]);
@@ -465,7 +496,7 @@ impl TextEngine {
             .collect();
         // Room for strokes and shadows around the text, worked out in one
         // place so a caller can subtract exactly what was added.
-        let extra = inset_for(text) as f32;
+        let extra = inset_for(text, runs) as f32;
         let inset = padding + extra;
         let text_w = (max_x - min_x).max(0.0);
         let width = (text_w + 2.0 * inset).ceil().max(1.0) as u32;
@@ -645,6 +676,47 @@ impl TextEngine {
                 .or_else(|| nearest_above(weight))
         };
         (picked.unwrap_or(weight), italic)
+    }
+
+    /// Whether text asked for at `asked` (weight, italic) and drawn in
+    /// `family`'s face at `got` is drawn synthetically bold, and oblique,
+    /// as Chromium decides. Bold: for a face the document ships (a font
+    /// asset or `@font-face`), when 600 or more is asked of a face that
+    /// stops below 600; for a face of the machine, when more than 200
+    /// above the face is asked. A variable face stops at the top of its
+    /// weight axis. Oblique: when italic is asked of an upright face.
+    fn synthesized(
+        &mut self,
+        family: &str,
+        asked: (u16, bool),
+        got: (u16, bool),
+        allowed: FontSynthesis,
+    ) -> (bool, bool) {
+        let Some(id) = self.face_of(family, got.0, got.1) else {
+            return (false, false);
+        };
+        let italic = allowed.style && asked.1 && !got.1;
+        if !allowed.weight || asked.0 < 600 {
+            return (false, italic);
+        }
+        let wght = swash::Tag::from_be_bytes(*b"wght");
+        let heaviest = self
+            .fonts
+            .get_font(id, Weight(got.0))
+            .and_then(|font| {
+                font.as_swash()
+                    .variations()
+                    .find_by_tag(wght)
+                    .map(|axis| axis.max_value() as u16)
+            })
+            .unwrap_or(got.0)
+            .max(got.0);
+        let bold = if self.asset_ids.contains(&id) {
+            heaviest < 600
+        } else {
+            asked.0 > heaviest + 200
+        };
+        (bold, italic)
     }
 
     /// The face the database gives a family at a weight and style, or
@@ -836,7 +908,7 @@ impl TextEngine {
     /// block sets them, so a bold font file renders bold without a separate
     /// `weight`.
     /// `color` is sampled by the caller, since it can move over the clip.
-    fn style(&self, s: &TextStyle, parent: Option<&TextStyle>, color: LinearRgba) -> Resolved {
+    fn style(&mut self, s: &TextStyle, parent: Option<&TextStyle>, color: LinearRgba) -> Resolved {
         let pick = |f: &dyn Fn(&TextStyle) -> Option<f64>| f(s).or_else(|| parent.and_then(f));
         let font = s
             .font
@@ -870,10 +942,17 @@ impl TextEngine {
             .unwrap_or(false);
         let asked = (weight, italic);
         let (weight, italic) = self.available_face(family.as_deref(), weight, italic);
+        let synthesis = s.synthesis;
+        let (fake_bold, fake_italic) = family.as_deref().map_or((false, false), |f| {
+            self.synthesized(f, asked, (weight, italic), synthesis)
+        });
         Resolved {
             family,
             families,
             asked,
+            synthesis,
+            fake_bold,
+            fake_italic,
             size: pick(&|s| s.size).unwrap_or(DEFAULT_SIZE).max(1.0) as f32,
             weight,
             italic,
@@ -882,11 +961,126 @@ impl TextEngine {
         }
     }
 
+    /// A glyph's coverage (or colour bitmap): the shaper's cache draws it,
+    /// or, synthetically bold or oblique, it is drawn here, since the
+    /// shaper's cache does not embolden and slants by another angle.
+    fn glyph_image(&mut self, key: cosmic_text::CacheKey) -> Option<&SwashImage> {
+        if !key.flags.intersects(FAKE_BOLD | CacheKeyFlags::FAKE_ITALIC) {
+            return self.cache.get_image(&mut self.fonts, key).as_ref();
+        }
+        if !self.synthetic.contains_key(&key) {
+            let drawn = self.draw_synthetic(key);
+            self.synthetic.insert(key, drawn);
+        }
+        self.synthetic.get(&key).and_then(Option::as_ref)
+    }
+
+    /// Draws a glyph emboldened and slanted as its key's flags ask, as
+    /// Skia does: the outline sheared, then stroked (mitred, limit 4) at
+    /// the bold width and the stroke laid over the fill. A glyph with no
+    /// outline (a bitmap) is drawn plain.
+    fn draw_synthetic(&mut self, key: cosmic_text::CacheKey) -> Option<SwashImage> {
+        let size = f32::from_bits(key.font_size_bits);
+        let Some(mut outline) = self.outline(key.font_id, key.font_weight, size, key.glyph_id)
+        else {
+            return self.cache.get_image(&mut self.fonts, key).clone();
+        };
+        if key.flags.contains(CacheKeyFlags::FAKE_ITALIC) {
+            outline.transform(&oblique());
+        }
+        let offset = Vector::new(key.x_bin.as_float(), -key.y_bin.as_float());
+        let render = |commands: &[Command]| {
+            ZenoMask::new(commands)
+                .format(Format::Alpha)
+                .origin(Origin::TopLeft)
+                .offset(offset)
+                .render_offset(offset)
+                .render()
+        };
+        let flip = |p: swash::zeno::Point| swash::zeno::Point::new(p.x, -p.y);
+        let filled: Vec<Command> = outline
+            .path()
+            .commands()
+            .map(|c| match c {
+                Command::MoveTo(p) => Command::MoveTo(flip(p)),
+                Command::LineTo(p) => Command::LineTo(flip(p)),
+                Command::QuadTo(a, b) => Command::QuadTo(flip(a), flip(b)),
+                Command::CurveTo(a, b, c) => Command::CurveTo(flip(a), flip(b), flip(c)),
+                Command::Close => Command::Close,
+            })
+            .collect();
+        let mut layers = vec![render(&filled)];
+        if key.flags.contains(FAKE_BOLD) {
+            let width = f64::from(bold_extra(size));
+            layers.push(render(&stroke_outline(
+                outline.points(),
+                outline.verbs(),
+                width,
+            )));
+        }
+        // Coverage of the layers together, the most of any at each pixel,
+        // over the box they all fit in.
+        let (left, top, right, bottom) = layers.iter().fold(
+            (i32::MAX, i32::MAX, i32::MIN, i32::MIN),
+            |(l, t, r, b), (_, p)| {
+                (
+                    l.min(p.left),
+                    t.min(p.top),
+                    r.max(p.left + p.width as i32),
+                    b.max(p.top + p.height as i32),
+                )
+            },
+        );
+        let (width, height) = ((right - left).max(0) as u32, (bottom - top).max(0) as u32);
+        let mut data = vec![0u8; width as usize * height as usize];
+        for (layer, p) in &layers {
+            for row in 0..p.height as i32 {
+                for col in 0..p.width as i32 {
+                    let v = layer[(row * p.width as i32 + col) as usize];
+                    let at = ((p.top + row - top) * width as i32 + (p.left + col - left)) as usize;
+                    data[at] = data[at].max(v);
+                }
+            }
+        }
+        let mut image = SwashImage::new();
+        image.content = SwashContent::Mask;
+        // The box in the shaper's terms: `top` up from the baseline.
+        image.placement = swash::zeno::Placement {
+            left,
+            top: -top,
+            width,
+            height,
+        };
+        image.data = data;
+        Some(image)
+    }
+
+    /// A glyph's outline at a size, at the weight on a variable face's
+    /// weight axis; y runs up from the baseline.
+    fn outline(
+        &mut self,
+        id: cosmic_text::fontdb::ID,
+        weight: Weight,
+        size: f32,
+        glyph: u16,
+    ) -> Option<swash::scale::outline::Outline> {
+        let font = self.fonts.get_font(id, weight)?;
+        let swash_font = font.as_swash();
+        let mut builder = self.scale.builder(swash_font).size(size).hint(false);
+        let wght = swash::Tag::from_be_bytes(*b"wght");
+        if let Some(axis) = swash_font.variations().find_by_tag(wght) {
+            let value = f32::from(weight.0).clamp(axis.min_value(), axis.max_value());
+            builder = builder
+                .normalized_coords(swash_font.variations().normalized_coords([(wght, value)]));
+        }
+        builder.build().scale_outline(glyph)
+    }
+
     /// Draws a glyph's filled coverage (or color bitmap) into the image,
     /// in its colour or, with a `fill`, the gradient's colour under each
     /// pixel.
     fn fill_into(&mut self, image: &mut Image, g: &PlacedGlyph, fill: Option<&Fill>) {
-        let Some(swash_image) = self.cache.get_image(&mut self.fonts, g.cache_key).as_ref() else {
+        let Some(swash_image) = self.glyph_image(g.cache_key) else {
             return;
         };
         let left = g.x + swash_image.placement.left;
@@ -938,7 +1132,7 @@ impl TextEngine {
 
     /// Adds a glyph's filled coverage to a mask, offset by `(dx, dy)`.
     fn fill_mask_into(&mut self, mask: &mut Mask, g: &PlacedGlyph, dx: f32, dy: f32) {
-        let Some(swash_image) = self.cache.get_image(&mut self.fonts, g.cache_key).as_ref() else {
+        let Some(swash_image) = self.glyph_image(g.cache_key) else {
             return;
         };
         if swash_image.content != SwashContent::Mask {
@@ -965,22 +1159,18 @@ impl TextEngine {
     /// to a point. The stroke is built with kurbo, whose joins follow that
     /// rule; zeno's own stroker bevels every corner under 90 degrees.
     fn stroke_into(&mut self, mask: &mut Mask, g: &PlacedGlyph, width: f32, dx: f32, dy: f32) {
-        let Some(font) = self.fonts.get_font(g.font_id, g.weight) else {
+        let Some(mut outline) = self.outline(g.font_id, g.weight, g.font_size, g.glyph_id) else {
             return;
         };
-        let swash_font = font.as_swash();
-        let mut builder = self.scale.builder(swash_font).size(g.font_size).hint(false);
-        // A variable font draws its fill at the weight asked for; the
-        // stroke has to follow the same outline.
-        let wght = swash::Tag::from_be_bytes(*b"wght");
-        if let Some(axis) = swash_font.variations().find_by_tag(wght) {
-            let value = f32::from(g.weight.0).clamp(axis.min_value(), axis.max_value());
-            builder = builder
-                .normalized_coords(swash_font.variations().normalized_coords([(wght, value)]));
+        // The stroke follows the glyph as filled: sheared for a synthetic
+        // oblique, and out by half the bold width for a synthetic bold.
+        if g.cache_key.flags.contains(CacheKeyFlags::FAKE_ITALIC) {
+            outline.transform(&oblique());
         }
-        let mut scaler = builder.build();
-        let Some(outline) = scaler.scale_outline(g.glyph_id) else {
-            return;
+        let width = if g.cache_key.flags.contains(FAKE_BOLD) {
+            width + bold_extra(g.font_size) / 2.0
+        } else {
+            width
         };
         let stroked = stroke_outline(outline.points(), outline.verbs(), f64::from(width) * 2.0);
         // The outline is y-up about the baseline; the path comes back
@@ -1074,6 +1264,11 @@ struct Resolved {
     /// them to the first family's faces: a fallback family snaps them
     /// to its own.
     asked: (u16, bool),
+    /// What may be synthesised, and what is: bold where the face is
+    /// lighter, oblique where it is upright.
+    synthesis: FontSynthesis,
+    fake_bold: bool,
+    fake_italic: bool,
     size: f32,
     weight: u16,
     italic: bool,
@@ -1161,6 +1356,26 @@ fn follows_neighbour(ch: char) -> bool {
         || ('\u{fe00}'..='\u{fe0f}').contains(&ch)
 }
 
+/// The width of the stroke that makes a synthetic bold, half of it out
+/// from each edge: Skia's, a 24th of the size up to 9 px, a 32nd from
+/// 36 px, in a line between (Chromium measured at 240 px: 7.5 px wider).
+fn bold_extra(size: f32) -> f32 {
+    let share = if size <= 9.0 {
+        1.0 / 24.0
+    } else if size >= 36.0 {
+        1.0 / 32.0
+    } else {
+        let t = (size - 9.0) / 27.0;
+        1.0 / 24.0 + t * (1.0 / 32.0 - 1.0 / 24.0)
+    };
+    size * share
+}
+
+/// The shear of a synthetic oblique, on an outline whose y runs up.
+fn oblique() -> Transform {
+    Transform::skew(Angle::from_radians(SKEW.atan()), Angle::from_radians(0.0))
+}
+
 fn attrs_for(style: &Resolved, metadata: usize) -> Attrs<'_> {
     let family = match &style.family {
         Some(name) => family_of(name),
@@ -1175,7 +1390,19 @@ fn attrs_for(style: &Resolved, metadata: usize) -> Attrs<'_> {
             Style::Normal
         })
         .metadata(metadata)
-        .cache_key_flags(CacheKeyFlags::DISABLE_HINTING);
+        .cache_key_flags(
+            CacheKeyFlags::DISABLE_HINTING
+                | if style.fake_bold {
+                    FAKE_BOLD
+                } else {
+                    CacheKeyFlags::empty()
+                }
+                | if style.fake_italic {
+                    CacheKeyFlags::FAKE_ITALIC
+                } else {
+                    CacheKeyFlags::empty()
+                },
+        );
     // cosmic-text adds this to an advance it has already divided by the
     // font's units per em, so the value it wants is a share of the em,
     // not pixels. Every caller here speaks pixels.
@@ -1343,6 +1570,82 @@ mod face_tests {
             std::fs::read(format!("{root}/LiberationSans-Bold.ttf"))
                 .expect("the golden root ships it"),
         )
+    }
+
+    /// Chromium's rule for a face the document ships: bold is drawn when
+    /// 600 or more is asked of a face below 600, oblique when italic is
+    /// asked of a family with no italic, neither under `font-synthesis:
+    /// none` or once the family has the face.
+    #[test]
+    fn a_face_the_family_lacks_is_synthesised_as_chromium_does() {
+        let mut engine = TextEngine::new();
+        let (regular, bold) = liberation();
+        engine.add_font("sans", regular).expect("a usable face");
+        let both = FontSynthesis::default();
+        let neither = FontSynthesis {
+            weight: false,
+            style: false,
+        };
+        let drawn = |e: &mut TextEngine, weight: u16, italic: bool, synthesis| {
+            let style = TextStyle {
+                font: Some("sans".to_owned()),
+                weight: Some(weight),
+                italic: Some(italic),
+                synthesis,
+                ..TextStyle::default()
+            };
+            let r = e.style(&style, None, LinearRgba::TRANSPARENT);
+            (r.fake_bold, r.fake_italic)
+        };
+        assert_eq!(drawn(&mut engine, 600, false, both), (true, false));
+        assert_eq!(drawn(&mut engine, 500, false, both), (false, false));
+        assert_eq!(drawn(&mut engine, 400, true, both), (false, true));
+        assert_eq!(drawn(&mut engine, 700, true, both), (true, true));
+        assert_eq!(drawn(&mut engine, 700, true, neither), (false, false));
+        engine.add_font("sans-bold", bold).expect("a usable face");
+        assert_eq!(drawn(&mut engine, 700, false, both), (false, false));
+    }
+
+    /// A synthetic bold is the glyph stroked as Skia strokes it, half the
+    /// width out from each edge: Chromium draws Anton's "I" at 240 px
+    /// 7.5 px wider and taller, by the same on each side.
+    #[test]
+    fn a_synthetic_bold_grows_each_edge_by_half_the_bold_width() {
+        let mut engine = TextEngine::new();
+        let (regular, _) = liberation();
+        let family = engine.add_font("sans", regular).expect("a usable face");
+        let id = engine.face_of(&family, 400, false).expect("the face");
+        let glyph = engine
+            .fonts
+            .get_font(id, Weight(400))
+            .expect("opens")
+            .as_swash()
+            .charmap()
+            .map('I');
+        let mut edges = |flags: CacheKeyFlags| {
+            let (key, _, _) =
+                cosmic_text::CacheKey::new(id, glyph, 240.0, (0.0, 0.0), Weight(400), flags);
+            let image = engine.glyph_image(key).expect("drawn").clone();
+            let w = image.placement.width as usize;
+            let row = &image.data[(image.placement.height as usize / 2) * w..][..w];
+            let ink: f32 = row.iter().map(|v| f32::from(*v) / 255.0).sum();
+            let column: f32 = (0..image.placement.height as usize)
+                .map(|y| f32::from(image.data[y * w + w / 2]) / 255.0)
+                .sum();
+            (ink, column, image.placement.left)
+        };
+        let (plain_w, plain_h, _) = edges(CacheKeyFlags::DISABLE_HINTING);
+        let (bold_w, bold_h, _) = edges(CacheKeyFlags::DISABLE_HINTING | FAKE_BOLD);
+        assert!(
+            (bold_w - plain_w - 7.5).abs() < 0.2,
+            "{plain_w} -> {bold_w}"
+        );
+        assert!(
+            (bold_h - plain_h - 7.5).abs() < 0.2,
+            "{plain_h} -> {bold_h}"
+        );
+        assert!((bold_extra(240.0) - 7.5).abs() < 1e-4);
+        assert!((bold_extra(9.0) - 9.0 / 24.0).abs() < 1e-4);
     }
 
     /// A family shipped at 400 and 700 answers every weight with one of
