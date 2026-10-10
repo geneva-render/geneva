@@ -32,6 +32,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloc-no-stdlib"
+version = "2.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc7bb162ec39d46ab1ca8c77bf72e890535becd1751bb45f64c597edb4c8c6b3"
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -208,6 +214,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc0b364ead1874514c8c2855ab558056ebfeb775653e7ae45ff72f28f8f3166c"
 
 [[package]]
+name = "brotli-decompressor"
+version = "5.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a32acac15fe1967bc3986b2a6347dffc965602354ea6f450ad07e8bfd253583"
+dependencies = [
+ "alloc-no-stdlib",
+]
+
+[[package]]
 name = "bstr"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -255,6 +270,12 @@ name = "byteorder-lite"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f1fe948ff07f4bd06c30984e69f5b4899c516a3ef74f34df92a2df2ab535495"
+
+[[package]]
+name = "bytes"
+version = "1.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cc"
@@ -495,6 +516,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "euclid"
+version = "0.22.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1a05365e3b1c6d1650318537c7460c6923f1abdd272ad6842baa2b509957a06"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "fancy-regex"
 version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -631,7 +661,7 @@ dependencies = [
 
 [[package]]
 name = "geneva-anim"
-version = "1.1.0"
+version = "1.4.0"
 dependencies = [
  "schemars",
  "serde",
@@ -640,11 +670,11 @@ dependencies = [
 
 [[package]]
 name = "geneva-audio"
-version = "1.1.0"
+version = "1.4.0"
 
 [[package]]
 name = "geneva-cli"
-version = "1.1.0"
+version = "1.4.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -658,6 +688,7 @@ dependencies = [
  "geneva-timeline",
  "image",
  "predicates",
+ "rayon",
  "serde",
  "serde_json",
  "tempfile",
@@ -665,7 +696,7 @@ dependencies = [
 
 [[package]]
 name = "geneva-color"
-version = "1.1.0"
+version = "1.4.0"
 dependencies = [
  "geneva-anim",
  "schemars",
@@ -676,7 +707,7 @@ dependencies = [
 
 [[package]]
 name = "geneva-golden"
-version = "1.1.0"
+version = "1.4.0"
 dependencies = [
  "geneva-audio",
  "geneva-render",
@@ -689,7 +720,7 @@ dependencies = [
 
 [[package]]
 name = "geneva-gpu"
-version = "1.1.0"
+version = "1.4.0"
 dependencies = [
  "bytemuck",
  "geneva-color",
@@ -706,15 +737,16 @@ dependencies = [
 
 [[package]]
 name = "geneva-html"
-version = "1.1.0"
+version = "1.4.0"
 dependencies = [
  "geneva-color",
  "taffy",
+ "unicode-bidi",
 ]
 
 [[package]]
 name = "geneva-media"
-version = "1.1.0"
+version = "1.4.0"
 dependencies = [
  "ffmpeg-next",
  "geneva-anim",
@@ -734,26 +766,31 @@ dependencies = [
 
 [[package]]
 name = "geneva-media-link"
-version = "1.1.0"
+version = "1.4.0"
 
 [[package]]
 name = "geneva-render"
-version = "1.1.0"
+version = "1.4.0"
 dependencies = [
  "cosmic-text",
  "geneva-color",
  "geneva-html",
  "geneva-timeline",
  "image",
+ "kurbo",
  "rayon",
  "serde_json",
  "swash",
  "thiserror",
+ "unicode-bidi",
+ "unicode-general-category",
+ "unicode-linebreak",
+ "wuff",
 ]
 
 [[package]]
 name = "geneva-timeline"
-version = "1.1.0"
+version = "1.4.0"
 dependencies = [
  "geneva-anim",
  "geneva-color",
@@ -820,8 +857,6 @@ dependencies = [
 [[package]]
 name = "harfrust"
 version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9da2e5ae821f6e96664977bf974d6d6a2d6682f9ccee23e62ec1d134246845f9"
 dependencies = [
  "bitflags",
  "bytemuck",
@@ -971,6 +1006,18 @@ dependencies = [
  "num-traits",
  "serde_json",
  "zmij",
+]
+
+[[package]]
+name = "kurbo"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b60dfc32f652b926df6192e55525b16d186c69d47876c3ead4da5cc9f8450e2"
+dependencies = [
+ "arrayvec",
+ "euclid",
+ "polycool",
+ "smallvec",
 ]
 
 [[package]]
@@ -1394,6 +1441,15 @@ name = "pollster"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
+
+[[package]]
+name = "polycool"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50596ddc09eb5ad5f75cacd40209568e66df71baf86e1499a0e99c4cff12a5a6"
+dependencies = [
+ "arrayvec",
+]
 
 [[package]]
 name = "portable-atomic"
@@ -2396,6 +2452,17 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "wuff"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "200a7b806377b65f1ff9a985874332f15357c87e5dd7855f35f06dade95b8b3d"
+dependencies = [
+ "brotli-decompressor",
+ "bytes",
+ "flate2",
+]
 
 [[package]]
 name = "yazi"

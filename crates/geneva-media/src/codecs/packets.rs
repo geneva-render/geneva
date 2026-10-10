@@ -39,7 +39,7 @@ pub fn packet_map(path: &Path) -> Result<Option<PacketMap>, MediaError> {
         .len();
     let mut packets = Vec::new();
     let mut packet = ffmpeg_next::Packet::empty();
-    while packet.read(&mut ictx).is_ok() {
+    while super::read_packet(&mut packet, &mut ictx).is_ok() {
         let Ok(pos) = u64::try_from(packet.position()) else {
             // A packet the demuxer cannot place: the file cannot be split.
             return Ok(None);

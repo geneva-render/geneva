@@ -591,7 +591,7 @@ fn stream_copy_trims_at_keyframes_and_joins_compatible_sources() {
     let report = stream_copy(&plan, &out, &[], true).unwrap();
     // Keyframes every 12 frames at 25 fps: the cut moves back to 0.48 s.
     assert_eq!(report.segments[0].1, Ratio::new(12, 25));
-    assert!(!report.notes().is_empty());
+    assert!(!report.notes().is_empty(), "the moved cut is not reported");
     let info = probe(&out).unwrap();
     let v = info.video.unwrap();
     assert_eq!(v.codec, "h264");
@@ -727,7 +727,9 @@ fn overlays_laid_onto_direct_frames_match_the_compositor() {
     let before = planes.clone();
     let mut drawn = renderer.render_overlays(&comp, t).unwrap();
     assert_eq!(drawn.len(), 1, "one caption, one box");
-    let (overlay, rect) = drawn.pop().expect("caption shown");
+    let Some(geneva_render::Overlay::Picture(overlay, rect, false)) = drawn.pop() else {
+        panic!("the caption is a picture in linear light");
+    };
     assert!(rect[1] > 50 && rect[3] <= 108, "{rect:?}");
     blend_overlay(&mut planes, &overlay, rect, comp.color);
     let slow = frame_to_planes(
@@ -764,6 +766,127 @@ fn overlays_laid_onto_direct_frames_match_the_compositor() {
     );
     // The caption did land: something in the box differs from the plain frame.
     assert_ne!(fast, was);
+}
+
+#[test]
+fn markup_and_its_backdrop_on_direct_frames_match_the_compositor() {
+    // A translucent plate with a backdrop filter over the video: the
+    // direct path lays the markup on in sRGB-encoded values and filters
+    // the planes under the plate, and must come out as the compositor
+    // does, inside the plate as well as at its edges.
+    use geneva_media::convert::{PlaneFormat, frame_to_planes, lay_overlay};
+    use geneva_media::{DirectSource, MediaAssets};
+    use geneva_render::{CpuRenderer, Overlay, Renderer};
+
+    let root = clip().parent().unwrap().to_path_buf();
+    let text = r##"{
+      "geneva": "1.1",
+      "output": { "width": 192, "height": 108, "fps": 25, "duration": "2s" },
+      "assets": { "clip": { "src": "clip.mp4" } },
+      "layers": [
+        { "clips": [ { "source": { "kind": "video", "asset": "clip" } } ] },
+        { "clips": [ { "source": { "kind": "html", "html":
+          "<div style='position:absolute;left:20px;top:30px;width:120px;height:50px;border-radius:10px;background:#ffffff30;backdrop-filter:blur(4px) saturate(150%)'></div>" } } ] }
+      ]
+    }"##;
+    let comp = load(text).composition.unwrap();
+    let mut base = DirectSource::open_base(&comp, &root, PlaneFormat::Yuv420p8, comp.color)
+        .unwrap()
+        .expect("the video with overlays qualifies");
+    let mut renderer = CpuRenderer::new(MediaAssets::new(root.clone()));
+    let t = comp.frame_time(20);
+    let mut planes = base.frame(t).unwrap();
+    let drawn = renderer.render_overlays(&comp, t).unwrap();
+    assert!(
+        matches!(
+            drawn.as_slice(),
+            [Overlay::Backdrop(_), Overlay::Picture(_, _, true)]
+        ),
+        "the backdrop, then the plate in encoded values"
+    );
+    for overlay in &drawn {
+        lay_overlay(&mut planes, overlay, comp.color);
+    }
+    let slow = frame_to_planes(
+        &renderer.render_frame(&comp, t).unwrap(),
+        comp.color,
+        PlaneFormat::Yuv420p8,
+    );
+    for (p, name) in ["Y'", "Cb", "Cr"].iter().enumerate() {
+        let (fast, full) = (&planes.planes[p], &slow.planes[p]);
+        // Chroma is halved both ways.
+        let k = if p == 0 { 1 } else { 2 };
+        let (mut sum, mut n) = (0.0f64, 0.0f64);
+        for y in 30 / k..80 / k {
+            for x in 20 / k..140 / k {
+                let (a, b) = (
+                    fast.data[y * fast.stride + x],
+                    full.data[y * full.stride + x],
+                );
+                sum += (f64::from(a) - f64::from(b)).abs();
+                n += 1.0;
+            }
+        }
+        assert!(
+            sum / n < 2.0,
+            "mean {name} difference under the plate: {}",
+            sum / n
+        );
+    }
+}
+
+#[test]
+fn frames_without_a_markup_caption_have_nothing_to_lay_on() {
+    // Markup captions back to back and after a gap, one with a backdrop
+    // filter: the direct path keeps the video, and exactly the frames a
+    // caption covers get overlays, so the rest go from the decoder to
+    // the encoder untouched.
+    use geneva_media::convert::PlaneFormat;
+    use geneva_media::{DirectSource, MediaAssets};
+    use geneva_render::CpuRenderer;
+
+    let root = clip().parent().unwrap().to_path_buf();
+    let caption = |text: &str, extra: &str| {
+        format!(
+            "<div style='position:absolute;left:10px;top:70px;padding:4px 8px;background:#000a;color:#fff;font-size:14px{extra}'>{text}</div>"
+        )
+    };
+    let text = format!(
+        r#"{{
+      "geneva": "1.1",
+      "output": {{ "width": 192, "height": 108, "fps": 25, "duration": "2s" }},
+      "assets": {{ "clip": {{ "src": "clip.mp4" }} }},
+      "layers": [
+        {{ "clips": [ {{ "source": {{ "kind": "video", "asset": "clip" }} }} ] }},
+        {{ "clips": [
+          {{ "start": "0.2s", "duration": "0.4s", "source": {{ "kind": "html", "html": "{}" }} }},
+          {{ "start": "0.6s", "duration": "0.4s", "source": {{ "kind": "html", "html": "{}" }} }},
+          {{ "start": "1.4s", "duration": "0.2s", "source": {{ "kind": "html", "html": "{}" }} }}
+        ] }}
+      ]
+    }}"#,
+        caption("one", ""),
+        caption("two", ""),
+        caption("three", ";backdrop-filter:blur(3px)")
+    );
+    let comp = load(&text).composition.unwrap();
+    assert!(
+        DirectSource::open_base(&comp, &root, PlaneFormat::Yuv420p8, comp.color)
+            .unwrap()
+            .is_some(),
+        "markup captions keep the direct path"
+    );
+    let mut renderer = CpuRenderer::new(MediaAssets::new(root));
+    let drawn: Vec<u64> = (0..comp.frame_count())
+        .filter(|&i| {
+            !renderer
+                .render_overlays(&comp, comp.frame_time(i))
+                .unwrap()
+                .is_empty()
+        })
+        .collect();
+    let expected: Vec<u64> = (5..25).chain(35..40).collect();
+    assert_eq!(drawn, expected);
 }
 
 #[test]
@@ -1588,7 +1711,8 @@ fn a_tune_without_an_equivalent_is_reported_not_applied() {
     let mut settings = solid_settings(VideoCodec::Vp9, None, 192, 108);
     settings.video.as_mut().unwrap().tune = Some(VideoTune::Film);
     let enc = Encoder::new(&dir.path().join("film.webm"), settings).unwrap();
-    assert!(enc.video_setting_notes().is_empty());
+    let notes = enc.video_setting_notes();
+    assert!(notes.is_empty(), "{notes:?}");
 }
 
 /// The sync corpus (`tests/media/sync`): the tone starts at 1.0 s of

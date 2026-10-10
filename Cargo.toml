@@ -1,5 +1,7 @@
 [workspace]
 resolver = "2"
+# Vendored crates are patched in, not built as workspace members.
+exclude = ["vendor"]
 members = [
     "crates/geneva-anim",
     "crates/geneva-audio",
@@ -15,7 +17,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.1.0"
+version = "1.4.0"
 edition = "2024"
 rust-version = "1.87"
 license = "MIT"
@@ -24,16 +26,16 @@ homepage = "https://github.com/geneva-render/geneva"
 authors = ["Francesco Benetti <francesco@benetti.dev>"]
 
 [workspace.dependencies]
-geneva-anim = { path = "crates/geneva-anim", version = "1.1.0" }
-geneva-audio = { path = "crates/geneva-audio", version = "1.1.0" }
-geneva-color = { path = "crates/geneva-color", version = "1.1.0" }
-geneva-timeline = { path = "crates/geneva-timeline", version = "1.1.0" }
-geneva-html = { path = "crates/geneva-html", version = "1.1.0" }
-geneva-render = { path = "crates/geneva-render", version = "1.1.0" }
-geneva-golden = { path = "crates/geneva-golden", version = "1.1.0" }
-geneva-gpu = { path = "crates/geneva-gpu", version = "1.1.0" }
-geneva-media = { path = "crates/geneva-media", version = "1.1.0", default-features = false }
-geneva-media-link = { path = "crates/geneva-media-link", version = "1.1.0" }
+geneva-anim = { path = "crates/geneva-anim", version = "1.4.0" }
+geneva-audio = { path = "crates/geneva-audio", version = "1.4.0" }
+geneva-color = { path = "crates/geneva-color", version = "1.4.0" }
+geneva-timeline = { path = "crates/geneva-timeline", version = "1.4.0" }
+geneva-html = { path = "crates/geneva-html", version = "1.4.0" }
+geneva-render = { path = "crates/geneva-render", version = "1.4.0" }
+geneva-golden = { path = "crates/geneva-golden", version = "1.4.0" }
+geneva-gpu = { path = "crates/geneva-gpu", version = "1.4.0" }
+geneva-media = { path = "crates/geneva-media", version = "1.4.0", default-features = false }
+geneva-media-link = { path = "crates/geneva-media-link", version = "1.4.0" }
 
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive", "env"] }
@@ -44,8 +46,13 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 serde_path_to_error = "0.1"
 thiserror = "2.0"
+unicode-bidi = "0.3"
+unicode-general-category = "1.1"
+unicode-linebreak = "0.1"
+wuff = "0.2"
 cosmic-text = { version = "0.19", default-features = false, features = ["std", "swash"] }
 swash = "0.2"
+kurbo = { version = "0.13", default-features = false, features = ["std"] }
 taffy = { version = "0.9", default-features = false, features = ["std", "flexbox", "block_layout", "content_size", "calc", "taffy_tree"] }
 pollster = "0.4"
 bytemuck = { version = "1.20", features = ["derive"] }
@@ -85,3 +92,8 @@ codegen-units = 1
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# harfrust 0.5.2 (cosmic-text's shaper) with one fix, until cosmic-text
+# moves to a harfrust that has it: see vendor/README.md.
+[patch.crates-io]
+harfrust = { path = "vendor/harfrust" }

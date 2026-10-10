@@ -79,6 +79,10 @@ impl AssetSource for MediaAssets {
         self.images.font(comp, id)
     }
 
+    fn font_at(&mut self, path: &str) -> Result<std::sync::Arc<Vec<u8>>, RenderError> {
+        self.images.font_at(path)
+    }
+
     fn video_planes(
         &mut self,
         comp: &Composition,
@@ -111,6 +115,14 @@ impl AssetSource for MediaAssets {
     ) -> Result<Option<(u32, u32)>, RenderError> {
         let reader = self.video(comp, id)?;
         Ok(Some((reader.width(), reader.height())))
+    }
+
+    fn video_display_size(
+        &mut self,
+        comp: &Composition,
+        id: &str,
+    ) -> Result<Option<(f64, f64)>, RenderError> {
+        Ok(Some(self.video(comp, id)?.display_size()))
     }
 
     fn video_frame_shrunk(

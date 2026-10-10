@@ -496,7 +496,7 @@ fn video_layer_clips(
 /// 70.837433… s), where copying the clip whole is still what was asked.
 fn about_equal(a: Ratio, b: Ratio) -> bool {
     let diff = if a > b { a - b } else { b - a };
-    diff <= Ratio::new(1, 1000)
+    diff <= geneva_timeline::END_SLACK
 }
 
 /// Whether a `w`×`h` picture fitted into the output covers the whole frame
@@ -646,6 +646,8 @@ struct StreamShape {
     codec_id: codec::Id,
     width: u32,
     height: u32,
+    /// How wide a stored pixel is shown; `width` already counts it.
+    aspect: crate::PixelAspect,
     fps: Ratio,
     format: ffmpeg_next::util::format::Pixel,
     extradata: Vec<u8>,
@@ -656,7 +658,11 @@ struct StreamShape {
 
 impl StreamShape {
     fn read(path: &Path) -> Result<Self, MediaError> {
-        let ictx = ffmpeg_next::format::input(path).map_err(|e| open_error(path, e))?;
+        let mut ictx = ffmpeg_next::format::input(path).map_err(|e| open_error(path, e))?;
+        // The same reconciliation as the probe, so that a file whose
+        // timestamps jitter (a phone recording) compares equal to the
+        // rate the composition was built at.
+        let fps = super::probe::video_frame_rate(&mut ictx).unwrap_or(Ratio::from_int(25));
         let video = ictx
             .streams()
             .best(Type::Video)
@@ -671,21 +677,17 @@ impl StreamShape {
         let decoder = ctx.decoder().video().map_err(|e| {
             super::codec_error(format!("{}: reading stream parameters", path.display()), e)
         })?;
-        // The same reconciliation as the probe, so that a file whose
-        // timestamps jitter (a phone recording) compares equal to the
-        // rate the composition was built at.
-        let fps = super::probe::frame_rate(
-            super::probe::ratio(video.avg_frame_rate()),
-            super::probe::ratio(video.rate()),
-        )
-        .unwrap_or(Ratio::from_int(25));
         // The picture as displayed: a rotated source is compared to the
-        // composition at its upright size, and copied with its matrix.
+        // composition at its upright size, and copied with its matrix; one
+        // with non-square pixels at its display size, and copied with its
+        // pixel aspect (the codec parameters carry it).
         let rotation = ffi::display_rotation(&params);
+        let aspect = ffi::sample_aspect_ratio(&video);
+        let (shown_w, shown_h) = aspect.display_size(decoder.width(), decoder.height());
         let (width, height) = if rotation % 180 == 90 {
-            (decoder.height(), decoder.width())
+            (shown_h, shown_w)
         } else {
-            (decoder.width(), decoder.height())
+            (shown_w, shown_h)
         };
         let audio = ictx.streams().best(Type::Audio);
         Ok(Self {
@@ -703,6 +705,7 @@ impl StreamShape {
             codec_id: params.id(),
             width,
             height,
+            aspect,
             fps,
             format: decoder.format(),
             extradata: ffi::extradata(&params),
@@ -719,6 +722,7 @@ impl StreamShape {
         self.codec_id == other.codec_id
             && self.width == other.width
             && self.height == other.height
+            && self.aspect == other.aspect
             && self.format == other.format
             && self.extradata == other.extradata
             && self.audio_id == other.audio_id
@@ -731,6 +735,8 @@ impl StreamShape {
             "video codec"
         } else if self.width != other.width || self.height != other.height {
             "picture size"
+        } else if self.aspect != other.aspect {
+            "pixel aspect"
         } else if self.format != other.format {
             "pixel format"
         } else if self.extradata != other.extradata {
@@ -1048,7 +1054,7 @@ fn copy_track(
             let mut packet = match queue.pop_front() {
                 Some(p) => p,
                 None => {
-                    if packet.read(&mut ictx).is_err() {
+                    if super::read_packet(&mut packet, &mut ictx).is_err() {
                         break;
                     }
                     if packet.stream() != in_idx {
@@ -1190,7 +1196,7 @@ fn decode_order_times(
     let mut pts_list = Vec::new();
     let mut started = false;
     let mut packet = Packet::empty();
-    while packet.read(ictx).is_ok() {
+    while super::read_packet(&mut packet, ictx).is_ok() {
         if packet.stream() != in_idx {
             continue;
         }

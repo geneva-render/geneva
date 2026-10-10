@@ -84,10 +84,26 @@ pub struct ResolvedOutput {
     pub columns: Option<u32>,
 }
 
+/// How far apart two times may be and still name the same instant: a
+/// millisecond. A duration printed with six decimals and the exact length
+/// of a clip at a fractional rate differ by less (2123 frames at 29.97 fps
+/// last 70.837433... s), and no picture or sound edit is that short.
+pub const END_SLACK: Ratio = Ratio::MILLI;
+
 impl Composition {
     /// Number of frames in the output, rounding partial frames up.
+    ///
+    /// A frame that would start less than [`END_SLACK`] before the end
+    /// (or half a frame, at rates above 500 fps) is not counted. A
+    /// duration written with six decimals can land a fraction of a
+    /// microsecond past a clip's exact end, and an audio track can run a
+    /// little past the picture; neither is a frame of its own.
     pub fn frame_count(&self) -> u64 {
-        (self.duration * self.fps).ceil().max(0) as u64
+        if self.duration <= Ratio::ZERO {
+            return 0;
+        }
+        let slack = (END_SLACK * self.fps).min(Ratio::new(1, 2));
+        (self.duration * self.fps - slack).ceil().max(1) as u64
     }
 
     /// The presentation time of frame `n`.
@@ -97,13 +113,9 @@ impl Composition {
 
     /// Clips visible at time `t`, bottom layer first, in layer order.
     pub fn clips_at(&self, t: Ratio) -> impl Iterator<Item = (&ResolvedLayer, &ResolvedClip)> {
-        self.layers.iter().flat_map(move |layer| {
-            layer
-                .clips
-                .iter()
-                .filter(move |c| c.start <= t && t < c.end)
-                .map(move |c| (layer, c))
-        })
+        self.layers
+            .iter()
+            .flat_map(move |layer| layer.visible_at(t).map(move |(_, c)| (layer, c)))
     }
 }
 
@@ -125,6 +137,56 @@ pub struct ResolvedLayer {
     pub id: String,
     /// Clips in time order.
     pub clips: Vec<ResolvedClip>,
+    /// The longest clip's length, worked out the first time a frame
+    /// asks which clips it shows; the clips are not changed after that.
+    longest: std::sync::OnceLock<Ratio>,
+}
+
+impl ResolvedLayer {
+    /// A layer of `clips`, which are in time order.
+    #[must_use]
+    pub fn new(id: String, clips: Vec<ResolvedClip>) -> Self {
+        Self {
+            id,
+            clips,
+            longest: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// The indices of the clips that may show at `t`, found without
+    /// looking at the rest. Clips are in time order, so one still
+    /// showing at `t` started within the longest clip's length of it: a
+    /// layer with thousands of captions costs two binary searches a
+    /// frame.
+    fn around(&self, t: Ratio) -> std::ops::Range<usize> {
+        let longest = *self.longest.get_or_init(|| {
+            self.clips
+                .iter()
+                .map(|c| c.end - c.start)
+                .max()
+                .unwrap_or(Ratio::ZERO)
+        });
+        let from = t - longest;
+        let lo = self.clips.partition_point(|c| c.start < from);
+        let hi = self.clips.partition_point(|c| c.start <= t);
+        lo..hi.max(lo)
+    }
+
+    /// The clips visible at `t` (`start <= t < end`), in order, with
+    /// their index in the layer.
+    pub fn visible_at(&self, t: Ratio) -> impl Iterator<Item = (usize, &ResolvedClip)> {
+        self.around(t)
+            .map(move |i| (i, &self.clips[i]))
+            .filter(move |(_, c)| c.start <= t && t < c.end)
+    }
+
+    /// The clips with `start <= t <= end`, visible or ending at `t`, in
+    /// order: what a transition closing at `t` is measured from.
+    pub fn touching(&self, t: Ratio) -> impl Iterator<Item = &ResolvedClip> {
+        self.around(t)
+            .map(move |i| &self.clips[i])
+            .filter(move |c| c.start <= t && t <= c.end)
+    }
 }
 
 /// A clip with exact timing and sampleable properties.
@@ -440,6 +502,51 @@ pub struct ResolvedText {
     pub highlight_fill: Option<FillTrack>,
     /// The shadows, front to back as listed; empty for none.
     pub shadow: Vec<ShadowTrack>,
+    /// How the outline is painted: a text source's outline, or markup's
+    /// `-webkit-text-stroke` under or over the fill.
+    pub outline_paint: OutlinePaint,
+    /// Lines as a browser stacks them (markup): ascent and descent
+    /// rounded to pixels, the half-leading floored, and with no
+    /// `line_height` the fonts' own spacing (`line-height: normal`).
+    /// A text source keeps its own layout, `line_height` 1.2 by default.
+    pub browser_lines: bool,
+    /// Paragraphs run right to left (markup's `direction: rtl`). Without
+    /// it a paragraph is left to right, as CSS's default is, whatever
+    /// script it starts in.
+    pub rtl: bool,
+    /// Lines never break where they run out of room (markup's
+    /// `white-space: nowrap`); the width still places them.
+    pub nowrap: bool,
+}
+
+/// How a text's outline is painted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OutlinePaint {
+    /// A text source's `outline`: under the fill, its `width` the ring
+    /// outside the glyph. Its image leaves that width around the text,
+    /// so the tip of a sharp corner's miter is cut.
+    #[default]
+    Outline,
+    /// A CSS stroke under the fill (`paint-order: stroke fill`): the
+    /// same ring, with room for miters as long as a browser draws them.
+    StrokeUnder,
+    /// A CSS stroke over the fill (`paint-order: normal`): it covers the
+    /// glyph's edge as well as the ring outside.
+    StrokeOver,
+}
+
+impl OutlinePaint {
+    /// How far a sharp corner's miter reaches, as a multiple of the
+    /// ring's width. Browsers stroke text with a miter limit of 4, so a
+    /// join reaches at most 4 half-widths out; a text source keeps the
+    /// ring alone.
+    #[must_use]
+    pub fn reach(self) -> f64 {
+        match self {
+            Self::Outline => 1.0,
+            Self::StrokeUnder | Self::StrokeOver => 4.0,
+        }
+    }
 }
 
 impl ResolvedText {
@@ -506,6 +613,10 @@ impl ResolvedText {
             fill,
             highlight_fill,
             shadow,
+            outline_paint: OutlinePaint::Outline,
+            browser_lines: false,
+            rtl: false,
+            nowrap: false,
         }
     }
 
@@ -671,6 +782,14 @@ pub trait AssetInfo {
         None
     }
 
+    /// The family a font asset's file declares, so that a style naming
+    /// the family rather than the asset id still counts as using it.
+    /// `None` where the caller has not read the file.
+    fn font_family(&self, asset_id: &str) -> Option<String> {
+        let _ = asset_id;
+        None
+    }
+
     /// Whether a file under the asset root is there, for a picture markup
     /// points at. `None` where the caller cannot tell, so validation
     /// without files stays quiet.
@@ -712,11 +831,43 @@ pub fn resolve_with(
         used_rules: BTreeSet::new(),
         rules: BTreeMap::new(),
         from_markup: None,
+        linked_texts: std::collections::HashMap::new(),
         composition_stack: Vec::new(),
     };
     let comp = r.run();
-    let has_errors = r.diags.iter().any(Diagnostic::is_error);
-    (if has_errors { None } else { Some(comp) }, r.diags)
+    let diags = collapse_repeats(r.diags);
+    let has_errors = diags.iter().any(Diagnostic::is_error);
+    (if has_errors { None } else { Some(comp) }, diags)
+}
+
+/// Warnings about markup that come out word for word from many clips, as
+/// they do when every caption repeats one `<style>`, said once: the first
+/// clip's path, and how many others share it.
+fn collapse_repeats(diags: Vec<Diagnostic>) -> Vec<Diagnostic> {
+    const PER_CLIP: [&str; 4] = ["W405", "W450", "W452", "W454"];
+    let mut seen: std::collections::HashMap<(&'static str, String), usize> =
+        std::collections::HashMap::new();
+    let mut out: Vec<Diagnostic> = Vec::with_capacity(diags.len());
+    let mut more: Vec<usize> = Vec::new();
+    for d in diags {
+        if PER_CLIP.contains(&d.code) {
+            let key = (d.code, d.message.clone());
+            if let Some(&first) = seen.get(&key) {
+                more[first] += 1;
+                continue;
+            }
+            seen.insert(key, out.len());
+        }
+        out.push(d);
+        more.push(0);
+    }
+    for (d, n) in out.iter_mut().zip(more) {
+        if n > 0 {
+            let clips = if n == 1 { "clip" } else { "clips" };
+            d.message = format!("{} (the same in {n} more {clips})", d.message);
+        }
+    }
+    out
 }
 
 struct Resolver<'a> {
@@ -736,6 +887,9 @@ struct Resolver<'a> {
     from_markup: Option<Markup>,
     /// Names of the compositions currently being resolved, for cycle checks.
     composition_stack: Vec<String>,
+    /// Stylesheets markup links to, read once by path: thousands of
+    /// captions linking one sheet read the file once.
+    linked_texts: std::collections::HashMap<String, Option<String>>,
 }
 
 /// What a clip's markup said about motion.
@@ -2584,7 +2738,7 @@ transitions in over the same join"
             });
             cursor = end;
         }
-        (ResolvedLayer { id, clips }, any_open)
+        (ResolvedLayer::new(id, clips), any_open)
     }
 
     /// Resolves a clip's source. `frame` is the frame percentages refer to
@@ -3128,13 +3282,16 @@ fills the frame",
         px
     }
 
-    /// Warns when a style names a font family this machine does not have.
+    /// Warns when a style names a font family this machine does not have,
+    /// each family of a list on its own.
     ///
     /// The text still draws, in whatever the shaper falls back to, which
     /// is a different picture on a different machine and the kind of
     /// difference that is only noticed once the file is somewhere else.
-    /// A family that is the id of a font asset is fine by definition:
-    /// the document carries the file, which is the fix this suggests.
+    /// A family that is the id of a font asset, or the family a font
+    /// asset declares, is fine by definition: the document carries the
+    /// file, which is the fix this suggests. Such an asset is used.
+    /// CSS's generic families are not checked.
     fn check_font(
         &mut self,
         family: Option<&str>,
@@ -3142,10 +3299,34 @@ fills the frame",
         assets: &BTreeMap<String, ResolvedAsset>,
         in_markup: bool,
     ) {
-        let Some(family) = family else {
+        let Some(list) = family else {
             return;
         };
+        for family in geneva_html::style::font_list(list) {
+            if !geneva_html::style::is_generic_family(&family) {
+                self.check_one_font(&family, path, assets, in_markup);
+            }
+        }
+    }
+
+    fn check_one_font(
+        &mut self,
+        family: &str,
+        path: &Path,
+        assets: &BTreeMap<String, ResolvedAsset>,
+        in_markup: bool,
+    ) {
         if assets.contains_key(family) {
+            self.used_assets.insert(family.to_owned());
+            return;
+        }
+        let declared: Vec<String> = assets
+            .keys()
+            .filter(|id| self.info.font_family(id).as_deref() == Some(family))
+            .cloned()
+            .collect();
+        if !declared.is_empty() {
+            self.used_assets.extend(declared);
             return;
         }
         if self.info.has_font_family(family) != Some(false) {
@@ -3390,6 +3571,10 @@ fills the frame",
             fill,
             highlight_fill,
             shadow,
+            outline_paint: OutlinePaint::Outline,
+            browser_lines: false,
+            rtl: false,
+            nowrap: false,
         }
     }
 
@@ -3577,8 +3762,8 @@ letter-spacing, a size or background-position",
                         "E442",
                         path.clone(),
                         format!(
-                            "{:?} sets a property the clip cannot play: filter, color, \
-text-shadow, letter-spacing, a size or background-position",
+                            "{:?} sets a property the clip cannot play: only transform and \
+opacity move the whole clip",
                             a.name
                         ),
                     )
@@ -3811,7 +3996,15 @@ be; write the distance in pixels, or give the source a size",
                 let Some(path) = self.markup_path(&base, &href, spath, "stylesheet") else {
                     continue;
                 };
-                match self.info.read(&path) {
+                let read = match self.linked_texts.get(&path) {
+                    Some(known) => known.clone(),
+                    None => {
+                        let text = self.info.read(&path);
+                        self.linked_texts.insert(path.clone(), text.clone());
+                        text
+                    }
+                };
+                match read {
                     Some(text) => {
                         linked.insert(href, text);
                     }
@@ -3851,6 +4044,16 @@ be; write the distance in pixels, or give the source a size",
                             "it is skipped and the rest is drawn; the timeline reference lists what geneva draws",
                         ),
                     );
+                }
+                for raw in p.styles.iter().filter_map(|s| s.paint.transform.as_deref()) {
+                    if let Err(e) =
+                        crate::animation::parse_declarations(&format!("transform: {raw}"))
+                    {
+                        self.push(
+                            Diagnostic::warning("W450", spath.clone(), format!("transform: {e}"))
+                                .with_help("it is skipped and the rest is drawn; the timeline reference lists what geneva draws"),
+                        );
+                    }
                 }
                 for what in &p.inert {
                     self.push(
@@ -3896,10 +4099,37 @@ be; write the distance in pixels, or give the source a size",
                         );
                     }
                 }
+                // Font files the markup's `@font-face` rules load: checked
+                // here, registered when it is drawn.
+                for face in &p.font_faces {
+                    let Some(path) = self.markup_path(&base, &face.src, spath, "font") else {
+                        continue;
+                    };
+                    if self.info.exists(&path) == Some(false) {
+                        self.push(
+                            Diagnostic::error(
+                                "E452",
+                                spath.clone(),
+                                format!(
+                                    "the font {:?} that @font-face gives {:?} is not there",
+                                    face.src, face.family
+                                ),
+                            )
+                            .with_value(path)
+                            .with_help(
+                                "the path is relative to the stylesheet, as it is in a browser",
+                            ),
+                        );
+                    }
+                }
                 // Families the markup's CSS names, checked the same way as
                 // a text source's `font`. The path is the source rather
-                // than a field of it, since the family is in the markup.
+                // than a field of it, since the family is in the markup. A
+                // family the markup's own `@font-face` defines is there.
                 for family in geneva_html::font_families(&p) {
+                    if p.font_faces.iter().any(|f| f.family == family) {
+                        continue;
+                    }
                     self.check_font(Some(&family), spath, assets, true);
                 }
                 // Animations on elements inside: each is the renderer's

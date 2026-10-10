@@ -129,6 +129,9 @@ impl<A: AssetSource> PlaneRenderer for GpuRenderer<A> {
                 duration: comp.duration,
             });
         }
+        if let Some(path) = geneva_render::backdrop::first_use(comp) {
+            return Err(backdrop_unsupported(path));
+        }
         let outputs: Vec<(ResolvedTags, PlaneFormat)> =
             targets.iter().map(|p| (p.tags, p.format)).collect();
         let key = Self::key(comp, t, &outputs);
@@ -193,11 +196,25 @@ impl<A: AssetSource> std::fmt::Debug for GpuRenderer<A> {
     }
 }
 
+/// `backdrop-filter` reads what is under a box mid-way through the
+/// markup; the compositor does not draw it, and `geneva` hands such
+/// documents to the CPU renderer.
+fn backdrop_unsupported(path: &str) -> RenderError {
+    RenderError::Unsupported {
+        what: "backdrop-filter in markup".to_owned(),
+        path: path.to_owned(),
+    }
+}
+
 impl<A: AssetSource> Renderer for GpuRenderer<A> {
     fn take_warnings(&mut self) -> Vec<String> {
         // Markup groups are painted by the same CPU painter, so the same
         // bound applies and the same remark is worth making.
         self.painter.take_warnings()
+    }
+
+    fn take_missing_glyphs(&mut self) -> Vec<(String, Vec<(char, usize)>)> {
+        self.painter.take_missing_glyphs()
     }
 
     fn render_into(
@@ -211,6 +228,9 @@ impl<A: AssetSource> Renderer for GpuRenderer<A> {
                 time: t,
                 duration: comp.duration,
             });
+        }
+        if let Some(path) = geneva_render::backdrop::first_use(comp) {
+            return Err(backdrop_unsupported(path));
         }
         self.drop_pending();
         self.compositor

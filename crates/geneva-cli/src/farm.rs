@@ -882,6 +882,9 @@ pub fn run(
         "crf": overrides.crf,
         "preset": overrides.preset,
         "diagnostics": opts.diagnostics,
+        // Workers draw text in the same fonts: with --no-system-fonts on
+        // the farm, only the document's and the built-in ones.
+        "system_fonts": geneva_render::system_fonts(),
     });
     let farm = Arc::new(Farm {
         token: token.clone(),
@@ -1303,6 +1306,9 @@ pub fn work(
         s => return Err(format!("the farm answered {s}")),
     }
     let id = job["worker"].as_u64().unwrap_or(0);
+    if job["system_fonts"] == false {
+        geneva_render::set_system_fonts(false);
+    }
     let own_dir = dir.is_none();
     let dir = dir.map_or_else(
         || std::env::temp_dir().join(format!("geneva-worker-{}-{id}", std::process::id())),

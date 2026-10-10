@@ -12,7 +12,7 @@ use geneva_color::{ColorTags, Matrix, ResolvedTags};
 use geneva_render::Image;
 use geneva_timeline::Ratio;
 
-use super::probe::{ratio, ts_to_secs};
+use super::probe::ts_to_secs;
 use super::{codec_error, ffi, init, open_error, tags};
 use crate::MediaError;
 use crate::convert::{Planes16, Planes420, rgba8_into, ycbcr16_into, yuv420p8_into};
@@ -43,11 +43,7 @@ impl StreamDecoder {
             .best(kind)
             .ok_or_else(|| MediaError::NoStream {
                 path: path.to_owned(),
-                kind: if kind == Type::Video {
-                    "video"
-                } else {
-                    "audio"
-                },
+                kind: kind_name(kind),
             })?;
         let stream_index = stream.index();
         let time_base = stream.time_base();
@@ -67,9 +63,51 @@ impl StreamDecoder {
             Some(video) => zero_of(&video),
             None => zero_of(&stream).max(Ratio::ZERO),
         };
+        let id = stream.parameters().id();
+        if ffmpeg_next::decoder::find(id).is_none() {
+            return Err(MediaError::Codec {
+                context: format!(
+                    "{}: decoding its {} stream",
+                    path.display(),
+                    kind_name(kind)
+                ),
+                reason: format!("no decoder for {} in this build", id.name()),
+            });
+        }
         let mut ctx = codec::context::Context::from_parameters(stream.parameters())
             .map_err(|e| codec_error(format!("{}: decoder setup", path.display()), e))?;
-        ffi::set_threads(&mut ctx, DECODER_THREADS.with(std::cell::Cell::get));
+        // A share set for this thread, else the process's cap, else all.
+        let threads = match DECODER_THREADS.with(std::cell::Cell::get) {
+            0 => geneva_render::limits::threads_set().map_or(0, |n| n as u32),
+            n => n,
+        };
+        let slices = ffmpeg_next::decoder::find(id).is_some_and(|c| {
+            c.capabilities()
+                .contains(codec::Capabilities::SLICE_THREADS)
+        });
+        if kind == Type::Video && slices && ffi::is_intra_only(id) {
+            // Frames that stand alone split into slices as well as frame
+            // threads would split them, without a frame in flight a thread.
+            ffi::set_slice_threads(&mut ctx, threads);
+        } else if kind == Type::Video {
+            // Frame threading holds about two and a half frames a thread
+            // (measured: H.264, MPEG-4 part 2); the decoders take a quarter
+            // of a memory budget between them.
+            let (width, height, format) = ffi::video_shape(&ctx);
+            let per_thread = frame_bytes(width, height, format) * 5 / 2;
+            let threads = match geneva_render::limits::threads_within_budget(per_thread, 0.25) {
+                Some(fit)
+                    if fit < geneva_render::limits::threads()
+                        && (threads == 0 || fit < threads as usize) =>
+                {
+                    fit as u32
+                }
+                _ => threads,
+            };
+            ffi::set_threads(&mut ctx, threads);
+        } else {
+            ffi::set_threads(&mut ctx, threads);
+        }
         Ok((
             Self {
                 path: path.to_owned(),
@@ -124,7 +162,7 @@ impl StreamDecoder {
             let mut fed = false;
             let mut packet = Packet::empty();
             loop {
-                match packet.read(&mut self.ictx) {
+                match super::read_packet(&mut packet, &mut self.ictx) {
                     Ok(()) => {}
                     // A demuxer may have nothing ready yet without being at
                     // the end; only the end of the file ends the stream.
@@ -188,6 +226,12 @@ pub struct VideoReader {
     /// Rotation the file asks for, in degrees clockwise, applied to the
     /// converted frames; raw frames keep the coded orientation.
     rotation: u16,
+    /// How wide a stored pixel is shown. Converted frames are stretched
+    /// to `shown` by it; raw frames keep the coded size.
+    aspect: crate::PixelAspect,
+    /// The coded picture at its display aspect, before the rotation:
+    /// the size converted frames have, rotated.
+    shown: (u32, u32),
     /// A buffer for the unrotated conversion when a rotation applies.
     unrotated: Option<Image>,
     /// How many times a frame request has seeked.
@@ -246,12 +290,12 @@ impl VideoReader {
         let decoder = decoder
             .video()
             .map_err(|e| codec_error(format!("{}: opening video decoder", path.display()), e))?;
+        let mut inner = inner;
+        let fps = super::probe::video_frame_rate(&mut inner.ictx).unwrap_or(Ratio::from_int(25));
         let stream = inner
             .ictx
             .stream(inner.stream_index)
             .expect("stream exists");
-        let fps = super::probe::frame_rate(ratio(stream.avg_frame_rate()), ratio(stream.rate()))
-            .unwrap_or(Ratio::from_int(25));
         let file_tags = tags::from_codec_tags(
             decoder.color_space(),
             decoder.color_range(),
@@ -278,14 +322,18 @@ impl VideoReader {
         ) {
             tags.range = geneva_color::Range::Limited;
         }
+        // Non-square pixels are stretched to their display aspect as the
+        // frame is widened, as a browser's `<video>` shows them.
+        let aspect = super::ffi::sample_aspect_ratio(&stream);
+        let shown = aspect.display_size(decoder.width(), decoder.height());
         let dst = if rgb { Pixel::RGBA } else { Pixel::YUV444P16LE };
         let scaler = scaling::Context::get(
             decoder.format(),
             decoder.width(),
             decoder.height(),
             dst,
-            decoder.width(),
-            decoder.height(),
+            shown.0,
+            shown.1,
             scaling::Flags::BICUBIC,
         )
         .map_err(|e| codec_error(format!("{}: pixel format conversion", path.display()), e))?;
@@ -319,6 +367,8 @@ impl VideoReader {
             pending: None,
             position: None,
             rotation,
+            aspect,
+            shown,
             unrotated: None,
             spare: None,
             seeks: 0,
@@ -345,22 +395,46 @@ impl VideoReader {
     }
 
     /// Width in pixels of the frames [`frame_at`](Self::frame_at) returns:
-    /// as displayed, after the file's rotation.
+    /// as displayed, stretched by the pixel aspect and after the file's
+    /// rotation.
     pub fn width(&self) -> u32 {
         if self.rotation % 180 == 90 {
-            self.decoder.height()
+            self.shown.1
         } else {
-            self.decoder.width()
+            self.shown.0
         }
     }
 
     /// Height in pixels of the displayed frames.
     pub fn height(&self) -> u32 {
         if self.rotation % 180 == 90 {
-            self.decoder.width()
+            self.shown.0
         } else {
-            self.decoder.height()
+            self.shown.1
         }
+    }
+
+    /// The size the picture is shown at, unrounded: [`width`](Self::width)
+    /// and [`height`](Self::height) before the stretched side is rounded
+    /// to whole pixels (853.33×480 for 720×480 at 32:27), for placing
+    /// the frame at its exact aspect.
+    pub fn display_size(&self) -> (f64, f64) {
+        let (w, h) = (
+            f64::from(self.decoder.width()),
+            f64::from(self.decoder.height()),
+        );
+        let w = w * f64::from(self.aspect.num) / f64::from(self.aspect.den);
+        if self.rotation % 180 == 90 {
+            (h, w)
+        } else {
+            (w, h)
+        }
+    }
+
+    /// How wide a stored pixel is shown. [`frame_at`](Self::frame_at)
+    /// applies it; [`raw_frame_at`](Self::raw_frame_at) does not.
+    pub fn sample_aspect_ratio(&self) -> crate::PixelAspect {
+        self.aspect
     }
 
     /// Rotation the file asks for, in degrees clockwise (0, 90, 180 or
@@ -406,6 +480,11 @@ impl VideoReader {
             return self.frame_at(t);
         }
         self.advance_to(t)?;
+        // An interlaced frame is woven whole before it is made smaller;
+        // shrinking the fields together would blur the combing in.
+        if self.current.as_ref().is_some_and(|c| c.raw.is_interlaced()) {
+            return self.frame_at(t);
+        }
         let mut current = self.current.take().expect("advance_to leaves a frame");
         let found = current.shrunk.iter().position(|(s, _)| *s == size);
         let index = match found {
@@ -436,7 +515,11 @@ impl VideoReader {
         t: Ratio,
     ) -> Result<Option<(Planes420<'_>, u32, u32, ResolvedTags)>, MediaError> {
         self.advance_to(t)?;
-        if self.rotation != 0 || self.hdr.is_some() || self.tags.matrix == Matrix::Identity {
+        if self.rotation != 0
+            || !self.aspect.is_square()
+            || self.hdr.is_some()
+            || self.tags.matrix == Matrix::Identity
+        {
             return Ok(None);
         }
         let raw = &self
@@ -444,7 +527,7 @@ impl VideoReader {
             .as_ref()
             .expect("advance_to leaves a frame")
             .raw;
-        if !matches!(raw.format(), Pixel::YUV420P | Pixel::YUVJ420P) {
+        if !matches!(raw.format(), Pixel::YUV420P | Pixel::YUVJ420P) || raw.is_interlaced() {
             return Ok(None);
         }
         let mut tags = self.tags;
@@ -522,7 +605,16 @@ impl VideoReader {
                     if !self.inner.next_frame(&mut self.decoder, &mut raw)? {
                         break;
                     }
-                    let pts = self.inner.secs(&raw);
+                    // A frame the decoder could not time, or timed before
+                    // the one shown last (a program stream's reference
+                    // frames carry only a decode time), follows it.
+                    let own = raw.timestamp().or(raw.pts()).map(|_| self.inner.secs(&raw));
+                    let pts = match (own, self.position) {
+                        (Some(t), Some(p)) if t <= p => p + self.frame_duration,
+                        (Some(t), _) => t,
+                        (None, Some(p)) => p + self.frame_duration,
+                        (None, None) => Ratio::ZERO,
+                    };
                     self.position = Some(pts);
                     (pts, raw)
                 }
@@ -578,10 +670,18 @@ impl VideoReader {
 
     fn convert(&mut self, raw: &frame::Video, into: &mut Image) -> Result<(), MediaError> {
         if self.rotation == 0 {
-            return self.convert_unrotated(raw, into);
+            self.convert_unrotated(raw, into)?;
+            if raw.is_interlaced() {
+                crate::convert::deinterlace(into, raw.is_top_first());
+            }
+            return Ok(());
         }
         let mut flat = self.unrotated.take().unwrap_or_default();
         self.convert_unrotated(raw, &mut flat)?;
+        // Fields are lines of the picture as coded, before it is turned.
+        if raw.is_interlaced() {
+            crate::convert::deinterlace(&mut flat, raw.is_top_first());
+        }
         rotate_into(&flat, self.rotation, into);
         self.unrotated = Some(flat);
         Ok(())
@@ -598,6 +698,7 @@ impl VideoReader {
         if matches!(raw.format(), Pixel::YUV420P | Pixel::YUVJ420P)
             && self.tags.matrix != Matrix::Identity
             && self.hdr.is_none()
+            && self.aspect.is_square()
         {
             let mut tags = self.tags;
             if raw.format() == Pixel::YUVJ420P {
@@ -1038,4 +1139,34 @@ fn copy_samples(frame: &frame::Audio, pos: &mut i64, out: &mut [f32]) {
         }
     }
     *pos += n as i64;
+}
+
+/// `video` or `audio`, for messages.
+/// Bytes of one decoded picture of `width` by `height` in `format`, with
+/// samples deeper than 8 bits in two bytes; four a pixel when the format
+/// is not known yet.
+fn frame_bytes(width: u32, height: u32, format: Pixel) -> u64 {
+    let pixels = u64::from(width.max(1)) * u64::from(height.max(1));
+    let Some(d) = format.descriptor() else {
+        return pixels * 4;
+    };
+    let components = f64::from(d.nb_components());
+    let chroma = 1.0 / f64::from(1u32 << (d.log2_chroma_w() + d.log2_chroma_h()));
+    // Samples a pixel: luma, chroma at its subsampling, alpha.
+    let samples = if components >= 3.0 {
+        1.0 + 2.0 * chroma + (components - 3.0)
+    } else {
+        components.max(1.0)
+    };
+    let depth = f64::from(d.bits_per_pixel().max(8)) / samples;
+    let bytes = samples * if depth > 8.0 { 2.0 } else { 1.0 };
+    (pixels as f64 * bytes).ceil() as u64
+}
+
+fn kind_name(kind: Type) -> &'static str {
+    if kind == Type::Video {
+        "video"
+    } else {
+        "audio"
+    }
 }

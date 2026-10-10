@@ -1,0 +1,10 @@
+<style>
+body { margin: 0; font-family: "Liberation Sans"; color: #fff }
+@keyframes grow { from { transform: scale(1) } to { transform: scale(1.1) } }
+@keyframes shrink { from { scale: 1; opacity: 1 } to { scale: 0.6; opacity: 0.5 } }
+@keyframes turn { from { rotate: 0deg } to { rotate: 20deg } }
+.w { position: absolute; left: 40px; top: 30px; font-size: 48px; background: #a03030; transform-origin: 50% 72%; animation: grow 1s linear both }
+.l { position: absolute; left: 40px; top: 120px; font-size: 32px; background: #3060a0; transform-origin: 0 100%; animation: shrink 1s linear both }
+.r { position: absolute; left: 300px; top: 40px; width: 80px; height: 40px; background: #30a060; transform-origin: right bottom; animation: turn 1s linear both }
+</style>
+<div class="w">Word</div><div class="l">Previous line rolls up</div><div class="r"></div>

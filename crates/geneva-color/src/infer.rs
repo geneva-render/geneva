@@ -164,7 +164,7 @@ mod tests {
             range: Some(Range::Full),
         };
         let (r, notes) = infer(tags, 3840, 2160);
-        assert!(notes.is_empty());
+        assert!(notes.is_empty(), "{notes:?}");
         assert!(r.is_hdr());
         assert_eq!(r.range, Range::Full);
     }

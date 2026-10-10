@@ -14,9 +14,14 @@ geneva-color = { workspace = true }
 geneva-html = { workspace = true }
 geneva-timeline = { workspace = true }
 image = { workspace = true }
+kurbo = { workspace = true }
 rayon = { workspace = true }
 swash = { workspace = true }
 thiserror = { workspace = true }
+unicode-bidi = { workspace = true }
+unicode-general-category = { workspace = true }
+unicode-linebreak = { workspace = true }
+wuff = { workspace = true }
 
 [lints]
 workspace = true

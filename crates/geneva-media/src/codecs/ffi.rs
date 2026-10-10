@@ -61,6 +61,51 @@ pub fn subtitle_context(id: ffmpeg_next::codec::Id) -> ffmpeg_next::codec::conte
     ctx
 }
 
+/// Whether every frame of the codec stands alone (ProRes, DNxHD, DV,
+/// Motion JPEG), from its descriptor.
+#[allow(unsafe_code, clippy::unnecessary_cast, clippy::cast_lossless)]
+pub fn is_intra_only(id: ffmpeg_next::codec::Id) -> bool {
+    // SAFETY: `avcodec_descriptor_get` returns null or a pointer into a
+    // static table owned by the library; `props` is a plain integer field.
+    unsafe {
+        let descriptor = ffmpeg_next::ffi::avcodec_descriptor_get(id.into());
+        !descriptor.is_null()
+            // The constant's integer type differs between platforms' bindings.
+            && ((*descriptor).props as i64) & (ffmpeg_next::ffi::AV_CODEC_PROP_INTRA_ONLY as i64) != 0
+    }
+}
+
+/// A decoder's picture size and pixel format, as set from its stream's
+/// parameters before it opens.
+#[allow(unsafe_code)]
+pub fn video_shape(
+    ctx: &ffmpeg_next::codec::context::Context,
+) -> (u32, u32, ffmpeg_next::format::Pixel) {
+    // SAFETY: `ctx` owns a valid `AVCodecContext`; `width`, `height` and
+    // `pix_fmt` are plain fields copied from the stream's parameters.
+    unsafe {
+        let raw = &*ctx.as_ptr();
+        (
+            raw.width.max(0) as u32,
+            raw.height.max(0) as u32,
+            ffmpeg_next::format::Pixel::from(raw.pix_fmt),
+        )
+    }
+}
+
+/// Lets a decoder use `count` threads on the slices of one frame only:
+/// no frames in flight beyond the one decoded, where frame threading
+/// holds one or two a thread.
+#[allow(unsafe_code)]
+pub fn set_slice_threads(ctx: &mut ffmpeg_next::codec::context::Context, count: u32) {
+    // SAFETY: as in `set_threads`.
+    unsafe {
+        let raw = &mut *ctx.as_mut_ptr();
+        raw.thread_type = ffmpeg_next::ffi::FF_THREAD_SLICE;
+        raw.thread_count = count as std::os::raw::c_int;
+    }
+}
+
 /// Lets the codec use `count` threads, frame or slice threading as it
 /// supports; `0` for as many as the machine has.
 #[allow(unsafe_code)]
@@ -396,6 +441,26 @@ pub fn hdr_metadata(params: &Parameters) -> Option<HdrMetadata> {
         light: get(AVPacketSideDataType::AV_PKT_DATA_CONTENT_LIGHT_LEVEL),
     };
     (meta.mastering.is_some() || meta.light.is_some()).then_some(meta)
+}
+
+/// The pixel aspect a stream is shown with: the container's (an MP4
+/// `pasp` box, Matroska's display size) when it has one, else the
+/// codec's, as libav's `av_guess_sample_aspect_ratio` picks it.
+#[allow(unsafe_code)]
+pub fn sample_aspect_ratio(stream: &ffmpeg_next::format::stream::Stream) -> crate::PixelAspect {
+    // SAFETY: `stream` wraps a valid `AVStream` whose `codecpar` is set
+    // for as long as the input it came from is open; both are read only.
+    let (container, codec) = unsafe {
+        let raw = &*stream.as_ptr();
+        (raw.sample_aspect_ratio, (*raw.codecpar).sample_aspect_ratio)
+    };
+    let usable = |r: ffmpeg_next::ffi::AVRational| r.num > 0 && r.den > 0;
+    let r = if usable(container) { container } else { codec };
+    if usable(r) {
+        crate::PixelAspect::new(r.num.unsigned_abs(), r.den.unsigned_abs())
+    } else {
+        crate::PixelAspect::SQUARE
+    }
 }
 
 /// The display matrix a stream carries, as its 36 bytes, if any.

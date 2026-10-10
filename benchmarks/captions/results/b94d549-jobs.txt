@@ -1,0 +1,14 @@
+srt-plate-800                wall   114.2 s  cpu   423.2 s  peak   0.62 GB
+words-highlight-800          wall   113.2 s  cpu   423.3 s  peak   0.65 GB
+srt-plate-2160               wall   226.4 s  cpu   856.3 s  peak   2.30 GB
+words-highlight-2160         wall   235.2 s  cpu   898.0 s  peak   2.58 GB
+still-800                    wall   116.0 s  cpu   436.9 s  peak   0.75 GB
+steps-800                    wall   114.5 s  cpu   432.1 s  peak   0.79 GB
+blur-in-800                  wall   122.1 s  cpu   462.1 s  peak   0.65 GB
+stroke-800                   wall   118.8 s  cpu   448.7 s  peak   0.74 GB
+frosted-800                  wall   125.2 s  cpu   472.3 s  peak   0.70 GB
+glow-800                     wall   116.6 s  cpu   433.6 s  peak   0.64 GB
+still-2160                   wall   221.4 s  cpu   838.1 s  peak   2.90 GB
+steps-2160                   wall   233.9 s  cpu   890.4 s  peak   3.04 GB
+blur-in-2160                 wall   239.0 s  cpu   910.6 s  peak   2.44 GB
+glow-2160                    wall   241.4 s  cpu   922.0 s  peak   2.40 GB

@@ -1,0 +1,6 @@
+{
+  "geneva": "1.1",
+  "output": { "width": 600, "height": 90, "fps": 30, "duration": "1s", "background": "#3a5a7a" },
+  "assets": { "page": { "src": "markup-fontface/page.html" } },
+  "layers": [ { "clips": [ { "source": { "kind": "html", "asset": "page" } } ] } ]
+}

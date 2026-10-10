@@ -1,0 +1,9 @@
+{
+  "geneva": "1.1",
+  "output": { "width": 480, "height": 200, "fps": 30, "duration": "1s", "background": "#000000" },
+  "assets": {
+    "page": { "src": "markup-origin/origin.html" },
+    "sans": { "src": "fonts/LiberationSans-Regular.ttf" }
+  },
+  "layers": [ { "clips": [ { "source": { "kind": "html", "asset": "page" } } ] } ]
+}

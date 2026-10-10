@@ -10,6 +10,7 @@ use geneva_timeline::{
 use rayon::prelude::*;
 
 use crate::assets::{AssetSource, FileAssets, Image, lerp, split};
+use crate::backdrop::{Backdrop, PlacedBackdrop, apply_to_frame};
 use crate::frame::Frame;
 use crate::painter::{Paint, Painter};
 use crate::placement::{Placement, SUBSAMPLES, crop_window};
@@ -30,7 +31,23 @@ pub struct CpuRenderer<A: AssetSource> {
     /// Luma mask images by asset id, shared so that a placement can hold
     /// one while the paint borrows the renderer.
     masks: HashMap<String, Arc<Image>>,
+    /// Markup pictures turned to sRGB-encoded values, by the painter's
+    /// key, most recent last: a caption that holds still is converted
+    /// once rather than at every frame.
+    encoded: Vec<(u64, Arc<Image>)>,
+    /// The overlay pictures drawn for the last frame, with what was drawn
+    /// into each: a group of clips that holds still is laid on from the
+    /// same picture at the next frame rather than drawn again.
+    drawn: Vec<(Vec<u64>, [u32; 4], Arc<Frame>)>,
+    /// The same for the frame being drawn, which becomes `drawn` when the
+    /// next one starts.
+    drawing: Vec<(Vec<u64>, [u32; 4], Arc<Frame>)>,
 }
+
+/// How many encoded markup pictures are kept: the captions on screen at
+/// once, with one to spare. Each is as large as its clip's box, often
+/// the frame, so a stepped caption's earlier pictures are not hoarded.
+const ENCODED_KEEP: usize = 3;
 
 /// How many spare buffers are kept.
 const SPARE_BUFFERS: usize = 4;
@@ -55,6 +72,9 @@ impl<A: AssetSource> CpuRenderer<A> {
             painter: Painter::new(assets),
             spare: Vec::new(),
             masks: HashMap::new(),
+            encoded: Vec::new(),
+            drawn: Vec::new(),
+            drawing: Vec::new(),
         }
     }
 
@@ -86,6 +106,10 @@ impl<A: AssetSource> Renderer for CpuRenderer<A> {
         self.painter.take_warnings()
     }
 
+    fn take_missing_glyphs(&mut self) -> Vec<(String, Vec<(char, usize)>)> {
+        self.painter.take_missing_glyphs()
+    }
+
     fn render_into(
         &mut self,
         comp: &Composition,
@@ -110,6 +134,66 @@ impl<A: AssetSource> Renderer for CpuRenderer<A> {
     }
 }
 
+/// One step of laying the clips above the first layer over its picture,
+/// in order: see [`CpuRenderer::render_overlays`].
+pub enum Overlay {
+    /// A picture of some clips, transparent around them, and its box
+    /// `[x0, y0, x1, y1]` in output pixels. With `encoded`, the picture
+    /// holds sRGB-encoded values, to be laid on as a browser lays markup
+    /// on (see [`composited_encoded`]); otherwise linear light. Shared,
+    /// since a picture that holds still is the same from frame to frame.
+    Picture(Arc<Frame>, [u32; 4], bool),
+    /// A box's `backdrop-filter`, done to the picture as it stands.
+    Backdrop(Box<PlacedBackdrop>),
+}
+
+/// A clip drawn for the overlay path, not yet laid on.
+struct OverlayItem {
+    /// What was drawn, as the painter keeps it (`None` when it does not)
+    /// and where and how: the same signature at the next frame means the
+    /// same pixels.
+    signature: Option<Vec<u64>>,
+    paint: Pic,
+    place: Placement,
+    opacity: f32,
+    blend: BlendMode,
+    backdrops: Vec<PlacedBackdrop>,
+    encoded: bool,
+}
+
+/// What a clip paints: the picture, its boxes' backdrop filters, and the
+/// key the painter keeps the picture under, if it does.
+type Painting<'a> = (Paint<'a>, Vec<Backdrop>, Option<u64>);
+
+/// A picture to lay on: one of its own, or one kept and shared.
+enum Pic {
+    Own(Paint<'static>),
+    Shared(Arc<Image>),
+}
+
+impl Pic {
+    /// The paint, its picture borrowed rather than copied: a picture
+    /// drawn fresh this frame is as big as the clip's box, 133 MB at
+    /// 3840x2160.
+    fn paint(&self) -> Paint<'_> {
+        match self {
+            Self::Own(Paint::Image(image)) => Paint::Image(Cow::Borrowed(image.as_ref())),
+            Self::Own(p) => p.clone(),
+            Self::Shared(image) => Paint::Image(Cow::Borrowed(image)),
+        }
+    }
+}
+
+/// Whether a clip is laid over what is under it in sRGB-encoded values,
+/// as a browser composites: markup with the normal blend. A page's
+/// translucent plate darkens what is behind it by its alpha in encoded
+/// values, which in linear light comes out lighter; this keeps markup
+/// looking as it does in a browser. Everything else, and markup with
+/// another blend mode, mixes in linear light.
+pub fn composited_encoded(clip: &geneva_timeline::ResolvedClip) -> bool {
+    matches!(clip.source, ResolvedSource::Html(_)) && clip.blend == BlendMode::Normal
+}
+
 impl<A: AssetSource> CpuRenderer<A> {
     /// What a clip paints at time `t` (`local` is the clip-relative time),
     /// or `None` when it paints nothing. A nested composition is drawn
@@ -121,7 +205,7 @@ impl<A: AssetSource> CpuRenderer<A> {
         t: Ratio,
         local: f64,
         size: Option<[u32; 2]>,
-    ) -> Result<Option<Paint<'_>>, RenderError> {
+    ) -> Result<Option<Painting<'_>>, RenderError> {
         if let ResolvedSource::Composition(nested) = &clip.source {
             let inner = self.render_layers(
                 comp,
@@ -131,13 +215,49 @@ impl<A: AssetSource> CpuRenderer<A> {
                 nested.background,
                 (t - clip.start) * clip.speed,
             )?;
-            return Ok(Some(Paint::Image(Cow::Owned(Image::from_frame_pixels(
-                inner,
-            )))));
+            return Ok(Some((
+                Paint::Image(Cow::Owned(Image::from_frame_pixels(inner))),
+                Vec::new(),
+                None,
+            )));
         }
-        Ok(Some(
-            self.painter.paint_shrunk(comp, clip, t, local, size)?.paint,
-        ))
+        let painted = self.painter.paint_shrunk(comp, clip, t, local, size)?;
+        Ok(Some((painted.paint, painted.backdrops, painted.key)))
+    }
+
+    /// The picture `clip` paints at `t`, in sRGB-encoded values, kept by
+    /// the painter's `key` so that one that holds still is converted
+    /// once. The painter keeps the picture itself, so asking for it
+    /// again on a miss costs no drawing.
+    fn encoded_picture(
+        &mut self,
+        comp: &Composition,
+        clip: &ResolvedClip,
+        t: Ratio,
+        local: f64,
+        key: u64,
+    ) -> Result<Arc<Image>, RenderError> {
+        if let Some(i) = self.encoded.iter().position(|(k, _)| *k == key) {
+            let hit = self.encoded.remove(i);
+            let image = Arc::clone(&hit.1);
+            self.encoded.push(hit);
+            return Ok(image);
+        }
+        let Some((paint, _, _)) = self.paint_for(comp, clip, t, local, None)? else {
+            return Err(RenderError::Unsupported {
+                what: "a markup picture that went away".to_owned(),
+                path: clip.path.clone(),
+            });
+        };
+        let Paint::Image(image) = encoded_paint(paint) else {
+            unreachable!("markup paints a picture");
+        };
+        let image = Arc::new(image.into_owned());
+        if self.encoded.len() >= ENCODED_KEEP {
+            self.encoded.remove(0);
+        }
+        self.encoded.push((key, Arc::clone(&image)));
+        Ok(image)
     }
 
     /// The smaller size a video clip's frame can be fetched at, and its
@@ -164,7 +284,14 @@ impl<A: AssetSource> CpuRenderer<A> {
         let Some((w, h)) = self.painter.assets_mut().video_size(comp, asset)? else {
             return Ok(None);
         };
-        let size = (f64::from(w), f64::from(h));
+        // The clip is placed by the picture's exact display size, which
+        // with non-square pixels is not quite its frames' (853.33 against
+        // 853 wide), and carried over to the frames' texels.
+        let size = self
+            .painter
+            .assets_mut()
+            .video_display_size(comp, asset)?
+            .unwrap_or((f64::from(w), f64::from(h)));
         let Some(window) = crop_window(clip, size) else {
             return Ok(None);
         };
@@ -176,11 +303,17 @@ impl<A: AssetSource> CpuRenderer<A> {
         } else {
             ZOOM_STEPS
         };
-        let fetched = [
-            shrunk_len(w, place.scale[0].abs() / reduce, steps),
-            shrunk_len(h, place.scale[1].abs() / reduce, steps),
+        // The scale from the frames' own pixels to the output's.
+        let texel = [
+            place.scale[0].abs() * size.0 / f64::from(w),
+            place.scale[1].abs() * size.1 / f64::from(h),
         ];
-        Ok((fetched != [w, h]).then_some(Shrunk {
+        let fetched = [
+            shrunk_len(w, texel[0] / reduce, steps),
+            shrunk_len(h, texel[1] / reduce, steps),
+        ];
+        let exact = size == (f64::from(w), f64::from(h));
+        Ok((fetched != [w, h] || !exact).then_some(Shrunk {
             full: size,
             size: fetched,
         }))
@@ -208,25 +341,30 @@ impl<A: AssetSource> CpuRenderer<A> {
 
     /// Draws the clips above the first layer that are visible at `t` onto
     /// transparent frames covering just their bounding boxes, one per
-    /// group of clips whose boxes touch, and returns each with its box
-    /// `[x0, y0, x1, y1]` in output pixels; empty when nothing is shown
-    /// above the first layer. Laying them all over the first layer's
-    /// picture, in any order, gives the composited frame when
+    /// group of clips whose boxes touch, each with its box `[x0, y0, x1,
+    /// y1]` in output pixels; empty when nothing is shown above the first
+    /// layer. Laying them all over the first layer's picture, in any
+    /// order, gives the composited frame when
     /// [`overlays_are_plain`](Self::overlays_are_plain) holds.
+    ///
+    /// A clip whose markup has a `backdrop-filter` changes what is under
+    /// it, so order matters there: the result is then a list to lay on in
+    /// order, the pictures of the clips below, the backdrop, and the
+    /// pictures from that clip on.
     pub fn render_overlays(
         &mut self,
         comp: &Composition,
         t: Ratio,
-    ) -> Result<Vec<(Frame, [u32; 4])>, RenderError> {
+    ) -> Result<Vec<Overlay>, RenderError> {
+        // The pictures drawn for the last frame are the ones this frame
+        // can reuse; the older ones go.
+        self.drawn = std::mem::take(&mut self.drawing);
         let Some(layers) = comp.layers.get(1..) else {
             return Ok(Vec::new());
         };
-        let mut items: Vec<(Paint<'static>, Placement, f32, BlendMode)> = Vec::new();
+        let mut items: Vec<OverlayItem> = Vec::new();
         for layer in layers {
-            for (i, clip) in layer.clips.iter().enumerate() {
-                if clip.start > t || t >= clip.end {
-                    continue;
-                }
+            for (i, clip) in layer.visible_at(t) {
                 let local = (t - clip.start).to_f64();
                 let mut opacity = clip.opacity.sample(local).clamp(0.0, 1.0);
                 opacity *= transition_gain(layer, i, t);
@@ -235,11 +373,11 @@ impl<A: AssetSource> CpuRenderer<A> {
                 }
                 let mask_image = self.mask_image(comp, clip)?;
                 let shrunk = self.shrink_for(comp, clip, local, (comp.width, comp.height), 1.0)?;
-                let Some(paint) = self.paint_for(comp, clip, t, local, shrunk.map(|s| s.size))?
+                let Some((paint, backdrops, key)) =
+                    self.paint_for(comp, clip, t, local, shrunk.map(|s| s.size))?
                 else {
                     continue;
                 };
-                let paint = paint.into_owned();
                 let Some(place) = place_paint(
                     (comp.width, comp.height),
                     clip,
@@ -250,16 +388,87 @@ impl<A: AssetSource> CpuRenderer<A> {
                 ) else {
                     continue;
                 };
+                let backdrops: Vec<PlacedBackdrop> = backdrops
+                    .iter()
+                    .filter_map(|b| {
+                        PlacedBackdrop::new(b, &place, opacity, (comp.width, comp.height))
+                    })
+                    .collect();
                 let b = place.bounds;
-                if b[0] >= b[2] || b[1] >= b[3] {
+                if (b[0] >= b[2] || b[1] >= b[3]) && backdrops.is_empty() {
                     continue;
                 }
-                items.push((paint, place, opacity as f32, clip.blend));
+                let encoded = composited_encoded(clip);
+                let paint = match (encoded, key) {
+                    (true, Some(key)) => {
+                        drop(paint);
+                        Pic::Shared(self.encoded_picture(comp, clip, t, local, key)?)
+                    }
+                    (true, None) => Pic::Own(encoded_paint(paint)),
+                    (false, _) => Pic::Own(paint.into_owned()),
+                };
+                let signature = key.filter(|_| place.mask.is_none()).map(|key| {
+                    let mut s = vec![key, u64::from(opacity.to_bits() as u32)];
+                    s.extend(
+                        place
+                            .window
+                            .iter()
+                            .chain(&place.anchor)
+                            .chain(&place.position)
+                            .chain(&place.scale)
+                            .chain([&place.cos, &place.sin])
+                            .map(|v| v.to_bits()),
+                    );
+                    s.extend(place.bounds.iter().map(|v| u64::from(*v)));
+                    s.push(clip.blend as u64);
+                    s
+                });
+                items.push(OverlayItem {
+                    signature,
+                    paint,
+                    place,
+                    opacity: opacity as f32,
+                    blend: clip.blend,
+                    backdrops,
+                    encoded,
+                });
             }
         }
-        if items.is_empty() {
-            return Ok(Vec::new());
+        // Runs of clips with no backdrop between them are laid on in
+        // groups as before; a backdrop starts a new run after itself.
+        // So does a change between markup laid on in encoded values and
+        // anything else, since the two cannot share a picture.
+        let mut out = Vec::new();
+        let mut run: Vec<OverlayItem> = Vec::new();
+        for mut item in items {
+            let switch = run.last().is_some_and(|last| last.encoded != item.encoded);
+            if !item.backdrops.is_empty() || switch {
+                out.extend(self.group_overlays(std::mem::take(&mut run)));
+            }
+            out.extend(
+                item.backdrops
+                    .drain(..)
+                    .map(|b| Overlay::Backdrop(Box::new(b))),
+            );
+            run.push(item);
         }
+        out.extend(self.group_overlays(run));
+        Ok(out)
+    }
+
+    /// Draws overlay items onto frames, one per group of items whose
+    /// boxes touch.
+    fn group_overlays(&mut self, items: Vec<OverlayItem>) -> Vec<Overlay> {
+        let items: Vec<OverlayItem> = items
+            .into_iter()
+            .filter(|i| {
+                i.place.bounds[0] < i.place.bounds[2] && i.place.bounds[1] < i.place.bounds[3]
+            })
+            .collect();
+        if items.is_empty() {
+            return Vec::new();
+        }
+        let encoded = items[0].encoded;
         // Clips far apart (a card at the top, captions at the bottom) get
         // a frame each rather than one spanning both, which would be
         // mostly transparent and still converted and laid on in full.
@@ -279,8 +488,9 @@ impl<A: AssetSource> CpuRenderer<A> {
         };
         // Each group: its box, its widened box, and its items in order.
         let mut groups: Vec<([u32; 4], [u32; 4], Vec<usize>)> = Vec::new();
-        for (i, (_, place, _, _)) in items.iter().enumerate() {
-            let (mut rect, mut wide, mut members) = (place.bounds, widen(place.bounds), vec![i]);
+        for (i, item) in items.iter().enumerate() {
+            let bounds = item.place.bounds;
+            let (mut rect, mut wide, mut members) = (bounds, widen(bounds), vec![i]);
             // Absorbing a group can make this one reach another, so keep
             // going until nothing more touches.
             while let Some(g) = groups.iter().position(|g| touch(g.1, wide)) {
@@ -291,28 +501,59 @@ impl<A: AssetSource> CpuRenderer<A> {
             }
             groups.push((rect, wide, members));
         }
-        let mut items: Vec<Option<_>> = items.into_iter().map(Some).collect();
+        let mut items: Vec<Option<OverlayItem>> = items.into_iter().map(Some).collect();
         let mut out = Vec::with_capacity(groups.len());
         for (rect, _, mut members) in groups {
             // Painter's order within a group, as in one shared frame.
             members.sort_unstable();
+            // The same clips, drawn the same way, as at the last frame:
+            // the same picture.
+            let signature: Option<Vec<u64>> = members
+                .iter()
+                .map(|i| items[*i].as_ref().and_then(|item| item.signature.clone()))
+                .collect::<Option<Vec<Vec<u64>>>>()
+                .map(|parts| parts.concat());
+            if let Some(signature) = &signature {
+                if let Some((_, _, frame)) = self
+                    .drawn
+                    .iter()
+                    .find(|(s, r, _)| s == signature && *r == rect)
+                {
+                    let frame = Arc::clone(frame);
+                    self.drawing
+                        .push((signature.clone(), rect, Arc::clone(&frame)));
+                    out.push(Overlay::Picture(frame, rect, encoded));
+                    continue;
+                }
+            }
             let mut frame = Frame::new(rect[2] - rect[0], rect[3] - rect[1], Color::TRANSPARENT);
             for i in members {
-                let (paint, place, opacity, blend) = items[i].take().expect("in one group");
+                let item = items[i].take().expect("in one group");
                 draw(
                     &mut frame,
                     [rect[0], rect[1]],
-                    &paint,
-                    &place,
-                    opacity,
-                    blend,
+                    &item.paint.paint(),
+                    &item.place,
+                    item.opacity,
+                    item.blend,
                 );
-                let pixels = owned_pixels(paint);
-                self.recycle(pixels);
+                match item.paint {
+                    // Markup drawn fresh this frame: its buffer goes back
+                    // to the painter for the next.
+                    Pic::Own(Paint::Image(Cow::Owned(image))) if item.encoded => {
+                        self.painter.recycle_markup(image);
+                    }
+                    Pic::Own(paint) => self.recycle(owned_pixels(paint)),
+                    Pic::Shared(_) => {}
+                }
             }
-            out.push((frame, rect));
+            let frame = Arc::new(frame);
+            if let Some(signature) = signature {
+                self.drawing.push((signature, rect, Arc::clone(&frame)));
+            }
+            out.push(Overlay::Picture(frame, rect, encoded));
         }
-        Ok(out)
+        out
     }
 
     /// Renders a set of layers into a fresh frame at time `t`, which is
@@ -354,14 +595,9 @@ impl<A: AssetSource> CpuRenderer<A> {
         frame: &mut Frame,
     ) -> Result<(), RenderError> {
         frame.reset(width, height, background);
-        let visible = layers.iter().flat_map(|layer| {
-            layer
-                .clips
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| c.start <= t && t < c.end)
-                .map(move |(i, c)| (layer, i, c))
-        });
+        let visible = layers
+            .iter()
+            .flat_map(|layer| layer.visible_at(t).map(move |(i, c)| (layer, i, c)));
         for (layer, i, clip) in visible {
             let local = (t - clip.start).to_f64();
             let mut opacity = clip.opacity.sample(local).clamp(0.0, 1.0);
@@ -386,7 +622,9 @@ impl<A: AssetSource> CpuRenderer<A> {
             let mask_image = self.mask_image(comp, clip)?;
             let shrunk =
                 self.shrink_for(comp, clip, local, (width, height), blur_reduction(sigma))?;
-            let Some(paint) = self.paint_for(comp, clip, t, local, shrunk.map(|s| s.size))? else {
+            let Some((paint, backdrops, key)) =
+                self.paint_for(comp, clip, t, local, shrunk.map(|s| s.size))?
+            else {
                 continue;
             };
             let Some(placement) = place_paint(
@@ -399,6 +637,13 @@ impl<A: AssetSource> CpuRenderer<A> {
             ) else {
                 continue;
             };
+            // What the clip's boxes do to the picture under them, before
+            // the clip is drawn over it.
+            for b in &backdrops {
+                if let Some(placed) = PlacedBackdrop::new(b, &placement, opacity, (width, height)) {
+                    apply_to_frame(frame, &placed);
+                }
+            }
             let scratch = if sigma > 0.0 {
                 Some(draw_blurred(
                     scratch,
@@ -409,6 +654,28 @@ impl<A: AssetSource> CpuRenderer<A> {
                     opacity as f32,
                     clip.blend,
                 ))
+            } else if composited_encoded(clip) {
+                match key {
+                    Some(key) => {
+                        drop(paint);
+                        let image = self.encoded_picture(comp, clip, t, local, key)?;
+                        let encoded = Paint::Image(Cow::Borrowed(&*image));
+                        draw_encoded(frame, &encoded, &placement, opacity as f32);
+                        drop(scratch);
+                        continue;
+                    }
+                    None => {
+                        // Drawn fresh for this frame, so it is turned to
+                        // encoded values in place rather than copied.
+                        let encoded = encoded_paint(paint);
+                        draw_encoded(frame, &encoded, &placement, opacity as f32);
+                        if let Paint::Image(Cow::Owned(image)) = encoded {
+                            self.painter.recycle_markup(image);
+                        }
+                        self.recycle(Some(scratch));
+                        continue;
+                    }
+                }
             } else {
                 draw(
                     frame,
@@ -659,6 +926,57 @@ impl Placement {
 /// Draws `paint` into `frame`, whose top-left corner sits at `origin` in
 /// output coordinates (the placement's bounds are in output coordinates
 /// too, so a frame covering part of the output receives its part).
+/// A picture's pixels turned to sRGB-encoded values, over its content
+/// rectangle only, for laying on as a browser would.
+fn encoded_paint(paint: Paint<'_>) -> Paint<'static> {
+    match paint {
+        Paint::Image(img) => {
+            let mut img = img.into_owned();
+            let [cx, cy, cw, ch] = img.content.unwrap_or([0, 0, img.width, img.height]);
+            let width = img.width as usize;
+            img.pixels
+                .par_chunks_mut(width)
+                .enumerate()
+                .filter(|(y, _)| *y as u32 >= cy && (*y as u32) < cy + ch)
+                .for_each(|(_, row)| {
+                    for p in &mut row[cx as usize..(cx + cw).min(width as u32) as usize] {
+                        *p = crate::html::encode_pixel(*p);
+                    }
+                });
+            Paint::Image(Cow::Owned(img))
+        }
+        other => other.into_owned(),
+    }
+}
+
+/// Draws a markup clip as a browser composites it: the frame under it
+/// turned to sRGB-encoded values, the picture (already in them, see
+/// [`encoded_paint`]) mixed there, and the frame turned back to linear
+/// light.
+fn draw_encoded(frame: &mut Frame, paint: &Paint<'_>, place: &Placement, opacity: f32) {
+    let [x0, y0, x1, y1] = place.bounds;
+    let x1 = x1.min(frame.width());
+    let y1 = y1.min(frame.height());
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let width = frame.width() as usize;
+    let span = x0 as usize..x1 as usize;
+    let rows = y0 as usize..y1 as usize;
+    let convert = |frame: &mut Frame, f: fn(LinearRgba) -> LinearRgba| {
+        frame.pixels_mut()[rows.start * width..rows.end * width]
+            .par_chunks_mut(width)
+            .for_each(|row| {
+                for p in &mut row[span.clone()] {
+                    *p = f(*p);
+                }
+            });
+    };
+    convert(frame, crate::html::encode_pixel);
+    draw(frame, [0, 0], paint, place, opacity, BlendMode::Normal);
+    convert(frame, crate::html::decode_pixel);
+}
+
 fn draw(
     frame: &mut Frame,
     origin: [u32; 2],

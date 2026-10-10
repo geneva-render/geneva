@@ -24,6 +24,10 @@ const DRAWN: &[&str] = &[
     "text-basics",
     "markup-card",
     "markup-opening",
+    "markup-stroke",
+    "markup-fallback",
+    "markup-lines",
+    "markup-origin",
     "blur",
 ];
 

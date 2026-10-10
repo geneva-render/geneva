@@ -31,7 +31,9 @@ versions changed the format freely.
   progress. Plain HTTP with a shared token, no encryption. Workers
   fetch only the byte ranges of MP4 and MOV sources that their parts
   read; other files, and those inside nested compositions or used as
-  masks, go whole.
+  masks, go whole. A farm started with `--no-system-fonts` has every
+  worker draw text the same way, in the document's fonts and the
+  built-in one.
 - **A `Dockerfile` for workers, and ways to start them.** The image
   runs `geneva worker` by default and answers AWS Lambda invocations
   when run as a function. `geneva farm --url` gives workers an address
@@ -41,7 +43,289 @@ versions changed the format freely.
   Kubernetes, ECS and Lambda; only Docker and a Lambda emulator have
   been tried.
 
+## 1.4.0 (2026-10-08)
+
+### Added
+
+- **Older video formats**: DV (NTSC and PAL), MPEG-1 and MPEG-2 in
+  program and transport streams (`.mpg`, `.vob`, `.ts`, `.m2ts`), WMV 1
+  to 3 and VC-1 in ASF, MS-MPEG4 v1 to v3, Motion JPEG, QuickTime RLE
+  and Canopus HQ/HQA/HQX, with their usual audio (MP1/MP2, WMA, DVD and
+  Blu-ray PCM, A-law, mu-law, IMA ADPCM). These extensions are taken as
+  video assets. An ASF file's rate, declared as its 1000 fps time base,
+  is measured from its timestamps; MPEG frames that carry no timestamp
+  are timed from the frame before, and the length of an MPEG stream is
+  measured from its last frames, so none are lost at the end.
+- **Deinterlacing**: an interlaced frame (DV, most MPEG-2) is drawn at
+  its first field, with the lines of the second rebuilt where they comb,
+  in place of the woven frame.
+- **Undecodable streams named**: `probe` lists a stream it cannot decode
+  under `undecodable` (codec and reason), and the human output says so;
+  a verb that needs the stream stops with `its video stream (cinepak)
+  cannot be decoded` rather than "has no video".
+
+- **Synthetic bold and oblique** (`font-synthesis`), as Chromium draws
+  them: `font: 700 40px Anton` with only Anton's 400 face is emboldened,
+  italic in a family with no italic face is slanted, and `font: italic
+  600 Inter` with italic faces at 400 and 500 is the 500 italic made
+  bold. Bold follows Chromium's rule for web fonts (600 or more asked of
+  a face below 600) and Skia's stroke (an "I" at 240 px is 7.5 px wider,
+  half on each side, as in Chromium); the oblique is Skia's quarter
+  shear. `font-synthesis: none` (and the `-weight`, `-style` longhands)
+  turns either off. Measured against Chromium on Anton 700, Inter italic
+  600 and Manrope italic: the difference is that of the same text with
+  no synthesis. Italic text gets room for glyphs that lean past their
+  advances, so the last letter is no longer cut off.
+
+- **`text-spacing-trim`** with Chromium's default, `normal`: full-width
+  punctuation beside punctuation is set half-width with the font's
+  `halt` forms, so `他說：「好的…」（真的？）` is an em narrower, as in
+  Chromium, in Noto Sans TC, SC and JP (glyph positions within a pixel).
+  The font decides which side a mark's space is on, and nothing is
+  trimmed at a line's start or end, as in Chromium. `space-all` keeps
+  every mark whole.
+- **Only the document's fonts** with `--no-system-fonts` (or
+  `GENEVA_NO_SYSTEM_FONTS=1`): text is drawn in the font assets and
+  `@font-face` files and the built-in Liberation Sans, never the
+  machine's, so a timeline is the same picture on a desktop and a bare
+  server image.
+- **Missing letters reported** (W407, `render` and `frame`): a clip that
+  draws letters no font has, as boxes, is named with each letter, its
+  code point and how many one frame drew. Before, a render on a machine
+  without the right fonts drew boxes and said nothing.
+
 ### Fixed
+
+- **Chinese and Japanese markup did not wrap.** A box's min-content
+  width took a run with no spaces as one word, so a caption in a
+  200 px box drew on one line far past it. Min-content now breaks where
+  Unicode allows, between ideographs among others, as a browser does.
+- **Memory grew with the source file.** Every packet a decoder read and
+  skipped (another stream's) leaked: the demuxer overwrites the packet
+  it is given without releasing the old one. The audio reader skips all
+  the video, so it leaked the whole video stream: 11 GB for a 4K ProRes
+  file, several GB for 1080p ProRes, MPEG-4 part 2 at high quality or
+  4K 120 fps H.264. Reads now release the previous packet, and a lint
+  keeps it so.
+- **`--memory-budget` counts decoders and encoders.** Intra-only codecs
+  (ProRes, DNxHD, DV) decode by slice, which holds no frame per thread
+  and is as fast; other decoders and software encoders run on fewer
+  threads where a quarter of the budget would not hold theirs. At 32
+  threads: 4K ProRes 422 Proxy 5.6 GB to 2.6 GB and 4K 120 fps H.264 at
+  60 fps 5.0 to 3.1 GB, under 4.8G; 1080p ProRes 0.9 GB and 1080p MPEG-4
+  1.1 GB, under 2.4G. A 2-minute 720p ProRes file holds 0.31 GB flat
+  where it climbed to 1.4 GB.
+- **Bengali ra-phala and ba-phala** (`ক্র`, `ন্ত্র`, `স্ক্র`, `ন্দ্র`
+  in Noto Sans Bengali) were drawn as a visible hasant and a full
+  letter. The shaper (harfrust 0.5.2, under cosmic-text) never matched
+  format-3 context rules when asking whether a below-base form applies;
+  it is patched in `vendor/harfrust` until cosmic-text moves to a
+  version with the fix. Devanagari, Gurmukhi and Odia conjuncts (`क्र`,
+  `प्र`, `ਪ੍ਰ`, `କ୍ର`) were checked against Chromium.
+
+## 1.3.0 (2026-10-07)
+
+### Added
+
+- **Non-square pixels**: a video whose pixels are not square (DV and
+  MPEG-2 material, 720×480 at 32:27 shown as 16:9) is drawn at its
+  display aspect under every `fit`, as a browser's `<video>` is; before,
+  it was drawn at its stored size, squeezed. `probe` reports the size as
+  displayed (853×480), `sample_aspect_ratio` and the stored size, and the
+  verbs that size their output from the source size it as displayed, in
+  square pixels (`convert` makes 854×480). Such a source is not stream-
+  copied or smart-cut into an output of another shape, and the direct
+  path and the GPU's own plane upload leave it to the compositor.
+
+## 1.2.2 (2026-10-07)
+
+### Fixed
+
+- **A word broke inside a box as wide as its text** when the text was
+  centred or right-aligned (`Makin` / `g`). The box was measured with
+  the text laid out in a very wide line, where a centred word sits tens
+  of thousands of pixels along and its width read back slightly short;
+  the box came out narrower than the line and the paint broke it. Text
+  is now measured left-aligned, so a box sized to its content keeps the
+  lines it was measured with, and its glyphs sit in the same place under
+  `start`, `center` and `right`.
+- **`white-space: nowrap` (and `pre`) never breaks a line** in markup;
+  it was read only for whether spaces are kept. A line too long for its
+  box now runs past it, as in a browser.
+
+## 1.2.1 (2026-10-07)
+
+### Fixed
+
+- **Right-to-left words with characters from two fonts**: a word whose
+  letters come from one family of the list and its punctuation or digits
+  from another was drawn with the runs in reading order, so `له.` with
+  the full stop from a Latin font came out as `.له`. The glyphs of each
+  bidi run are now put in the order the run's direction gives, as in a
+  browser. This also covers a right-to-left word split by a style change
+  (a highlighted or bold part).
+- **Glyphs still while a markup text shadow grows**: an animated
+  `text-shadow` blur changed the room left around the text every frame,
+  and with a fractional room the glyphs moved by a pixel from frame to
+  frame. The room is now whole pixels, so the word stays where layout
+  puts it (within 0.1 px). `filter: blur()` and `box-shadow` growing
+  were checked and do not move their content.
+
+## 1.2.0 (2026-10-07)
+
+### Added
+
+- **Masks in markup**: `mask-image` with `linear-gradient()` or
+  `radial-gradient()`, `mask-size`, `mask-position` and `mask-repeat`
+  (`-webkit-` too), with `mask-position` and `mask-size` animatable: a
+  word painted on left to right with a soft edge. Documents using one
+  render on the CPU.
+- **More animatable properties in markup keyframes**:
+  `background-color` (or a one-colour `background`), `border-color` and
+  the `border-*-color` longhands, `box-shadow` (mixed shadow by shadow),
+  `left` and `top`.
+- **`anchor()` and `anchor-size()` in keyframes** on `left`, `top` and
+  `width`, naming a box by `anchor-name` or id: an underline that glides
+  from the spoken word to the next, without measuring the words
+  beforehand.
+- **`direction` and the `dir` attribute** (`ltr`, `rtl`, `auto`):
+  paragraphs run right to left, `text-align: start` and `end` follow the
+  direction, and flex rows run from the right.
+- **`text-transform`** (`uppercase`, `lowercase`, `capitalize`), with
+  Turkish and Azeri casing under `lang="tr"` or `"az"`.
+- **A static `transform` in markup**, with the functions keyframes
+  take. It was W450.
+- **`calc()`, `min()`, `max()` and `clamp()`** in lengths, over `px`,
+  `em`, `rem` and numbers.
+- **Text stroke in markup.** `-webkit-text-stroke` (and its `-width` and
+  `-color` longhands) and `paint-order`, inherited like `color`: a
+  stroke centred on the outline with mitred joins, over the fill by
+  default or under it with `paint-order: stroke fill`, so half its width
+  shows. It does not change layout.
+- **`--threads N` and `--memory-budget SIZE`** (or `GENEVA_THREADS` and
+  `GENEVA_MEMORY_BUDGET`), so jobs sharing a host each keep to a share.
+  The thread count reaches every pool: decoders, the scaler, rendering,
+  x264 and the other encoders, and the number of chunks encoded at
+  once. The budget sizes the caches and the queue of frames waiting for
+  the encoder. The render report gives `threads` and `peak_memory`.
+- **`transform-origin` in markup**: keywords, lengths and percentages,
+  for the point an animated `transform`, `scale`, `rotate` or
+  `translate` turns and scales about, such as a word growing from near
+  its baseline (`50% 72%`) or a line shrinking towards its corner
+  (`0 100%`). Transforms turned about the box's centre only. Compared
+  with Chromium frame by frame.
+- **WOFF and WOFF2 fonts, and `@font-face` in markup.** A `font` asset
+  can be a `.woff` or `.woff2` file, as web font packages ship them, and
+  markup can load one with `@font-face { font-family: ...; src: url(...) }`
+  relative to its stylesheet, with `font-weight` and `font-style`. The
+  `wuff` crate (MIT) unpacks them.
+- **Font fallback through `font-family` lists.** Markup's
+  `font-family: Inter, "Noto Sans Arabic", "Noto Sans JP"` (and a text
+  source's `font` written as a list) draws each character in the first
+  listed family that has it, so a Latin caption with an Arabic or
+  Japanese word uses the fonts the document names, shaped and joined,
+  rather than whatever the machine falls back to. Only the first family
+  was used before.
+- **`backdrop-filter` in markup** (`-webkit-` too): `blur()`,
+  `saturate()`, `brightness()` and `contrast()`, in order, on what is
+  under the box, for frosted caption plates. As in Chromium, only the
+  picture inside the border box is read, the blur thins out towards its
+  edges, and the result follows the rounded corners and the box's
+  opacity. On the direct path it is done to the decoded video under the
+  box. Documents using it render on the CPU.
+
+### Changed
+
+- **Moving markup is cheaper to draw.** Text is measured once per clip
+  rather than every frame; `filter: blur()` radii are rounded to 0.25 px
+  so frames share a blurred picture of an element whose content holds
+  still, and a radius over 8 px is blurred at a half to a quarter of
+  the size and scaled back (within a code of the full blur).
+- **A timeline with thousands of markup clips renders in the memory of
+  the few on screen.** Each markup clip's prepared document and picture
+  were kept for the whole render, about 33 MB a clip at 1080p; they are
+  now dropped once the clip has ended. The clips a frame shows are found
+  by binary search instead of a scan of every clip, a stylesheet shared
+  by many clips (repeated as `<style>` or linked) is read and parsed
+  once, and `validate` looks each font family up once.
+- **A markup warning repeated by many clips is reported once**, with the
+  number of other clips that share it.
+- **Markup whose animations only step is painted once per step.** Word
+  by word highlighting written as keyframes with `steps()` (or keyframes
+  that all say the same) was laid out and painted at every frame, as
+  moving captions are; it is now painted once per interval between the
+  moments it can change, and the picture reused. With a still caption's
+  picture also turned to sRGB-encoded values once rather than at every
+  frame, and only its painted area converted to linear light, a two-line
+  caption whose 13 words light up one after another costs about 2.8%
+  more than the same captions through `subtitles --highlight` (it was
+  about 10%), and still markup captions cost no more than `--highlight`.
+  A group of captions or titles that holds still is no longer drawn
+  again at every frame on the direct path, and laying it on the video
+  costs about half what it did.
+- **Markup text lines are stacked as in Chromium.** `line-height:
+  normal`, the default, was 1.2 times the size for every font; it is now
+  the font's own ascent, descent and line gap, rounded as Chromium
+  rounds them, and a fallback font with taller metrics makes its line
+  taller. Explicit line heights place the baseline with Chromium's
+  rounding. Line boxes now equal Chromium's for the fonts measured, and
+  glyphs sit within a pixel of it; a plate around a caption is as tall
+  as in the browser. Text sources keep their layout (1.2 by default).
+  Markup renders change wherever text uses `normal`.
+- **Markup is laid over the picture in sRGB-encoded values, as a
+  browser lays a page over a video.** A markup clip with the `normal`
+  blend mode was laid on in linear light, so a translucent plate
+  (`#ffffff20`), a soft `box-shadow` or a text shadow came out lighter
+  than in Chromium. Measured on a plate, a 60% black box-shadow and a
+  gradient over a flat colour, they now match Chromium to a code or two. Markup with
+  another blend mode, and every other source, still composite in linear
+  light. Renders of existing documents with translucent markup change.
+- **A text outline mitres its sharp corners as browsers do.** Joins
+  sharper than 90 degrees were bevelled; now every join is mitred up to
+  a miter limit of 4, so the tip of an A or a W comes to a point. The
+  stroke also follows a variable font's weight.
+
+### Fixed
+
+- **Markup with a box wholly below its picture panicked** while painting
+  that box. It is left out, as everything else outside the picture is.
+- **A `box-shadow` showed through its own translucent box.** It is drawn
+  only outside the border box, as CSS has it.
+- **Animated colours in markup mixed in linear light**; they mix as a
+  browser mixes them, in sRGB-encoded values premultiplied by alpha, so a
+  colour halfway between two matches Chromium's.
+- **Lines in markup ignored the first family of the list unless it drew
+  a glyph.** Every line holds its metrics (CSS's strut), so a Latin line
+  under `font-family: "Noto Sans Arabic", Inter` is as tall as in a
+  browser.
+
+- **A `transform` list was collected rather than composed in order**, so
+  `scale(0.5) translateX(20px)` moved 20 px where CSS moves 10. A
+  translation written after a scale or rotation now goes through them.
+
+- **Text in a box narrower than the text did not wrap** when the box
+  was a flex container (an absolutely positioned `<div>` with a
+  `width`, for one): the text's narrowest size was taken as its whole
+  width, so it ran out of the box. It is now its longest word, and the
+  text wraps.
+
+- **A font asset named in markup only by the family its file declares
+  was reported unused** (W201), and by `validate` also as not installed
+  (W405), though the render used it.
+
+- **`validate` without `--probe` looked for linked stylesheets in the
+  working directory** rather than under the asset root, so a document
+  checked from elsewhere reported E452 for a sheet that was there.
+
+- **A source whose length ends a fraction of a frame past its last frame
+  failed to render.** 73 frames at 24 fps last 3.0416666... s; a verb
+  (`subtitles --burn`, `overlay`, `audio`) writes that into its document
+  as 3.041667 s, and the frame count, rounded up, asked for a 74th frame
+  that no clip covered: `error[E501]: ... no clip covers 3.041667s`. An
+  audio track ending up to 1 ms past the picture did the same. A frame
+  that would start less than 1 ms before the end is no longer counted.
+  When the smart cut ran instead, the frame was dropped but still
+  counted in the report.
 
 - **The install scripts failed for anyone with a `GITHUB_TOKEN` set.** A
   token in the environment sent them down the path meant for a private

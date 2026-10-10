@@ -415,7 +415,7 @@ fn index_source(
     wanted: Range<u64>,
 ) -> Result<Option<(SourceStream, ParameterSets, Vec<u8>)>, MediaError> {
     let mut ictx = ffmpeg_next::format::input(path).map_err(|e| open_error(path, e))?;
-    let (stream_index, time_base, params, stream_fps) = {
+    let (stream_index, time_base, params, stream_fps, aspect) = {
         let Some(video) = ictx.streams().best(Type::Video) else {
             return Ok(None);
         };
@@ -424,14 +424,16 @@ fn index_source(
             video.time_base(),
             video.parameters(),
             super::probe::frame_rate(ratio(video.avg_frame_rate()), ratio(video.rate())),
+            super::ffi::sample_aspect_ratio(&video),
         )
     };
     if params.id() != codec::Id::H264 || stream_fps != Some(fps) {
         return Ok(None);
     }
-    // Copied packets keep the coded orientation while encoded runs would
-    // be upright: a rotated source is re-encoded whole instead.
-    if super::ffi::display_rotation(&params) != 0 {
+    // Copied packets keep the coded orientation and pixel aspect while
+    // encoded runs would be upright and square: a rotated source, or one
+    // with non-square pixels, is re-encoded whole instead.
+    if super::ffi::display_rotation(&params) != 0 || !aspect.is_square() {
         return Ok(None);
     }
     let decoder = codec::context::Context::from_parameters(params.clone())
@@ -459,7 +461,7 @@ fn index_source(
     // with, shown first.
     let mut packet = Packet::empty();
     let mut first_pts = None;
-    while packet.read(&mut ictx).is_ok() {
+    while super::read_packet(&mut packet, &mut ictx).is_ok() {
         if packet.stream() == stream_index {
             first_pts = packet.pts().or(packet.dts());
             break;
@@ -476,7 +478,7 @@ fn index_source(
     let mut packets: Vec<IndexedPacket> = Vec::new();
     let mut base: Option<usize> = None;
     let mut reorder = 0i64;
-    while packet.read(&mut ictx).is_ok() {
+    while super::read_packet(&mut packet, &mut ictx).is_ok() {
         if packet.stream() != stream_index {
             continue;
         }
@@ -559,7 +561,7 @@ pub fn read_copied(
     .map_err(|e| codec_error(format!("{}: seeking", path.display()), e))?;
     let mut packet = Packet::empty();
     let mut index = None;
-    while packet.read(&mut ictx).is_ok() {
+    while super::read_packet(&mut packet, &mut ictx).is_ok() {
         if packet.stream() != source.stream_index {
             continue;
         }
@@ -664,7 +666,7 @@ pub fn read_copied_audio(
     }
     let mut packet = Packet::empty();
     let mut placing = false;
-    while packet.read(&mut ictx).is_ok() {
+    while super::read_packet(&mut packet, &mut ictx).is_ok() {
         if packet.stream() != index {
             continue;
         }

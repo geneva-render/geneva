@@ -23,7 +23,7 @@ impl PlaneScaler {
     /// A scaler for `format` from `from` to `to` (width, height).
     pub fn new(format: PlaneFormat, from: (u32, u32), to: (u32, u32)) -> Result<Self, MediaError> {
         let pixel = pixel_of(format);
-        let threads = std::thread::available_parallelism().map_or(1, usize::from);
+        let threads = geneva_render::limits::threads();
         let scaler = ffi::ThreadedScaler::new(
             pixel,
             from,

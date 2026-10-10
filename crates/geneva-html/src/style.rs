@@ -188,6 +188,54 @@ pub struct Paint {
     /// `mix-blend-mode`: how the box and its children are mixed with
     /// what is behind them.
     pub blend: Blend,
+    /// `transform-origin`: the point an animated transform turns and
+    /// scales about, a share or a length of the border box from its
+    /// top-left corner. The centre by default.
+    pub transform_origin: (Extent, Extent),
+    /// `backdrop-filter`: what is done to the picture behind the box,
+    /// inside its border box, before the box is drawn over it. Empty for
+    /// none.
+    pub backdrop: Vec<Filter>,
+    /// `mask-image`: a gradient whose alpha keeps the box and its
+    /// children, laid out as a background is by the three below.
+    pub mask: Option<Background>,
+    /// `mask-size`.
+    pub mask_size: (Extent, Extent),
+    /// `mask-position`.
+    pub mask_position: (Extent, Extent),
+    /// `mask-repeat`, per axis: whether the tile repeats, or is kept
+    /// once with nothing kept outside it.
+    pub mask_repeat: (bool, bool),
+    /// A static `transform`, as written: the renderer reads it with the
+    /// keyframe parser, so the two take the same functions.
+    pub transform: Option<String>,
+    /// `anchor-name`: what `anchor()` in a keyframe calls this box.
+    pub anchor_name: Option<String>,
+}
+
+/// One function of a `backdrop-filter`, applied in the order written to
+/// sRGB-encoded values, as a browser does.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Filter {
+    /// `blur(<length>)`: a Gaussian of that standard deviation, in pixels.
+    Blur(f64),
+    /// `saturate(<number>|<percentage>)`: 1 leaves the colour as it is.
+    Saturate(f64),
+    /// `brightness(...)`: a factor on every channel.
+    Brightness(f64),
+    /// `contrast(...)`: a factor on every channel's distance from grey.
+    Contrast(f64),
+}
+
+impl Filter {
+    /// The blur's standard deviation, zero for the other functions.
+    #[must_use]
+    pub fn blur(self) -> f64 {
+        match self {
+            Self::Blur(r) => r,
+            _ => 0.0,
+        }
+    }
 }
 
 impl Default for Paint {
@@ -204,6 +252,14 @@ impl Default for Paint {
             blur: 0.0,
             clip_path: None,
             blend: Blend::default(),
+            transform_origin: (Extent::Percent(50.0), Extent::Percent(50.0)),
+            backdrop: Vec::new(),
+            mask: None,
+            mask_size: (Extent::Auto, Extent::Auto),
+            mask_position: (Extent::Px(0.0), Extent::Px(0.0)),
+            mask_repeat: (true, true),
+            transform: None,
+            anchor_name: None,
         }
     }
 }
@@ -266,20 +322,186 @@ pub struct Text {
     pub weight: u16,
     /// Italic.
     pub italic: bool,
-    /// Multiple of the font size.
-    pub line_height: f64,
+    /// `font-synthesis`: whether a bold, then an oblique, may be drawn
+    /// synthetically where the family has no such face.
+    pub synthesis: (bool, bool),
+    /// `text-spacing-trim: space-all`: full-width punctuation keeps its
+    /// full width; `normal` (the default) halves it beside other marks.
+    pub space_all: bool,
+    /// Multiple of the font size; `None` for `normal`, the font's own
+    /// spacing.
+    pub line_height: Option<f64>,
     /// Extra space between characters, in pixels.
     pub letter_spacing: f64,
     /// Horizontal alignment.
     pub align: TextAlign,
-    /// Whether runs of whitespace and newlines are kept.
-    pub pre: bool,
+    /// `white-space`: whether spaces and newlines are kept, and whether
+    /// lines break where they run out of room.
+    pub white_space: WhiteSpace,
     /// Shadows drawn behind the glyphs, front to back as CSS lists them.
     pub shadow: Vec<Shadow>,
     /// A background clipped to the glyphs, from an ancestor's
     /// `background-clip: text`. It stands in for `color` while it is set.
     /// Boxed so a style with no fill stays small.
     pub fill: Option<Box<TextFill>>,
+    /// `-webkit-text-stroke-width` in pixels: a stroke centred on the
+    /// glyph outline, so half of it lies outside the glyph.
+    pub stroke_width: f64,
+    /// `-webkit-text-stroke-color`; `None` is `currentcolor`.
+    pub stroke_color: Option<Color>,
+    /// Whether the stroke is painted over the fill, as `paint-order:
+    /// normal` does; `stroke fill` puts it underneath.
+    pub stroke_over_fill: bool,
+    /// `text-transform`.
+    pub transform: TextTransform,
+    /// The `lang` attribute of the nearest element that has one, lower
+    /// case: the casing rules `text-transform` follows.
+    pub lang: Option<String>,
+    /// `direction`, or the `dir` attribute: with `Rtl` paragraphs run
+    /// right to left, `start` is the right edge, and a flex row runs from
+    /// the right.
+    pub direction: TextDirection,
+    /// `text-align: start` (`Some(false)`) or `end` (`Some(true)`), which
+    /// [`Text::align`] is worked out from with each element's direction;
+    /// `None` for a side written as such.
+    pub start_end: Option<bool>,
+}
+
+/// Whether the first strong character in an element's text, in document
+/// order, is right to left (Hebrew, Arabic and the like), which is what
+/// `dir="auto"` goes by; `None` when it has no strong character.
+fn first_strong_is_rtl(doc: &Document, id: crate::dom::NodeId) -> Option<bool> {
+    use unicode_bidi::BidiClass;
+    for c in doc.children(id) {
+        let found = match doc.nodes[*c].text() {
+            Some(t) => t.chars().find_map(|ch| match unicode_bidi::bidi_class(ch) {
+                BidiClass::L => Some(false),
+                BidiClass::R | BidiClass::AL => Some(true),
+                _ => None,
+            }),
+            None => first_strong_is_rtl(doc, *c),
+        };
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
+
+/// `white-space`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WhiteSpace {
+    /// Spaces collapse and lines break where they run out of room.
+    #[default]
+    Normal,
+    /// Spaces collapse; lines never break where they run out of room.
+    Nowrap,
+    /// Spaces and newlines kept; lines break only at newlines.
+    Pre,
+    /// Spaces and newlines kept, and lines break where they run out of
+    /// room (`pre-wrap`, `break-spaces`).
+    PreWrap,
+}
+
+impl WhiteSpace {
+    /// Whether runs of spaces and newlines are kept as written.
+    #[must_use]
+    pub fn keeps_spaces(self) -> bool {
+        matches!(self, Self::Pre | Self::PreWrap)
+    }
+
+    /// Whether a line breaks where it runs out of room; forced breaks
+    /// always do.
+    #[must_use]
+    pub fn wraps(self) -> bool {
+        matches!(self, Self::Normal | Self::PreWrap)
+    }
+}
+
+/// `direction`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextDirection {
+    /// Left to right, CSS's default.
+    #[default]
+    Ltr,
+    /// Right to left.
+    Rtl,
+}
+
+/// `text-transform`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextTransform {
+    /// As written.
+    #[default]
+    None,
+    /// Every letter in capitals.
+    Uppercase,
+    /// Every letter in small letters.
+    Lowercase,
+    /// The first letter of each word in capitals.
+    Capitalize,
+}
+
+/// `text` as `style`'s `text-transform` sets it. `word_start` says
+/// whether the text begins a word (a piece of a run that follows a
+/// space, or the run's start) and is left saying whether the next piece
+/// would. Turkish and Azeri (`lang="tr"`, `"az"`) case the dotted and
+/// dotless i as their alphabets do; everything else follows Unicode's
+/// default casing, `ß` to `SS` and a word-final sigma included.
+#[must_use]
+pub fn transform_text(text: &str, style: &Text, word_start: &mut bool) -> String {
+    let turkic = style
+        .lang
+        .as_deref()
+        .is_some_and(|l| l == "tr" || l == "az" || l.starts_with("tr-") || l.starts_with("az-"));
+    let upper = |c: char, out: &mut String| match c {
+        'i' if turkic => out.push('\u{130}'),
+        _ => out.extend(c.to_uppercase()),
+    };
+    let mut out = String::with_capacity(text.len());
+    match style.transform {
+        TextTransform::None => out.push_str(text),
+        TextTransform::Uppercase => {
+            for c in text.chars() {
+                upper(c, &mut out);
+            }
+        }
+        TextTransform::Lowercase => {
+            if turkic {
+                for c in text.chars() {
+                    match c {
+                        'I' => out.push('\u{131}'),
+                        '\u{130}' => out.push('i'),
+                        _ => out.extend(c.to_lowercase()),
+                    }
+                }
+            } else {
+                // The whole string at once, so that a sigma at the end of
+                // a word takes its final form.
+                out = text.to_lowercase();
+            }
+        }
+        TextTransform::Capitalize => {
+            for c in text.chars() {
+                if c.is_whitespace() {
+                    *word_start = true;
+                    out.push(c);
+                } else if *word_start && c.is_alphanumeric() {
+                    *word_start = false;
+                    if c.is_alphabetic() {
+                        upper(c, &mut out);
+                    } else {
+                        out.push(c);
+                    }
+                } else {
+                    out.push(c);
+                }
+            }
+            return out;
+        }
+    }
+    *word_start = text.ends_with(char::is_whitespace);
+    out
 }
 
 impl Default for Text {
@@ -290,13 +512,36 @@ impl Default for Text {
             size: ROOT_FONT_SIZE,
             weight: 400,
             italic: false,
-            line_height: 1.2,
+            synthesis: (true, true),
+            space_all: false,
+            line_height: None,
             letter_spacing: 0.0,
             align: TextAlign::Left,
-            pre: false,
+            white_space: WhiteSpace::Normal,
             shadow: Vec::new(),
             fill: None,
+            stroke_width: 0.0,
+            stroke_color: None,
+            stroke_over_fill: true,
+            transform: TextTransform::None,
+            lang: None,
+            direction: TextDirection::Ltr,
+            start_end: Some(false),
         }
+    }
+}
+
+impl Text {
+    /// Whether paragraphs run right to left.
+    #[must_use]
+    pub fn rtl(&self) -> bool {
+        self.direction == TextDirection::Rtl
+    }
+
+    /// The stroke's colour, `currentcolor` resolved.
+    #[must_use]
+    pub fn stroke_color(&self) -> Color {
+        self.stroke_color.unwrap_or(self.color)
     }
 }
 
@@ -324,6 +569,8 @@ pub struct Overrides {
     pub blur: Option<f64>,
     /// `color`.
     pub color: Option<Color>,
+    /// `-webkit-text-stroke-color`.
+    pub stroke_color: Option<Color>,
     /// `text-shadow`: the list, empty for `none`.
     pub text_shadow: Option<Vec<Shadow>>,
     /// `letter-spacing`, in pixels.
@@ -340,6 +587,20 @@ pub struct Overrides {
     pub background_position: Option<(Extent, Extent)>,
     /// `clip-path`: a polygon's points, or empty for `none`.
     pub clip_path: Option<Vec<(Extent, Extent)>>,
+    /// `background-color`.
+    pub background_color: Option<Color>,
+    /// Border colour per side: top, right, bottom, left.
+    pub border_color: [Option<Color>; 4],
+    /// `box-shadow`: the list, empty for `none`.
+    pub box_shadow: Option<Vec<Shadow>>,
+    /// `mask-position`.
+    pub mask_position: Option<(Extent, Extent)>,
+    /// `mask-size`.
+    pub mask_size: Option<(Extent, Extent)>,
+    /// `left`.
+    pub left: Option<Extent>,
+    /// `top`.
+    pub top: Option<Extent>,
 }
 
 impl Overrides {
@@ -348,6 +609,8 @@ impl Overrides {
     #[must_use]
     pub fn moves_layout(&self) -> bool {
         self.letter_spacing.is_some()
+            || self.left.is_some()
+            || self.top.is_some()
             || self.width.is_some()
             || self.height.is_some()
             || self.max_width.is_some()
@@ -457,6 +720,28 @@ pub fn cascade(doc: &Document, sheet: &Stylesheet) -> (Vec<Computed>, Vec<String
             flex_written: false,
         };
         if let Some(el) = doc.nodes[id].element() {
+            if let Some(lang) = el.attrs.get("lang") {
+                computed.text.lang = Some(lang.trim().to_ascii_lowercase());
+            }
+            // The attribute is a presentational hint: `direction` in a
+            // style sheet wins over it.
+            match el
+                .attrs
+                .get("dir")
+                .map(|d| d.trim().to_ascii_lowercase())
+                .as_deref()
+            {
+                Some("rtl") => computed.text.direction = TextDirection::Rtl,
+                Some("ltr") => computed.text.direction = TextDirection::Ltr,
+                Some("auto") => {
+                    computed.text.direction = if first_strong_is_rtl(doc, id).unwrap_or(false) {
+                        TextDirection::Rtl
+                    } else {
+                        TextDirection::Ltr
+                    };
+                }
+                _ => {}
+            }
             // CSS's default is content-box; taffy's is border-box, so it
             // is set here rather than inherited from the layout default.
             computed.layout.box_sizing = BoxSizing::ContentBox;
@@ -547,6 +832,36 @@ pub fn cascade(doc: &Document, sheet: &Stylesheet) -> (Vec<Computed>, Vec<String
                 }
             }
             computed.text.size = em;
+            // `start` and `end` are sides only once the element's own
+            // direction is known; a child that turns the other way turns
+            // the alignment it inherited with it.
+            if let Some(end) = computed.text.start_end {
+                computed.text.align = if end == computed.text.rtl() {
+                    TextAlign::Left
+                } else {
+                    TextAlign::Right
+                };
+            }
+            // A flex row runs from the start edge, the right one in right
+            // to left text: the reverse of the row taffy lays out. Only a
+            // row written as one: the row an element holding text is set
+            // in stands for a line, which `text-align` places.
+            // The row an element holding text is set in places a line
+            // shorter than the row by `text-align`, as a line box is.
+            if !computed.flex_written && computed.layout.justify_content.is_none() {
+                computed.layout.justify_content = match computed.text.align {
+                    TextAlign::Left => None,
+                    TextAlign::Center => Some(JustifyContent::Center),
+                    TextAlign::Right => Some(JustifyContent::FlexEnd),
+                };
+            }
+            if computed.text.rtl() && computed.flex_written {
+                computed.layout.flex_direction = match computed.layout.flex_direction {
+                    FlexDirection::Row => FlexDirection::RowReverse,
+                    FlexDirection::RowReverse => FlexDirection::Row,
+                    other => other,
+                };
+            }
             // Taffy's default display is flex, CSS's is block (or inline).
             // An element that says nothing and holds block-level elements
             // is a block, so they stack as in a browser rather than stand
@@ -624,6 +939,33 @@ pub fn overridden(
         if let Some(v) = &o.clip_path {
             target.paint.clip_path = (!v.is_empty()).then(|| v.clone());
         }
+        // A gradient is an image over the colour, which is not drawn
+        // apart from it here: an animated colour under one is not seen.
+        if let Some(c) = o.background_color
+            && matches!(target.paint.background, None | Some(Background::Color(_)))
+        {
+            target.paint.background = (c.a > 0.0).then_some(Background::Color(c));
+        }
+        for (side, c) in o.border_color.iter().enumerate() {
+            if let Some(c) = c {
+                target.paint.border_color[side] = *c;
+            }
+        }
+        if let Some(v) = &o.box_shadow {
+            target.paint.shadow.clone_from(v);
+        }
+        if let Some(v) = o.mask_position {
+            target.paint.mask_position = v;
+        }
+        if let Some(v) = o.mask_size {
+            target.paint.mask_size = v;
+        }
+        if let Some(v) = o.left {
+            target.layout.inset.left = inset_of(v);
+        }
+        if let Some(v) = o.top {
+            target.layout.inset.top = inset_of(v);
+        }
         text_override(&mut out[*id].text, &before.text, o);
         // The element's own text style went to its descendants when the
         // cascade ran; the same values are updated there.
@@ -642,6 +984,11 @@ fn text_override(text: &mut Text, from: &Text, o: &Overrides) {
     if let Some(c) = o.color {
         if text.color == from.color {
             text.color = c;
+        }
+    }
+    if let Some(c) = o.stroke_color {
+        if text.stroke_color() == from.stroke_color() {
+            text.stroke_color = Some(c);
         }
     }
     if let Some(sh) = &o.text_shadow {
@@ -677,6 +1024,28 @@ pub fn extent_of(d: Dimension) -> Extent {
         Extent::Percent(f64::from(raw.value()) * 100.0)
     } else {
         Extent::Auto
+    }
+}
+
+/// An inset (`left`, `top`, ...) as an [`Extent`], as [`extent_of`]
+/// reads a size.
+#[must_use]
+pub fn inset_extent(d: LengthPercentageAuto) -> Extent {
+    let raw = d.into_raw();
+    if raw.tag() == taffy::CompactLength::LENGTH_TAG {
+        Extent::Px(f64::from(raw.value()))
+    } else if raw.tag() == taffy::CompactLength::PERCENT_TAG {
+        Extent::Percent(f64::from(raw.value()) * 100.0)
+    } else {
+        Extent::Auto
+    }
+}
+
+fn inset_of(e: Extent) -> LengthPercentageAuto {
+    match e {
+        Extent::Auto => LengthPercentageAuto::auto(),
+        Extent::Px(v) => LengthPercentageAuto::length(v as f32),
+        Extent::Percent(p) => LengthPercentageAuto::percent((p / 100.0) as f32),
     }
 }
 
@@ -838,6 +1207,7 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
                 .longhands
                 .push((property.to_owned(), v.to_owned()));
         }
+        "transform-origin" => c.paint.transform_origin = transform_origin(v, em)?,
         "clip-path" => {
             c.paint.clip_path = if l == "none" {
                 None
@@ -855,6 +1225,38 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
                 Some(points)
             } else {
                 return unsupported(v, "none or polygon(x y, ...)");
+            };
+        }
+        "backdrop-filter" | "-webkit-backdrop-filter" => c.paint.backdrop = filters(v, em)?,
+        "mask-image" | "-webkit-mask-image" => {
+            c.paint.mask = if l == "none" {
+                None
+            } else if l.contains("gradient(") {
+                Some(background(v)?)
+            } else {
+                return unsupported(v, "none, linear-gradient() or radial-gradient()");
+            };
+        }
+        "mask-size" | "-webkit-mask-size" => c.paint.mask_size = background_size(v, em)?,
+        "transform" => c.paint.transform = (l != "none").then(|| v.trim().to_owned()),
+        "anchor-name" => c.paint.anchor_name = (l != "none").then(|| v.trim().to_owned()),
+        "mask-position" | "-webkit-mask-position" => {
+            c.paint.mask_position = background_position(v, em)?;
+        }
+        "mask-repeat" | "-webkit-mask-repeat" => {
+            let one = |t: &str| match t {
+                "repeat" => Ok(true),
+                "no-repeat" => Ok(false),
+                _ => Err(()),
+            };
+            c.paint.mask_repeat = match parts(l).as_slice() {
+                ["repeat-x"] => (true, false),
+                ["repeat-y"] => (false, true),
+                [a] if one(a).is_ok() => (one(a) == Ok(true), one(a) == Ok(true)),
+                [a, b] if one(a).is_ok() && one(b).is_ok() => {
+                    (one(a) == Ok(true), one(b) == Ok(true))
+                }
+                _ => return unsupported(v, "repeat, no-repeat, repeat-x or repeat-y"),
             };
         }
         "filter" => {
@@ -910,30 +1312,99 @@ fn apply(property: &str, value: &str, c: &mut Computed, em: f64) -> Result<(), S
             };
         }
         "font-style" => c.text.italic = l == "italic" || l == "oblique",
+        "font-synthesis" => {
+            let words: Vec<&str> = l.split_whitespace().collect();
+            if words != ["none"]
+                && !words
+                    .iter()
+                    .all(|w| matches!(*w, "weight" | "style" | "small-caps" | "position"))
+            {
+                return unsupported(v, "none, or weight and/or style");
+            }
+            c.text.synthesis = (words.contains(&"weight"), words.contains(&"style"));
+        }
+        "text-spacing-trim" => {
+            c.text.space_all = match l {
+                "normal" | "auto" | "space-first" => false,
+                "space-all" => true,
+                _ => return unsupported(v, "normal or space-all"),
+            };
+        }
+        "font-synthesis-weight" | "font-synthesis-style" => {
+            let on = match l {
+                "auto" => true,
+                "none" => false,
+                _ => return unsupported(v, "auto or none"),
+            };
+            if property == "font-synthesis-weight" {
+                c.text.synthesis.0 = on;
+            } else {
+                c.text.synthesis.1 = on;
+            }
+        }
         "font" => font_shorthand(v, em, c)?,
         "line-height" => {
             c.text.line_height = if let Some(p) = percent(v) {
-                p / 100.0
+                Some(p / 100.0)
             } else if l == "normal" {
-                1.2
+                None
             } else if l.ends_with("px") || l.ends_with("em") || l.ends_with("rem") {
-                pixels(v, em)? / c.text.size.max(1.0)
+                Some(pixels(v, em)? / c.text.size.max(1.0))
             } else {
-                number(v)?
+                Some(number(v)?)
             };
         }
         "letter-spacing" => {
             c.text.letter_spacing = if l == "normal" { 0.0 } else { pixels(v, em)? }
         }
-        "text-align" => {
-            c.text.align = match l {
-                "left" | "start" => TextAlign::Left,
-                "center" => TextAlign::Center,
-                "right" | "end" => TextAlign::Right,
-                _ => return unsupported(v, "left, center or right"),
+        "text-transform" => {
+            c.text.transform = match l {
+                "none" => TextTransform::None,
+                "uppercase" => TextTransform::Uppercase,
+                "lowercase" => TextTransform::Lowercase,
+                "capitalize" => TextTransform::Capitalize,
+                _ => return unsupported(v, "none, uppercase, lowercase or capitalize"),
             };
         }
-        "white-space" => c.text.pre = matches!(l, "pre" | "pre-wrap" | "break-spaces"),
+        "text-align" => {
+            (c.text.align, c.text.start_end) = match l {
+                "start" => (TextAlign::Left, Some(false)),
+                "end" => (TextAlign::Right, Some(true)),
+                "left" => (TextAlign::Left, None),
+                "center" => (TextAlign::Center, None),
+                "right" => (TextAlign::Right, None),
+                _ => return unsupported(v, "start, end, left, center or right"),
+            };
+        }
+        "direction" => {
+            c.text.direction = match l {
+                "ltr" => TextDirection::Ltr,
+                "rtl" => TextDirection::Rtl,
+                _ => return unsupported(v, "ltr or rtl"),
+            };
+        }
+        "white-space" => {
+            c.text.white_space = match l {
+                "nowrap" => WhiteSpace::Nowrap,
+                "pre" => WhiteSpace::Pre,
+                "pre-wrap" | "break-spaces" => WhiteSpace::PreWrap,
+                _ => WhiteSpace::Normal,
+            }
+        }
+        "-webkit-text-stroke" => {
+            let (mut width, mut stroke) = (0.0, None);
+            for token in parts(v) {
+                match stroke_width(token, em) {
+                    Ok(w) => width = w,
+                    Err(_) => stroke = stroke_color(token)?,
+                }
+            }
+            c.text.stroke_width = width;
+            c.text.stroke_color = stroke;
+        }
+        "-webkit-text-stroke-width" => c.text.stroke_width = stroke_width(v.trim(), em)?,
+        "-webkit-text-stroke-color" => c.text.stroke_color = stroke_color(v.trim())?,
+        "paint-order" => c.text.stroke_over_fill = fill_before_stroke(l)?,
         _ => {
             return Err(
                 "is not a property geneva draws; see the timeline reference for the list"
@@ -1075,6 +1546,9 @@ fn ratio(value: &str) -> Result<f64, String> {
 /// A length in pixels; `em` and `rem` resolve against the font size.
 fn pixels(token: &str, em: f64) -> Result<f64, String> {
     let t = token.trim();
+    if let Some(worked) = math(t, em) {
+        return worked;
+    }
     for (suffix, unit) in [("px", 1.0), ("rem", ROOT_FONT_SIZE), ("em", em)] {
         if let Some(body) = t.strip_suffix(suffix) {
             return Ok(number(body)? * unit);
@@ -1084,6 +1558,178 @@ fn pixels(token: &str, em: f64) -> Result<f64, String> {
         return Ok(0.0);
     }
     number(t).map_err(|_| format!("{token:?} is not a length; write it like \"12px\" or \"1.5em\""))
+}
+
+/// `calc()`, `min()`, `max()` and `clamp()` over lengths (`px`, `em`,
+/// `rem`) and numbers, worked out to pixels; `None` when `token` is none
+/// of them. A percentage inside is not read: it is a share of something
+/// only layout knows.
+fn math(token: &str, em: f64) -> Option<Result<f64, String>> {
+    let lower = token.to_ascii_lowercase();
+    if !["calc(", "min(", "max(", "clamp("]
+        .iter()
+        .any(|f| lower.starts_with(f))
+    {
+        return None;
+    }
+    let mut p = MathParser {
+        text: lower.as_bytes(),
+        at: 0,
+        em,
+    };
+    let worked = p.value().and_then(|v| {
+        p.space();
+        if p.at != p.text.len() {
+            return Err("unexpected text after it".to_owned());
+        }
+        match v {
+            (v, true) => Ok(v),
+            (0.0, false) => Ok(0.0),
+            _ => Err("it gives a number, not a length".to_owned()),
+        }
+    });
+    Some(worked.map_err(|e| format!("{token:?}: {e}")))
+}
+
+/// A recursive descent over the bytes of a math function. Each value is
+/// carried with whether it is a length, so that `2 * 1em` is one and
+/// `1em + 2` is caught.
+struct MathParser<'a> {
+    text: &'a [u8],
+    at: usize,
+    em: f64,
+}
+
+impl MathParser<'_> {
+    fn space(&mut self) {
+        while self.text.get(self.at).is_some_and(u8::is_ascii_whitespace) {
+            self.at += 1;
+        }
+    }
+
+    fn eat(&mut self, c: u8) -> bool {
+        self.space();
+        if self.text.get(self.at) == Some(&c) {
+            self.at += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// A function call or a bracket, a number, or a length.
+    fn value(&mut self) -> Result<(f64, bool), String> {
+        self.space();
+        let rest = &self.text[self.at..];
+        for name in ["calc", "min", "max", "clamp"] {
+            if rest.starts_with(name.as_bytes()) && rest.get(name.len()) == Some(&b'(') {
+                self.at += name.len() + 1;
+                let mut args = vec![self.sum()?];
+                while self.eat(b',') {
+                    args.push(self.sum()?);
+                }
+                if !self.eat(b')') {
+                    return Err(format!("{name}() is not closed"));
+                }
+                let length = args[0].1;
+                if args.iter().any(|a| a.1 != length) {
+                    return Err(format!("{name}() mixes lengths and numbers"));
+                }
+                let v: Vec<f64> = args.iter().map(|a| a.0).collect();
+                let out = match (name, v.as_slice()) {
+                    ("calc", [x]) => *x,
+                    ("min", _) => v.iter().copied().fold(f64::INFINITY, f64::min),
+                    ("max", _) => v.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                    // CSS lets the lower bound win when they cross.
+                    ("clamp", [lo, x, hi]) => x.min(*hi).max(*lo),
+                    _ => return Err(format!("{name}() takes the wrong number of values")),
+                };
+                return Ok((out, length));
+            }
+        }
+        if self.eat(b'(') {
+            let v = self.sum()?;
+            if !self.eat(b')') {
+                return Err("a bracket is not closed".to_owned());
+            }
+            return Ok(v);
+        }
+        let start = self.at;
+        if matches!(self.text.get(self.at), Some(b'+' | b'-')) {
+            self.at += 1;
+        }
+        while self
+            .text
+            .get(self.at)
+            .is_some_and(|c| c.is_ascii_digit() || *c == b'.')
+        {
+            self.at += 1;
+        }
+        let number: f64 = std::str::from_utf8(&self.text[start..self.at])
+            .ok()
+            .and_then(|n| n.parse().ok())
+            .ok_or_else(|| "expected a number or a length".to_owned())?;
+        let unit_start = self.at;
+        while self
+            .text
+            .get(self.at)
+            .is_some_and(|c| c.is_ascii_alphabetic() || *c == b'%')
+        {
+            self.at += 1;
+        }
+        match &self.text[unit_start..self.at] {
+            b"" => Ok((number, false)),
+            b"px" => Ok((number, true)),
+            b"em" => Ok((number * self.em, true)),
+            b"rem" => Ok((number * ROOT_FONT_SIZE, true)),
+            b"%" => Err("a percentage inside it is not read".to_owned()),
+            other => Err(format!(
+                "the unit {:?} is not read",
+                String::from_utf8_lossy(other)
+            )),
+        }
+    }
+
+    fn product(&mut self) -> Result<(f64, bool), String> {
+        let mut left = self.value()?;
+        loop {
+            if self.eat(b'*') {
+                let right = self.value()?;
+                if left.1 && right.1 {
+                    return Err("two lengths are multiplied".to_owned());
+                }
+                left = (left.0 * right.0, left.1 || right.1);
+            } else if self.eat(b'/') {
+                let right = self.value()?;
+                if right.1 || right.0 == 0.0 {
+                    return Err("it divides by a length or by zero".to_owned());
+                }
+                left = (left.0 / right.0, left.1);
+            } else {
+                return Ok(left);
+            }
+        }
+    }
+
+    fn sum(&mut self) -> Result<(f64, bool), String> {
+        let mut left = self.product()?;
+        loop {
+            // A sign needs space around it in CSS; without it, it is the
+            // sign of the number that follows, read by `value`.
+            self.space();
+            let op = match self.text.get(self.at) {
+                Some(b'+') if self.text.get(self.at + 1) == Some(&b' ') => 1.0,
+                Some(b'-') if self.text.get(self.at + 1) == Some(&b' ') => -1.0,
+                _ => return Ok(left),
+            };
+            self.at += 1;
+            let right = self.product()?;
+            if left.1 != right.1 && left.0 != 0.0 && right.0 != 0.0 {
+                return Err("it adds a length and a number".to_owned());
+            }
+            left = (left.0 + op * right.0, left.1 || right.1);
+        }
+    }
 }
 
 /// A font size: a length, or a percentage of the inherited size, which is
@@ -1132,16 +1778,85 @@ fn color(value: &str) -> Result<Color, String> {
     Color::from_str(value.trim()).map_err(|e| format!("{value:?} is not a colour: {e}"))
 }
 
+/// A stroke width: a length, or `thin`, `medium` or `thick` (1, 3 and
+/// 5 px, as browsers draw them).
+fn stroke_width(token: &str, em: f64) -> Result<f64, String> {
+    match token.to_ascii_lowercase().as_str() {
+        "thin" => Ok(1.0),
+        "medium" => Ok(3.0),
+        "thick" => Ok(5.0),
+        _ => Ok(pixels(token, em)?.max(0.0)),
+    }
+}
+
+/// A stroke colour; `currentcolor` is `None`, the text's own colour.
+fn stroke_color(token: &str) -> Result<Option<Color>, String> {
+    if token.eq_ignore_ascii_case("currentcolor") {
+        Ok(None)
+    } else {
+        color(token).map(Some)
+    }
+}
+
+/// Whether `paint-order` puts the fill before the stroke. The keywords
+/// listed come first in the order given and the rest follow in the
+/// default order, fill, stroke, markers; markers draw nothing on text.
+fn fill_before_stroke(l: &str) -> Result<bool, String> {
+    if l.trim() == "normal" {
+        return Ok(true);
+    }
+    let mut order: Vec<&str> = Vec::new();
+    for token in l.split_whitespace() {
+        if !matches!(token, "fill" | "stroke" | "markers") || order.contains(&token) {
+            return unsupported(l, "normal, or fill, stroke and markers in some order");
+        }
+        order.push(token);
+    }
+    for token in ["fill", "stroke", "markers"] {
+        if !order.contains(&token) {
+            order.push(token);
+        }
+    }
+    let at = |k: &str| order.iter().position(|t| *t == k);
+    Ok(at("fill") < at("stroke"))
+}
+
 fn family(value: &str) -> String {
-    // Only the first family is used; there is no font matching to fall
-    // back through, and the renderer already falls back on its own.
+    // The whole list, written plainly: the renderer falls back through
+    // it a character at a time.
+    font_list(value).join(", ")
+}
+
+/// The families of a `font-family` list, in order, unquoted:
+/// `Inter, "Noto Sans Arabic", sans-serif` gives the three names.
+#[must_use]
+pub fn font_list(value: &str) -> Vec<String> {
     value
         .split(',')
-        .next()
-        .unwrap_or(value)
-        .trim()
-        .trim_matches(['"', '\''])
-        .to_owned()
+        .map(|f| f.trim().trim_matches(['"', '\'']).trim().to_owned())
+        .filter(|f| !f.is_empty())
+        .collect()
+}
+
+/// Whether a family name is one of CSS's generic families, which name
+/// whatever the machine has rather than a font.
+#[must_use]
+pub fn is_generic_family(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "serif"
+            | "sans-serif"
+            | "monospace"
+            | "cursive"
+            | "fantasy"
+            | "system-ui"
+            | "ui-serif"
+            | "ui-sans-serif"
+            | "ui-monospace"
+            | "ui-rounded"
+            | "emoji"
+            | "math"
+    )
 }
 
 /// `border: 5px solid #4ade80`, in any order, on the named sides.
@@ -1262,13 +1977,13 @@ fn font_shorthand(value: &str, em: f64, c: &mut Computed) -> Result<(), String> 
         None => (*size_part, None),
     };
     c.text.size = pixels(size, em)?;
-    if let Some(l) = line {
-        c.text.line_height = if l.ends_with("px") {
-            pixels(l, em)? / c.text.size.max(1.0)
-        } else {
-            number(l)?
-        };
-    }
+    // The shorthand resets what it leaves out: no `/line-height` is
+    // `normal`.
+    c.text.line_height = match line {
+        Some(l) if l.ends_with("px") => Some(pixels(l, em)? / c.text.size.max(1.0)),
+        Some(l) => Some(number(l)?),
+        None => None,
+    };
     let rest = p[i + 1..].join(" ");
     if !rest.trim().is_empty() {
         c.text.family = Some(family(&rest));
@@ -1309,6 +2024,56 @@ fn extent(token: &str, em: f64) -> Result<Extent, String> {
     match percent(token) {
         Some(p) => Ok(Extent::Percent(p)),
         None => pixels(token, em).map(Extent::Px),
+    }
+}
+
+/// `transform-origin`: one to three values, keywords (`left`, `center`,
+/// `right`, `top`, `bottom`), lengths or percentages. One value is the
+/// horizontal one (or the vertical, for `top` and `bottom`), the other
+/// centred; two are horizontal then vertical, unless the keywords say
+/// otherwise; a third, the depth, is ignored.
+fn transform_origin(value: &str, em: f64) -> Result<(Extent, Extent), String> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Axis {
+        Either,
+        X,
+        Y,
+    }
+    let one = |t: &str| -> Result<(Extent, Axis), String> {
+        Ok(match t.to_ascii_lowercase().as_str() {
+            "left" => (Extent::Percent(0.0), Axis::X),
+            "right" => (Extent::Percent(100.0), Axis::X),
+            "top" => (Extent::Percent(0.0), Axis::Y),
+            "bottom" => (Extent::Percent(100.0), Axis::Y),
+            "center" => (Extent::Percent(50.0), Axis::Either),
+            _ => (extent(t, em)?, Axis::Either),
+        })
+    };
+    let centre = Extent::Percent(50.0);
+    let tokens = parts(value);
+    match tokens.as_slice() {
+        [a] => {
+            let (v, axis) = one(a)?;
+            Ok(if axis == Axis::Y {
+                (centre, v)
+            } else {
+                (v, centre)
+            })
+        }
+        [a, b] | [a, b, _] => {
+            let ((va, aa), (vb, ab)) = (one(a)?, one(b)?);
+            if aa == Axis::Y || ab == Axis::X {
+                if aa == Axis::X || ab == Axis::Y {
+                    return Err(format!("{value:?}: both values are on the same side"));
+                }
+                Ok((vb, va))
+            } else {
+                Ok((va, vb))
+            }
+        }
+        _ => Err(format!(
+            "{value:?}: transform-origin takes one to three values"
+        )),
     }
 }
 
@@ -1377,6 +2142,40 @@ fn background_position(value: &str, em: f64) -> Result<(Extent, Extent), String>
 }
 
 /// The inside of `name(...)`, keeping the original case of the argument.
+/// A `backdrop-filter` list: `none`, or `blur()`, `saturate()`,
+/// `brightness()` and `contrast()` in any order and number.
+pub fn filters(value: &str, em: f64) -> Result<Vec<Filter>, String> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Ok(Vec::new());
+    }
+    let amount = |arg: &str| -> Result<f64, String> {
+        let arg = arg.trim();
+        match percent(arg) {
+            Some(p) => Ok(p / 100.0),
+            None => number(arg),
+        }
+        .map(|a| a.max(0.0))
+    };
+    parts(v)
+        .into_iter()
+        .map(|f| {
+            let l = f.to_ascii_lowercase();
+            if let Some(arg) = function(&l, f, "blur") {
+                Ok(Filter::Blur(pixels(arg.trim(), em)?.max(0.0)))
+            } else if let Some(arg) = function(&l, f, "saturate") {
+                Ok(Filter::Saturate(amount(arg)?))
+            } else if let Some(arg) = function(&l, f, "brightness") {
+                Ok(Filter::Brightness(amount(arg)?))
+            } else if let Some(arg) = function(&l, f, "contrast") {
+                Ok(Filter::Contrast(amount(arg)?))
+            } else {
+                unsupported(f, "blur(), saturate(), brightness() or contrast()")
+            }
+        })
+        .collect()
+}
+
 fn function<'a>(lower: &str, value: &'a str, name: &str) -> Option<&'a str> {
     let head = format!("{name}(");
     if !lower.starts_with(&head) || !lower.ends_with(')') {
@@ -1713,6 +2512,40 @@ mod tests {
     }
 
     #[test]
+    fn a_text_stroke_inherits_and_paint_order_puts_it_under() {
+        let (doc, styles, problems) = styled(
+            "<style>.a { color: #fff; font-size: 40px; -webkit-text-stroke: 0.1em black } \
+             .b { -webkit-text-stroke-color: currentcolor; color: #f00; paint-order: stroke fill } \
+             .c { -webkit-text-stroke: thick; paint-order: markers } \
+             .d { -webkit-text-stroke: #0f0 2px; paint-order: stroke }</style>\
+             <div class=a><p>x</p><p class=b>x</p><p class=c>x</p><p class=d>x</p></div>",
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let a = doc.children(doc.root)[0];
+        let ps = doc.children(a);
+        // Inherited from .a, as `color` is; em is the element's size.
+        assert_eq!(styles[a].text.stroke_width, 4.0);
+        assert_eq!(styles[ps[0]].text.stroke_width, 4.0);
+        assert_eq!(styles[ps[0]].text.stroke_color().to_hex(), "#000000");
+        assert!(styles[ps[0]].text.stroke_over_fill);
+        // currentcolor follows the element's own colour.
+        assert_eq!(styles[ps[1]].text.stroke_color().to_hex(), "#ff0000");
+        assert!(!styles[ps[1]].text.stroke_over_fill);
+        // A shorthand with no colour resets it to currentcolor; markers
+        // first leaves fill before stroke.
+        assert_eq!(styles[ps[2]].text.stroke_width, 5.0);
+        assert_eq!(styles[ps[2]].text.stroke_color().to_hex(), "#ffffff");
+        assert!(styles[ps[2]].text.stroke_over_fill);
+        // Colour first, width second; `stroke` alone puts it first.
+        assert_eq!(styles[ps[3]].text.stroke_width, 2.0);
+        assert_eq!(styles[ps[3]].text.stroke_color().to_hex(), "#00ff00");
+        assert!(!styles[ps[3]].text.stroke_over_fill);
+
+        let (_, _, problems) = styled("<style>p { paint-order: fill fill }</style><p>x</p>");
+        assert_eq!(problems.len(), 1, "{problems:?}");
+    }
+
+    #[test]
     fn em_resolves_against_this_elements_font_size() {
         let (doc, styles, _) = styled(
             "<style>.a { font-size: 20px; padding: 2em } h1 { padding: 1em }</style>\
@@ -1738,7 +2571,7 @@ mod tests {
         assert!(problems.is_empty(), "{problems:?}");
         let b = doc.children(doc.children(doc.root)[0])[0];
         assert_eq!(styles[b].text.size, 30.0);
-        assert!((styles[b].text.line_height - 2.0).abs() < 1e-9);
+        assert!((styles[b].text.line_height.unwrap() - 2.0).abs() < 1e-9);
     }
 
     /// Every mode the compositor implements is taken by its CSS name,
@@ -1764,6 +2597,32 @@ mod tests {
             assert_eq!(styles[a].paint.blend, expected, "{keyword}");
             assert_eq!(expected.keyword(), keyword);
         }
+    }
+
+    /// `transform-origin` in its one-, two- and three-value forms, with
+    /// keywords in either order.
+    #[test]
+    fn transform_origin_takes_keywords_lengths_and_percentages() {
+        use Extent::{Percent as P, Px};
+        for (value, expected) in [
+            ("50% 72%", (P(50.0), P(72.0))),
+            ("0 100%", (Px(0.0), P(100.0))),
+            ("left", (P(0.0), P(50.0))),
+            ("bottom", (P(50.0), P(100.0))),
+            ("bottom right", (P(100.0), P(100.0))),
+            ("right top", (P(100.0), P(0.0))),
+            ("10px 2em 5px", (Px(10.0), Px(32.0))),
+        ] {
+            let (doc, styles, problems) = styled(&format!(
+                "<style>.a {{ font-size: 16px; transform-origin: {value} }}</style><div class=a></div>"
+            ));
+            assert!(problems.is_empty(), "{value}: {problems:?}");
+            let a = doc.children(doc.root)[0];
+            assert_eq!(styles[a].paint.transform_origin, expected, "{value}");
+        }
+        let (_, _, problems) =
+            styled("<style>.a { transform-origin: left right }</style><div class=a></div>");
+        assert!(!problems.is_empty(), "two horizontal keywords");
     }
 
     /// The modes geneva does not have. A browser would draw these; this
@@ -1809,7 +2668,7 @@ mod tests {
         assert!(s.text.italic);
         assert_eq!(s.text.weight, 700);
         assert_eq!(s.text.size, 32.0);
-        assert!((s.text.line_height - 1.25).abs() < 1e-9);
+        assert!((s.text.line_height.unwrap() - 1.25).abs() < 1e-9);
         assert_eq!(s.text.family.as_deref(), Some("Liberation Sans"));
         let sh = s.paint.shadow[0];
         assert_eq!((sh.x, sh.y, sh.blur), (0.0, 2.0, 8.0));
@@ -1875,6 +2734,136 @@ mod tests {
     }
 
     #[test]
+    fn a_mask_is_read_with_its_tile_and_the_webkit_names() {
+        let (doc, styles, problems) = styled(
+            "<style>p { mask-image: linear-gradient(90deg, #000 45%, transparent 55%); \
+             mask-size: 220% 100%; mask-repeat: no-repeat; mask-position: 100% 0 } \
+             b { -webkit-mask-image: radial-gradient(circle, #000, transparent); \
+             -webkit-mask-repeat: repeat-x }</style><p>hi <b>there</b></p>",
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let p = doc.children(doc.root)[0];
+        assert!(matches!(
+            styles[p].paint.mask,
+            Some(Background::Linear { .. })
+        ));
+        assert_eq!(
+            styles[p].paint.mask_size,
+            (Extent::Percent(220.0), Extent::Percent(100.0))
+        );
+        assert_eq!(styles[p].paint.mask_repeat, (false, false));
+        assert_eq!(
+            styles[p].paint.mask_position,
+            (Extent::Percent(100.0), Extent::Px(0.0))
+        );
+        let b = doc.children(p)[1];
+        assert!(matches!(
+            styles[b].paint.mask,
+            Some(Background::Radial { .. })
+        ));
+        assert_eq!(styles[b].paint.mask_repeat, (true, false));
+        let (_, _, problems) = styled("<style>p { mask-image: url(a.png) }</style><p>hi</p>");
+        assert_eq!(problems.len(), 1, "{problems:?}");
+    }
+
+    #[test]
+    fn text_transform_cases_as_unicode_and_turkish_say() {
+        let style = |transform, lang: Option<&str>| Text {
+            transform,
+            lang: lang.map(str::to_owned),
+            ..Text::default()
+        };
+        let mut start = true;
+        let up = style(TextTransform::Uppercase, None);
+        assert_eq!(
+            transform_text("straße istanbul", &up, &mut start),
+            "STRASSE ISTANBUL"
+        );
+        let up_tr = style(TextTransform::Uppercase, Some("tr"));
+        assert_eq!(
+            transform_text("istanbul", &up_tr, &mut start),
+            "\u{130}STANBUL"
+        );
+        let low_tr = style(TextTransform::Lowercase, Some("tr"));
+        assert_eq!(
+            transform_text("ISTANBUL", &low_tr, &mut start),
+            "\u{131}stanbul"
+        );
+        let low = style(TextTransform::Lowercase, None);
+        assert_eq!(transform_text("ΟΔΥΣΣΕΥΣ", &low, &mut start), "οδυσσευς");
+        let cap = style(TextTransform::Capitalize, None);
+        let mut start = true;
+        assert_eq!(
+            transform_text("the (quick) o'neil", &cap, &mut start),
+            "The (Quick) O'neil"
+        );
+        // Across pieces: a piece that follows a space starts a word, one
+        // that follows a letter does not.
+        let mut start = true;
+        assert_eq!(transform_text("big ", &cap, &mut start), "Big ");
+        assert_eq!(transform_text("bang", &cap, &mut start), "Bang");
+        assert_eq!(transform_text("er", &cap, &mut start), "er");
+    }
+
+    #[test]
+    fn direction_turns_start_and_end_and_reverses_a_row() {
+        let (doc, styles, problems) = styled(
+            "<style>.r { display: flex } .e { text-align: end } .l { direction: ltr }</style>\
+             <div dir=\"rtl\"><p>a</p><p class=\"e\">b</p><div class=\"r\">c</div>\
+             <p class=\"l\">d</p></div><div dir=\"auto\">\u{645}\u{631}</div>",
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let outer = doc.children(doc.root)[0];
+        let kids = doc.children(outer);
+        assert!(styles[kids[0]].text.rtl());
+        assert_eq!(styles[kids[0]].text.align, TextAlign::Right);
+        assert_eq!(styles[kids[1]].text.align, TextAlign::Left);
+        assert_eq!(
+            styles[kids[2]].layout.flex_direction,
+            FlexDirection::RowReverse
+        );
+        assert!(!styles[kids[3]].text.rtl());
+        assert_eq!(styles[kids[3]].text.align, TextAlign::Left);
+        let auto = doc.children(doc.root)[1];
+        assert!(styles[auto].text.rtl());
+    }
+
+    #[test]
+    fn math_functions_work_out_to_pixels() {
+        assert_eq!(pixels("calc(10px + 2em)", 16.0), Ok(42.0));
+        assert_eq!(pixels("max(1px, 0.06em)", 10.0), Ok(1.0));
+        assert_eq!(pixels("max(1px, 0.06em)", 50.0), Ok(3.0));
+        assert_eq!(pixels("clamp(2px, 1em, 6px)", 20.0), Ok(6.0));
+        assert_eq!(pixels("min(30px, calc(2 * (4px + 1rem)))", 0.0), Ok(30.0));
+        assert_eq!(pixels("calc(10px - -2px)", 0.0), Ok(12.0));
+        assert!(pixels("calc(50% - 10px)", 16.0).is_err());
+        assert!(pixels("calc(10px + 2)", 16.0).is_err());
+        assert!(pixels("calc(2px * 3px)", 16.0).is_err());
+        let (doc, styles, problems) =
+            styled("<style>p { padding: min(30px, 1em) calc(2 * 8px) }</style><p>x</p>");
+        assert!(problems.is_empty(), "{problems:?}");
+        let p = doc.children(doc.root)[0];
+        assert_eq!(
+            styles[p].layout.padding.left,
+            LengthPercentage::length(16.0)
+        );
+    }
+
+    #[test]
+    fn a_static_transform_and_an_anchor_name_are_kept_as_written() {
+        let (doc, styles, problems) = styled(
+            "<style>p { transform: rotate(-8deg) scale(1.1); anchor-name: --w1 }</style><p>x</p>",
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let p = doc.children(doc.root)[0];
+        assert_eq!(
+            styles[p].paint.transform.as_deref(),
+            Some("rotate(-8deg) scale(1.1)")
+        );
+        assert_eq!(styles[p].paint.anchor_name.as_deref(), Some("--w1"));
+    }
+
+    #[test]
     fn a_shadow_keeps_a_colour_with_commas_in_it() {
         let (doc, styles, problems) = styled(
             "<style>p { text-shadow: 0 0 8px rgba(0, 238, 225, 0.5); \
@@ -1903,7 +2892,11 @@ mod tests {
             1,
             "the inset box-shadow is named: {problems:?}"
         );
-        assert!(styles[p].paint.shadow.is_empty());
+        assert!(
+            styles[p].paint.shadow.is_empty(),
+            "{:?}",
+            styles[p].paint.shadow
+        );
     }
 
     #[test]

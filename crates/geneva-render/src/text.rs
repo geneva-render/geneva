@@ -6,7 +6,8 @@
 //! every other source. A text source renders to an image that is then
 //! placed like any other box.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use cosmic_text::fontdb::Weight;
 use cosmic_text::{
@@ -14,10 +15,13 @@ use cosmic_text::{
     Style, SwashCache, SwashContent, Wrap,
 };
 use geneva_color::{Color, LinearRgba};
-use geneva_timeline::schema::{TextAlign, TextStyle};
-use geneva_timeline::{FillTrack, ResolvedText};
-use swash::scale::{Render, ScaleContext, Source, StrikeWith};
-use swash::zeno::{Format, Stroke, Style as ZenoStyle, Vector};
+use geneva_timeline::schema::{FontSynthesis, TextAlign, TextStyle};
+use geneva_timeline::{FillTrack, OutlinePaint, ResolvedText};
+use swash::scale::ScaleContext;
+use swash::scale::image::Image as SwashImage;
+use swash::zeno::{
+    Angle, Command, Format, Mask as ZenoMask, Origin, PathData as _, Transform, Vector, Verb,
+};
 
 use crate::assets::Image;
 use crate::fill::Fill;
@@ -38,7 +42,108 @@ pub struct TextEngine {
     /// of these in it is the document's, and the machine's faces of that
     /// family are dropped.
     asset_ids: HashSet<cosmic_text::fontdb::ID>,
+    /// The face a family, weight and style comes to, for fallback
+    /// through a family list.
+    faces: HashMap<(String, u16, bool), Option<cosmic_text::fontdb::ID>>,
+    /// Glyphs drawn synthetically bold or oblique, which the shaper's
+    /// own cache would draw plain.
+    synthetic: HashMap<cosmic_text::CacheKey, Option<SwashImage>>,
+    /// Letters drawn as a missing-glyph box by the paint under way,
+    /// summed over its draws, and whose paint it is.
+    missing_now: (String, BTreeMap<char, usize>),
+    /// Letters drawn as a box, by what painted them: the most any one
+    /// paint drew.
+    missing: BTreeMap<String, BTreeMap<char, usize>>,
+    /// Whether draws count their missing letters: not while text is only
+    /// measured.
+    counting: bool,
+    /// How full-width punctuation sits in each face, by face and mark.
+    punct: HashMap<(cosmic_text::fontdb::ID, char), Punct>,
 }
+
+/// Where a full-width punctuation mark sits in its em, which decides what
+/// `text-spacing-trim` takes off it: the space before an opening mark,
+/// after a closing one; a centred mark keeps both, but its neighbours
+/// lose theirs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Punct {
+    Open,
+    Close,
+    Middle,
+    Other,
+}
+
+/// U+3000, which counts as a centred mark for its neighbours.
+const IDEOGRAPHIC_SPACE: char = '\u{3000}';
+
+/// The marks a face's half-width forms may trim: brackets and quotes,
+/// commas and stops, colon, semicolon, middle dot.
+const FULLWIDTH_PUNCTUATION: &str =
+    "「『（【〈《〔〖〘〚［｛｟‘“」』）】〉》〕〗〙〛］｝｠’”、。，．：；・";
+
+/// The characters (byte offsets into the pieces joined) that start or
+/// end a line as `buffer` laid them out.
+fn line_edges(buffer: &Buffer, pieces: &[(String, usize, bool)]) -> BTreeSet<usize> {
+    // Where each of the shaper's lines (paragraphs) starts.
+    let mut paragraphs = vec![0usize];
+    let mut at = 0usize;
+    for (piece, _, _) in pieces {
+        paragraphs.extend(piece.match_indices('\n').map(|(i, _)| at + i + 1));
+        at += piece.len();
+    }
+    let mut edges = BTreeSet::new();
+    for run in buffer.layout_runs() {
+        let Some(&base) = paragraphs.get(run.line_i) else {
+            continue;
+        };
+        let visible = |g: &&cosmic_text::LayoutGlyph| {
+            run.text
+                .get(g.start..g.end)
+                .is_some_and(|t| t.chars().any(|ch| !is_invisible(ch)))
+        };
+        if let Some(first) = run.glyphs.iter().filter(visible).map(|g| g.start).min() {
+            edges.insert(base + first);
+        }
+        if let Some(last) = run.glyphs.iter().filter(visible).map(|g| g.start).max() {
+            edges.insert(base + last);
+        }
+    }
+    edges
+}
+
+/// How a draw lays its text out.
+struct Layout {
+    line_height: f32,
+    wrap_width: f32,
+    align: Align,
+    nowrap: bool,
+}
+
+/// Whether engines made from now on read the machine's fonts.
+static SYSTEM_FONTS: AtomicBool = AtomicBool::new(true);
+
+/// Whether engines made from now on read the machine's fonts. Off, text
+/// is drawn only in the fonts a document ships and the built-in
+/// Liberation Sans, which every generic family names, so a timeline is
+/// the same picture on every machine: a letter none of them has is a
+/// missing-glyph box everywhere, where the machine's fonts would have
+/// drawn it on one machine and not on another.
+pub fn set_system_fonts(on: bool) {
+    SYSTEM_FONTS.store(on, Ordering::Relaxed);
+}
+
+/// Whether engines read the machine's fonts.
+pub fn system_fonts() -> bool {
+    SYSTEM_FONTS.load(Ordering::Relaxed)
+}
+
+/// A glyph flag of geneva's own, beside cosmic-text's: drawn
+/// synthetically bold. cosmic-text carries it through layout untouched.
+const FAKE_BOLD: CacheKeyFlags = CacheKeyFlags::from_bits_retain(1 << 16);
+
+/// The shear of a synthetic oblique, as Skia draws one: a quarter of the
+/// height (about 14 degrees).
+const SKEW: f32 = 0.25;
 
 impl Default for TextEngine {
     fn default() -> Self {
@@ -46,16 +151,58 @@ impl Default for TextEngine {
     }
 }
 
+/// A font file's bytes as TrueType or OpenType: a WOFF or WOFF2 file, as
+/// web fonts ship, is unpacked; anything else is returned as it is.
+pub fn sfnt_bytes(data: Vec<u8>) -> Result<Vec<u8>, String> {
+    match data.get(..4) {
+        Some(b"wOFF") => wuff::decompress_woff1(&data)
+            .map_err(|e| format!("a WOFF file that does not unpack: {e:?}")),
+        Some(b"wOF2") => wuff::decompress_woff2(&data)
+            .map_err(|e| format!("a WOFF2 file that does not unpack: {e:?}")),
+        _ => Ok(data),
+    }
+}
+
+/// The family a font file declares (its first face's), read without the
+/// machine's fonts; `None` when the file has no usable face.
+#[must_use]
+pub fn declared_family(data: Vec<u8>) -> Option<String> {
+    let mut db = cosmic_text::fontdb::Database::new();
+    db.load_font_data(sfnt_bytes(data).ok()?);
+    let face = db.faces().next()?;
+    face.families.first().map(|(name, _)| name.clone())
+}
+
 /// The room `render` leaves around the glyphs for a stroke and a shadow,
 /// on every side. A caller that has to place the image where the glyphs
 /// alone would have gone subtracts this, and one that lays text out
 /// ignores it: neither a stroke nor a shadow changes where text sits.
 #[must_use]
-pub fn inset_for(text: &ResolvedText) -> f64 {
-    let outline = text.spec.outline.as_ref().map_or(0.0, |o| o.width.max(0.0));
+pub fn inset_for(text: &ResolvedText, runs: Option<&[(String, TextStyle, LinearRgba)]>) -> f64 {
+    let outline =
+        text.spec.outline.as_ref().map_or(0.0, |o| o.width.max(0.0)) * text.outline_paint.reach();
     // A shadow's reach is its furthest over the whole clip, so a shadow
     // that grows does not grow the image and move the glyphs with it.
-    outline + text.shadow.iter().fold(0.0f64, |m, s| m.max(s.reach))
+    // Whole pixels: the glyphs are placed in the image to a pixel and the
+    // image on the page to a pixel, and with a fractional room the two
+    // roundings add up differently as the room changes (a markup shadow
+    // that animates gives a new one each frame), so the glyphs jumped.
+    (outline + text.shadow.iter().fold(0.0f64, |m, s| m.max(s.reach)) + slant_room(text, runs))
+        .ceil()
+}
+
+/// Room for italic glyphs, which lean past the advances the image is
+/// sized from: a synthetic oblique leans a quarter of the height, so the
+/// top of a last letter, or the tail of a first, would be cut off.
+fn slant_room(text: &ResolvedText, runs: Option<&[(String, TextStyle, LinearRgba)]>) -> f64 {
+    let spec = &text.spec;
+    let styles = std::iter::once(&spec.style)
+        .chain(spec.highlight.as_ref())
+        .chain(runs.into_iter().flatten().map(|(_, style, _)| style));
+    styles
+        .filter(|s| s.italic.unwrap_or(spec.style.italic.unwrap_or(false)))
+        .map(|s| s.size.or(spec.style.size).unwrap_or(DEFAULT_SIZE) * f64::from(SKEW) * 1.2)
+        .fold(0.0, f64::max)
 }
 
 /// Drawn with when the machine has no fonts at all (a bare container, a
@@ -67,7 +214,20 @@ const LAST_RESORT_FONT: &[u8] =
 impl TextEngine {
     /// Creates an engine with the system fonts available for fallback.
     pub fn new() -> Self {
-        Self::with_fonts(FontSystem::new())
+        if system_fonts() {
+            Self::with_fonts(FontSystem::new())
+        } else {
+            let mut engine = Self::with_fonts(FontSystem::new_with_locale_and_db(
+                "en-US".to_owned(),
+                cosmic_text::fontdb::Database::new(),
+            ));
+            let db = engine.fonts.db_mut();
+            db.set_serif_family("Liberation Sans");
+            db.set_monospace_family("Liberation Sans");
+            db.set_cursive_family("Liberation Sans");
+            db.set_fantasy_family("Liberation Sans");
+            engine
+        }
     }
 
     fn with_fonts(mut fonts: FontSystem) -> Self {
@@ -82,7 +242,52 @@ impl TextEngine {
             scale: ScaleContext::new(),
             asset_faces: HashMap::new(),
             asset_ids: HashSet::new(),
+            faces: HashMap::new(),
+            synthetic: HashMap::new(),
+            missing_now: (String::new(), BTreeMap::new()),
+            missing: BTreeMap::new(),
+            counting: true,
+            punct: HashMap::new(),
         }
+    }
+
+    /// Starts a paint for `label` (a clip's path): letters drawn as a box
+    /// from now on are counted for it, summed over the paint's draws, a
+    /// markup box's several runs of text among them.
+    pub fn begin_paint(&mut self, label: &str) {
+        self.end_paint();
+        label.clone_into(&mut self.missing_now.0);
+    }
+
+    fn end_paint(&mut self) {
+        let now = std::mem::take(&mut self.missing_now.1);
+        if now.is_empty() {
+            return;
+        }
+        let kept = self.missing.entry(self.missing_now.0.clone()).or_default();
+        for (ch, n) in now {
+            let most = kept.entry(ch).or_insert(0);
+            *most = (*most).max(n);
+        }
+    }
+
+    /// The letters no font had a glyph for, drawn as a box, by the label
+    /// of the paint that drew them, with how many: the most any one
+    /// paint drew, so a caption drawn on every frame counts its own
+    /// letters once. Taken and cleared.
+    pub fn take_missing(&mut self) -> BTreeMap<String, BTreeMap<char, usize>> {
+        self.end_paint();
+        std::mem::take(&mut self.missing)
+    }
+
+    /// Runs `f` with draws not counting their missing letters: a draw
+    /// that only measures text, which a markup layout does several times
+    /// over for one drawn box.
+    pub fn uncounted<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let was = std::mem::replace(&mut self.counting, false);
+        let result = f(self);
+        self.counting = was;
+        result
     }
 
     /// Whether the font asset has been registered.
@@ -105,6 +310,7 @@ impl TextEngine {
     /// Registers a font file's bytes under an asset id. Returns the family
     /// name the file declares, or `None` if it contains no usable face.
     pub fn add_font(&mut self, asset_id: &str, data: Vec<u8>) -> Option<String> {
+        let data = sfnt_bytes(data).ok()?;
         let db = self.fonts.db_mut();
         let before: Vec<cosmic_text::fontdb::ID> = db.faces().map(|f| f.id).collect();
         db.load_font_data(data);
@@ -141,7 +347,62 @@ impl TextEngine {
             db.remove_face(id);
         }
         self.asset_faces.insert(asset_id.to_owned(), loaded);
+        self.faces.clear();
         Some(family)
+    }
+
+    /// Registers a font file under a family the markup gives it with
+    /// `@font-face`, whatever family the file declares, with the weight
+    /// and style the rule gives (the file's own otherwise). As with a
+    /// font asset, the machine's faces of that family are set aside.
+    /// Whether the file had a usable face.
+    pub fn add_font_face(
+        &mut self,
+        family: &str,
+        data: Vec<u8>,
+        weight: Option<u16>,
+        italic: Option<bool>,
+    ) -> bool {
+        let Ok(data) = sfnt_bytes(data) else {
+            return false;
+        };
+        let db = self.fonts.db_mut();
+        let before: HashSet<cosmic_text::fontdb::ID> = db.faces().map(|f| f.id).collect();
+        db.load_font_data(data);
+        let fresh: Vec<cosmic_text::fontdb::FaceInfo> = db
+            .faces()
+            .filter(|f| !before.contains(&f.id))
+            .cloned()
+            .collect();
+        if fresh.is_empty() {
+            return false;
+        }
+        let strangers: Vec<cosmic_text::fontdb::ID> = db
+            .faces()
+            .filter(|f| before.contains(&f.id) && !self.asset_ids.contains(&f.id))
+            .filter(|f| f.families.iter().any(|(n, _)| n == family))
+            .map(|f| f.id)
+            .collect();
+        for id in strangers {
+            db.remove_face(id);
+        }
+        for mut info in fresh {
+            db.remove_face(info.id);
+            info.families = vec![(
+                family.to_owned(),
+                cosmic_text::fontdb::Language::English_UnitedStates,
+            )];
+            if let Some(w) = weight {
+                info.weight = Weight(w);
+            }
+            if let Some(i) = italic {
+                info.style = if i { Style::Italic } else { Style::Normal };
+            }
+            let id = db.push_face_info(info);
+            self.asset_ids.insert(id);
+        }
+        self.faces.clear();
+        true
     }
 
     /// Renders a text source at clip-local time `t` seconds into an image
@@ -203,33 +464,19 @@ impl TextEngine {
                 styles.push(self.style(style, Some(&spec.style), *color));
             }
         }
-        let mut buffer = Buffer::new(
-            &mut self.fonts,
-            Metrics::new(base.size, base.size * line_height),
-        );
-        // Lines break between words; a word longer than the line breaks
-        // inside rather than running past the edge.
-        buffer.set_wrap(Wrap::WordOrGlyph);
-        buffer.set_size(Some(wrap_width), None);
-        let default_attrs = attrs_for(&base, 0);
+        // The pieces of text in order, each with its style and whether it
+        // carries its own metrics (a run's pieces do).
+        let mut spans: Vec<(String, usize, bool)> = Vec::new();
         if let Some(runs) = runs {
-            // Every piece carries its own metrics: a line is as tall as
-            // the tallest piece on it, but only pieces with metrics count,
-            // so one `<small>` alone would shrink the line under the rest.
-            let rich = runs.iter().enumerate().map(|(i, (piece, _, _))| {
-                let style = &styles[i + 1];
-                let attrs = attrs_for(style, i + 1)
-                    .metrics(Metrics::new(style.size, style.size * line_height));
-                (piece.as_str(), attrs)
-            });
-            buffer.set_rich_text(rich, &default_attrs, Shaping::Advanced, Some(align));
+            for (i, (piece, _, _)) in runs.iter().enumerate() {
+                spans.push((piece.clone(), i + 1, true));
+            }
         } else if text.words.is_empty() {
-            buffer.set_text(&text.text, &default_attrs, Shaping::Advanced, Some(align));
+            spans.push((text.text.clone(), 0, false));
         } else {
-            let mut spans: Vec<(String, usize)> = Vec::new();
             for (i, (word, _, _)) in text.words.iter().enumerate() {
                 if i > 0 {
-                    spans.push((" ".to_owned(), 0));
+                    spans.push((" ".to_owned(), 0, false));
                 }
                 let style_index = match (&highlight, active_word) {
                     (Some(h), Some(active)) if active == i => {
@@ -238,28 +485,149 @@ impl TextEngine {
                     }
                     _ => 0,
                 };
-                spans.push((word.clone(), style_index));
+                spans.push((word.clone(), style_index, false));
             }
-            let rich = spans
-                .iter()
-                .map(|(s, i)| (s.as_str(), attrs_for(&styles[*i], *i)));
-            buffer.set_rich_text(rich, &default_attrs, Shaping::Advanced, Some(align));
         }
-        buffer.shape_until_scroll(&mut self.fonts, true);
+        // CSS's default direction is left to right, while the shaper
+        // takes a paragraph's direction from its first strong character,
+        // which would set a caption that starts with an Arabic word right
+        // to left. A left-to-right mark (invisible) before such a
+        // paragraph keeps it left to right; other paragraphs are left as
+        // they are. Right-to-left text is the mirror: a right-to-left
+        // mark before a paragraph that starts in a left-to-right script.
+        let (against, mark) = if text.rtl {
+            (unicode_bidi::BidiClass::L, RTL_MARK)
+        } else {
+            (unicode_bidi::BidiClass::R, LTR_MARK)
+        };
+        let mut first_strong_pending = true;
+        let mut mark_at: Option<(usize, usize)> = None;
+        let mut marks: Vec<(usize, usize)> = Vec::new();
+        for (index, (piece, _, _)) in spans.iter().enumerate() {
+            for (at, ch) in piece.char_indices() {
+                if ch == '\n' {
+                    first_strong_pending = true;
+                    mark_at = None;
+                    continue;
+                }
+                if mark_at.is_none() {
+                    mark_at = Some((index, at));
+                }
+                if first_strong_pending {
+                    use unicode_bidi::BidiClass;
+                    let class = unicode_bidi::bidi_class(ch);
+                    let class = if class == BidiClass::AL {
+                        BidiClass::R
+                    } else {
+                        class
+                    };
+                    if class == against {
+                        marks.extend(mark_at);
+                        first_strong_pending = false;
+                    } else if matches!(class, BidiClass::L | BidiClass::R) {
+                        first_strong_pending = false;
+                    }
+                }
+            }
+        }
+        for (index, at) in marks.into_iter().rev() {
+            spans[index].0.insert(at, mark);
+        }
+        // `origin[i]` is the style `styles[i]` was made from: a piece in a
+        // fallback family gets a style of its own, which keeps its colour
+        // and fill.
+        let mut origin: Vec<usize> = (0..styles.len()).collect();
+        let mut pieces: Vec<(String, usize, bool)> = Vec::with_capacity(spans.len());
+        for (piece, index, own_metrics) in spans {
+            let parts = self.split_by_family(&piece, &styles[index]);
+            if parts.len() == 1 && parts[0].1 == 0 {
+                pieces.push((piece, index, own_metrics));
+                continue;
+            }
+            for (range, family) in parts {
+                let mut style = styles[index].clone();
+                if family > 0 {
+                    let name = style.families[family].clone();
+                    let (weight, italic) = style.asked;
+                    let got = self.available_face(Some(&name), weight, italic);
+                    (style.fake_bold, style.fake_italic) =
+                        self.synthesized(&name, style.asked, got, style.synthesis);
+                    style.family = Some(name);
+                    (style.weight, style.italic) = got;
+                }
+                styles.push(style);
+                origin.push(origin[index]);
+                pieces.push((piece[range].to_owned(), styles.len() - 1, own_metrics));
+            }
+        }
+        // Full-width punctuation next to punctuation is set half-width,
+        // as Chromium's `text-spacing-trim: normal` sets it. Chromium
+        // (1194) trims nothing at the start or end of a line, wrapped or
+        // after a break, even beside a mark across the break, so a mark
+        // the lines put at an edge is set full again.
+        let layout = Layout {
+            line_height,
+            wrap_width,
+            align,
+            nowrap: text.nowrap,
+        };
+        let mut halts = if base.trim {
+            self.adjacent_trims(&pieces, &styles)
+        } else {
+            BTreeSet::new()
+        };
+        let mut buffer = self.lay_out(&pieces, &halts, &styles, &base, &layout);
+        let at_edges = line_edges(&buffer, &pieces);
+        if halts.iter().any(|h| at_edges.contains(h)) {
+            halts.retain(|h| !at_edges.contains(h));
+            buffer = self.lay_out(&pieces, &halts, &styles, &base, &layout);
+        }
+        // Letters no font had a glyph for: the shaper draws the first
+        // font's missing-glyph box. Spaces and invisible characters
+        // (joiners, direction marks, variation selectors) are not letters.
+        // A cluster drawn as several boxes gives each its whole range, so
+        // each cluster is counted once.
+        for run in buffer.layout_runs().filter(|_| self.counting) {
+            let mut clusters: Vec<(usize, usize)> = run
+                .glyphs
+                .iter()
+                .filter(|g| g.glyph_id == 0)
+                .map(|g| (g.start, g.end))
+                .collect();
+            clusters.sort_unstable();
+            clusters.dedup();
+            for (start, end) in clusters {
+                for ch in run.text.get(start..end).unwrap_or("").chars() {
+                    if !is_invisible(ch) {
+                        *self.missing_now.1.entry(ch).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
 
         // Tight bounds of all glyphs, in buffer coordinates.
         let mut min_x = f32::INFINITY;
         let mut max_x = f32::NEG_INFINITY;
         let mut bottom = 0.0f32;
         let mut glyph_count = 0usize;
-        for run in buffer.layout_runs() {
-            for g in run.glyphs.iter() {
-                min_x = min_x.min(g.x);
-                max_x = max_x.max(g.x + g.w);
+        let xs: Vec<Vec<f32>> = buffer.layout_runs().map(|run| visual_x(&run)).collect();
+        for (run, xs) in buffer.layout_runs().zip(&xs) {
+            for (g, &x) in run.glyphs.iter().zip(xs) {
+                min_x = min_x.min(x);
+                max_x = max_x.max(x + g.w);
                 glyph_count += 1;
             }
             bottom = bottom.max(run.line_top + run.line_height);
         }
+        // Each line's baseline: the shaper's, or for markup the browser's
+        // (`browser_lines`), which also sets where the text ends.
+        let baselines: Vec<f32> = if text.browser_lines {
+            let (lines, end) = self.browser_baselines(&buffer, &base, spec.line_height.is_none());
+            bottom = end;
+            lines
+        } else {
+            buffer.layout_runs().map(|run| run.line_y).collect()
+        };
         if glyph_count == 0 {
             min_x = 0.0;
             max_x = 0.0;
@@ -284,7 +652,7 @@ impl TextEngine {
             .collect();
         // Room for strokes and shadows around the text, worked out in one
         // place so a caller can subtract exactly what was added.
-        let extra = inset_for(text) as f32;
+        let extra = inset_for(text, runs) as f32;
         let inset = padding + extra;
         let text_w = (max_x - min_x).max(0.0);
         let width = (text_w + 2.0 * inset).ceil().max(1.0) as u32;
@@ -337,7 +705,7 @@ impl TextEngine {
         // that clips its background to all the text inside it.
         let fills: Vec<Option<Fill>> = (0..styles.len())
             .map(|i| {
-                if i == 0 || runs.is_some() {
+                if origin[i] == 0 || runs.is_some() {
                     text.fill.as_ref().map(fill_now)
                 } else {
                     text.highlight_fill.as_ref().map(fill_now)
@@ -347,9 +715,9 @@ impl TextEngine {
 
         // Glyph placements, computed once and reused for every pass.
         let mut placed: Vec<PlacedGlyph> = Vec::new();
-        for run in buffer.layout_runs() {
-            for g in run.glyphs.iter() {
-                let physical = g.physical((origin_x, origin_y + run.line_y), 1.0);
+        for ((run, baseline), xs) in buffer.layout_runs().zip(&baselines).zip(&xs) {
+            for (g, &x) in run.glyphs.iter().zip(xs) {
+                let physical = g.physical((origin_x + x - g.x, origin_y + baseline), 1.0);
                 let style = g.metadata.min(styles.len() - 1);
                 placed.push(PlacedGlyph {
                     cache_key: physical.cache_key,
@@ -377,7 +745,10 @@ impl TextEngine {
             mask.blur(*blur);
             mask.composite(&mut image, *color);
         }
-        if outline_w > 0.0 {
+        // The outline goes under the fill, so only its outer half shows,
+        // unless it is asked for on top (markup's `paint-order: normal`).
+        let over = text.outline_paint == OutlinePaint::StrokeOver;
+        let outline = (outline_w > 0.0).then(|| {
             let color = spec
                 .outline
                 .as_ref()
@@ -386,12 +757,191 @@ impl TextEngine {
             for g in &placed {
                 self.stroke_into(&mut mask, g, outline_w, 0.0, 0.0);
             }
-            mask.composite(&mut image, color);
+            (mask, color)
+        });
+        if let Some((mask, color)) = outline.as_ref().filter(|_| !over) {
+            mask.composite(&mut image, *color);
         }
         for g in &placed {
             self.fill_into(&mut image, g, fills[g.style].as_ref());
         }
+        if let Some((mask, color)) = outline.as_ref().filter(|_| over) {
+            mask.composite(&mut image, *color);
+        }
         image
+    }
+
+    /// Shapes and lays out the pieces (text, style, whether it carries
+    /// its own metrics), the characters at `halts` (byte offsets into the
+    /// pieces joined) set with the face's half-width forms.
+    fn lay_out(
+        &mut self,
+        pieces: &[(String, usize, bool)],
+        halts: &BTreeSet<usize>,
+        styles: &[Resolved],
+        base: &Resolved,
+        layout: &Layout,
+    ) -> Buffer {
+        let mut buffer = Buffer::new(
+            &mut self.fonts,
+            Metrics::new(base.size, base.size * layout.line_height),
+        );
+        // Lines break between words; a word longer than the line breaks
+        // inside rather than running past the edge.
+        buffer.set_wrap(if layout.nowrap {
+            Wrap::None
+        } else {
+            Wrap::WordOrGlyph
+        });
+        buffer.set_size(Some(layout.wrap_width), None);
+        let default_attrs = attrs_for(base, 0);
+        if pieces.len() == 1 && pieces[0].1 == 0 && halts.is_empty() {
+            buffer.set_text(
+                &pieces[0].0,
+                &default_attrs,
+                Shaping::Advanced,
+                Some(layout.align),
+            );
+        } else {
+            // Each piece cut where the half-width forms start and stop.
+            let mut spans: Vec<(&str, usize, bool, bool)> = Vec::new();
+            let mut at = 0usize;
+            for (piece, i, own_metrics) in pieces {
+                let mut start = 0usize;
+                let mut half = false;
+                for (offset, _) in piece.char_indices() {
+                    let now = halts.contains(&(at + offset));
+                    if now != half {
+                        if offset > start {
+                            spans.push((&piece[start..offset], *i, *own_metrics, half));
+                        }
+                        start = offset;
+                        half = now;
+                    }
+                }
+                if start < piece.len() {
+                    spans.push((&piece[start..], *i, *own_metrics, half));
+                }
+                at += piece.len();
+            }
+            // A run's pieces carry their own metrics: a line is as tall as
+            // the tallest piece on it, but only pieces with metrics count,
+            // so one `<small>` alone would shrink the line under the rest.
+            let rich = spans.into_iter().map(|(piece, i, own_metrics, half)| {
+                let style = &styles[i];
+                let mut attrs = attrs_for(style, i);
+                if own_metrics {
+                    attrs =
+                        attrs.metrics(Metrics::new(style.size, style.size * layout.line_height));
+                }
+                if half {
+                    let mut features = cosmic_text::FontFeatures::new();
+                    features.enable(cosmic_text::FeatureTag::new(b"halt"));
+                    attrs = attrs.font_features(features);
+                }
+                (piece, attrs)
+            });
+            buffer.set_rich_text(rich, &default_attrs, Shaping::Advanced, Some(layout.align));
+        }
+        buffer.shape_until_scroll(&mut self.fonts, true);
+        buffer
+    }
+
+    /// The characters of the pieces joined (byte offsets) to set
+    /// half-width because of their neighbours: an opening mark after an
+    /// opening, closing or centred one (or an ideographic space), and a
+    /// closing mark before a closing or centred one.
+    fn adjacent_trims(
+        &mut self,
+        pieces: &[(String, usize, bool)],
+        styles: &[Resolved],
+    ) -> BTreeSet<usize> {
+        let mut marks: Vec<(usize, Punct)> = Vec::new();
+        let mut at = 0usize;
+        for (piece, i, _) in pieces {
+            for (offset, ch) in piece.char_indices() {
+                if is_invisible(ch) && ch != IDEOGRAPHIC_SPACE {
+                    continue;
+                }
+                marks.push((at + offset, self.punct_of(&styles[*i], ch)));
+            }
+            at += piece.len();
+        }
+        let mut halts = BTreeSet::new();
+        for (k, (offset, class)) in marks.iter().enumerate() {
+            let before = k.checked_sub(1).map(|j| marks[j].1);
+            let after = marks.get(k + 1).map(|m| m.1);
+            let trimmed = match class {
+                Punct::Open => matches!(before, Some(Punct::Open | Punct::Close | Punct::Middle)),
+                Punct::Close => matches!(after, Some(Punct::Close | Punct::Middle)),
+                Punct::Middle | Punct::Other => false,
+            };
+            if trimmed {
+                halts.insert(*offset);
+            }
+        }
+        halts
+    }
+
+    /// How a character sits in its em in the face `style` draws it in,
+    /// from what the face's `halt` (half-width forms) does to it: moved
+    /// left by all it loses, an opening mark; not moved, a closing mark;
+    /// by half, a centred one. A character `halt` leaves alone, or one
+    /// that is not full-width punctuation, is neither.
+    fn punct_of(&mut self, style: &Resolved, ch: char) -> Punct {
+        if ch == IDEOGRAPHIC_SPACE {
+            return Punct::Middle;
+        }
+        if !FULLWIDTH_PUNCTUATION.contains(ch) {
+            return Punct::Other;
+        }
+        let Some(family) = style.family.clone() else {
+            return Punct::Other;
+        };
+        let Some(id) = self.face_of(&family, style.weight, style.italic) else {
+            return Punct::Other;
+        };
+        if let Some(class) = self.punct.get(&(id, ch)) {
+            return *class;
+        }
+        let class = self.measure_punct(id, Weight(style.weight), ch);
+        self.punct.insert((id, ch), class);
+        class
+    }
+
+    fn measure_punct(&mut self, id: cosmic_text::fontdb::ID, weight: Weight, ch: char) -> Punct {
+        let Some(font) = self.fonts.get_font(id, weight) else {
+            return Punct::Other;
+        };
+        let shape = |features: &[(&str, u16)]| {
+            let mut context = swash::shape::ShapeContext::new();
+            let mut shaper = context
+                .builder(font.as_swash())
+                .script(swash::text::Script::Han)
+                .features(features.iter().copied())
+                .build();
+            let mut buf = [0u8; 4];
+            shaper.add_str(ch.encode_utf8(&mut buf));
+            let mut out = (0.0f32, 0.0f32);
+            shaper.shape_with(|cluster| {
+                for g in cluster.glyphs {
+                    out = (g.advance, g.x);
+                }
+            });
+            out
+        };
+        let (full, _) = shape(&[]);
+        let (half, x) = shape(&[("halt", 1)]);
+        let lost = full - half;
+        if full <= 0.0 || lost < full * 0.25 {
+            Punct::Other
+        } else if x <= -0.75 * lost {
+            Punct::Open
+        } else if x.abs() <= 0.25 * lost {
+            Punct::Close
+        } else {
+            Punct::Middle
+        }
     }
 
     /// The style and weight to ask for, snapped to what the family
@@ -457,22 +1007,258 @@ impl TextEngine {
         (picked.unwrap_or(weight), italic)
     }
 
+    /// Whether text asked for at `asked` (weight, italic) and drawn in
+    /// `family`'s face at `got` is drawn synthetically bold, and oblique,
+    /// as Chromium decides. Bold: for a face the document ships (a font
+    /// asset or `@font-face`), when 600 or more is asked of a face that
+    /// stops below 600; for a face of the machine, when more than 200
+    /// above the face is asked. A variable face stops at the top of its
+    /// weight axis. Oblique: when italic is asked of an upright face.
+    fn synthesized(
+        &mut self,
+        family: &str,
+        asked: (u16, bool),
+        got: (u16, bool),
+        allowed: FontSynthesis,
+    ) -> (bool, bool) {
+        let Some(id) = self.face_of(family, got.0, got.1) else {
+            return (false, false);
+        };
+        let italic = allowed.style && asked.1 && !got.1;
+        if !allowed.weight || asked.0 < 600 {
+            return (false, italic);
+        }
+        let wght = swash::Tag::from_be_bytes(*b"wght");
+        let heaviest = self
+            .fonts
+            .get_font(id, Weight(got.0))
+            .and_then(|font| {
+                font.as_swash()
+                    .variations()
+                    .find_by_tag(wght)
+                    .map(|axis| axis.max_value() as u16)
+            })
+            .unwrap_or(got.0)
+            .max(got.0);
+        let bold = if self.asset_ids.contains(&id) {
+            heaviest < 600
+        } else {
+            asked.0 > heaviest + 200
+        };
+        (bold, italic)
+    }
+
+    /// The face the database gives a family at a weight and style, or
+    /// `None` when it has no face of that family.
+    fn face_of(
+        &mut self,
+        family: &str,
+        weight: u16,
+        italic: bool,
+    ) -> Option<cosmic_text::fontdb::ID> {
+        let key = (family.to_owned(), weight, italic);
+        if let Some(found) = self.faces.get(&key) {
+            return *found;
+        }
+        let query = cosmic_text::fontdb::Query {
+            families: &[family_of(family)],
+            weight: Weight(weight),
+            stretch: cosmic_text::fontdb::Stretch::Normal,
+            style: if italic { Style::Italic } else { Style::Normal },
+        };
+        let found = self.fonts.db().query(&query);
+        self.faces.insert(key, found);
+        found
+    }
+
+    /// A face's ascent, descent and line gap at a size, each rounded to
+    /// whole pixels as a browser rounds them; `None` for a face the
+    /// database cannot open.
+    fn rounded_metrics(
+        &mut self,
+        id: cosmic_text::fontdb::ID,
+        weight: Weight,
+        size: f32,
+    ) -> Option<(f32, f32, f32)> {
+        let font = self.fonts.get_font(id, weight)?;
+        let m = font.as_swash().metrics(&[]);
+        let scale = size / f32::from(m.units_per_em.max(1));
+        Some((
+            (m.ascent * scale).round(),
+            (m.descent * scale).round(),
+            (m.leading * scale).round(),
+        ))
+    }
+
+    /// Lines stacked as a browser stacks them: on each line, every font
+    /// used gets half the leading its line height leaves over its rounded
+    /// ascent and descent, floored above the baseline; the line is as
+    /// tall as the most any font reaches above it plus the most below.
+    /// With `normal` the line height is each font's own ascent, descent
+    /// and line gap. The baselines from the top, and the bottom of the
+    /// last line.
+    fn browser_baselines(
+        &mut self,
+        buffer: &Buffer,
+        base: &Resolved,
+        normal: bool,
+    ) -> (Vec<f32>, f32) {
+        let mut baselines = Vec::new();
+        let mut top = 0.0f32;
+        for run in buffer.layout_runs() {
+            let mut fonts: Vec<(cosmic_text::fontdb::ID, Weight, f32, f32)> = Vec::new();
+            for g in run.glyphs.iter() {
+                let height = g.line_height_opt.unwrap_or(run.line_height);
+                if !fonts
+                    .iter()
+                    .any(|f| f.0 == g.font_id && f.2 == g.font_size && f.3 == height)
+                {
+                    fonts.push((g.font_id, g.font_weight, g.font_size, height));
+                }
+            }
+            // Every line also holds the first available family of the
+            // list at the block's own size (CSS's strut), whether or not
+            // a glyph of it is drawn: a Latin line in a list that starts
+            // with an Arabic family is as tall as the Arabic one makes it.
+            // A line with nothing on it takes only that.
+            if let Some((id, weight)) = self.strut(base) {
+                if !fonts
+                    .iter()
+                    .any(|f| f.0 == id && f.2 == base.size && f.3 == run.line_height)
+                {
+                    fonts.push((id, weight, base.size, run.line_height));
+                }
+            }
+            let (mut above, mut below) = (0.0f32, 0.0f32);
+            for (id, weight, size, height) in fonts {
+                let Some((ascent, descent, gap)) = self.rounded_metrics(id, weight, size) else {
+                    continue;
+                };
+                let height = if normal {
+                    ascent + descent + gap
+                } else {
+                    height
+                };
+                let up = ((height - (ascent + descent)) / 2.0).floor() + ascent;
+                above = above.max(up);
+                below = below.max(height - up);
+            }
+            if above + below <= 0.0 {
+                // No font to measure: the shaper's own placement.
+                baselines.push(top + run.line_y - run.line_top);
+                top += run.line_height;
+                continue;
+            }
+            baselines.push(top + above);
+            top += above + below;
+        }
+        (baselines, top)
+    }
+
+    /// The face whose metrics every line holds: the first family of the
+    /// base style's list that is there, in the weight it snaps to.
+    fn strut(&mut self, base: &Resolved) -> Option<(cosmic_text::fontdb::ID, Weight)> {
+        let (weight, italic) = base.asked;
+        let mut names: Vec<String> = base.families.clone();
+        if names.is_empty() {
+            names.push(
+                base.family
+                    .clone()
+                    .unwrap_or_else(|| "sans-serif".to_owned()),
+            );
+        }
+        for family in &names {
+            let (w, it) = self.available_face(Some(family), weight, italic);
+            if let Some(id) = self.face_of(family, w, it) {
+                return Some((id, Weight(w)));
+            }
+        }
+        None
+    }
+
+    /// Whether a face has a glyph for a character.
+    fn face_has(&mut self, id: cosmic_text::fontdb::ID, weight: u16, ch: char) -> bool {
+        self.fonts
+            .get_font(id, Weight(weight))
+            .is_some_and(|font| font.as_swash().charmap().map(ch) != 0)
+    }
+
+    /// The first family of `style`'s list, by index, with a glyph for
+    /// `ch` in the weight and style the family snaps to; `None` when none
+    /// has one, and the shaper's own fallback is left to find one.
+    fn family_for(&mut self, style: &Resolved, ch: char) -> Option<usize> {
+        let (weight, italic) = style.asked;
+        for (i, family) in style.families.iter().enumerate() {
+            let (w, it) = self.available_face(Some(family), weight, italic);
+            if let Some(id) = self.face_of(family, w, it) {
+                if self.face_has(id, w, ch) {
+                    return Some(i);
+                }
+            }
+        }
+        None
+    }
+
+    /// Cuts `text` where the family a character comes from changes: each
+    /// character goes to the first family of the list with a glyph for
+    /// it, as in a browser; spaces, marks and joiners stay with what is
+    /// before them, so a word is shaped whole. Characters no family has
+    /// go to the first, whose shaper falls back to the machine's fonts.
+    /// Byte ranges and the index of the family in `style.families`.
+    fn split_by_family(
+        &mut self,
+        text: &str,
+        style: &Resolved,
+    ) -> Vec<(std::ops::Range<usize>, usize)> {
+        if style.families.len() < 2 {
+            return vec![(0..text.len(), 0)];
+        }
+        let mut out: Vec<(std::ops::Range<usize>, usize)> = Vec::new();
+        for (at, ch) in text.char_indices() {
+            let end = at + ch.len_utf8();
+            let chosen = match out.last() {
+                Some((_, last)) if follows_neighbour(ch) => *last,
+                _ => self.family_for(style, ch).unwrap_or(0),
+            };
+            match out.last_mut() {
+                Some((range, last)) if *last == chosen => range.end = end,
+                _ => out.push((at..end, chosen)),
+            }
+        }
+        if out.is_empty() {
+            out.push((0..text.len(), 0));
+        }
+        out
+    }
+
     /// Resolves a style block against defaults (and a parent for highlights).
     ///
     /// A font asset supplies its face's weight and style unless the style
     /// block sets them, so a bold font file renders bold without a separate
     /// `weight`.
     /// `color` is sampled by the caller, since it can move over the clip.
-    fn style(&self, s: &TextStyle, parent: Option<&TextStyle>, color: LinearRgba) -> Resolved {
+    fn style(&mut self, s: &TextStyle, parent: Option<&TextStyle>, color: LinearRgba) -> Resolved {
         let pick = |f: &dyn Fn(&TextStyle) -> Option<f64>| f(s).or_else(|| parent.and_then(f));
         let font = s
             .font
             .clone()
             .or_else(|| parent.and_then(|p| p.font.clone()));
-        let face = font.as_ref().and_then(|f| self.asset_faces.get(f));
-        let family = font
-            .clone()
-            .map(|f| face.map_or(f, |face| face.family.clone()));
+        // A list names asset ids or families; an asset id stands for the
+        // family its file declares. The first decides the defaults.
+        let list = font
+            .as_deref()
+            .map(geneva_html::style::font_list)
+            .unwrap_or_default();
+        let face = list.first().and_then(|f| self.asset_faces.get(f));
+        let families: Vec<String> = list
+            .iter()
+            .map(|f| {
+                self.asset_faces
+                    .get(f)
+                    .map_or_else(|| f.clone(), |a| a.family.clone())
+            })
+            .collect();
+        let family = families.first().cloned();
         let weight = s
             .weight
             .or_else(|| parent.and_then(|p| p.weight))
@@ -483,9 +1269,20 @@ impl TextEngine {
             .or_else(|| parent.and_then(|p| p.italic))
             .or_else(|| face.map(|f| f.style != Style::Normal))
             .unwrap_or(false);
+        let asked = (weight, italic);
         let (weight, italic) = self.available_face(family.as_deref(), weight, italic);
+        let synthesis = s.synthesis;
+        let (fake_bold, fake_italic) = family.as_deref().map_or((false, false), |f| {
+            self.synthesized(f, asked, (weight, italic), synthesis)
+        });
         Resolved {
             family,
+            families,
+            asked,
+            synthesis,
+            fake_bold,
+            fake_italic,
+            trim: !s.space_all,
             size: pick(&|s| s.size).unwrap_or(DEFAULT_SIZE).max(1.0) as f32,
             weight,
             italic,
@@ -494,11 +1291,126 @@ impl TextEngine {
         }
     }
 
+    /// A glyph's coverage (or colour bitmap): the shaper's cache draws it,
+    /// or, synthetically bold or oblique, it is drawn here, since the
+    /// shaper's cache does not embolden and slants by another angle.
+    fn glyph_image(&mut self, key: cosmic_text::CacheKey) -> Option<&SwashImage> {
+        if !key.flags.intersects(FAKE_BOLD | CacheKeyFlags::FAKE_ITALIC) {
+            return self.cache.get_image(&mut self.fonts, key).as_ref();
+        }
+        if !self.synthetic.contains_key(&key) {
+            let drawn = self.draw_synthetic(key);
+            self.synthetic.insert(key, drawn);
+        }
+        self.synthetic.get(&key).and_then(Option::as_ref)
+    }
+
+    /// Draws a glyph emboldened and slanted as its key's flags ask, as
+    /// Skia does: the outline sheared, then stroked (mitred, limit 4) at
+    /// the bold width and the stroke laid over the fill. A glyph with no
+    /// outline (a bitmap) is drawn plain.
+    fn draw_synthetic(&mut self, key: cosmic_text::CacheKey) -> Option<SwashImage> {
+        let size = f32::from_bits(key.font_size_bits);
+        let Some(mut outline) = self.outline(key.font_id, key.font_weight, size, key.glyph_id)
+        else {
+            return self.cache.get_image(&mut self.fonts, key).clone();
+        };
+        if key.flags.contains(CacheKeyFlags::FAKE_ITALIC) {
+            outline.transform(&oblique());
+        }
+        let offset = Vector::new(key.x_bin.as_float(), -key.y_bin.as_float());
+        let render = |commands: &[Command]| {
+            ZenoMask::new(commands)
+                .format(Format::Alpha)
+                .origin(Origin::TopLeft)
+                .offset(offset)
+                .render_offset(offset)
+                .render()
+        };
+        let flip = |p: swash::zeno::Point| swash::zeno::Point::new(p.x, -p.y);
+        let filled: Vec<Command> = outline
+            .path()
+            .commands()
+            .map(|c| match c {
+                Command::MoveTo(p) => Command::MoveTo(flip(p)),
+                Command::LineTo(p) => Command::LineTo(flip(p)),
+                Command::QuadTo(a, b) => Command::QuadTo(flip(a), flip(b)),
+                Command::CurveTo(a, b, c) => Command::CurveTo(flip(a), flip(b), flip(c)),
+                Command::Close => Command::Close,
+            })
+            .collect();
+        let mut layers = vec![render(&filled)];
+        if key.flags.contains(FAKE_BOLD) {
+            let width = f64::from(bold_extra(size));
+            layers.push(render(&stroke_outline(
+                outline.points(),
+                outline.verbs(),
+                width,
+            )));
+        }
+        // Coverage of the layers together, the most of any at each pixel,
+        // over the box they all fit in.
+        let (left, top, right, bottom) = layers.iter().fold(
+            (i32::MAX, i32::MAX, i32::MIN, i32::MIN),
+            |(l, t, r, b), (_, p)| {
+                (
+                    l.min(p.left),
+                    t.min(p.top),
+                    r.max(p.left + p.width as i32),
+                    b.max(p.top + p.height as i32),
+                )
+            },
+        );
+        let (width, height) = ((right - left).max(0) as u32, (bottom - top).max(0) as u32);
+        let mut data = vec![0u8; width as usize * height as usize];
+        for (layer, p) in &layers {
+            for row in 0..p.height as i32 {
+                for col in 0..p.width as i32 {
+                    let v = layer[(row * p.width as i32 + col) as usize];
+                    let at = ((p.top + row - top) * width as i32 + (p.left + col - left)) as usize;
+                    data[at] = data[at].max(v);
+                }
+            }
+        }
+        let mut image = SwashImage::new();
+        image.content = SwashContent::Mask;
+        // The box in the shaper's terms: `top` up from the baseline.
+        image.placement = swash::zeno::Placement {
+            left,
+            top: -top,
+            width,
+            height,
+        };
+        image.data = data;
+        Some(image)
+    }
+
+    /// A glyph's outline at a size, at the weight on a variable face's
+    /// weight axis; y runs up from the baseline.
+    fn outline(
+        &mut self,
+        id: cosmic_text::fontdb::ID,
+        weight: Weight,
+        size: f32,
+        glyph: u16,
+    ) -> Option<swash::scale::outline::Outline> {
+        let font = self.fonts.get_font(id, weight)?;
+        let swash_font = font.as_swash();
+        let mut builder = self.scale.builder(swash_font).size(size).hint(false);
+        let wght = swash::Tag::from_be_bytes(*b"wght");
+        if let Some(axis) = swash_font.variations().find_by_tag(wght) {
+            let value = f32::from(weight.0).clamp(axis.min_value(), axis.max_value());
+            builder = builder
+                .normalized_coords(swash_font.variations().normalized_coords([(wght, value)]));
+        }
+        builder.build().scale_outline(glyph)
+    }
+
     /// Draws a glyph's filled coverage (or color bitmap) into the image,
     /// in its colour or, with a `fill`, the gradient's colour under each
     /// pixel.
     fn fill_into(&mut self, image: &mut Image, g: &PlacedGlyph, fill: Option<&Fill>) {
-        let Some(swash_image) = self.cache.get_image(&mut self.fonts, g.cache_key).as_ref() else {
+        let Some(swash_image) = self.glyph_image(g.cache_key) else {
             return;
         };
         let left = g.x + swash_image.placement.left;
@@ -550,7 +1462,7 @@ impl TextEngine {
 
     /// Adds a glyph's filled coverage to a mask, offset by `(dx, dy)`.
     fn fill_mask_into(&mut self, mask: &mut Mask, g: &PlacedGlyph, dx: f32, dy: f32) {
-        let Some(swash_image) = self.cache.get_image(&mut self.fonts, g.cache_key).as_ref() else {
+        let Some(swash_image) = self.glyph_image(g.cache_key) else {
             return;
         };
         if swash_image.content != SwashContent::Mask {
@@ -571,32 +1483,42 @@ impl TextEngine {
     /// Adds a glyph's stroked outline to a mask. The stroke is centered on
     /// the outline, so `width` is doubled to leave a ring of that width
     /// outside the fill once the fill is drawn on top.
+    ///
+    /// Joins are mitred up to a limit of 4, as browsers stroke text: a
+    /// corner sharper than about 29 degrees is bevelled, any other comes
+    /// to a point. The stroke is built with kurbo, whose joins follow that
+    /// rule; zeno's own stroker bevels every corner under 90 degrees.
     fn stroke_into(&mut self, mask: &mut Mask, g: &PlacedGlyph, width: f32, dx: f32, dy: f32) {
-        let Some(font) = self.fonts.get_font(g.font_id, g.weight) else {
+        let Some(mut outline) = self.outline(g.font_id, g.weight, g.font_size, g.glyph_id) else {
             return;
         };
-        let mut scaler = self
-            .scale
-            .builder(font.as_swash())
-            .size(g.font_size)
-            .hint(false)
-            .build();
-        let (fx, fy) = (g.cache_key.x_bin.as_float(), g.cache_key.y_bin.as_float());
-        let Some(rendered) = Render::new(&[Source::Outline, Source::Bitmap(StrikeWith::BestFit)])
+        // The stroke follows the glyph as filled: sheared for a synthetic
+        // oblique, and out by half the bold width for a synthetic bold.
+        if g.cache_key.flags.contains(CacheKeyFlags::FAKE_ITALIC) {
+            outline.transform(&oblique());
+        }
+        let width = if g.cache_key.flags.contains(FAKE_BOLD) {
+            width + bold_extra(g.font_size) / 2.0
+        } else {
+            width
+        };
+        let stroked = stroke_outline(outline.points(), outline.verbs(), f64::from(width) * 2.0);
+        // The outline is y-up about the baseline; the path comes back
+        // y-down, so its placement is in the image's own direction.
+        let offset = Vector::new(g.cache_key.x_bin.as_float(), -g.cache_key.y_bin.as_float());
+        let (data, placement) = ZenoMask::new(&stroked)
             .format(Format::Alpha)
-            .offset(Vector::new(fx, fy))
-            .style(ZenoStyle::Stroke(Stroke::new(width * 2.0)))
-            .render(&mut scaler, g.glyph_id)
-        else {
-            return;
-        };
-        if rendered.content != swash::scale::image::Content::Mask {
+            .origin(Origin::TopLeft)
+            .offset(offset)
+            .render_offset(offset)
+            .render();
+        let left = g.x + placement.left + dx.round() as i32;
+        let top = g.y + placement.top + dy.round() as i32;
+        let w = placement.width as usize;
+        if w == 0 {
             return;
         }
-        let left = g.x + rendered.placement.left + dx.round() as i32;
-        let top = g.y - rendered.placement.top + dy.round() as i32;
-        let w = rendered.placement.width as usize;
-        for (i, v) in rendered.data.iter().enumerate() {
+        for (i, v) in data.iter().enumerate() {
             mask.add(
                 left + (i % w) as i32,
                 top + (i / w) as i32,
@@ -604,6 +1526,54 @@ impl TextEngine {
             );
         }
     }
+}
+
+/// A glyph outline stroked `width` wide, centred on the outline, with
+/// mitred joins limited to 4 and butt ends, as a path to fill, turned
+/// y-down.
+fn stroke_outline(points: &[swash::zeno::Point], verbs: &[Verb], width: f64) -> Vec<Command> {
+    use kurbo::{BezPath, Cap, Join, PathEl, Point};
+    let at = |p: swash::zeno::Point| Point::new(f64::from(p.x), f64::from(p.y));
+    let mut path = BezPath::new();
+    let mut i = 0usize;
+    for verb in verbs {
+        match verb {
+            Verb::MoveTo => {
+                path.move_to(at(points[i]));
+                i += 1;
+            }
+            Verb::LineTo => {
+                path.line_to(at(points[i]));
+                i += 1;
+            }
+            Verb::QuadTo => {
+                path.quad_to(at(points[i]), at(points[i + 1]));
+                i += 2;
+            }
+            Verb::CurveTo => {
+                path.curve_to(at(points[i]), at(points[i + 1]), at(points[i + 2]));
+                i += 3;
+            }
+            Verb::Close => path.close_path(),
+        }
+    }
+    let style = kurbo::Stroke::new(width)
+        .with_join(Join::Miter)
+        .with_miter_limit(4.0)
+        .with_caps(Cap::Butt);
+    let stroked = kurbo::stroke(path, &style, &kurbo::StrokeOpts::default(), 0.01);
+    let back = |p: Point| swash::zeno::Point::new(p.x as f32, -p.y as f32);
+    stroked
+        .elements()
+        .iter()
+        .map(|el| match *el {
+            PathEl::MoveTo(p) => Command::MoveTo(back(p)),
+            PathEl::LineTo(p) => Command::LineTo(back(p)),
+            PathEl::QuadTo(a, b) => Command::QuadTo(back(a), back(b)),
+            PathEl::CurveTo(a, b, c) => Command::CurveTo(back(a), back(b), back(c)),
+            PathEl::ClosePath => Command::Close,
+        })
+        .collect()
 }
 
 /// A font face registered from an asset.
@@ -614,9 +1584,25 @@ struct LoadedFace {
 }
 
 /// A style block with defaults applied.
+// Flags of one style each, read where text is laid out and drawn.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 struct Resolved {
     family: Option<String>,
+    /// The whole family list, `family` first; more than one means the
+    /// text falls back through them a character at a time.
+    families: Vec<String>,
+    /// The weight and style asked for, before `available_face` snapped
+    /// them to the first family's faces: a fallback family snaps them
+    /// to its own.
+    asked: (u16, bool),
+    /// What may be synthesised, and what is: bold where the face is
+    /// lighter, oblique where it is upright.
+    synthesis: FontSynthesis,
+    fake_bold: bool,
+    fake_italic: bool,
+    /// Whether full-width punctuation is trimmed (`text-spacing-trim`).
+    trim: bool,
     size: f32,
     weight: u16,
     italic: bool,
@@ -624,9 +1610,119 @@ struct Resolved {
     color: LinearRgba,
 }
 
+/// U+200E, which makes a paragraph that starts with it left to right.
+const LTR_MARK: char = '\u{200e}';
+
+/// U+200F, which makes a paragraph that starts with it right to left.
+const RTL_MARK: char = '\u{200f}';
+
+/// Where each glyph of a line goes, left edge, in the line's order.
+///
+/// The shaper orders the glyphs of a word by the runs it was given, and
+/// a word whose characters come from two fonts (or two styles) is two
+/// runs: in right-to-left text it puts them in reading order where they
+/// should be reversed, so `له.` with the full stop from a Latin font came
+/// out as `.له`. Every stretch of glyphs at one bidi level is put back in
+/// the order the level gives (ascending text position left to right on
+/// an even level, descending on an odd one) and laid end to end from
+/// where the stretch starts. A stretch already in order keeps the
+/// shaper's positions.
+fn visual_x(run: &cosmic_text::LayoutRun) -> Vec<f32> {
+    let glyphs = run.glyphs;
+    let mut xs: Vec<f32> = glyphs.iter().map(|g| g.x).collect();
+    let mut start = 0;
+    while start < glyphs.len() {
+        let level = glyphs[start].level;
+        let end = glyphs[start..]
+            .iter()
+            .position(|g| g.level != level)
+            .map_or(glyphs.len(), |n| start + n);
+        // The stretch from left to right: the line holds a right-to-left
+        // line's glyphs from the right.
+        let mut seen: Vec<usize> = (start..end).collect();
+        if run.rtl {
+            seen.reverse();
+        }
+        let mut wanted = seen.clone();
+        if level.is_rtl() {
+            wanted.sort_by_key(|&i| std::cmp::Reverse(glyphs[i].start));
+        } else {
+            wanted.sort_by_key(|&i| glyphs[i].start);
+        }
+        if wanted != seen {
+            let mut x = seen
+                .iter()
+                .map(|&i| glyphs[i].x)
+                .fold(f32::INFINITY, f32::min);
+            for &i in &wanted {
+                xs[i] = x;
+                x += glyphs[i].w;
+            }
+        }
+        start = end;
+    }
+    xs
+}
+
+/// A family name as the font database takes it: CSS's generic names
+/// are the database's generic families.
+fn family_of(name: &str) -> Family<'_> {
+    match name.to_ascii_lowercase().as_str() {
+        "serif" | "ui-serif" => Family::Serif,
+        "sans-serif" | "system-ui" | "ui-sans-serif" | "ui-rounded" => Family::SansSerif,
+        "monospace" | "ui-monospace" => Family::Monospace,
+        "cursive" => Family::Cursive,
+        "fantasy" => Family::Fantasy,
+        _ => Family::Name(name),
+    }
+}
+
+/// Whether a character draws nothing of its own: a space, a joiner, a
+/// direction mark, a variation selector.
+fn is_invisible(ch: char) -> bool {
+    use unicode_general_category::{GeneralCategory as G, get_general_category};
+    ch.is_whitespace()
+        || matches!(get_general_category(ch), G::Format | G::Control)
+        || ('\u{fe00}'..='\u{fe0f}').contains(&ch)
+        || ('\u{e0100}'..='\u{e01ef}').contains(&ch)
+}
+
+/// Whether a character goes with the text around it rather than choosing
+/// a font of its own: spaces, combining marks and joiners, which a
+/// browser draws in the font of the character they follow.
+fn follows_neighbour(ch: char) -> bool {
+    use unicode_general_category::{GeneralCategory as G, get_general_category};
+    ch.is_whitespace()
+        || matches!(
+            get_general_category(ch),
+            G::NonspacingMark | G::SpacingMark | G::EnclosingMark | G::Format
+        )
+        || ('\u{fe00}'..='\u{fe0f}').contains(&ch)
+}
+
+/// The width of the stroke that makes a synthetic bold, half of it out
+/// from each edge: Skia's, a 24th of the size up to 9 px, a 32nd from
+/// 36 px, in a line between (Chromium measured at 240 px: 7.5 px wider).
+fn bold_extra(size: f32) -> f32 {
+    let share = if size <= 9.0 {
+        1.0 / 24.0
+    } else if size >= 36.0 {
+        1.0 / 32.0
+    } else {
+        let t = (size - 9.0) / 27.0;
+        1.0 / 24.0 + t * (1.0 / 32.0 - 1.0 / 24.0)
+    };
+    size * share
+}
+
+/// The shear of a synthetic oblique, on an outline whose y runs up.
+fn oblique() -> Transform {
+    Transform::skew(Angle::from_radians(SKEW.atan()), Angle::from_radians(0.0))
+}
+
 fn attrs_for(style: &Resolved, metadata: usize) -> Attrs<'_> {
     let family = match &style.family {
-        Some(name) => Family::Name(name.as_str()),
+        Some(name) => family_of(name),
         None => Family::SansSerif,
     };
     let mut attrs = Attrs::new()
@@ -638,7 +1734,19 @@ fn attrs_for(style: &Resolved, metadata: usize) -> Attrs<'_> {
             Style::Normal
         })
         .metadata(metadata)
-        .cache_key_flags(CacheKeyFlags::DISABLE_HINTING);
+        .cache_key_flags(
+            CacheKeyFlags::DISABLE_HINTING
+                | if style.fake_bold {
+                    FAKE_BOLD
+                } else {
+                    CacheKeyFlags::empty()
+                }
+                | if style.fake_italic {
+                    CacheKeyFlags::FAKE_ITALIC
+                } else {
+                    CacheKeyFlags::empty()
+                },
+        );
     // cosmic-text adds this to an advance it has already divided by the
     // font's units per em, so the value it wants is a share of the em,
     // not pixels. Every caller here speaks pixels.
@@ -808,6 +1916,127 @@ mod face_tests {
         )
     }
 
+    /// Full-width punctuation beside punctuation is set half-width, as
+    /// Chromium sets this line in Noto Sans TC: the bracket after the
+    /// colon and the one after the closing bracket lose their leading
+    /// half; `space-all` keeps every mark whole.
+    #[test]
+    fn punctuation_beside_punctuation_is_set_half_width() {
+        let mut engine = TextEngine::new();
+        let data = std::fs::read("../../tests/golden/fonts/NotoSansTC-Subset.ttf")
+            .expect("the golden root ships it");
+        engine.add_font("tc", data).expect("a usable face");
+        let advances = |engine: &mut TextEngine, space_all: bool| {
+            let asked = TextStyle {
+                font: Some("tc".to_owned()),
+                size: Some(40.0),
+                space_all,
+                ..TextStyle::default()
+            };
+            let style = engine.style(&asked, None, LinearRgba::TRANSPARENT);
+            let pieces = vec![("他說：「好的…」（真的？）".to_owned(), 0usize, false)];
+            let styles = vec![style.clone()];
+            let halts = if style.trim {
+                engine.adjacent_trims(&pieces, &styles)
+            } else {
+                BTreeSet::new()
+            };
+            let layout = Layout {
+                line_height: 1.2,
+                wrap_width: 2000.0,
+                align: Align::Left,
+                nowrap: true,
+            };
+            let buffer = engine.lay_out(&pieces, &halts, &styles, &style, &layout);
+            let run = buffer.layout_runs().next().expect("one line");
+            run.glyphs
+                .iter()
+                .map(|g| g.w.round() as i32)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            advances(&mut engine, false),
+            [40, 40, 40, 20, 40, 40, 40, 40, 20, 40, 40, 40, 40]
+        );
+        assert_eq!(advances(&mut engine, true), [40; 13]);
+    }
+
+    /// Chromium's rule for a face the document ships: bold is drawn when
+    /// 600 or more is asked of a face below 600, oblique when italic is
+    /// asked of a family with no italic, neither under `font-synthesis:
+    /// none` or once the family has the face.
+    #[test]
+    fn a_face_the_family_lacks_is_synthesised_as_chromium_does() {
+        let mut engine = TextEngine::new();
+        let (regular, bold) = liberation();
+        engine.add_font("sans", regular).expect("a usable face");
+        let both = FontSynthesis::default();
+        let neither = FontSynthesis {
+            weight: false,
+            style: false,
+        };
+        let drawn = |e: &mut TextEngine, weight: u16, italic: bool, synthesis| {
+            let style = TextStyle {
+                font: Some("sans".to_owned()),
+                weight: Some(weight),
+                italic: Some(italic),
+                synthesis,
+                ..TextStyle::default()
+            };
+            let r = e.style(&style, None, LinearRgba::TRANSPARENT);
+            (r.fake_bold, r.fake_italic)
+        };
+        assert_eq!(drawn(&mut engine, 600, false, both), (true, false));
+        assert_eq!(drawn(&mut engine, 500, false, both), (false, false));
+        assert_eq!(drawn(&mut engine, 400, true, both), (false, true));
+        assert_eq!(drawn(&mut engine, 700, true, both), (true, true));
+        assert_eq!(drawn(&mut engine, 700, true, neither), (false, false));
+        engine.add_font("sans-bold", bold).expect("a usable face");
+        assert_eq!(drawn(&mut engine, 700, false, both), (false, false));
+    }
+
+    /// A synthetic bold is the glyph stroked as Skia strokes it, half the
+    /// width out from each edge: Chromium draws Anton's "I" at 240 px
+    /// 7.5 px wider and taller, by the same on each side.
+    #[test]
+    fn a_synthetic_bold_grows_each_edge_by_half_the_bold_width() {
+        let mut engine = TextEngine::new();
+        let (regular, _) = liberation();
+        let family = engine.add_font("sans", regular).expect("a usable face");
+        let id = engine.face_of(&family, 400, false).expect("the face");
+        let glyph = engine
+            .fonts
+            .get_font(id, Weight(400))
+            .expect("opens")
+            .as_swash()
+            .charmap()
+            .map('I');
+        let mut edges = |flags: CacheKeyFlags| {
+            let (key, _, _) =
+                cosmic_text::CacheKey::new(id, glyph, 240.0, (0.0, 0.0), Weight(400), flags);
+            let image = engine.glyph_image(key).expect("drawn").clone();
+            let w = image.placement.width as usize;
+            let row = &image.data[(image.placement.height as usize / 2) * w..][..w];
+            let ink: f32 = row.iter().map(|v| f32::from(*v) / 255.0).sum();
+            let column: f32 = (0..image.placement.height as usize)
+                .map(|y| f32::from(image.data[y * w + w / 2]) / 255.0)
+                .sum();
+            (ink, column, image.placement.left)
+        };
+        let (plain_w, plain_h, _) = edges(CacheKeyFlags::DISABLE_HINTING);
+        let (bold_w, bold_h, _) = edges(CacheKeyFlags::DISABLE_HINTING | FAKE_BOLD);
+        assert!(
+            (bold_w - plain_w - 7.5).abs() < 0.2,
+            "{plain_w} -> {bold_w}"
+        );
+        assert!(
+            (bold_h - plain_h - 7.5).abs() < 0.2,
+            "{plain_h} -> {bold_h}"
+        );
+        assert!((bold_extra(240.0) - 7.5).abs() < 1e-4);
+        assert!((bold_extra(9.0) - 9.0 / 24.0).abs() < 1e-4);
+    }
+
     /// A family shipped at 400 and 700 answers every weight with one of
     /// the two, by the CSS rule, whatever the machine's own fonts are.
     #[test]
@@ -899,6 +2128,146 @@ mod face_tests {
                 "every face left is the document's"
             );
         }
+    }
+
+    /// Each character goes to the first family of the list with a glyph
+    /// for it; the space between two Arabic words stays with them, so
+    /// the phrase is shaped whole, and the Latin after them goes back to
+    /// the first family.
+    #[test]
+    fn a_family_list_is_fallen_back_through_a_character_at_a_time() {
+        let mut engine = TextEngine::new();
+        let (regular, _) = liberation();
+        engine.add_font("sans", regular).expect("a usable face");
+        let arabic = std::fs::read("../../tests/golden/fonts/NotoSansArabic-Subset.ttf")
+            .expect("the golden root ships it");
+        engine.add_font("arabic", arabic).expect("a usable face");
+        let style = TextStyle {
+            font: Some("sans, arabic".to_owned()),
+            ..TextStyle::default()
+        };
+        let resolved = engine.style(&style, None, LinearRgba::TRANSPARENT);
+        assert_eq!(resolved.families, ["Liberation Sans", "Noto Sans Arabic"]);
+        let text = "Hi مرحبا بالعالم ok";
+        let parts: Vec<(&str, usize)> = engine
+            .split_by_family(text, &resolved)
+            .into_iter()
+            .map(|(r, f)| (&text[r], f))
+            .collect();
+        assert_eq!(parts, [("Hi ", 0), ("مرحبا بالعالم ", 1), ("ok", 0)]);
+        // One family: nothing to split, whatever it covers.
+        let one = engine.style(
+            &TextStyle {
+                font: Some("sans".to_owned()),
+                ..TextStyle::default()
+            },
+            None,
+            LinearRgba::TRANSPARENT,
+        );
+        assert_eq!(engine.split_by_family(text, &one), [(0..text.len(), 0)]);
+    }
+
+    /// A right-to-left word whose full stop comes from another font
+    /// keeps it at its end, on the left, as a browser draws it; a line
+    /// the shaper already orders keeps its positions.
+    #[test]
+    fn punctuation_from_another_font_ends_a_right_to_left_word() {
+        let mut engine = TextEngine::new();
+        let (regular, _) = liberation();
+        engine.add_font("sans", regular).expect("a usable face");
+        let arabic = std::fs::read("../../tests/golden/fonts/NotoSansArabic-Subset.ttf")
+            .expect("the golden root ships it");
+        engine.add_font("arabic", arabic).expect("a usable face");
+        let shape = |engine: &mut TextEngine, pieces: &[(&str, &str)]| {
+            let mut buffer = Buffer::new(&mut engine.fonts, Metrics::new(40.0, 48.0));
+            buffer.set_size(Some(1000.0), None);
+            let attrs = Attrs::new();
+            let rich = pieces
+                .iter()
+                .map(|(text, family)| (*text, attrs.clone().family(Family::Name(family))));
+            buffer.set_rich_text(rich, &attrs, Shaping::Advanced, None);
+            buffer.shape_until_scroll(&mut engine.fonts, true);
+            let run = buffer.layout_runs().next().expect("one line");
+            let glyphs: Vec<(String, f32)> = run
+                .glyphs
+                .iter()
+                .map(|g| (run.text[g.start..g.end].to_owned(), g.x))
+                .collect();
+            (glyphs, visual_x(&run))
+        };
+        let (glyphs, xs) = shape(
+            &mut engine,
+            &[
+                ("\u{200f}مال", "Noto Sans Arabic"),
+                (".", "Liberation Sans"),
+            ],
+        );
+        let dot = glyphs.iter().position(|(t, _)| t == ".").expect("drawn");
+        for (i, (t, _)) in glyphs.iter().enumerate() {
+            if i != dot && t != "\u{200f}" {
+                assert!(
+                    xs[dot] < xs[i],
+                    "{t:?} at {} is left of the stop at {}",
+                    xs[i],
+                    xs[dot]
+                );
+            }
+        }
+        // One font, digits inside: already in order, so left alone.
+        let (glyphs, xs) = shape(&mut engine, &[("\u{200f}مال 12 لك", "Noto Sans Arabic")]);
+        assert_eq!(xs, glyphs.iter().map(|(_, x)| *x).collect::<Vec<_>>());
+    }
+
+    /// A Bengali consonant followed by hasant and ra takes the font's
+    /// ra-phala, with no hasant drawn, as HarfBuzz shapes it: the glyphs
+    /// are HarfBuzz's for the same subset of Noto Sans Bengali. Its
+    /// below-base forms are format-3 context rules, which the vendored
+    /// harfrust tests rightly (vendor/README.md).
+    #[test]
+    fn a_bengali_ra_phala_is_formed_as_harfbuzz_forms_it() {
+        let mut engine = TextEngine::new();
+        let data = std::fs::read("../../tests/golden/fonts/NotoSansBengali-Subset.ttf")
+            .expect("the golden root ships it");
+        let family = engine.add_font("bengali", data).expect("a usable face");
+        let shaped = |engine: &mut TextEngine, text: &str| {
+            let mut buffer = Buffer::new(&mut engine.fonts, Metrics::new(72.0, 90.0));
+            buffer.set_size(Some(1000.0), None);
+            let attrs = Attrs::new()
+                .family(Family::Name(&family))
+                .weight(Weight(600));
+            buffer.set_text(text, &attrs, Shaping::Advanced, None);
+            buffer.shape_until_scroll(&mut engine.fonts, true);
+            let run = buffer.layout_runs().next().expect("one line");
+            run.glyphs.iter().map(|g| g.glyph_id).collect::<Vec<u16>>()
+        };
+        // Glyph 11 is the hasant drawn on its own.
+        for (text, harfbuzz) in [
+            ("ক্র", vec![17, 71, 67]),
+            ("ন্ত্র", vec![31, 60]),
+            ("স্ক্র", vec![39, 60, 67, 71]),
+            ("ন্দ্র", vec![74, 27, 69, 47]),
+        ] {
+            assert_eq!(shaped(&mut engine, text), harfbuzz, "{text}");
+        }
+    }
+
+    /// A WOFF2 file given a family by `@font-face` answers to that family,
+    /// at the weight the rule gives, whatever the file declares.
+    #[test]
+    fn a_font_face_answers_to_the_family_the_rule_gives() {
+        let mut engine = TextEngine::new();
+        let woff2 =
+            std::fs::read("../../tests/golden/markup-fontface/fonts/LiberationSans-Subset.woff2")
+                .expect("the golden root ships it");
+        assert!(sfnt_bytes(woff2.clone()).is_ok_and(|ttf| ttf.get(..4) == Some(&[0, 1, 0, 0][..])));
+        assert!(engine.add_font_face("Caption Web", woff2, Some(500), None));
+        assert!(engine.family_is_available("Caption Web"));
+        let id = engine
+            .face_of("Caption Web", 500, false)
+            .expect("found by its new name");
+        let face = engine.fonts.db().face(id).expect("in the database");
+        assert_eq!(face.weight, Weight(500));
+        assert_eq!(face.families[0].0, "Caption Web");
     }
 
     /// A family nobody shipped is left to the machine, which is what

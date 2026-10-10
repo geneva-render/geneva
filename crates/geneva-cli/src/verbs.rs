@@ -39,6 +39,9 @@ pub struct Input {
     pub pixel_format: Option<String>,
     /// The audio codec's name, as the probe reports it.
     pub audio_codec: Option<String>,
+    /// A video stream the file has and this build cannot decode: its
+    /// codec and why.
+    pub undecodable_video: Option<(String, String)>,
 }
 
 impl Input {
@@ -51,7 +54,7 @@ impl Input {
         let color = info
             .video
             .as_ref()
-            .map(|v| geneva_color::infer(v.color, v.width, v.height).0);
+            .map(|v| geneva_color::infer(v.color, v.stored_width, v.stored_height).0);
         let duration = info
             .video
             .as_ref()
@@ -70,7 +73,26 @@ impl Input {
             codec: info.video.as_ref().map(|v| v.codec.clone()),
             pixel_format: info.video.as_ref().map(|v| v.pixel_format.clone()),
             audio_codec: info.audio.as_ref().map(|a| a.codec.clone()),
+            undecodable_video: info
+                .undecodable
+                .iter()
+                .find(|u| u.kind == "video")
+                .map(|u| (u.codec.clone(), u.reason.clone())),
         })
+    }
+
+    /// An error unless the file has a picture to read: a video stream this
+    /// build cannot decode is named, rather than taken for no video.
+    /// `missing` ends the message for a file with no video at all.
+    fn require_video(&self, path: &Path, missing: &str) -> Result<()> {
+        match (&self.undecodable_video, self.has_video) {
+            (_, true) => Ok(()),
+            (Some((codec, reason)), false) => bail!(
+                "{}: its video stream ({codec}) cannot be decoded: {reason}",
+                path.display()
+            ),
+            (None, false) => bail!("{} has no video stream{missing}", path.display()),
+        }
     }
 }
 
@@ -830,12 +852,7 @@ pub fn convert(
     args: &EncodeArgs,
 ) -> Result<Compiled> {
     let src = Input::probe(input)?;
-    if !src.has_video {
-        bail!(
-            "{} has no video stream; use `geneva audio` for audio files",
-            input.display()
-        );
-    }
+    src.require_video(input, "; use `geneva audio` for audio files")?;
     let (crop, pic_w, pic_h) = match crop {
         Some(c) => {
             let (crop, w, h) = c.resolve(src.width, src.height)?;
@@ -1349,9 +1366,7 @@ fn output_spec(kind: OutputKind) -> OutputSpec {
 /// write pictures of it rather than a new video.
 fn whole_picture(input: &Path) -> Result<(Timeline, PathBuf, Input)> {
     let src = Input::probe(input)?;
-    if !src.has_video {
-        bail!("{} has no video stream", input.display());
-    }
+    src.require_video(input, "")?;
     let (root, rel) = common_root(&[input.to_owned()])?;
     let (w, h) = (even(src.width), even(src.height));
     let mut tl = base_timeline(w, h, src.fps, None);
@@ -1681,12 +1696,7 @@ fn burn_cues(file: &Path) -> Result<Vec<geneva_timeline::captions::Cue>> {
 /// engine and reported when it leaves the frame or the title-safe area.
 pub fn burn_subtitles(input: &Path, opts: &BurnOptions, args: &EncodeArgs) -> Result<Compiled> {
     let src = Input::probe(input)?;
-    if !src.has_video {
-        bail!(
-            "{} has no video stream to burn subtitles into",
-            input.display()
-        );
-    }
+    src.require_video(input, " to burn subtitles into")?;
     let cues = burn_cues(&opts.file)?;
     let (root, rel) = common_root(&[input.to_owned()])?;
     let (w, h) = (even(src.width), even(src.height));

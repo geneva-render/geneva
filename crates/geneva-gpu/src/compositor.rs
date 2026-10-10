@@ -1229,10 +1229,7 @@ impl Compositor {
         let mut draws = Vec::new();
         let frame_size = [width as f32, height as f32];
         for layer in layers {
-            for (i, clip) in layer.clips.iter().enumerate() {
-                if !(clip.start <= t && t < clip.end) {
-                    continue;
-                }
+            for (i, clip) in layer.visible_at(t) {
                 let local = (t - clip.start).to_f64();
                 let mut opacity = clip.opacity.sample(local).clamp(0.0, 1.0);
                 opacity *= transition_gain(layer, i, t);
@@ -1256,6 +1253,9 @@ impl Compositor {
                 let mut planes = None;
                 let mut transfer = Transfer::Srgb;
                 let mut picture: Option<(f64, f64, Option<[u32; 4]>)> = None;
+                // A video's exact display size, which its frames round
+                // when its pixels are not square.
+                let mut shown: Option<(f64, f64)> = None;
                 match &clip.source {
                     ResolvedSource::Composition(nested) => {
                         let texture = self.acquire(gpu, nested.width, nested.height);
@@ -1279,6 +1279,7 @@ impl Compositor {
                         // the one layout the shader converts; its
                         // picture otherwise, through the painter.
                         let source_time = *in_ + (t - clip.start) * clip.speed;
+                        shown = painter.assets_mut().video_display_size(comp, asset)?;
                         let held = painter
                             .assets_mut()
                             .video_planes(comp, asset, source_time)?;
@@ -1354,7 +1355,11 @@ impl Compositor {
                     continue;
                 };
                 let size = (w, h);
-                let Some(window) = crop_window(clip, size) else {
+                // Placed by the exact display size and carried over to the
+                // texels, as the CPU does; a mask is laid out on the
+                // texels themselves.
+                let full = shown.filter(|_| clip.mask.is_none()).unwrap_or(size);
+                let Some(window) = crop_window(clip, full) else {
                     continue;
                 };
                 let content = content
@@ -1362,6 +1367,14 @@ impl Compositor {
                 let Some(place) = Placement::new(width, height, clip, local, window, content, None)
                 else {
                     continue;
+                };
+                let place = if full == size {
+                    place
+                } else {
+                    let Some(place) = place.in_texels([full.0 / w, full.1 / h]) else {
+                        continue;
+                    };
+                    place
                 };
                 let mut mask = Tex::Blank;
                 if let Some(m) = &clip.mask {
@@ -1386,7 +1399,14 @@ impl Compositor {
                     };
                 }
                 set_placement(&mut uniform, &place, size);
-                let (blending, code) = blending(clip.blend);
+                let (blending, code) = if geneva_render::composited_encoded(clip) {
+                    // Markup mixes in sRGB-encoded values, as a browser
+                    // does (`composited_encoded`): the shader does it
+                    // from a copy of the frame, as for a blend mode.
+                    (Blending::Separable, BLEND_ENCODED)
+                } else {
+                    blending(clip.blend)
+                };
                 uniform.blend = code;
                 let draw = Draw {
                     uniform,
@@ -1806,7 +1826,8 @@ impl Compositor {
     /// Drops kept pictures not drawn this frame, least recently drawn
     /// first, until the rest fit the budget.
     fn evict(&mut self) {
-        while self.kept_bytes > CACHE_BUDGET {
+        let budget = geneva_render::limits::cache_budget(CACHE_BUDGET as usize, 0.125) as u64;
+        while self.kept_bytes > budget {
             let Some((&key, _)) = self
                 .kept
                 .iter()
@@ -2447,6 +2468,9 @@ fn image_key(id: &str) -> u64 {
     id.hash(&mut hasher);
     hasher.finish()
 }
+
+/// The shader's code for "over" in sRGB-encoded values.
+const BLEND_ENCODED: u32 = 9;
 
 /// How a blend mode is drawn, and its code for the shader.
 fn blending(mode: BlendMode) -> (Blending, u32) {

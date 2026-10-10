@@ -24,12 +24,13 @@ pub mod style;
 
 use std::fmt;
 
-pub use css::{CssError, KeyframesRule, Stylesheet};
+pub use css::{CssError, FontFace, KeyframesRule, Stylesheet};
 pub use dom::{Document, Element, HtmlError, Node, NodeId, NodeKind};
 pub use layout::{Content, Group, Laid, Measure, Painted};
 pub use style::{
     AnimationSpec, Background, Blend, Computed, Direction, Extent, Overrides, Paint, Shadow, Stop,
-    Text, TextAlign, TextFill, declared_box, extent_of, overridden,
+    Text, TextAlign, TextDirection, TextFill, TextTransform, WhiteSpace, declared_box, extent_of,
+    inset_extent, overridden,
 };
 
 /// Why a document did not parse, and where.
@@ -96,6 +97,9 @@ pub struct Prepared {
     pub inert: Vec<String>,
     /// `@keyframes` rules from the stylesheet, untouched.
     pub keyframes: std::collections::BTreeMap<String, KeyframesRule>,
+    /// `@font-face` rules, their `src` relative to the markup (a linked
+    /// stylesheet's are rebased from the stylesheet's directory).
+    pub font_faces: Vec<css::FontFace>,
     /// The `animation` on the outermost element, when the document has
     /// one: the root's single element child, which is the whole picture.
     /// Layout and paint do not play it; it is what the clip drawing this
@@ -112,7 +116,62 @@ pub struct Prepared {
     animated: Option<Computed>,
 }
 
+/// Where a box named by `anchor()` is: by `anchor-name` (`--name`) or by
+/// element id (`#id` or the bare id), its border box in the surface's
+/// pixels.
+#[derive(Debug, Clone, Default)]
+pub struct Anchors {
+    boxes: std::collections::HashMap<String, layout::Rectangle>,
+}
+
+impl Anchors {
+    /// The border box `name` refers to.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<layout::Rectangle> {
+        let name = name.trim();
+        self.boxes
+            .get(name)
+            .or_else(|| self.boxes.get(name.trim_start_matches('#')))
+            .copied()
+    }
+}
+
 impl Prepared {
+    /// The boxes `anchor()` can name in a laid-out frame: every element
+    /// with an `anchor-name` or an id, at its first box.
+    #[must_use]
+    pub fn anchors(&self, laid: &Laid) -> Anchors {
+        let mut boxes = std::collections::HashMap::new();
+        for b in &laid.boxes {
+            let Some(el) = self.doc.nodes[b.node].element() else {
+                continue;
+            };
+            if let Some(name) = &self.styles[b.node].paint.anchor_name {
+                boxes.entry(name.clone()).or_insert(b.rect);
+            }
+            if let Some(id) = &el.id {
+                boxes.entry(id.clone()).or_insert(b.rect);
+            }
+        }
+        Anchors { boxes }
+    }
+
+    /// The box `left` and `top` of `node` are measured from: the padding
+    /// box of its nearest positioned ancestor, or the surface's origin.
+    #[must_use]
+    pub fn containing_origin(&self, laid: &Laid, node: NodeId) -> (f32, f32) {
+        let mut at = self.doc.nodes[node].parent;
+        while let Some(n) = at {
+            if self.styles[n].positioned {
+                if let Some(b) = laid.boxes.iter().find(|b| b.node == n) {
+                    return (b.rect[0] + b.border[3], b.rect[1] + b.border[0]);
+                }
+            }
+            at = self.doc.nodes[n].parent;
+        }
+        (0.0, 0.0)
+    }
+
     /// The border box of the element carrying the animation, against a
     /// surface of `width` by `height`. `None` on an axis its style leaves
     /// to the content.
@@ -195,20 +254,26 @@ pub fn image_sources(prepared: &Prepared) -> Vec<String> {
         .collect()
 }
 
-/// Every font family the computed styles name, once each and in order.
+/// Every font family the computed styles name, each family of a
+/// `font-family` list on its own, once each, sorted; CSS's generic
+/// families are left out.
 ///
 /// A family here is either a family the machine has or the id of a font
 /// asset the document carries, which the painter registers by both. The
 /// caller is the one that knows which, so this only reports what was
 /// asked for.
 pub fn font_families(prepared: &Prepared) -> Vec<String> {
-    let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for style in &prepared.styles {
-        if let Some(family) = style.text.family.as_deref() {
-            seen.insert(family);
+        if let Some(list) = style.text.family.as_deref() {
+            seen.extend(
+                style::font_list(list)
+                    .into_iter()
+                    .filter(|f| !style::is_generic_family(f)),
+            );
         }
     }
-    seen.into_iter().map(str::to_owned).collect()
+    seen.into_iter().collect()
 }
 
 /// The `href` of every `<link rel="stylesheet">` in some markup, so that
@@ -231,27 +296,43 @@ pub fn prepare(
 ) -> Result<Prepared, Error> {
     let doc = dom::parse(html).map_err(Error::Html)?;
     let mut sheet = css::Stylesheet::default();
+    // Sheets are parsed through a shared cache: a timeline's captions
+    // repeat the same few, and each is parsed once.
     for href in &doc.links {
         if let Some(text) = linked.get(href) {
-            let more = css::parse_stylesheet(text).map_err(Error::Css)?;
-            sheet.rules.extend(more.rules);
-            sheet.keyframes.extend(more.keyframes);
+            let more = css::parse_shared(text).map_err(Error::Css)?;
+            sheet.rules.extend(more.rules.iter().cloned());
+            sheet.keyframes.extend(more.keyframes.clone());
+            // A url in a stylesheet is relative to the stylesheet.
+            let dir = href.rsplit_once('/').map_or("", |(d, _)| d);
+            sheet
+                .font_faces
+                .extend(more.font_faces.iter().map(|f| css::FontFace {
+                    src: if dir.is_empty() || f.src.starts_with('/') {
+                        f.src.clone()
+                    } else {
+                        format!("{dir}/{}", f.src)
+                    },
+                    ..f.clone()
+                }));
         }
     }
     // Where this document's own <style> rules sit in the sheet, so that a
     // rule someone wrote here can be told apart from one in a stylesheet
     // shared with other markup.
     let own_from = sheet.rules.len();
-    let own = css::parse_stylesheet(&doc.style).map_err(Error::Css)?;
-    sheet.rules.extend(own.rules);
-    sheet.keyframes.extend(own.keyframes);
+    let own = css::parse_shared(&doc.style).map_err(Error::Css)?;
+    sheet.rules.extend(own.rules.iter().cloned());
+    sheet.keyframes.extend(own.keyframes.clone());
+    sheet.font_faces.extend(own.font_faces.iter().cloned());
     let own_to = sheet.rules.len();
     if !extra.trim().is_empty() {
-        let more = css::parse_stylesheet(extra).map_err(Error::Css)?;
-        sheet.rules.extend(more.rules);
+        let more = css::parse_shared(extra).map_err(Error::Css)?;
+        sheet.rules.extend(more.rules.iter().cloned());
         // A rule of the same name replaces the markup's, as the field is
         // applied after it.
-        sheet.keyframes.extend(more.keyframes);
+        sheet.keyframes.extend(more.keyframes.clone());
+        sheet.font_faces.extend(more.font_faces.iter().cloned());
     }
     let (styles, problems, used) = style::cascade(&doc, &sheet);
     // CSS honours z-index on a positioned box or a flex item and ignores
@@ -338,6 +419,7 @@ nothing here; a browser ignores it too"
         unmatched,
         inert,
         keyframes: sheet.keyframes,
+        font_faces: sheet.font_faces,
         animation,
         animated_node,
         animated,

@@ -578,10 +578,14 @@ impl AssetKind {
     /// Guesses the kind from a file extension.
     pub fn from_extension(ext: &str) -> Option<Self> {
         match ext.to_ascii_lowercase().as_str() {
-            "mp4" | "mov" | "mkv" | "webm" | "m4v" | "mxf" | "ts" | "avi" => Some(Self::Video),
+            "mp4" | "mov" | "mkv" | "webm" | "m4v" | "mxf" | "ts" | "avi" | "dv" | "mpg"
+            | "mpeg" | "vob" | "m2v" | "m2ts" | "mts" | "wmv" | "asf" | "3gp" | "3g2" | "ogv"
+            | "qt" => Some(Self::Video),
             "png" | "jpg" | "jpeg" | "webp" | "bmp" | "gif" => Some(Self::Image),
-            "wav" | "mp3" | "aac" | "m4a" | "flac" | "ogg" | "opus" | "oga" => Some(Self::Audio),
-            "ttf" | "otf" | "ttc" => Some(Self::Font),
+            "wav" | "mp3" | "aac" | "m4a" | "flac" | "ogg" | "opus" | "oga" | "wma" => {
+                Some(Self::Audio)
+            }
+            "ttf" | "otf" | "ttc" | "woff" | "woff2" => Some(Self::Font),
             "html" | "htm" => Some(Self::Html),
             "srt" | "vtt" => Some(Self::Subtitle),
             "json" => Some(Self::Captions),
@@ -1351,9 +1355,10 @@ impl JsonSchema for Word {
 #[serde(deny_unknown_fields)]
 pub struct TextStyle {
     /// Font: the id of an asset of kind "font", a family name available
-    /// on the system, or the CSS `font` shorthand ("600 40px/1.2 Inter"),
-    /// whose parts fill in size, weight, italic and line_height unless
-    /// those are set.
+    /// on the system, a comma list of them tried in order for each
+    /// character ("Inter, Noto Sans Arabic"), or the CSS `font` shorthand
+    /// ("600 40px/1.2 Inter"), whose parts fill in size, weight, italic
+    /// and line_height unless those are set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
     /// Font size in pixels. Defaults to 48.
@@ -1385,6 +1390,35 @@ pub struct TextStyle {
     )]
     #[schemars(schema_with = "crate::pixels::opt_px_schema")]
     pub letter_spacing: Option<f64>,
+    /// Markup's `font-synthesis`. Not part of the format: a text source
+    /// synthesises both, as a browser does by default.
+    #[serde(skip)]
+    pub synthesis: FontSynthesis,
+    /// Markup's `text-spacing-trim: space-all`: full-width punctuation
+    /// keeps its full width beside other punctuation. Not part of the
+    /// format: a text source trims, as a browser does by default.
+    #[serde(skip)]
+    pub space_all: bool,
+}
+
+/// What may be drawn synthetically where a family has no face for it,
+/// as CSS `font-synthesis`: bold from a lighter face, oblique from an
+/// upright one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FontSynthesis {
+    /// Synthetic bold.
+    pub weight: bool,
+    /// Synthetic oblique.
+    pub style: bool,
+}
+
+impl Default for FontSynthesis {
+    fn default() -> Self {
+        Self {
+            weight: true,
+            style: true,
+        }
+    }
 }
 
 /// Horizontal text alignment.

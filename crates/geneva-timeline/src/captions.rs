@@ -677,7 +677,7 @@ mod tests {
         assert_eq!(cues.len(), 2);
         assert_eq!(cues[0].text, "Hello\nworld");
         assert_eq!(cues[0].start, Ratio::new(1, 1));
-        assert!(cues[0].words.is_empty());
+        assert!(cues[0].words.is_empty(), "{:?}", cues[0].words);
         assert!(parse("1\n00:00:05,000 --> 00:00:04,000\nx\n").is_err());
     }
 }

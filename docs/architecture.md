@@ -84,26 +84,49 @@ transition logic and the painter are shared Rust.
 a software one too; both fall back to the CPU with a note. `frame` and
 the overlays on a direct-path picture always use the CPU.
 
-**Text**: shaping, bidi, line breaking and fallback by `cosmic-text`,
+**Text**: shaping, bidi, line breaking and fallback by `cosmic-text`
+(its shaper, harfrust, patched in `vendor/` for Indic below-base forms),
 rasterized by `swash` into coverage masks, composited in linear light
 with box, outline and shadow, placed like an image.
 
 **Markup**: parsed and styled once per clip by `geneva-html`, laid out
 and painted by the renderer into a picture placed like an image.
 
-- Painted in sRGB-encoded premultiplied values, as a browser does; the
-  finished box is converted to linear light once.
-- A box with nothing animated inside is painted once per clip.
+- Painted in sRGB-encoded premultiplied values, as a browser does, and
+  laid on in them too with the `normal` blend mode: the frame under the
+  box is encoded, the box drawn over it, and the result decoded. On the
+  GPU, the shader does the same from a copy of the frame, as for a blend
+  mode.
+- `backdrop-filter` boxes are handed to the compositor with the picture:
+  before the clip is drawn, the region under each box is filtered (blur,
+  downsampled above sigma 8, then the colour filters) and mixed in. The
+  GPU compositor does not draw them; documents using them, or a
+  `mask-image`, render on the CPU.
+- A box with nothing animated inside is painted once per clip. One whose
+  animations only step (`steps()`, or keyframes that all say the same)
+  is painted once per interval between the moments they can change
+  (`motion::step_moments`), and the picture reused until the next; a
+  frame within a microsecond of such a moment is painted fresh and not
+  kept. The CPU renderer keeps the last few markup pictures converted
+  to sRGB-encoded values, so a caption that holds still is converted
+  once.
 - An element with an animation, opacity, filter, blend mode or clip is a
   group: a buffer of its own, bounded to what its parent can show
   (through the inverse transform, padded for blur, cut to its
   `clip-path` polygon, at most nine frames of area), composited with
   those applied. Groups off the frame, and groups whose polygon covers
-  nothing, are skipped. An animation that changes a size re-lays out
-  each frame.
+  nothing, are skipped. A `mask-image` is applied to the group's picture
+  after its blur and polygon, before its transform. Markup with an
+  animation that moves is laid out again each frame, with text sizes
+  kept from earlier frames; a keyframe that names another box
+  (`anchor()`) is worked out from a first pass, and the frame laid out
+  again.
 - A group with no group inside keeps its picture between frames while
   its boxes stay the same, blurred in place once its blur holds still
-  for two frames, and composited through its transform each frame. A
+  for two frames, and composited through its transform each frame. While
+  its blur changes, one blurred copy is kept per radius, radii rounded
+  to 0.25 px; above 8 px the blur is a Gaussian on a copy reduced 2 to 4
+  times. Groups under 64x64 pixels are not kept unless they hold text. A
   group whose boxes change three frames running is painted fresh until
   they hold still again. Pictures not wanted in a frame are let go,
   oldest first, when a new one would pass the budget (96 MB per
@@ -116,6 +139,9 @@ and painted by the renderer into a picture placed like an image.
   it) gets no buffer: its boxes and groups are painted into what holds
   it. A group with a blend mode inside it does this only while what
   holds it is still empty, so the blend sees the same backdrop.
+- A picture painted fresh each frame is handed back to the painter once
+  laid on, and the next frame is drawn into it, clearing only what the
+  last one marked.
 - On the GPU, boxes, glyphs, shadows and polygon coverage are still
   painted on the CPU and uploaded; groups are composited on the device.
 
@@ -127,7 +153,8 @@ per output. The report names the mode.
 ### Stream copy
 
 One layer of video clips shown as they are (natural size, centred, full
-opacity, no rotation, transitions or overlays), output size and rate
+opacity, no rotation, transitions or overlays), output size (as
+displayed, after the pixel aspect; the copy keeps the source's) and rate
 equal to the sources', one codec with identical coded parameters, and
 audio absent, the sources' own, or one untouched track. No setting asks
 for a re-encode (quality, bitrate, keyframes, or audio that differs
@@ -175,7 +202,14 @@ Picture untouched but not copyable (another codec, a quality setting,
   transparent frames the size of their bounding boxes, one per group of
   clips whose boxes touch (a card at the top and captions at the bottom
   are two), and laid over the decoded planes, converting only covered
-  pixels to linear light and back. Untouched pixels stay byte-identical.
+  pixels to linear light and back (markup: to sRGB-encoded values and
+  back). A backdrop filter splits the overlays where it falls and is
+  done to the planes under its box. Untouched pixels stay byte-identical.
+  A group of overlay clips that holds still (the same pictures, by the
+  painter's key, in the same places) is laid on from the picture drawn
+  for the previous frame. The blend works per chroma block: the block's
+  chroma decoded once, one table each way across the curve, single
+  precision; pixels the overlay leaves alone are not converted.
   Word-timed text is drawn again only when the lit word changes.
 - RGB outputs from 8-bit Y'CbCr sources go through the scaler with the
   source matrix and range and a per-channel transfer table. Other
@@ -260,6 +294,22 @@ the source rather than treating a set field as a change.
 - `AssetSource` resolves `assets.<id>.src` under one root; validation
   has already rejected absolute paths and `..`. One decoder is kept open
   per asset so sequential frames decode once.
+- Decoders: a codec whose frames stand alone (ProRes, DNxHD, DV) is
+  threaded by slice, with no frame in flight per thread; others by
+  frame, on as many threads as a quarter of `--memory-budget` holds at
+  two and a half pictures a thread. Software encoders take another
+  quarter at twelve pictures a thread (x264, measured). Every packet is
+  read through `codecs::read_packet`, which releases the one before;
+  `Packet::read` is disallowed in `clippy.toml`, since the demuxer
+  overwrote a packet without releasing it.
+- Older files: a rate that is missing or absurd (ASF declares its
+  millisecond time base, so 1000 fps) is measured from the first 120
+  packets' timestamps and snapped to a standard rate within 1%. MPEG
+  program and transport streams time only some frames, so a frame with
+  no timestamp, or one not after the last, follows the frame before by
+  one frame duration, and the length is measured by decoding the last
+  seconds. Interlaced frames are deinterlaced on conversion
+  (`convert::deinterlace`), which keeps them off the direct path.
 
 ## Tests
 
@@ -277,6 +327,11 @@ the source rather than treating a set field as a change.
   3 ms. Time zero is a file's first video frame, for picture and sound;
   MPEG-TS AAC starts 21 ms late, as in ffmpeg, since TS carries no
   priming.
+- **Legacy corpus**: `tests/media/legacy/`, from
+  `scripts/make-legacy-corpus.sh`: DV NTSC and PAL, MPEG-2 in PS and TS,
+  MS-MPEG4 v3, Motion JPEG, QuickTime RLE, each a flash and a tone at
+  0.5 s, which must keep their frame count and marks through `convert`;
+  and a Cinepak file, which `probe` must name as undecodable.
 
 ## Vulkan in a container
 

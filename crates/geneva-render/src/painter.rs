@@ -28,13 +28,58 @@ const WORD_TEXT_KEEP: usize = 8;
 struct Scene {
     /// The clip this scene was made for, so a remark can name it.
     path: String,
+    /// When the clip ends, after which the scene is not needed again by
+    /// a render going forward in time.
+    end: Ratio,
     prepared: geneva_html::Prepared,
     images: HashMap<String, Image>,
-    /// The box as drawn, kept when no animation inside can change it.
-    still: Option<Image>,
+    /// The box as drawn, kept when no animation inside can change it,
+    /// with the backdrops of its boxes.
+    still: Option<(Image, Vec<crate::backdrop::Backdrop>)>,
+    /// When every animation inside only steps, the moments the picture
+    /// can change at (`geneva_timeline::motion::step_moments`), worked
+    /// out on first use; `None` inside when something moves smoothly.
+    steps: std::cell::OnceCell<Option<Vec<f64>>>,
+    /// The picture drawn for one interval between those moments, and
+    /// which: the frames after it in the same interval reuse it.
+    stepped: Option<(usize, Image, Vec<crate::backdrop::Backdrop>)>,
     /// Pictures of the groups inside that do not change from frame to
     /// frame, which an animated source is redrawn from.
     groups: crate::html::GroupCache,
+}
+
+/// Where a frame of markup with animations inside falls.
+enum Step {
+    /// Something moves smoothly: drawn fresh every frame.
+    Moving,
+    /// Every animation steps, and the frame is in interval `.0`, whose
+    /// picture holds until the next moment.
+    Interval(usize),
+    /// Every animation steps, but the frame is too close to a moment to
+    /// say on which side of it the animation samples: drawn fresh and
+    /// not kept.
+    Edge,
+}
+
+impl Scene {
+    fn step(
+        &mut self,
+        html: &geneva_timeline::ResolvedHtml,
+        clip: &ResolvedClip,
+        local: f64,
+    ) -> Step {
+        let horizon = (clip.end - clip.start).to_f64() * clip.speed.to_f64().max(1.0) + 1.0;
+        let steps = self
+            .steps
+            .get_or_init(|| geneva_timeline::motion::step_moments(&html.motion, horizon));
+        let Some(moments) = steps else {
+            return Step::Moving;
+        };
+        if moments.iter().any(|m| (m - local).abs() < 1e-6) {
+            return Step::Edge;
+        }
+        Step::Interval(moments.partition_point(|m| *m <= local))
+    }
 }
 
 /// Paints clip sources for a renderer, keeping what does not change.
@@ -42,8 +87,9 @@ pub struct Painter<A: AssetSource> {
     assets: A,
     text: TextEngine,
     /// Rendered text images that do not change with time, by a hash of
-    /// the clip and its text, so a caption is laid out once per clip.
-    text_cache: HashMap<u64, Image>,
+    /// the clip and its text, so a caption is laid out once per clip,
+    /// with the time its clip ends.
+    text_cache: HashMap<u64, (Ratio, Image)>,
     /// Word-timed text drawn lately, by a hash of the clip, its text and
     /// the word lit: the picture only changes when the lit word does, and
     /// frames come in order, so the last few are all worth keeping. Most
@@ -53,6 +99,14 @@ pub struct Painter<A: AssetSource> {
     /// document and its pictures, and the drawn box when nothing in the
     /// markup moves, which is then the same picture at every time.
     html_cache: HashMap<u64, Scene>,
+    /// `@font-face` files registered so far: family, path, weight, style.
+    font_faces: std::collections::HashSet<(String, String, Option<u16>, Option<bool>)>,
+    /// The buffer of a markup picture drawn fresh for the last frame,
+    /// handed back once laid on, for the next: a picture is the size of
+    /// the clip's box, and allocating and clearing one per frame was most
+    /// of what a moving caption cost at 3840x2160. Only what it marked
+    /// (its content rectangle) is cleared for reuse.
+    markup_spare: Option<Image>,
     /// What the painter has to tell the reader about the render itself,
     /// deduplicated: a group cut down to the buffer bound does it on
     /// most of a clip's frames, and saying so once is the useful number.
@@ -69,6 +123,10 @@ pub struct Painted<'a> {
     pub paint: Paint<'a>,
     /// The picture's identity, when it is kept.
     pub key: Option<u64>,
+    /// Boxes in markup with a `backdrop-filter`, in the paint's own
+    /// coordinates: done to what is under the clip before the paint is
+    /// drawn over it.
+    pub backdrops: Vec<crate::backdrop::Backdrop>,
 }
 
 impl<A: AssetSource> std::fmt::Debug for Painter<A> {
@@ -96,6 +154,23 @@ impl<A: AssetSource> Painter<A> {
         std::mem::take(&mut self.warnings).into_iter().collect()
     }
 
+    /// The letters no font had a glyph for, drawn as a box, by clip
+    /// path, with how many: the most one frame of the clip drew. Taken
+    /// and cleared.
+    pub fn take_missing_glyphs(&mut self) -> Vec<(String, Vec<(char, usize)>)> {
+        self.text
+            .take_missing()
+            .into_iter()
+            .map(|(clip, letters)| (clip, letters.into_iter().collect()))
+            .collect()
+    }
+
+    /// Takes back the buffer of a markup picture [`paint`](Self::paint)
+    /// drew fresh, once it has been laid on, to draw the next one in.
+    pub fn recycle_markup(&mut self, image: Image) {
+        self.markup_spare = Some(image);
+    }
+
     /// A painter reading from `assets`.
     pub fn new(assets: A) -> Self {
         Self {
@@ -104,6 +179,8 @@ impl<A: AssetSource> Painter<A> {
             text_cache: HashMap::new(),
             word_text: Vec::new(),
             html_cache: HashMap::new(),
+            font_faces: std::collections::HashSet::new(),
+            markup_spare: None,
             warnings: std::collections::BTreeSet::new(),
         }
     }
@@ -155,10 +232,42 @@ impl<A: AssetSource> Painter<A> {
         clip.path.hash(&mut hasher);
         let scene_key = hasher.finish();
         if !self.html_cache.contains_key(&scene_key) {
+            // Frames are asked for in order, so a scene whose clip ended
+            // before this one started is done with: a timeline with
+            // thousands of captions keeps only the ones on screen. A
+            // render that jumps back (a poster, a sprite sheet) only
+            // prepares the markup again.
+            self.html_cache.retain(|_, s| s.end > clip.start);
             let prepared = crate::html::prepare(html).map_err(|reason| RenderError::Asset {
                 id: clip.path.clone(),
                 reason,
             })?;
+            // `@font-face` files, relative to the markup, registered once
+            // under the family the rule gives them.
+            for face in &prepared.font_faces {
+                let path = if html.base.is_empty() {
+                    face.src.clone()
+                } else {
+                    format!("{}/{}", html.base.trim_end_matches('/'), face.src)
+                };
+                let mark = (face.family.clone(), path.clone(), face.weight, face.italic);
+                if self.font_faces.contains(&mark) {
+                    continue;
+                }
+                let data = self.assets.font_at(&path)?;
+                if !self.text.add_font_face(
+                    &face.family,
+                    data.as_ref().clone(),
+                    face.weight,
+                    face.italic,
+                ) {
+                    return Err(RenderError::Asset {
+                        id: path,
+                        reason: "not a usable font file".to_owned(),
+                    });
+                }
+                self.font_faces.insert(mark);
+            }
             // A picture in markup is a path relative to the markup, as
             // it is on a page; the resolver has already checked the
             // shape and that the file is there.
@@ -177,9 +286,12 @@ impl<A: AssetSource> Painter<A> {
                 scene_key,
                 Scene {
                     path: clip.path.clone(),
+                    end: clip.end,
                     prepared,
                     images,
                     still: None,
+                    steps: std::cell::OnceCell::new(),
+                    stepped: None,
                     groups: crate::html::GroupCache::default(),
                 },
             );
@@ -205,8 +317,19 @@ impl<A: AssetSource> Painter<A> {
         if html.motion.is_empty() {
             return Ok(None);
         }
+        self.text.begin_paint(&clip.path);
         let scene_key = self.scene(comp, clip, html)?;
         let scene = self.html_cache.get_mut(&scene_key).expect("inserted above");
+        // Markup that only steps is drawn whole once per interval by
+        // `paint`, which a renderer then keeps as one picture.
+        if !matches!(scene.step(html, clip, local), Step::Moving) {
+            return Ok(None);
+        }
+        // A mask is applied on the CPU only: markup with one is drawn
+        // whole and handed over as one picture.
+        if scene.prepared.styles.iter().any(|s| s.paint.mask.is_some()) {
+            return Ok(None);
+        }
         let layers = crate::html::render_layers(
             html,
             &scene.prepared,
@@ -247,7 +370,9 @@ impl<A: AssetSource> Painter<A> {
         local: f64,
         size: Option<[u32; 2]>,
     ) -> Result<Painted<'_>, RenderError> {
+        self.text.begin_paint(&clip.path);
         let mut key = None;
+        let mut backdrops = Vec::new();
         let paint = match &clip.source {
             ResolvedSource::Solid { color } => Paint::Solid {
                 color: color.sample(local),
@@ -320,18 +445,47 @@ impl<A: AssetSource> Painter<A> {
                         scene.groups.clear();
                         scene.still = Some(drawn);
                     }
-                    Paint::Image(Cow::Borrowed(scene.still.as_ref().expect("drawn above")))
+                    let (image, kept) = scene.still.as_ref().expect("drawn above");
+                    backdrops.clone_from(kept);
+                    Paint::Image(Cow::Borrowed(image))
                 } else {
-                    let drawn = crate::html::render(
-                        html,
-                        &scene.prepared,
-                        &mut self.text,
-                        &scene.images,
-                        local,
-                        &mut scene.groups,
-                    )
-                    .map_err(failed)?;
-                    Paint::Image(Cow::Owned(drawn))
+                    let step = scene.step(html, clip, local);
+                    if let Step::Interval(i) = step {
+                        // Every animation inside steps: one drawing per
+                        // interval between the moments it can change.
+                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                        scene_key.hash(&mut hasher);
+                        i.hash(&mut hasher);
+                        key = Some(hasher.finish());
+                        if scene.stepped.as_ref().is_none_or(|(at, _, _)| *at != i) {
+                            let (drawn, now) = crate::html::render(
+                                html,
+                                &scene.prepared,
+                                &mut self.text,
+                                &scene.images,
+                                local,
+                                &mut scene.groups,
+                            )
+                            .map_err(failed)?;
+                            scene.stepped = Some((i, drawn, now));
+                        }
+                        let (_, image, kept) = scene.stepped.as_ref().expect("drawn above");
+                        backdrops.clone_from(kept);
+                        Paint::Image(Cow::Borrowed(image))
+                    } else {
+                        let (drawn, now) = crate::html::render_into(
+                            html,
+                            &scene.prepared,
+                            &mut self.text,
+                            &scene.images,
+                            local,
+                            &mut scene.groups,
+                            self.markup_spare.take(),
+                        )
+                        .map_err(failed)?;
+                        backdrops = now;
+                        Paint::Image(Cow::Owned(drawn))
+                    }
                 }
             }
             ResolvedSource::Text(text) => {
@@ -356,11 +510,14 @@ impl<A: AssetSource> Painter<A> {
                     // shadow with keyframes is drawn fresh each frame.
                     let text_key = text_key().finish();
                     key = Some(text_key);
-                    let engine = &mut self.text;
-                    let image = self
-                        .text_cache
-                        .entry(text_key)
-                        .or_insert_with(|| engine.render(text, local));
+                    if !self.text_cache.contains_key(&text_key) {
+                        // As with markup: what ended before this clip
+                        // started is not drawn again going forward.
+                        self.text_cache.retain(|_, (end, _)| *end > clip.start);
+                        let image = self.text.render(text, local);
+                        self.text_cache.insert(text_key, (clip.end, image));
+                    }
+                    let (_, image) = &self.text_cache[&text_key];
                     Paint::Image(Cow::Borrowed(image))
                 } else if text.is_static() {
                     // Word-timed text with nothing animated: the picture
@@ -391,7 +548,11 @@ impl<A: AssetSource> Painter<A> {
                 }
             }
         };
-        Ok(Painted { paint, key })
+        Ok(Painted {
+            paint,
+            key,
+            backdrops,
+        })
     }
 }
 

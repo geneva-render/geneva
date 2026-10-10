@@ -52,6 +52,9 @@ fn corpus_files() -> Vec<(&'static str, Marks)> {
         ("aac-44k.mp4", at(24, 1.0)),
         ("opus.webm", at(24, 1.0)),
         ("mpegts.ts", at(24, 1.0)),
+        ("editlist-73.mov", at(24, 1.0)),
+        ("audio-long.mp4", at(24, 1.0)),
+        ("audio-short.mp4", at(24, 1.0)),
     ]
 }
 
@@ -699,6 +702,95 @@ fn a_farm_gives_launched_workers_the_url_it_is_told() {
     assert_eq!(probe(&out).unwrap().video.unwrap().frames, Some(72));
 }
 
+/// PSNR in dB between frame `n` (at 24 fps) of two files.
+fn frame_psnr(a: &Path, b: &Path, n: u64) -> f64 {
+    let t = Ratio::from_int(n as i64) / Ratio::from_int(24);
+    let x = VideoReader::open(a, ColorTags::default())
+        .unwrap()
+        .frame_at(t)
+        .unwrap()
+        .pixels
+        .clone();
+    let y = VideoReader::open(b, ColorTags::default())
+        .unwrap()
+        .frame_at(t)
+        .unwrap()
+        .pixels
+        .clone();
+    let mse: f64 = x
+        .iter()
+        .zip(&y)
+        .map(|(p, q)| {
+            let d = |u: f32, v: f32| f64::from(u - v).powi(2);
+            (d(p.r, q.r) + d(p.g, q.g) + d(p.b, q.b)) / 3.0
+        })
+        .sum::<f64>()
+        / x.len() as f64;
+    10.0 * (1.0 / mse.max(1e-12)).log10()
+}
+
+#[test]
+#[cfg(unix)]
+fn workers_follow_a_farm_that_draws_no_system_fonts() {
+    // A worker started without --no-system-fonts still draws the text in
+    // the built-in face when the farm was started with it.
+    let dir = tempfile::tempdir().unwrap();
+    let timeline = dir.path().join("text.json");
+    std::fs::write(
+        &timeline,
+        r#"{"geneva":"1.0",
+            "output":{"width":320,"height":180,"fps":24,"duration":"2s",
+                      "encode":{"video":{"crf":10,"preset":"ultrafast"}}},
+            "layers":[{"clips":[{"source":{"kind":"html",
+                "html":"<p style='color:white;font:40px sans-serif'>Farm test</p>"}}]}]}"#,
+    )
+    .unwrap();
+    let t = timeline.to_str().unwrap();
+    let path = |name: &str| dir.path().join(name);
+    let own = path("own.mp4");
+    let builtin = path("builtin.mp4");
+    run(&["render", t, "-o", own.to_str().unwrap()]);
+    run(&[
+        "--no-system-fonts",
+        "render",
+        t,
+        "-o",
+        builtin.to_str().unwrap(),
+    ]);
+    let farmed = path("farmed.mp4");
+    let exe = assert_cmd::cargo::cargo_bin("geneva");
+    run(&[
+        "--no-system-fonts",
+        "farm",
+        t,
+        "-o",
+        farmed.to_str().unwrap(),
+        "--parts",
+        "2",
+        "--local",
+        "0",
+        "--listen",
+        "127.0.0.1:0",
+        "--launch",
+        &format!("'{}' worker", exe.display()),
+        "--launch-count",
+        "1",
+    ]);
+    for n in [0, 24, 47] {
+        let psnr = frame_psnr(&builtin, &farmed, n);
+        assert!(
+            psnr > 40.0,
+            "frame {n}: {psnr:.1} dB from the built-in face"
+        );
+    }
+    // Where this machine's sans-serif is another face, the farm's frames
+    // are not the ones it would draw.
+    if frame_psnr(&own, &builtin, 24) < 30.0 {
+        let psnr = frame_psnr(&own, &farmed, 24);
+        assert!(psnr < 30.0, "{psnr:.1} dB from this machine's face");
+    }
+}
+
 /// A farm running in the background, stopped when it goes out of scope
 /// so that a failed test leaves no process behind.
 struct Farm(std::process::Child);
@@ -948,4 +1040,136 @@ fn a_farm_fetches_part_of_a_long_source_and_renders_it_as_a_single_run_does() {
         let psnr = 10.0 * (1.0 / mse.max(1e-12)).log10();
         assert!(psnr > 40.0, "frame {n}: {psnr:.1} dB");
     }
+}
+
+/// Files whose length is not a whole number of frames in six decimals,
+/// or whose audio runs past or stops short of the picture: every path
+/// writes the frames the source shows and no more. A source of 73
+/// frames at 24 fps lasts 3.0416666... s, which a verb writes into its
+/// document as 3.041667 s, a third of a microsecond past the last frame;
+/// that used to ask the direct path for a 74th frame no clip covered.
+#[test]
+fn a_length_that_ends_mid_frame_adds_no_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let srt = dir.path().join("a.srt");
+    std::fs::write(&srt, "1\n00:00:00,500 --> 00:00:02,500\nHello\n").unwrap();
+    // The count the muxer wrote: MP4 keeps one entry per sample.
+    let frames_of = |path: &Path| probe(path).unwrap().video.unwrap().frames.unwrap_or(0);
+    let corpus_dir = corpus();
+    let corpus_dir = corpus_dir.to_str().unwrap();
+    let mut problems = Vec::new();
+    for (name, want) in [
+        ("editlist-73.mov", 73u32),
+        ("audio-long.mp4", 72),
+        ("audio-short.mp4", 72),
+    ] {
+        let src = corpus().join(name);
+        let src = src.to_str().unwrap();
+        // Burned captions with the defaults (copied where it can be),
+        // re-encoded throughout, and as a document with a markup clip
+        // and the duration written out to six decimals.
+        let doc = dir.path().join("doc.json");
+        std::fs::write(
+            &doc,
+            format!(
+                r#"{{"geneva":"1.1","output":{{"width":160,"height":90,"fps":24,"duration":"{:.6}s"}},
+                   "assets":{{"v":{{"src":"{name}"}}}},
+                   "layers":[{{"clips":[{{"source":{{"kind":"video","asset":"v"}}}}]}},
+                             {{"clips":[{{"source":{{"kind":"html","html":"<p style='color:white'>Hi</p>"}},
+                                         "start":"0.5s","duration":"1s"}}]}}]}}"#,
+                f64::from(want) / 24.0
+            ),
+        )
+        .unwrap();
+        let runs: [(&str, Vec<&str>); 3] = [
+            (
+                "burn",
+                vec!["subtitles", src, "--burn", srt.to_str().unwrap()],
+            ),
+            (
+                "burn --crf",
+                vec![
+                    "subtitles",
+                    src,
+                    "--burn",
+                    srt.to_str().unwrap(),
+                    "--crf",
+                    "20",
+                ],
+            ),
+            (
+                "document",
+                vec![
+                    "render",
+                    doc.to_str().unwrap(),
+                    "--crf",
+                    "20",
+                    "--assets",
+                    corpus_dir,
+                ],
+            ),
+        ];
+        for (what, mut args) in runs {
+            let out = dir
+                .path()
+                .join(format!("{name}-{}.mp4", what.replace(' ', "")));
+            args.extend(["-o", out.to_str().unwrap()]);
+            let run = geneva().args(&args).output().unwrap();
+            if !run.status.success() {
+                problems.push(format!(
+                    "{name}, {what}: {}",
+                    String::from_utf8_lossy(&run.stderr)
+                ));
+                continue;
+            }
+            let got = frames_of(&out);
+            if got != u64::from(want) {
+                problems.push(format!("{name}, {what}: {got} frames, want {want}"));
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// The legacy corpus (`tests/media/legacy`, `scripts/make-legacy-corpus.sh`):
+/// DV, MPEG-2 in a program and a transport stream, MS-MPEG4 v3, Motion
+/// JPEG and QuickTime RLE, each with a white frame at 0.5 s and a tone
+/// from 0.5 s. Converted, each keeps every frame (as ffmpeg counts them)
+/// and both marks.
+#[test]
+fn legacy_sources_keep_their_frames_and_marks() {
+    let legacy = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/media/legacy");
+    let dir = tempfile::tempdir().unwrap();
+    let mut problems = Vec::new();
+    for (name, frames, flash_frame) in [
+        ("dv-ntsc.dv", 20, 15),
+        ("dv-pal.dv", 17, 13),
+        ("mpeg2.mpg", 25, 13),
+        ("mpeg2.ts", 30, 15),
+        ("msmpeg4v3.avi", 25, 13),
+        ("mjpeg.avi", 25, 13),
+        ("qtrle.mov", 25, 13),
+    ] {
+        let out = dir.path().join(format!("{name}.mp4"));
+        run(&[
+            "convert",
+            legacy.join(name).to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--crf",
+            "16",
+            "--preset",
+            "ultrafast",
+        ]);
+        let written = probe(&out).unwrap().video.unwrap().frames;
+        if written != Some(frames) {
+            problems.push(format!("{name}: {written:?} frames (wanted {frames})"));
+        }
+        let want = Marks {
+            flash_frame,
+            tone_secs: 0.5,
+        };
+        problems.extend(check("convert", name, &out, &want));
+    }
+    assert!(problems.is_empty(), "\n{}", problems.join("\n"));
 }

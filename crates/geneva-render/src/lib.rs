@@ -12,11 +12,13 @@
 #![forbid(unsafe_code)]
 
 mod assets;
+pub mod backdrop;
 mod blur;
 mod cpu;
 mod fill;
 mod frame;
 mod html;
+pub mod limits;
 mod painter;
 mod placement;
 mod text;
@@ -28,12 +30,12 @@ use thiserror::Error;
 
 pub use assets::{AssetSource, FileAssets, Image, NoAssets, VideoPlanes};
 pub use blur::{box_radii, gaussian_blur};
-pub use cpu::CpuRenderer;
+pub use cpu::{CpuRenderer, Overlay, composited_encoded};
 pub use frame::Frame;
 pub use html::{MarkupGroup, MarkupItem, MarkupLayers, MarkupRun, blend_mode};
 pub use painter::{Paint, Painted, Painter};
 pub use placement::{Placement, SUBSAMPLES, crop_window};
-pub use text::TextEngine;
+pub use text::{TextEngine, declared_family, set_system_fonts, sfnt_bytes, system_fonts};
 pub use transitions::{fade_veil, transition_gain};
 
 /// Errors that prevent a frame from being rendered.
@@ -102,6 +104,13 @@ pub trait Renderer {
     /// taken and cleared: things noticed while drawing that no amount of
     /// reading the document would show. Nothing by default.
     fn take_warnings(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// The letters no font had a glyph for, drawn as a box, by clip path,
+    /// with how many (the most one frame of the clip drew). Taken and
+    /// cleared. Nothing by default.
+    fn take_missing_glyphs(&mut self) -> Vec<(String, Vec<(char, usize)>)> {
         Vec::new()
     }
 

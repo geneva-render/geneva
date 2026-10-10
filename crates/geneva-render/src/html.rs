@@ -13,11 +13,14 @@ use geneva_html::layout::Rectangle;
 use geneva_html::style::{Extent, TextFill};
 use geneva_html::{Content, Group, Laid, Measure, Painted, Prepared, Text};
 use geneva_timeline::motion::{NodeMotion, Transform};
-use geneva_timeline::schema::{BlendMode, Shadow, Shadows, TextAlign, TextSource, TextStyle};
-use geneva_timeline::{Animated, FillTrack, ResolvedHtml, ResolvedText};
+use geneva_timeline::schema::{
+    BlendMode, FontSynthesis, Shadow, Shadows, Stroke, TextAlign, TextSource, TextStyle,
+};
+use geneva_timeline::{Animated, FillTrack, OutlinePaint, ResolvedHtml, ResolvedText};
 use rayon::prelude::*;
 
 use crate::assets::Image;
+use crate::backdrop::{Backdrop, Filter};
 use crate::fill::{Fill, encoded};
 use crate::text::TextEngine;
 
@@ -31,14 +34,25 @@ struct Context<'a> {
     text: &'a mut TextEngine,
     images: &'a HashMap<String, Image>,
     /// Sizes already measured, keyed by the run and the width it was
-    /// measured at; flex asks the same question several times.
-    memo: HashMap<(String, String, u32), (f32, f32)>,
+    /// measured at; flex asks the same question several times, and an
+    /// animated source asks it again every frame.
+    memo: &'a mut Measured,
 }
+
+/// Text sizes by the run, its style and the width it was measured at.
+/// Colour is not in the key, so a word changing colour is not measured
+/// again.
+type Measured = HashMap<(String, String, u32), (f32, f32)>;
+
+/// How many sizes a source keeps between frames. A size that animates
+/// (a font size, letter spacing) adds keys every frame; past this many
+/// they are dropped and measured again as asked.
+const MEASURED_KEEP: usize = 4096;
 
 /// Turns an HTML text style into the text source the engine draws, so
 /// markup takes the same shaping, fallback and colour path as a text clip.
 fn as_text_source(text: &str, style: &Text, max_width: f64) -> ResolvedText {
-    ResolvedText::constant(
+    let mut source = ResolvedText::constant(
         text.to_owned(),
         TextSource {
             text: Some(text.to_owned()),
@@ -51,11 +65,16 @@ fn as_text_source(text: &str, style: &Text, max_width: f64) -> ResolvedText {
                 geneva_html::TextAlign::Center => TextAlign::Center,
                 geneva_html::TextAlign::Right => TextAlign::Right,
             }),
-            line_height: Some(style.line_height),
+            line_height: style.line_height,
             padding: None,
             background: None,
             radius: None,
-            outline: None,
+            // A CSS stroke is centred on the outline; the engine's
+            // outline is the part outside the glyph, half of it.
+            outline: (style.stroke_width > 0.0).then(|| Stroke {
+                color: style.stroke_color().into(),
+                width: style.stroke_width / 2.0,
+            }),
             shadow: (!style.shadow.is_empty()).then(|| {
                 Shadows(
                     style
@@ -72,7 +91,16 @@ fn as_text_source(text: &str, style: &Text, max_width: f64) -> ResolvedText {
             }),
         },
         max_width,
-    )
+    );
+    source.browser_lines = true;
+    source.rtl = style.rtl();
+    source.nowrap = !style.white_space.wraps();
+    source.outline_paint = if style.stroke_over_fill {
+        OutlinePaint::StrokeOver
+    } else {
+        OutlinePaint::StrokeUnder
+    };
+    source
 }
 
 /// An HTML text style as the style block a text source carries.
@@ -85,6 +113,11 @@ fn text_style_of(style: &Text) -> TextStyle {
         color: Some(Animated::Constant(style.color.into())),
         fill: None,
         letter_spacing: Some(style.letter_spacing),
+        synthesis: FontSynthesis {
+            weight: style.synthesis.0,
+            style: style.synthesis.1,
+        },
+        space_all: style.space_all,
     }
 }
 
@@ -96,17 +129,63 @@ fn engine_runs(runs: &[(String, Text)]) -> Vec<(String, TextStyle, LinearRgba)> 
 }
 
 /// A key that distinguishes two runs with different styles.
+/// The width a text is measured at: a run with no limit, or one that
+/// never breaks, at a width nothing will reach, which is max-content.
+fn measure_limit(style: &Text, width: Option<f32>) -> f32 {
+    width
+        .filter(|w| *w > 0.0 && style.white_space.wraps())
+        .unwrap_or(1.0e5)
+}
+
+/// A text style as it is measured. A shadow or stroke pads the rendered
+/// image, so measuring with one would move the text it is drawn behind;
+/// CSS lays text out as though they were not there, and so does this.
+/// Alignment does not change where lines break, and it is left out: in
+/// the measuring width a centred line sits tens of thousands of pixels
+/// along, where an `f32` holds positions to about 1/256 px, and the
+/// width read back came out short of the line (91.0 for 91.0008), so the
+/// box was made too narrow and the paint broke the line.
+fn plain_for_measure(style: &Text) -> Text {
+    let mut plain = style.clone();
+    plain.shadow.clear();
+    plain.stroke_width = 0.0;
+    plain.align = geneva_html::TextAlign::Left;
+    plain
+}
+
 fn style_key(style: &Text) -> String {
     format!(
-        "{}|{}|{}|{}|{}|{}|{:?}",
+        "{}|{}|{}|{}|{:?}|{}|{:?}|{}",
         style.family.as_deref().unwrap_or(""),
         style.size,
         style.weight,
         style.italic,
         style.line_height,
         style.letter_spacing,
-        style.align
+        style.align,
+        style.white_space.wraps()
     )
+}
+
+impl Context<'_> {
+    /// The min-content width of some pieces of text: the widest stretch
+    /// between two places a line may break (Unicode's line breaking:
+    /// spaces, after a hyphen, and between Chinese or Japanese
+    /// characters, which a line breaks between with no space at all).
+    fn longest_word<'a>(&mut self, pieces: impl Iterator<Item = (&'a str, &'a Text)>) -> f32 {
+        let mut widest = 0.0f32;
+        for (piece, style) in pieces {
+            let mut start = 0usize;
+            for (end, _) in unicode_linebreak::linebreaks(piece) {
+                let word = piece[start..end].trim();
+                if !word.is_empty() {
+                    widest = widest.max(self.text(word, style, None).0);
+                }
+                start = end;
+            }
+        }
+        widest
+    }
 }
 
 impl Measure for Context<'_> {
@@ -114,20 +193,20 @@ impl Measure for Context<'_> {
         if text.trim().is_empty() {
             return (0.0, 0.0);
         }
-        // A run with no limit is measured at a width nothing will reach,
-        // which is what max-content means here.
-        let limit = width.filter(|w| *w > 0.0).unwrap_or(1.0e5);
+        // Min-content is asked for as a width of zero: the text at the
+        // width of its longest word, or all of it when it never breaks.
+        if width == Some(0.0) && style.white_space.wraps() {
+            let widest = self.longest_word(std::iter::once((text, style)));
+            return self.text(text, style, Some(widest.max(1.0)));
+        }
+        let limit = measure_limit(style, width);
         let key = (text.to_owned(), style_key(style), limit.to_bits());
         if let Some(size) = self.memo.get(&key) {
             return *size;
         }
-        // A shadow pads the rendered image, so measuring with one would
-        // move the text it is drawn behind. CSS lays text out as though
-        // the shadow were not there, and so does this.
-        let mut plain = style.clone();
-        plain.shadow.clear();
+        let plain = plain_for_measure(style);
         let source = as_text_source(text, &plain, f64::from(limit));
-        let image = self.text.render(&source, 0.0);
+        let image = self.text.uncounted(|e| e.render(&source, 0.0));
         let size = (image.width as f32, image.height as f32);
         self.memo.insert(key, size);
         size
@@ -137,7 +216,11 @@ impl Measure for Context<'_> {
         if runs.iter().all(|(piece, _)| piece.trim().is_empty()) {
             return (0.0, 0.0);
         }
-        let limit = width.filter(|w| *w > 0.0).unwrap_or(1.0e5);
+        if width == Some(0.0) && style.white_space.wraps() {
+            let widest = self.longest_word(runs.iter().map(|(p, s)| (p.as_str(), s)));
+            return self.rich(runs, style, Some(widest.max(1.0)));
+        }
+        let limit = measure_limit(style, width);
         let mut text = String::new();
         let mut styles = style_key(style);
         for (piece, s) in runs {
@@ -150,10 +233,10 @@ impl Measure for Context<'_> {
         if let Some(size) = self.memo.get(&key) {
             return *size;
         }
-        let mut plain = style.clone();
-        plain.shadow.clear();
+        let plain = plain_for_measure(style);
         let source = as_text_source("", &plain, f64::from(limit));
-        let image = self.text.render_runs(&source, &engine_runs(runs), 0.0);
+        let runs = engine_runs(runs);
+        let image = self.text.uncounted(|e| e.render_runs(&source, &runs, 0.0));
         let size = (image.width as f32, image.height as f32);
         self.memo.insert(key, size);
         size
@@ -184,11 +267,89 @@ pub fn render(
     images: &HashMap<String, Image>,
     t: f64,
     cache: &mut GroupCache,
-) -> Result<Image, String> {
-    let (laid, transforms) = lay_out(html, prepared, text, images, t)?;
-    let mut surface = paint(&laid, &transforms, text, images, cache);
+) -> Result<(Image, Vec<Backdrop>), String> {
+    render_into(html, prepared, text, images, t, cache, None)
+}
+
+/// [`render`], drawing into `spare` when it is a picture of the same size
+/// handed back from an earlier frame: only what that frame marked (its
+/// content rectangle) is cleared.
+#[allow(clippy::too_many_arguments)]
+pub fn render_into(
+    html: &ResolvedHtml,
+    prepared: &Prepared,
+    text: &mut TextEngine,
+    images: &HashMap<String, Image>,
+    t: f64,
+    cache: &mut GroupCache,
+    spare: Option<Image>,
+) -> Result<(Image, Vec<Backdrop>), String> {
+    let (laid, transforms) = lay_out(html, prepared, text, images, t, &mut cache.measured)?;
+    let mut surface = paint(&laid, &transforms, text, images, cache, spare);
     to_linear(&mut surface);
-    Ok(surface)
+    Ok((surface, backdrops(&laid, &transforms)))
+}
+
+/// The boxes with a `backdrop-filter`, where they land in the clip's box
+/// at this moment: each group they are in moves their rectangle (to its
+/// bounding box, when the group turns) and multiplies its opacity in.
+fn backdrops(laid: &Laid, transforms: &[Option<Transform>]) -> Vec<Backdrop> {
+    let mut out = Vec::new();
+    for b in &laid.boxes {
+        if b.paint.backdrop.is_empty() || b.opacity <= 0.0 {
+            continue;
+        }
+        let r = b.rect;
+        let mut corners = [
+            (f64::from(r[0]), f64::from(r[1])),
+            (f64::from(r[0] + r[2]), f64::from(r[1])),
+            (f64::from(r[0]), f64::from(r[1] + r[3])),
+            (f64::from(r[0] + r[2]), f64::from(r[1] + r[3])),
+        ];
+        let mut opacity = f64::from(b.opacity);
+        let mut scale = 1.0f64;
+        let mut group = b.group;
+        while let Some(g) = group {
+            let gr = &laid.groups[g];
+            opacity *= f64::from(gr.opacity);
+            if let Some(tr) = transforms.get(g).and_then(Option::as_ref) {
+                let centre = gr.pivot;
+                for c in &mut corners {
+                    *c = forward(tr, centre, *c);
+                }
+                scale *= f64::midpoint(tr.scale[0].abs(), tr.scale[1].abs());
+            }
+            group = gr.parent;
+        }
+        if opacity <= 0.0 {
+            continue;
+        }
+        let x0 = corners.iter().map(|c| c.0).fold(f64::INFINITY, f64::min);
+        let y0 = corners.iter().map(|c| c.1).fold(f64::INFINITY, f64::min);
+        let x1 = corners
+            .iter()
+            .map(|c| c.0)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let y1 = corners
+            .iter()
+            .map(|c| c.1)
+            .fold(f64::NEG_INFINITY, f64::max);
+        out.push(Backdrop {
+            rect: [x0, y0, x1 - x0, y1 - y0],
+            radius: b.paint.radius.map(|r| r * scale),
+            filters: b
+                .paint
+                .backdrop
+                .iter()
+                .map(|f| match *f {
+                    Filter::Blur(r) => Filter::Blur(r * scale),
+                    other => other,
+                })
+                .collect(),
+            opacity,
+        });
+    }
+    out
 }
 
 /// Lays the document out at `t`, with the animated styles of the moment
@@ -200,11 +361,15 @@ fn lay_out(
     text: &mut TextEngine,
     images: &HashMap<String, Image>,
     t: f64,
+    measured: &mut Measured,
 ) -> Result<(Laid, Vec<Option<Transform>>), String> {
+    if measured.len() > MEASURED_KEEP {
+        measured.clear();
+    }
     let mut context = Context {
         text,
         images,
-        memo: HashMap::new(),
+        memo: measured,
     };
     let motions: HashMap<usize, &NodeMotion> = html.motion.iter().map(|m| (m.node, m)).collect();
     let mut overrides = BTreeMap::new();
@@ -217,21 +382,49 @@ fn lay_out(
             overrides.insert(m.node, sampled.overrides);
         }
     }
-    let laid = prepared.layout_with(
+    let mut laid = prepared.layout_with(
         html.width.map(|w| w as f32),
         html.height.map(|h| h as f32),
         &mut context,
         &overrides,
     )?;
+    // A keyframe that names another box (`anchor()`) is worked out
+    // against where the boxes landed, and the frame laid out again with
+    // it. The box it moves is not one the others depend on, so one more
+    // pass settles it.
+    if html.motion.iter().any(NodeMotion::uses_anchors) {
+        let anchors = prepared.anchors(&laid);
+        for m in html.motion.iter().filter(|m| m.uses_anchors()) {
+            let Some(style) = prepared.styles.get(m.node) else {
+                continue;
+            };
+            let frame = geneva_timeline::motion::AnchorFrame {
+                anchors: &anchors,
+                origin: prepared.containing_origin(&laid, m.node),
+            };
+            let sampled = m.sample_anchored(t, style, (0.0, 0.0), Some(&frame));
+            overrides.insert(m.node, sampled.overrides);
+        }
+        laid = prepared.layout_with(
+            html.width.map(|w| w as f32),
+            html.height.map(|h| h as f32),
+            &mut context,
+            &overrides,
+        )?;
+    }
     // A transform is sampled against the box the element settled on,
     // which a percentage in a translation is a share of.
     let transforms: Vec<Option<Transform>> = laid
         .groups
         .iter()
         .map(|g| {
-            let m = motions.get(&g.node)?;
             let size = (f64::from(g.rect[2]), f64::from(g.rect[3]));
-            m.sample(t, &prepared.styles[g.node], size)
+            let style = &prepared.styles[g.node];
+            let Some(m) = motions.get(&g.node) else {
+                let raw = style.paint.transform.as_deref()?;
+                return geneva_timeline::motion::static_transform(raw, size);
+            };
+            m.sample(t, style, size)
                 .transform
                 .filter(|tr| !tr.is_identity())
         })
@@ -244,7 +437,7 @@ fn lay_out(
 /// box (gradients, translucent boxes, shadows, blur, text) blends there,
 /// so a page looks as it does in a browser, and the finished box is
 /// turned into linear light once, for the compositor.
-fn encode_pixel(p: LinearRgba) -> LinearRgba {
+pub(crate) fn encode_pixel(p: LinearRgba) -> LinearRgba {
     if p.a <= 0.0 {
         return LinearRgba::TRANSPARENT;
     }
@@ -257,7 +450,7 @@ fn encode_pixel(p: LinearRgba) -> LinearRgba {
     }
 }
 
-fn decode_pixel(p: LinearRgba) -> LinearRgba {
+pub(crate) fn decode_pixel(p: LinearRgba) -> LinearRgba {
     if p.a <= 0.0 {
         return LinearRgba::TRANSPARENT;
     }
@@ -320,13 +513,24 @@ fn srgb_from_linear(v: f32) -> f32 {
     table[i] + (table[i + 1] - table[i]) * f
 }
 
-/// The painter's image back in linear light.
+/// The painter's image back in linear light: its content rectangle,
+/// since everything outside it is transparent, which converts to itself.
+/// A caption's box is the size of the frame, its words a strip of it.
 fn to_linear(image: &mut Image) {
-    image.pixels.par_chunks_mut(1 << 12).for_each(|part| {
-        for p in part {
-            *p = decode_pixel(*p);
-        }
-    });
+    let width = image.width as usize;
+    let [cx, cy, cw, ch] = image.content.unwrap_or([0, 0, image.width, image.height]);
+    let (x0, x1) = (cx as usize, ((cx + cw) as usize).min(width));
+    let rows = cy as usize..((cy + ch) as usize).min(image.height as usize);
+    if x0 >= x1 || rows.is_empty() || width == 0 {
+        return;
+    }
+    image.pixels[rows.start * width..rows.end * width]
+        .par_chunks_mut(width)
+        .for_each(|row| {
+            for p in &mut row[x0..x1] {
+                *p = decode_pixel(*p);
+            }
+        });
 }
 
 /// The rectangle one box can touch: its own, grown by what its shadows
@@ -335,8 +539,13 @@ fn reach_of(painted: &Painted) -> Bounds {
     let reach = |s: &geneva_html::style::Shadow| s.blur.abs() + s.x.abs().max(s.y.abs()) + 1.0;
     let furthest = |list: &[geneva_html::style::Shadow]| list.iter().map(reach).fold(0.0, f64::max);
     let box_shadow = furthest(&painted.paint.shadow);
+    // A stroke reaches half its width out, and a miter at a sharp corner
+    // up to four times that; its shadow reaches as far again.
     let text_shadow = match &painted.content {
-        Content::Text { style, .. } | Content::Rich { style, .. } => furthest(&style.shadow),
+        Content::Text { style, .. } | Content::Rich { style, .. } => {
+            let stroke = style.stroke_width / 2.0 * OutlinePaint::StrokeUnder.reach();
+            stroke + furthest(&style.shadow) + f64::from(u8::from(stroke > 0.0))
+        }
         _ => 0.0,
     };
     let grow = box_shadow.max(text_shadow);
@@ -370,7 +579,8 @@ fn padded(r: Bounds, by: f64) -> Bounds {
     [r[0] - by, r[1] - by, r[2] + by, r[3] + by]
 }
 
-/// A group's rectangle after its transform, about the centre of its box.
+/// A group's rectangle after its transform, about its pivot
+/// (`transform-origin`).
 fn transformed(r: Bounds, centre: (f64, f64), tr: &Transform) -> Bounds {
     let mut out: Option<Bounds> = None;
     for (x, y) in [(r[0], r[1]), (r[2], r[1]), (r[0], r[3]), (r[2], r[3])] {
@@ -380,7 +590,7 @@ fn transformed(r: Bounds, centre: (f64, f64), tr: &Transform) -> Bounds {
     out.unwrap_or(r)
 }
 
-/// Where a point of the group lands: scaled and turned about the centre,
+/// Where a point of the group lands: scaled and turned about the pivot,
 /// then moved. `rotate` is clockwise on a screen whose y grows down.
 fn forward(tr: &Transform, centre: (f64, f64), p: (f64, f64)) -> (f64, f64) {
     let (dx, dy) = (
@@ -453,7 +663,7 @@ fn group_bounds(
             }
         }
         if let Some(tr) = &transforms[g] {
-            r = transformed(r, centre_of(group.rect), tr);
+            r = transformed(r, group.pivot, tr);
         }
         placed[g] = Some(r);
         if let Some(p) = group.parent {
@@ -481,7 +691,7 @@ fn group_bounds(
         let visible = window.and_then(|w| {
             let seen = match &transforms[g] {
                 Some(tr) if tr.scale[0] == 0.0 || tr.scale[1] == 0.0 => return None,
-                Some(tr) => inverted(w, centre_of(group.rect), tr),
+                Some(tr) => inverted(w, group.pivot, tr),
                 None => w,
             };
             // Only what is inside the polygon shows, and the blur reads
@@ -601,13 +811,6 @@ fn inverted(r: Bounds, centre: (f64, f64), tr: &Transform) -> Bounds {
         out = Some(union(out, [px, py, px, py]));
     }
     out.unwrap_or(r)
-}
-
-fn centre_of(rect: Rectangle) -> (f64, f64) {
-    (
-        f64::from(rect[0]) + f64::from(rect[2]) / 2.0,
-        f64::from(rect[1]) + f64::from(rect[3]) / 2.0,
-    )
 }
 
 /// The integer rectangle a group's buffer covers, and whether bounding it
@@ -744,9 +947,19 @@ struct Cached {
     /// The last frame this picture was wanted, for choosing which to
     /// let go when a new one does not fit.
     used: u64,
+    /// The picture blurred by a radius the group asked for lately (see
+    /// [`blur_step`]), for a blur that changes from frame to frame:
+    /// frames whose radii round the same share it.
+    soft: Option<(f64, Image)>,
 }
 
 impl Cached {
+    /// What the pictures hold, in bytes.
+    fn bytes(&self) -> usize {
+        let soft = self.soft.as_ref().map_or(0, |(_, i)| i.pixels.len());
+        (self.image.pixels.len() + soft) * size_of::<LinearRgba>()
+    }
+
     /// Whether the picture covers `want`, in surface pixels.
     fn covers(&self, want: [i64; 4]) -> bool {
         let (w, h) = (i64::from(self.image.width), i64::from(self.image.height));
@@ -758,14 +971,22 @@ impl Cached {
 
     /// The part of the picture covering `want`, as a layer to composite.
     fn window(&self, group: usize, want: [i64; 4]) -> Layer {
+        let mut layer = self.window_of(&self.image, group, want);
+        layer.blurred = self.blurred > 0.0;
+        layer
+    }
+
+    /// The part of `image`, the picture or its blurred copy, covering
+    /// `want`.
+    fn window_of(&self, image: &Image, group: usize, want: [i64; 4]) -> Layer {
         let width = (want[2] - want[0]).max(0) as u32;
         let height = (want[3] - want[1]).max(0) as u32;
         let mut pixels = Vec::with_capacity(width as usize * height as usize);
-        let stride = self.image.width as usize;
+        let stride = image.width as usize;
         for y in 0..i64::from(height) {
             let row = (want[1] + y - self.origin.1) as usize * stride;
             let from = row + (want[0] - self.origin.0) as usize;
-            pixels.extend_from_slice(&self.image.pixels[from..from + width as usize]);
+            pixels.extend_from_slice(&image.pixels[from..from + width as usize]);
         }
         Layer {
             group,
@@ -776,7 +997,7 @@ impl Cached {
                 content: None,
             },
             origin: (want[0], want[1]),
-            blurred: self.blurred > 0.0,
+            blurred: false,
             through: false,
             touched: true,
         }
@@ -820,10 +1041,14 @@ pub struct GroupCache {
     /// Paintings so far, so that each picture kept has a number of its
     /// own.
     generation: u64,
+    /// Text sizes measured on earlier frames: layout runs every frame
+    /// for a source with an animation inside, and the words are the same.
+    measured: Measured,
 }
 
-/// Pictures below this many pixels are not worth keeping: the copy out
-/// of the cache would cost about what painting them does.
+/// Pictures below this many pixels are not worth keeping, unless they
+/// hold text: the copy out of the cache would cost about what painting
+/// their boxes does.
 const MIN_PIXELS: i64 = 64 * 64;
 
 /// What one markup source may hold. Each thread rendering frames has a
@@ -843,6 +1068,7 @@ impl GroupCache {
     pub fn clear(&mut self) {
         self.entries.clear();
         self.give_up.clear();
+        self.measured.clear();
         self.bytes = 0;
     }
 
@@ -861,9 +1087,9 @@ impl GroupCache {
 
     fn insert(&mut self, group: usize, mut entry: Cached) {
         if let Some(old) = self.entries.remove(&group) {
-            self.bytes -= old.image.pixels.len() * size_of::<LinearRgba>();
+            self.bytes -= old.bytes();
         }
-        self.bytes += entry.image.pixels.len() * size_of::<LinearRgba>();
+        self.bytes += entry.bytes();
         entry.generation = self.generation;
         entry.used = self.frame;
         self.generation += 1;
@@ -873,7 +1099,7 @@ impl GroupCache {
     /// Lets go of pictures not wanted this frame, the longest unused
     /// first, until `bytes` more fit in the budget. Whether they now do.
     fn make_room(&mut self, bytes: usize) -> bool {
-        while self.bytes + bytes > BUDGET {
+        while self.bytes + bytes > crate::limits::cache_budget(BUDGET, 0.125) {
             let Some(oldest) = self
                 .entries
                 .iter()
@@ -884,10 +1110,62 @@ impl GroupCache {
                 return false;
             };
             let gone = self.entries.remove(&oldest).expect("found above");
-            self.bytes -= gone.image.pixels.len() * size_of::<LinearRgba>();
+            self.bytes -= gone.bytes();
         }
         true
     }
+}
+
+impl GroupCache {
+    /// The part of group `g`'s picture covering `want`, blurred by
+    /// `sigma` (already through [`blur_step`]) when the group asks for a
+    /// blur that is not in the picture: from the blurred copy kept for
+    /// that radius, made now if the radius is new. A picture much larger
+    /// than the window (an element that travels) is not blurred whole;
+    /// its window is, when it is composited.
+    fn window(&mut self, g: usize, want: [i64; 4], sigma: f64) -> Option<Layer> {
+        let entry = self.entries.get(&g)?;
+        if sigma <= 0.0 || entry.blurred > 0.0 {
+            return Some(entry.window(g, want));
+        }
+        let window = (want[2] - want[0]) * (want[3] - want[1]);
+        let whole = i64::from(entry.image.width) * i64::from(entry.image.height);
+        if whole > 2 * window {
+            return Some(entry.window(g, want));
+        }
+        if entry.soft.as_ref().is_none_or(|(at, _)| *at != sigma) {
+            let bytes = entry.image.pixels.len() * size_of::<LinearRgba>();
+            let entry = self.entries.get_mut(&g).expect("found above");
+            if let Some((_, old)) = entry.soft.take() {
+                self.bytes -= old.pixels.len() * size_of::<LinearRgba>();
+            }
+            if !self.make_room(bytes) {
+                return Some(self.entries[&g].window(g, want));
+            }
+            let entry = self.entries.get_mut(&g).expect("kept: wanted this frame");
+            let mut soft = entry.image.clone();
+            let (w, h) = (soft.width as usize, soft.height as usize);
+            crate::blur::blur_pixels_reduced(&mut soft.pixels, w, h, sigma);
+            entry.soft = Some((sigma, soft));
+            self.bytes += bytes;
+        }
+        let entry = &self.entries[&g];
+        let (_, soft) = entry.soft.as_ref().expect("made above");
+        let mut layer = entry.window_of(soft, g, want);
+        layer.blurred = true;
+        Some(layer)
+    }
+}
+
+/// Blur radii are rounded to this many pixels: a quarter of a pixel of
+/// blur is not visible, and frames whose radii round the same share a
+/// blurred picture.
+const BLUR_STEP: f64 = 0.25;
+
+/// A `filter: blur()` radius as the painter blurs by: rounded to
+/// [`BLUR_STEP`], so that under an eighth of a pixel is no blur at all.
+fn blur_step(sigma: f64) -> f64 {
+    (sigma / BLUR_STEP).round() * BLUR_STEP
 }
 
 /// The integer buffer a group needs, as [`Layer::over`] would bound it.
@@ -931,9 +1209,6 @@ fn fill_cache(
         let Some(want) = buffer_rect(*bounds, surface) else {
             continue;
         };
-        if (want[2] - want[0]) * (want[3] - want[1]) < MIN_PIXELS {
-            continue;
-        }
         if !is_leaf(laid, g) {
             continue;
         }
@@ -945,6 +1220,15 @@ fn fill_cache(
         if boxes.is_empty() {
             continue;
         }
+        // Text is shaped and drawn by the engine, which costs far more
+        // than copying the picture, however small: a word that has
+        // finished arriving is kept, not drawn again every frame.
+        let text = boxes
+            .iter()
+            .any(|b| matches!(b.content, Content::Text { .. } | Content::Rich { .. }));
+        if !text && (want[2] - want[0]) * (want[3] - want[1]) < MIN_PIXELS {
+            continue;
+        }
         // Wanted this frame, fresh or not, so that making room for
         // another picture never lets it go.
         if let Some(c) = cache.entries.get_mut(&g) {
@@ -954,7 +1238,7 @@ fn fill_cache(
     }
     let mut served = HashSet::new();
     for (g, want, boxes) in candidates {
-        let blur = laid.groups[g].blur;
+        let blur = blur_step(laid.groups[g].blur);
         // Only the boxes are compared. A group's own opacity, blur and
         // clips are read when its picture is composited rather than when
         // it is painted, so they change nothing in the picture, and its
@@ -988,7 +1272,7 @@ fn fill_cache(
             let ([x0, y0, x1, y1], _) = bound_group(region, surface);
             let pixels = ((x1 - x0).max(0) * (y1 - y0).max(0)) as usize;
             if let Some(old) = cache.entries.remove(&g) {
-                cache.bytes -= old.image.pixels.len() * size_of::<LinearRgba>();
+                cache.bytes -= old.bytes();
             }
             if !cache.make_room(pixels * size_of::<LinearRgba>()) {
                 continue;
@@ -1006,6 +1290,7 @@ fn fill_cache(
                 blurred: 0.0,
                 asked: -1.0,
                 used: 0,
+                soft: None,
             };
             // The clamp in `Layer::over` can cut a picture that reaches
             // far past the surface down to less than the frame asks for.
@@ -1017,8 +1302,11 @@ fn fill_cache(
         let entry = cache.entries.get_mut(&g).expect("fresh or kept above");
         if blur > 0.0 && entry.blurred == 0.0 && entry.asked == blur {
             let (w, h) = (entry.image.width as usize, entry.image.height as usize);
-            crate::blur::blur_pixels(&mut entry.image.pixels, w, h, blur);
+            crate::blur::blur_pixels_reduced(&mut entry.image.pixels, w, h, blur);
             entry.blurred = blur;
+            if let Some((_, soft)) = entry.soft.take() {
+                cache.bytes -= soft.pixels.len() * size_of::<LinearRgba>();
+            }
             entry.generation = cache.generation;
             cache.generation += 1;
         }
@@ -1098,6 +1386,7 @@ fn paint(
     text: &mut TextEngine,
     images: &HashMap<String, Image>,
     cache: &mut GroupCache,
+    spare: Option<Image>,
 ) -> Image {
     let width = laid.size.0.ceil().max(1.0) as u32;
     let height = laid.size.1.ceil().max(1.0) as u32;
@@ -1112,11 +1401,28 @@ fn paint(
         }
     }
     let content = content_of(laid, &placed, (width, height));
-    let mut surface = Image {
-        width,
-        height,
-        pixels: transparent(width as usize * height as usize),
-        content,
+    let mut surface = match spare {
+        Some(mut used)
+            if (used.width, used.height) == (width, height)
+                && used.pixels.len() == width as usize * height as usize =>
+        {
+            if let Some([x, y, w, h]) = used.content {
+                let stride = width as usize;
+                used.pixels[y as usize * stride..(y + h) as usize * stride]
+                    .par_chunks_mut(stride)
+                    .for_each(|row| {
+                        row[x as usize..(x + w) as usize].fill(LinearRgba::TRANSPARENT);
+                    });
+            }
+            used.content = content;
+            used
+        }
+        _ => Image {
+            width,
+            height,
+            pixels: transparent(width as usize * height as usize),
+            content,
+        },
     };
     let first = first_seen(laid, transforms, (width, height));
     let served = fill_cache(
@@ -1180,7 +1486,7 @@ fn paint(
             let ready = (serving.is_none() && served.contains(&g))
                 .then(|| buffer_rect(own[g], (width, height)))
                 .flatten()
-                .and_then(|want| cache.entries.get(&g).map(|c| c.window(g, want)));
+                .and_then(|want| cache.window(g, want, blur_step(group.blur)));
             if let Some(layer) = ready {
                 serving = Some(g);
                 stack.push(layer);
@@ -1258,6 +1564,7 @@ fn first_seen(laid: &Laid, transforms: &[Option<Transform>], surface: (u32, u32)
                 group.opacity >= 1.0
                     && group.blur <= 0.0
                     && group.blend == geneva_html::Blend::Normal
+                    && group.mask.is_none()
                     && transforms[g].is_none()
                     && group
                         .clip
@@ -1299,6 +1606,7 @@ fn passes_through(
         && group
             .clip
             .is_none_or(|(rect, radius)| RoundRect::new(rect, radius).covers(target))
+        && group.mask.is_none()
         && group
             .clip_path
             .as_ref()
@@ -1417,9 +1725,10 @@ fn composite(
     if layer.image.width == 0 || layer.image.height == 0 {
         return;
     }
-    if group.blur > 0.0 && !layer.blurred {
+    let sigma = blur_step(group.blur);
+    if sigma > 0.0 && !layer.blurred {
         let (w, h) = (layer.image.width as usize, layer.image.height as usize);
-        crate::blur::blur_pixels(&mut layer.image.pixels, w, h, group.blur);
+        crate::blur::blur_pixels_reduced(&mut layer.image.pixels, w, h, sigma);
     }
     // CSS clips after filtering and before the transform, so the polygon
     // is applied in the buffer, where the group's own pixels are. A
@@ -1429,6 +1738,9 @@ fn composite(
         && !polygon_covers(points, layer.bounds())
     {
         mask_polygon(&mut layer.image, layer.origin, points);
+    }
+    if let Some(mask) = &group.mask {
+        mask_image(&mut layer.image, layer.origin, mask);
     }
     let opacity = group.opacity.clamp(0.0, 1.0);
     // Chosen once for the group: a group that does not blend takes the
@@ -1479,7 +1791,7 @@ fn composite(
     let Some(l) = landing else {
         return;
     };
-    let centre = centre_of(group.rect);
+    let centre = group.pivot;
     let x0 = (l[0].floor() as i64 - dst_origin.0).max(0);
     let y0 = (l[1].floor() as i64 - dst_origin.1).max(0);
     let x1 = (l[2].ceil() as i64 - dst_origin.0).min(dw);
@@ -1594,6 +1906,36 @@ fn affine_inverse(tr: &Transform, centre: (f64, f64), origin: (i64, i64)) -> [f6
 fn taps_of(tr: &Transform) -> (usize, usize) {
     let taps = |scale: f64| ((1.0 / scale.abs().max(1e-3)).ceil() as usize).clamp(1, 4);
     (taps(tr.scale[0]), taps(tr.scale[1]))
+}
+
+/// Keeps of a buffer whose top-left pixel sits at `origin` what the
+/// mask's alpha keeps at each pixel's centre; outside a tile that does
+/// not repeat, nothing. The gradient's alpha is read with its stops
+/// mixed premultiplied, as a browser mixes them.
+fn mask_image(image: &mut Image, origin: (i64, i64), mask: &geneva_html::layout::GroupMask) {
+    let w = image.width as usize;
+    if w == 0 {
+        return;
+    }
+    let fill = Fill::new_encoded(&mask.image, mask.tile);
+    let (tx, ty, tw, th) = mask.tile;
+    image
+        .pixels
+        .par_chunks_mut(w)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let py = (y as i64 + origin.1) as f64 + 0.5;
+            let row_in = mask.repeat.1 || (py >= ty && py < ty + th);
+            for (x, p) in row.iter_mut().enumerate() {
+                if p.a <= 0.0 {
+                    continue;
+                }
+                let px = (x as i64 + origin.0) as f64 + 0.5;
+                let inside = row_in && (mask.repeat.0 || (px >= tx && px < tx + tw));
+                let keep = if inside { fill.at(px, py).a } else { 0.0 };
+                *p = p.scaled(keep);
+            }
+        });
 }
 
 /// Keeps what is inside the polygon, given in the surface's pixels, of a
@@ -1713,8 +2055,9 @@ fn rows(
     y1: i64,
 ) -> impl IndexedParallelIterator<Item = (i64, &mut [LinearRgba])> {
     let w = image.width as usize;
+    // Both ends inside the image: a box wholly below it has no rows.
     let (y0, y1) = (
-        y0.max(0) as usize,
+        (y0.max(0) as usize).min(image.height as usize),
         (y1.max(0) as usize).min(image.height as usize),
     );
     let (from, to) = (y0 * w, y1.max(y0) * w);
@@ -2023,13 +2366,17 @@ fn paint_one_shadow(image: &mut Image, b: &Painted, shadow: &geneva_html::style:
     let (x0, y0, x1, y1) = bounds(image, rect, grow);
     let colour = encoded(shadow.color);
     let clip = clip_of(b);
+    // An outer shadow is drawn only outside the box's border edge, as CSS
+    // has it: a translucent box does not show its own shadow through it.
+    let own = RoundRect::new(b.rect, b.paint.radius);
+    let outside = |px: f64, py: f64| 1.0 - own.coverage(px, py);
     if shadow.blur <= 0.0 {
         let shape = RoundRect::new(rect, b.paint.radius);
         rows(image, i64::from(y0), i64::from(y1)).for_each(|(y, row)| {
             let py = y as f64 + 0.5;
             for x in x0..x1 {
                 let px = f64::from(x) + 0.5;
-                let a = shape.coverage(px, py) * clip_at(clip.as_ref(), px, py);
+                let a = shape.coverage(px, py) * clip_at(clip.as_ref(), px, py) * outside(px, py);
                 blend(row, x as usize, colour, a * b.opacity);
             }
         });
@@ -2058,7 +2405,7 @@ fn paint_one_shadow(image: &mut Image, b: &Painted, shadow: &geneva_html::style:
                     row,
                     x as usize,
                     colour,
-                    a * clip_at(clip.as_ref(), px, py) * b.opacity,
+                    a * clip_at(clip.as_ref(), px, py) * outside(px, py) * b.opacity,
                 );
             }
         }
@@ -2098,7 +2445,7 @@ fn paint_text(
         Some(runs) => engine.render_runs(source, runs, 0.0),
         None => engine.render(source, 0.0),
     };
-    let inset = crate::text::inset_for(&source);
+    let inset = crate::text::inset_for(&source, pieces.as_deref());
     // Where the glyphs sit in the run's box: aligned text that is
     // narrower than its box is shifted along it by a share of the slack.
     let shift = |drawn_width: f64| {
@@ -2115,7 +2462,7 @@ fn paint_text(
         // the other. A left-aligned run has no slack to measure.
         let along = match style.align {
             geneva_html::TextAlign::Left => 0.0,
-            _ => shift(f64::from(draw(engine, &source).width)),
+            _ => shift(f64::from(engine.uncounted(|e| draw(e, &source)).width)),
         };
         source.fill = Some(fill_track(fill, b.content_rect, along));
     }

@@ -1,0 +1,10 @@
+{
+  "geneva": "1.1",
+  "output": { "width": 640, "height": 330, "fps": 30, "duration": "1s", "background": "#4a6a3a" },
+  "assets": {
+    "page": { "src": "markup-lines/plates.html" },
+    "sans": { "src": "fonts/LiberationSans-Regular.ttf" },
+    "arabic": { "src": "fonts/NotoSansArabic-Subset.ttf" }
+  },
+  "layers": [ { "clips": [ { "source": { "kind": "html", "asset": "page" } } ] } ]
+}

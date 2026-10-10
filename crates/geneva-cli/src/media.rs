@@ -216,6 +216,7 @@ pub fn choose_renderer(
     choice: RendererChoice,
     root: &std::path::Path,
     keep_hdr: bool,
+    comp: &Composition,
 ) -> (Box<dyn geneva_media::PlaneRenderer>, Vec<String>) {
     use geneva_media::{FramePacker, MediaAssets, PlaneRenderer};
     use geneva_render::CpuRenderer;
@@ -228,6 +229,19 @@ pub fn choose_renderer(
     };
     if choice == RendererChoice::Cpu {
         return cpu(Vec::new());
+    }
+    // The GPU compositor does not draw backdrop filters yet.
+    if geneva_render::backdrop::used_in(comp) {
+        let notes = if choice == RendererChoice::Gpu {
+            vec![
+                "markup uses backdrop-filter, which the GPU renderer does not draw; the frames \
+                 were composited on the CPU"
+                    .to_owned(),
+            ]
+        } else {
+            Vec::new()
+        };
+        return cpu(notes);
     }
     #[cfg(feature = "gpu")]
     {
@@ -276,6 +290,20 @@ pub fn choose_renderer(
     }
 }
 
+/// How many frames may wait between the renderer and the encoder: eight,
+/// or fewer under a memory budget, at most a sixteenth of it in frames
+/// of this size (a frame is counted at three bytes a pixel, the most a
+/// queued picture takes), and never fewer than two.
+#[cfg(feature = "media")]
+fn queue_depth(comp: &Composition) -> usize {
+    let frame = u64::from(comp.width) * u64::from(comp.height) * 3;
+    geneva_render::limits::memory_budget().map_or(8, |b| {
+        usize::try_from(b / 16 / frame.max(1))
+            .unwrap_or(8)
+            .clamp(2, 8)
+    })
+}
+
 /// What a render produced.
 /// How `render` produced its output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -322,6 +350,9 @@ pub struct RenderStats {
     /// as warnings rather than notes: something asked for is not in the
     /// output.
     pub warnings: Vec<String>,
+    /// Letters no font had a glyph for, drawn as a box, by clip path,
+    /// with how many one frame drew.
+    pub missing_glyphs: Vec<(String, Vec<(char, usize)>)>,
     pub seconds: f64,
 }
 
@@ -444,6 +475,10 @@ pub struct ProbedAssets {
     /// assets themselves: linked stylesheets and pictures in markup. A
     /// farm sends these to its workers along with the assets.
     touched: std::cell::RefCell<std::collections::BTreeSet<String>>,
+    /// Families already looked up, so a document with thousands of
+    /// clips naming the same few families scans the machine's fonts once
+    /// for each.
+    families: std::cell::RefCell<std::collections::HashMap<String, bool>>,
 }
 
 impl ProbedAssets {
@@ -471,9 +506,13 @@ impl ProbedAssets {
     /// a document can be checked away from its material; the fonts are
     /// not material, they are on the machine either way, so the check on
     /// a family a document names works there too.
-    pub fn fonts_only() -> Self {
-        Self {
-            root: std::path::PathBuf::new(),
+    ///
+    /// Stylesheets that markup links to are still read, from under
+    /// `root`, the asset root, since the markup cannot be checked without
+    /// them.
+    pub fn fonts_only(text: &str, root: &Path) -> Self {
+        let mut out = Self {
+            root: root.to_path_buf(),
             absolute_paths: false,
             durations: std::collections::HashMap::new(),
             sizes: std::collections::HashMap::new(),
@@ -482,7 +521,20 @@ impl ProbedAssets {
             problems: Vec::new(),
             fonts: std::cell::OnceCell::new(),
             touched: std::cell::RefCell::default(),
+            families: std::cell::RefCell::default(),
+        };
+        // The families the document's font files declare, which markup
+        // can name them by.
+        if let Ok(timeline) = geneva_timeline::parse(text) {
+            for (id, asset) in &timeline.assets {
+                if asset_kind(asset) == Some(geneva_timeline::schema::AssetKind::Font) {
+                    if let Some(family) = read_family(&root.join(&asset.src)) {
+                        out.asset_families.insert(id.clone(), family);
+                    }
+                }
+            }
         }
+        out
     }
 }
 
@@ -499,15 +551,23 @@ impl AssetInfo for ProbedAssets {
         if self.asset_families.values().any(|f| f == family) {
             return Some(true);
         }
-        Some(
-            self.fonts
-                .get_or_init(geneva_render::TextEngine::new)
-                .family_is_available(family),
-        )
+        if let Some(known) = self.families.borrow().get(family) {
+            return Some(*known);
+        }
+        let found = self
+            .fonts
+            .get_or_init(geneva_render::TextEngine::new)
+            .family_is_available(family);
+        self.families.borrow_mut().insert(family.to_owned(), found);
+        Some(found)
     }
 
     fn size(&self, asset_id: &str, _: &str) -> Option<(u32, u32)> {
         self.sizes.get(asset_id).copied()
+    }
+
+    fn font_family(&self, asset_id: &str) -> Option<String> {
+        self.asset_families.get(asset_id).cloned()
     }
 
     fn text(&self, asset_id: &str, _: &str) -> Option<String> {
@@ -525,6 +585,24 @@ impl AssetInfo for ProbedAssets {
     }
 }
 
+/// An asset's kind, as declared or as its extension says.
+fn asset_kind(
+    asset: &geneva_timeline::schema::Asset,
+) -> Option<geneva_timeline::schema::AssetKind> {
+    asset.kind.or_else(|| {
+        let ext = Path::new(&asset.src)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        geneva_timeline::schema::AssetKind::from_extension(ext)
+    })
+}
+
+/// The family a font file declares, if it can be read.
+fn read_family(path: &Path) -> Option<String> {
+    geneva_render::declared_family(std::fs::read(path).ok()?)
+}
+
 /// Opens every video and audio asset declared in `text` under `root`.
 /// `measure` decodes every audio track to report what it measures
 /// (N310 and the warnings around it), which `validate --probe` asks for
@@ -538,13 +616,7 @@ pub fn probe_assets(text: &str, root: &Path, measure: bool) -> ProbedAssets {
         return out;
     };
     for (id, asset) in &timeline.assets {
-        let kind = asset.kind.or_else(|| {
-            let ext = Path::new(&asset.src)
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("");
-            geneva_timeline::schema::AssetKind::from_extension(ext)
-        });
+        let kind = asset_kind(asset);
         let path = root.join(&asset.src);
         // Text a document draws rather than muxes: markup, and captions,
         // which a .srt or .vtt infers as a subtitle.
@@ -577,11 +649,8 @@ pub fn probe_assets(text: &str, root: &Path, measure: bool) -> ProbedAssets {
         // is what stops the check below from reporting a document that
         // carries its font, which is the very thing the check asks for.
         if matches!(kind, Some(geneva_timeline::schema::AssetKind::Font)) {
-            if let Ok(data) = std::fs::read(&path) {
-                let mut engine = geneva_render::TextEngine::new();
-                if let Some(family) = engine.add_font(id, data) {
-                    out.asset_families.insert(id.clone(), family);
-                }
+            if let Some(family) = read_family(&path) {
+                out.asset_families.insert(id.clone(), family);
             }
             continue;
         }
@@ -1242,7 +1311,7 @@ mod imp {
         let mut previous_gist: Option<Vec<f32>> = None;
 
         let (mut renderer, renderer_notes) =
-            super::choose_renderer(overrides.renderer, root, comp.color.is_hdr());
+            super::choose_renderer(overrides.renderer, root, comp.color.is_hdr(), comp);
         notes.extend(renderer_notes);
         let mut frame = geneva_render::Frame::new(0, 0, geneva_color::Color::BLACK);
         let mut render_error: Option<RenderError> = None;
@@ -1625,7 +1694,8 @@ mod imp {
                 duration: comp.duration,
                 mode: RenderMode::Render,
                 notes,
-                warnings: Vec::new(),
+                warnings: renderer.take_warnings(),
+                missing_glyphs: renderer.take_missing_glyphs(),
                 seconds: started.elapsed().as_secs_f64(),
             },
         ))
@@ -1760,7 +1830,7 @@ mod imp {
         comp: &'env Composition,
         root: &'env Path,
     ) -> Feed<'scope> {
-        let (tx, rx) = std::sync::mpsc::sync_channel::<Msg>(8);
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Msg>(super::queue_depth(comp));
         let (spare_tx, spare_rx) = std::sync::mpsc::channel();
         let audio_encoder = sample_rate.and_then(|_| encoder.take_audio_encoder());
         let worker = scope.spawn(move || -> Result<Encoder, geneva_media::MediaError> {
@@ -1929,7 +1999,7 @@ mod imp {
         let join_secs = join_started.elapsed().as_secs_f64();
         let _ = std::fs::remove_dir_all(&dir);
         let report = report.map_err(media_err)?;
-        let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+        let cores = geneva_render::limits::threads();
         let mut notes = Vec::new();
         if let Some(reason) = direct_reason {
             notes.push(reason);
@@ -1949,6 +2019,7 @@ mod imp {
             },
             notes,
             warnings: Vec::new(),
+            missing_glyphs: Vec::new(),
             seconds: started.elapsed().as_secs_f64(),
         })
     }
@@ -2003,7 +2074,7 @@ mod imp {
         // As in the single run: frames are produced here while the
         // encoder runs on its own thread a few frames behind, and buffers
         // come back to be filled again.
-        let (tx, rx) = std::sync::mpsc::sync_channel::<Msg>(8);
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Msg>(super::queue_depth(comp));
         let (spare_tx, spare_rx) = std::sync::mpsc::channel::<geneva_media::convert::Planes>();
         let mut pool = geneva_media::convert::PlanePool::default();
         std::thread::scope(|scope| -> Result<(), geneva_media::MediaError> {
@@ -2038,15 +2109,8 @@ mod imp {
                     d.frame_with(t, &mut pool)
                 } else if let Some(b) = base.as_mut() {
                     b.frame_with(t, &mut pool).and_then(|mut planes| {
-                        for (overlay, rect) in
-                            renderer.render_overlays(comp, t).map_err(render_err)?
-                        {
-                            geneva_media::convert::blend_overlay(
-                                &mut planes,
-                                &overlay,
-                                rect,
-                                output_tags,
-                            );
+                        for overlay in renderer.render_overlays(comp, t).map_err(render_err)? {
+                            geneva_media::convert::lay_overlay(&mut planes, &overlay, output_tags);
                         }
                         Ok(planes)
                     })
@@ -2244,6 +2308,7 @@ mod imp {
                     },
                     notes,
                     warnings: Vec::new(),
+                    missing_glyphs: Vec::new(),
                     seconds: started.elapsed().as_secs_f64(),
                 })
             }
@@ -2281,6 +2346,7 @@ mod imp {
                     mode: RenderMode::Render,
                     notes,
                     warnings: Vec::new(),
+                    missing_glyphs: Vec::new(),
                     seconds: started.elapsed().as_secs_f64(),
                 })
             }
@@ -2361,6 +2427,7 @@ mod imp {
                 }
             )],
             warnings,
+            missing_glyphs: Vec::new(),
             seconds: started.elapsed().as_secs_f64(),
         })
     }
@@ -2403,6 +2470,21 @@ mod imp {
         CpuRenderer::new(MediaAssets::new(root))
     }
 
+    /// How a video is stored when that differs from how it is shown: with
+    /// non-square pixels, a rotation, or both; empty otherwise.
+    fn stored_as(v: &geneva_media::VideoInfo) -> String {
+        let square = v.sample_aspect_ratio.is_square();
+        let pixels = format!("{} pixels", v.sample_aspect_ratio);
+        let size = format!("{}×{}", v.stored_width, v.stored_height);
+        match (square, v.rotation) {
+            (true, 0) => String::new(),
+            (true, r) if r % 180 == 90 => format!(", stored as {size} with a {r}° rotation"),
+            (true, r) => format!(", with a {r}° rotation"),
+            (false, 0) => format!(", stored as {size} with {pixels}"),
+            (false, r) => format!(", stored as {size} with {pixels} and a {r}° rotation"),
+        }
+    }
+
     /// Human-readable probe output.
     pub fn describe(path: &Path, info: &MediaInfo) -> String {
         use std::fmt::Write as _;
@@ -2420,12 +2502,7 @@ mod imp {
                 geneva_timeline::Fps(v.fps),
                 v.pixel_format,
                 if v.has_alpha { " with alpha" } else { "" },
-                match v.rotation {
-                    0 => String::new(),
-                    r if r % 180 == 90 =>
-                        format!(", stored as {}×{} with a {r}° rotation", v.height, v.width),
-                    r => format!(", with a {r}° rotation"),
-                }
+                stored_as(v)
             );
             let tags = serde_json::to_value(v.color).unwrap_or_default();
             let tag = |name: &str| match tags.get(name).and_then(|t| t.as_str()) {
@@ -2440,7 +2517,7 @@ mod imp {
                 tag("matrix"),
                 tag("range"),
             );
-            let (resolved, notes) = geneva_color::infer(v.color, v.width, v.height);
+            let (resolved, notes) = geneva_color::infer(v.color, v.stored_width, v.stored_height);
             if !notes.is_empty() {
                 let _ = writeln!(
                     s,
@@ -2456,6 +2533,13 @@ mod imp {
             if resolved.is_hdr() {
                 s.push_str("    note: HDR material; tone-mapped to SDR (BT.2446 method A) unless the output is HDR\n");
             }
+        }
+        for u in &info.undecodable {
+            let _ = writeln!(
+                s,
+                "  {}: {} (stream {}), which cannot be decoded: {}",
+                u.kind, u.codec, u.index, u.reason
+            );
         }
         if let Some(a) = &info.audio {
             let _ = writeln!(
@@ -2727,6 +2811,7 @@ mod imp {
                     },
                     notes,
                     warnings: Vec::new(),
+                    missing_glyphs: Vec::new(),
                     seconds: started.elapsed().as_secs_f64(),
                 });
             }
@@ -2798,7 +2883,7 @@ mod imp {
                     && v.bitrate_kbps.is_none()
                     && container != geneva_timeline::schema::Container::ImageSequence =>
             {
-                let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as u32);
+                let cores = geneva_render::limits::threads() as u32;
                 geneva_media::chunks::plan_chunks(
                     comp,
                     v.codec,
@@ -2871,7 +2956,7 @@ mod imp {
         let composites = direct.is_none() && base.is_none();
         let mut renderer = if has_video {
             let (renderer, renderer_notes) =
-                super::choose_renderer(overrides.renderer, root, comp.color.is_hdr());
+                super::choose_renderer(overrides.renderer, root, comp.color.is_hdr(), comp);
             if composites {
                 notes.extend(renderer_notes);
             }
@@ -2895,7 +2980,7 @@ mod imp {
         // its own thread, a few frames behind; the audio is mixed and
         // encoded on a third thread and its packets are interleaved by the
         // encoder thread as they arrive.
-        let (tx, rx) = std::sync::mpsc::sync_channel::<Msg>(8);
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Msg>(super::queue_depth(comp));
         // Encoded frames come back here to be filled again, so the run
         // allocates as many frame buffers as are in flight, not one per
         // picture.
@@ -2996,9 +3081,9 @@ mod imp {
                     if !drawn.is_empty() {
                         composited += 1;
                     }
-                    for (overlay, rect) in drawn {
+                    for overlay in &drawn {
                         let tags = output_tags.expect("video output has tags");
-                        geneva_media::convert::blend_overlay(&mut planes, &overlay, rect, tags);
+                        geneva_media::convert::lay_overlay(&mut planes, overlay, tags);
                     }
                     return Ok(planes);
                 }
@@ -3138,6 +3223,10 @@ mod imp {
             warnings: renderer
                 .as_mut()
                 .map(|r| r.take_warnings())
+                .unwrap_or_default(),
+            missing_glyphs: renderer
+                .as_mut()
+                .map(|r| r.take_missing_glyphs())
                 .unwrap_or_default(),
             seconds: started.elapsed().as_secs_f64(),
         })

@@ -132,12 +132,18 @@ pub struct Values {
     pub blur: Option<f64>,
     /// `color`.
     pub color: Option<Color>,
+    /// `-webkit-text-stroke-color`.
+    pub stroke_color: Option<Color>,
     /// `text-shadow`: the list front to back, empty for `none`.
     pub text_shadow: Option<Vec<TextShadow>>,
     /// `letter-spacing`.
     pub letter_spacing: Option<Spacing>,
     /// `width`.
-    pub width: Option<Shift>,
+    pub width: Option<Place>,
+    /// `left`.
+    pub left: Option<Place>,
+    /// `top`.
+    pub top: Option<Place>,
     /// `height`.
     pub height: Option<Shift>,
     /// `max-width`.
@@ -148,9 +154,103 @@ pub struct Values {
     pub background_position: Option<[Shift; 2]>,
     /// `clip-path`: a polygon's points, or empty for `none`.
     pub clip_path: Option<Vec<[Shift; 2]>>,
+    /// `background-color`, or a `background` that is only a colour.
+    pub background_color: Option<Color>,
+    /// The `border-*-color` longhands, top, right, bottom, left; each
+    /// side `None` when the block leaves it alone.
+    pub border_color: [Option<Color>; 4],
+    /// `box-shadow`: the list front to back, empty for `none`.
+    pub box_shadow: Option<Vec<TextShadow>>,
+    /// `mask-position`.
+    pub mask_position: Option<[Shift; 2]>,
+    /// `mask-size`: a width and a height; one value is the width, with
+    /// the height the box's.
+    pub mask_size: Option<[Shift; 2]>,
 }
 
-/// A `text-shadow` in a keyframe.
+/// A length in a keyframe that may be another box's edge or size:
+/// `anchor(<name> <side>)` or `anchor-size(<name> width|height)`, worked
+/// out against the frame's layout before the keyframes are mixed.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Place {
+    /// A length or a percentage.
+    Length(Shift),
+    /// An edge or the size of the box named: by its `anchor-name`
+    /// (`--name`) or its id.
+    Anchor {
+        /// The name as written.
+        name: String,
+        /// Which edge, or which size.
+        edge: Edge,
+    },
+}
+
+/// What `anchor()` and `anchor-size()` read from a box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edge {
+    /// The left edge.
+    Left,
+    /// The right edge.
+    Right,
+    /// The top edge.
+    Top,
+    /// The bottom edge.
+    Bottom,
+    /// The middle, across for `left` and `width`, down for `top`.
+    Center,
+    /// `anchor-size(... width)`.
+    Width,
+    /// `anchor-size(... height)`.
+    Height,
+}
+
+impl Place {
+    /// Whether it names another box.
+    #[must_use]
+    pub fn is_anchor(&self) -> bool {
+        matches!(self, Self::Anchor { .. })
+    }
+}
+
+/// A length, `anchor()` or `anchor-size()` in a keyframe.
+fn place(value: &str) -> Result<Place, String> {
+    let anchor = |args: Vec<&str>, sizes: bool| -> Result<Place, String> {
+        // A fallback after a comma is not read: the box is always there.
+        let words: Vec<&str> = args.first().map(|a| tokens(a)).unwrap_or_default();
+        let [name, edge] = words.as_slice() else {
+            return Err(format!(
+                "{value:?}: write a name and a side, like anchor(--word left)"
+            ));
+        };
+        let edge = match (*edge, sizes) {
+            ("left", false) => Edge::Left,
+            ("right", false) => Edge::Right,
+            ("top", false) => Edge::Top,
+            ("bottom", false) => Edge::Bottom,
+            ("center", false) => Edge::Center,
+            ("width", true) => Edge::Width,
+            ("height", true) => Edge::Height,
+            _ => {
+                return Err(format!(
+                    "{value:?}: anchor() takes left, right, top, bottom or center; anchor-size() width or height"
+                ));
+            }
+        };
+        Ok(Place::Anchor {
+            name: (*name).to_owned(),
+            edge,
+        })
+    };
+    if let Some(args) = call(value, "anchor") {
+        return anchor(args, false);
+    }
+    if let Some(args) = call(value, "anchor-size") {
+        return anchor(args, true);
+    }
+    pixels(value).map(Place::Length)
+}
+
+/// A `text-shadow` or `box-shadow` in a keyframe.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextShadow {
     /// Horizontal offset in pixels.
@@ -174,16 +274,24 @@ impl Values {
     pub fn beyond_a_clip(&self) -> bool {
         self.blur.is_some()
             || self.color.is_some()
+            || self.stroke_color.is_some()
             || self.text_shadow.is_some()
             || self.moves_layout()
             || self.background_position.is_some()
             || self.clip_path.is_some()
+            || self.background_color.is_some()
+            || self.border_color.iter().any(Option::is_some)
+            || self.box_shadow.is_some()
+            || self.mask_position.is_some()
+            || self.mask_size.is_some()
     }
 
     /// Whether it changes where boxes land, so the markup is laid out
     /// again at each frame it plays.
     pub fn moves_layout(&self) -> bool {
         self.letter_spacing.is_some()
+            || self.left.is_some()
+            || self.top.is_some()
             || self.width.is_some()
             || self.height.is_some()
             || self.max_width.is_some()
@@ -831,9 +939,52 @@ pub fn parse_declarations(block: &str) -> Result<Values, String> {
                 v.color =
                     Some(Color::from_str(value).map_err(|_| format!("{value:?} is not a colour"))?);
             }
+            "-webkit-text-stroke-color" => {
+                v.stroke_color =
+                    Some(Color::from_str(value).map_err(|_| format!("{value:?} is not a colour"))?);
+            }
             "text-shadow" => v.text_shadow = Some(text_shadow(value)?),
+            "box-shadow" => v.box_shadow = Some(text_shadow(value)?),
+            "background-color" => v.background_color = Some(colour(value)?),
+            "background" => {
+                v.background_color =
+                    Some(Color::from_str(value).map_err(|_| {
+                        format!("{value:?}: a background in a keyframe is one colour")
+                    })?);
+            }
+            "border-color" => {
+                let c: Vec<Color> = tokens(value)
+                    .into_iter()
+                    .map(colour)
+                    .collect::<Result<_, _>>()?;
+                // One to four values, as for any box side shorthand.
+                let [top, right, bottom, left] = match c.as_slice() {
+                    [a] => [*a; 4],
+                    [a, b] => [*a, *b, *a, *b],
+                    [a, b, d] => [*a, *b, *d, *b],
+                    [a, b, d, e] => [*a, *b, *d, *e],
+                    _ => return Err(format!("{value:?}: border-color takes one to four colours")),
+                };
+                v.border_color = [Some(top), Some(right), Some(bottom), Some(left)];
+            }
+            "mask-position" | "-webkit-mask-position" => {
+                v.mask_position = Some(position_pair(value)?);
+            }
+            "mask-size" | "-webkit-mask-size" => {
+                v.mask_size = Some(match tokens(value).as_slice() {
+                    [w] => [pixels(w)?, Shift::Percent(100.0)],
+                    [w, h] => [pixels(w)?, pixels(h)?],
+                    _ => return Err(format!("{value:?}: a mask-size is one or two lengths")),
+                });
+            }
+            "border-top-color" => v.border_color[0] = Some(colour(value)?),
+            "border-right-color" => v.border_color[1] = Some(colour(value)?),
+            "border-bottom-color" => v.border_color[2] = Some(colour(value)?),
+            "border-left-color" => v.border_color[3] = Some(colour(value)?),
             "letter-spacing" => v.letter_spacing = Some(spacing(value)?),
-            "width" => v.width = Some(pixels(value)?),
+            "width" => v.width = Some(place(value)?),
+            "left" => v.left = Some(place(value)?),
+            "top" => v.top = Some(place(value)?),
             "height" => v.height = Some(pixels(value)?),
             "max-width" => v.max_width = Some(pixels(value)?),
             "min-width" => v.min_width = Some(pixels(value)?),
@@ -842,8 +993,9 @@ pub fn parse_declarations(block: &str) -> Result<Values, String> {
             _ => {
                 return Err(format!(
                     "{property:?} cannot be animated; a keyframe sets transform, translate, \
-scale, rotate, opacity, filter, color, text-shadow, letter-spacing, width, height, \
-max-width, min-width, background-position or clip-path"
+scale, rotate, opacity, filter, color, -webkit-text-stroke-color, text-shadow, \
+letter-spacing, width, height, max-width, min-width, left, top, background-position, clip-path, \
+background-color, border-color (and its sides), box-shadow, mask-position or mask-size"
                 ));
             }
         }
@@ -851,8 +1003,13 @@ max-width, min-width, background-position or clip-path"
     Ok(v)
 }
 
-/// `text-shadow` in a keyframe: `none`, or a list of shadows, each two or
-/// three lengths and a colour in any order.
+/// A colour in a keyframe.
+fn colour(value: &str) -> Result<Color, String> {
+    Color::from_str(value).map_err(|_| format!("{value:?} is not a colour"))
+}
+
+/// `text-shadow` or `box-shadow` in a keyframe: `none`, or a list of
+/// shadows, each two or three lengths and a colour in any order.
 fn text_shadow(value: &str) -> Result<Vec<TextShadow>, String> {
     if value == "none" {
         return Ok(Vec::new());
@@ -890,7 +1047,7 @@ fn one_text_shadow(value: &str) -> Result<TextShadow, String> {
             }),
         }),
         _ => Err(format!(
-            "{value:?}: a text-shadow is \"<x> <y> [blur] [color]\", a list of them, or none"
+            "{value:?}: a shadow is \"<x> <y> [blur] [color]\", a list of them, or none"
         )),
     }
 }
@@ -982,10 +1139,13 @@ fn scale_pair(value: &str) -> Result<[f64; 2], String> {
     }
 }
 
-/// A `transform` function list. The functions are collected rather than
-/// multiplied in order: translations add, scales multiply and rotations
-/// add, and the renderer applies scale and rotation about the anchor and
-/// then the translation.
+/// A `transform` function list, composed in written order as CSS does,
+/// into the scale, rotation and translation the renderer applies (scale
+/// and rotation about the origin, then the translation): a translation
+/// written after a scale or a rotation is taken through them, so
+/// `scale(0.5) translateX(20px)` moves 10 px. A percentage translation
+/// after a rotation is scaled but not turned, since the box's size is
+/// not known here. Scales after a rotation are taken as if before it.
 fn apply_transform(value: &str, v: &mut Values) -> Result<(), String> {
     if value.trim() == "none" {
         // CSS's identity transform, which is what "to { transform: none }"
@@ -995,6 +1155,26 @@ fn apply_transform(value: &str, v: &mut Values) -> Result<(), String> {
         v.rotate = Some(0.0);
         return Ok(());
     }
+    // The scale and rotation written so far in this list, which a
+    // translation written after them goes through.
+    let mut so_far_scale = [1.0f64, 1.0];
+    let mut so_far_turn = 0.0f64;
+    let through = |d: [Shift; 2], scale: [f64; 2], turn: f64| -> [Shift; 2] {
+        match d {
+            [Shift::Px(x), Shift::Px(y)] => {
+                let (x, y) = (x * scale[0], y * scale[1]);
+                let (sin, cos) = turn.to_radians().sin_cos();
+                [Shift::Px(x * cos - y * sin), Shift::Px(x * sin + y * cos)]
+            }
+            [x, y] => {
+                let by = |s: Shift, k: f64| match s {
+                    Shift::Px(v) => Shift::Px(v * k),
+                    Shift::Percent(p) => Shift::Percent(p * k),
+                };
+                [by(x, scale[0]), by(y, scale[1])]
+            }
+        }
+    };
     for token in tokens(value) {
         let (name, _) = token
             .split_once('(')
@@ -1005,25 +1185,34 @@ fn apply_transform(value: &str, v: &mut Values) -> Result<(), String> {
         }
         let two = |i: usize| args.get(i).copied();
         match name {
-            "translate" => {
-                let x = pixels(args[0])?;
-                let y = two(1).map(pixels).transpose()?.unwrap_or(Shift::Px(0.0));
-                v.translate = Some(add(v.translate, [x, y]));
+            "translate" | "translateX" | "translateY" => {
+                let d = match name {
+                    "translateX" => [pixels(args[0])?, Shift::Px(0.0)],
+                    "translateY" => [Shift::Px(0.0), pixels(args[0])?],
+                    _ => [
+                        pixels(args[0])?,
+                        two(1).map(pixels).transpose()?.unwrap_or(Shift::Px(0.0)),
+                    ],
+                };
+                v.translate = Some(add(v.translate, through(d, so_far_scale, so_far_turn)));
             }
-            "translateX" => {
-                v.translate = Some(add(v.translate, [pixels(args[0])?, Shift::Px(0.0)]));
+            "scale" | "scaleX" | "scaleY" => {
+                let f = match name {
+                    "scaleX" => [number(args[0])?, 1.0],
+                    "scaleY" => [1.0, number(args[0])?],
+                    _ => {
+                        let x = number(args[0])?;
+                        [x, two(1).map(number).transpose()?.unwrap_or(x)]
+                    }
+                };
+                so_far_scale = mul(Some(so_far_scale), f);
+                v.scale = Some(mul(v.scale, f));
             }
-            "translateY" => {
-                v.translate = Some(add(v.translate, [Shift::Px(0.0), pixels(args[0])?]));
+            "rotate" => {
+                let a = angle(args[0])?;
+                so_far_turn += a;
+                v.rotate = Some(v.rotate.unwrap_or(0.0) + a);
             }
-            "scale" => {
-                let x = number(args[0])?;
-                let y = two(1).map(number).transpose()?.unwrap_or(x);
-                v.scale = Some(mul(v.scale, [x, y]));
-            }
-            "scaleX" => v.scale = Some(mul(v.scale, [number(args[0])?, 1.0])),
-            "scaleY" => v.scale = Some(mul(v.scale, [1.0, number(args[0])?])),
-            "rotate" => v.rotate = Some(v.rotate.unwrap_or(0.0) + angle(args[0])?),
             _ => {
                 return Err(format!(
                     "{name:?} is not a transform geneva animates; use translate, translateX, \
@@ -1140,6 +1329,22 @@ mod tests {
         assert_eq!(v.scale, Some([6.0, 2.0]));
     }
 
+    /// A translation written after a scale or a rotation goes through
+    /// them, as CSS multiplies the list in order.
+    #[test]
+    fn a_transform_list_composes_in_written_order() {
+        let v = parse_declarations("transform: scale(0.5) translateX(20px)").unwrap();
+        assert_eq!(v.translate, Some([Shift::Px(10.0), Shift::Px(0.0)]));
+        assert_eq!(v.scale, Some([0.5, 0.5]));
+        let v = parse_declarations("transform: rotate(90deg) translate(10px, 0)").unwrap();
+        let Some([Shift::Px(x), Shift::Px(y)]) = v.translate else {
+            panic!("{:?}", v.translate);
+        };
+        assert!(x.abs() < 1e-9 && (y - 10.0).abs() < 1e-9, "{x} {y}");
+        let v = parse_declarations("transform: scale(2) translateY(-50%)").unwrap();
+        assert_eq!(v.translate, Some([Shift::Px(0.0), Shift::Percent(-100.0)]));
+    }
+
     #[test]
     fn translate_takes_percentages_of_the_clips_own_box() {
         let v = parse_declarations("transform: translateX(-100%)").unwrap();
@@ -1218,6 +1423,46 @@ mod tests {
             Some(Vec::new())
         );
         assert!(parse_declarations("text-shadow: 1px").is_err());
+    }
+
+    #[test]
+    fn box_colours_shadows_masks_and_anchors_are_keyframe_values() {
+        let v = parse_declarations(
+            "background-color: #e03030; border-color: red blue; border-left-color: #0f0; \
+             box-shadow: 0 4px 24px #ffd400cc; mask-position: 100% 0; mask-size: 220%; \
+             left: anchor(--w1 left); top: 3px; width: anchor-size(#w3 width, 10px)",
+        )
+        .unwrap();
+        assert_eq!(v.background_color.unwrap().to_hex(), "#e03030");
+        let sides: Vec<String> = v.border_color.iter().map(|c| c.unwrap().to_hex()).collect();
+        assert_eq!(sides, ["#ff0000", "#0000ff", "#ff0000", "#00ff00"]);
+        assert_eq!(v.box_shadow.as_ref().unwrap()[0].blur, 24.0);
+        assert_eq!(
+            v.mask_position,
+            Some([Shift::Percent(100.0), Shift::Px(0.0)])
+        );
+        assert_eq!(
+            v.mask_size,
+            Some([Shift::Percent(220.0), Shift::Percent(100.0)])
+        );
+        assert_eq!(
+            v.left,
+            Some(Place::Anchor {
+                name: "--w1".to_owned(),
+                edge: Edge::Left
+            })
+        );
+        assert_eq!(v.top, Some(Place::Length(Shift::Px(3.0))));
+        assert_eq!(
+            v.width,
+            Some(Place::Anchor {
+                name: "#w3".to_owned(),
+                edge: Edge::Width
+            })
+        );
+        assert!(v.beyond_a_clip() && v.moves_layout());
+        assert!(parse_declarations("left: anchor(--w1 width)").is_err());
+        assert!(parse_declarations("background: linear-gradient(red, blue)").is_err());
     }
 
     #[test]

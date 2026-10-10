@@ -17,12 +17,14 @@ fn frame_at(clip: &str, tenths: i64) -> geneva_render::Frame {
         .unwrap()
 }
 
-/// The box of fully opaque pixels: the glyph cores, never a blurred edge.
+/// The box of the white glyph cores, by their red (premultiplied): a
+/// green shadow has none, so its alpha under an edge pixel does not
+/// count that pixel in, whatever face the machine draws the text with.
 fn ink(f: &geneva_render::Frame) -> (u32, u32, u32, u32) {
     let mut b = (u32::MAX, u32::MAX, 0, 0);
     for y in 0..120 {
         for x in 0..240 {
-            if f.get(x, y).a > 0.95 {
+            if f.get(x, y).r > 0.95 {
                 b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
             }
         }

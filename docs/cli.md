@@ -9,6 +9,9 @@ it instead).
 | | |
 | --- | --- |
 | `--format human\|json` | `json` prints one JSON document on stdout. In `human` mode diagnostics go to stderr. |
+| `--threads N` | Threads every pool may use: decoding, scaling, rendering, and the encoder's own. Default: as many as the operating system lets this process use, which on Linux follows a cgroup CPU quota. Also `GENEVA_THREADS`. Stages overlap, so a run can use a little more than `N` cores at moments. |
+| `--memory-budget SIZE` | `3G`, `512M`: what the caches, the frame queue between renderer and encoder, the decoders' frames in flight and the encoder's threads may hold, each taking a share: a decoder that threads by frame, and a software encoder, run on fewer threads where a quarter of the budget would not hold theirs. A target, not a hard limit on the process. Also `GENEVA_MEMORY_BUDGET`. |
+| `--no-system-fonts` | Text is drawn only in the fonts the document ships (font assets, `@font-face`) and the built-in Liberation Sans, which every generic family (`sans-serif`, `serif`, `monospace`) names. A letter none of them has is a box on every machine, where the machine's fonts would draw it on one and not another. Also `GENEVA_NO_SYSTEM_FONTS=1`. |
 | Times | `1.5`, `1.5s`, `1500ms`, `45f` (frames at the source's rate), `00:00:01.5`. See [Times](timeline.md#times). |
 
 | Exit code | Meaning |
@@ -81,7 +84,7 @@ for pictures and video. A sprite sheet's `.vtt` is its own row (`kind`
 | `--preset NAME` | Encoder preset, `ultrafast` to `veryslow`. Forces a re-encode. |
 | `--for TARGET`, `--quality`, `--budget` | Encode for a destination; see [targets](#targets). The timeline's size is kept. |
 | `--no-audio` | No audio track. |
-| `--renderer auto\|cpu\|gpu` | `auto`: a hardware GPU if present, else the CPU. `gpu`: any device, software ones included, else the CPU with a note. A software device (llvmpipe, WARP) is for testing and is several times slower than the CPU renderer: `auto` never picks one. `cpu`: the reference. `GENEVA_GPU=software` forces the software device. The note names the device. `frame` and overlays on a direct-path picture always use the CPU. |
+| `--renderer auto\|cpu\|gpu` | `auto`: a hardware GPU if present, else the CPU. `gpu`: any device, software ones included, else the CPU with a note. A software device (llvmpipe, WARP) is for testing and is several times slower than the CPU renderer: `auto` never picks one. `cpu`: the reference. `GENEVA_GPU=software` forces the software device. The note names the device. `frame`, overlays on a direct-path picture and documents with a markup `backdrop-filter` always use the CPU (with a note when `gpu` was asked for). |
 | `--exact` | Frame-accurate cuts; a [smart cut](#smart-cut) where possible. |
 | `--frames START..END` | Only output frames `START` to `END` (not included), picture only: one part for `geneva join`. Not with `--for`. |
 | `--audio-only` | Only the sound, as the sound part for `join`. Not with `--for` or `--no-audio`. |
@@ -167,8 +170,11 @@ same paths relative to the root. Files outside the asset root are
 refused. Fonts the machine provides are not sent; a worker whose own
 load reports something the farm's did not (a missing font family, a
 file it cannot decode) says so and renders nothing, since its parts
-would differ. A worker running another geneva version, or with x264
-where the farm has none or the other way round, is refused when it
+would differ. A generic family such as `sans-serif` is drawn in each
+machine's own face without a word; with `--no-system-fonts` on the
+farm, every worker draws only in the document's fonts and the built-in
+one, as the farm does. A worker running another geneva version, or with
+x264 where the farm has none or the other way round, is refused when it
 connects.
 
 `GET /status` (JSON) and `GET /metrics` (Prometheus text: parts pending,
@@ -225,8 +231,14 @@ What is different from one `render`, for `join` and `farm` alike:
 ### `geneva probe <file>`
 
 Container, duration, streams, sizes, rates and colour tags, with the
-tags that had to be assumed. Sizes are as displayed; `rotation` (0, 90,
-180, 270, clockwise) and the stored size are reported beside them.
+tags that had to be assumed. Sizes are as displayed: after the pixel
+aspect and the rotation. `sample_aspect_ratio` (`"32:27"`; `"1:1"` for
+square pixels), `rotation` (0, 90, 180, 270, clockwise) and the stored
+size (`stored_width`, `stored_height`) are reported beside them.
+A stream that cannot be decoded (no decoder for its codec in this build,
+or one that would not open) is listed under `undecodable` as
+`{"index", "kind", "codec", "reason"}`, and a verb that needs it stops
+with that codec and reason.
 
 ### `geneva schema`
 
@@ -549,5 +561,19 @@ Subtitle streams: MP4, MOV, MKV, WebM.
 | PNG | 8-bit RGBA | Lossless, keeps alpha. |
 | Motion JPEG | 8-bit 4:2:0, full range | `--crf` maps to JPEG quality (0 best). |
 
-Also read, not written: VP8, MPEG-2, MPEG-4 part 2, DNxHD, raw video,
-GIF, E-AC-3, MPEG-TS, AVI.
+Also read, not written:
+
+- Containers: AVI, MPEG-TS (`.ts`, `.m2ts`, `.mts`), MPEG program
+  streams (`.mpg`, `.mpeg`, `.vob`, `.m2v`), DV (`.dv`), ASF (`.wmv`,
+  `.asf`, `.wma`), 3GP, Ogg video.
+- Video: VP8, MPEG-1, MPEG-2, MPEG-4 part 2, DV, WMV 1 to 3, VC-1,
+  MS-MPEG4 v1 to v3, Motion JPEG, QuickTime RLE, Canopus HQ/HQA/HQX,
+  DNxHD, raw video, GIF.
+- Audio: E-AC-3, MP1, MP2, WMA 1, 2 and Pro, DVD and Blu-ray PCM,
+  A-law, mu-law, IMA ADPCM.
+
+An interlaced frame is drawn at the time of its first field: that
+field's lines are kept, and on the other field's lines a pixel that
+combs against the lines around it (something moved between the fields)
+is rebuilt from them, as a browser's deinterlacer does. A stream with
+no decoder in the build is named by `probe`.

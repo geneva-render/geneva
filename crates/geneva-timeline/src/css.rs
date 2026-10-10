@@ -179,7 +179,7 @@ pub struct FontShorthand {
     pub size: f64,
     /// A multiple of the size.
     pub line_height: Option<f64>,
-    /// The first family named.
+    /// The family list, written plainly (`Inter, Noto Sans Arabic`).
     pub family: String,
 }
 
@@ -225,7 +225,7 @@ fn size_token(token: &str) -> Option<(f64, Option<Result<f64, String>>)> {
 }
 
 /// `"600 40px/1.2 Inter"`: optional style and weight, a size with an
-/// optional line height, then the family (the first of a comma list).
+/// optional line height, then the family or a comma list of them.
 /// `None` when the text is a plain family name.
 pub fn parse_font(text: &str) -> Option<Result<FontShorthand, String>> {
     if !looks_like_shorthand(text) {
@@ -270,14 +270,7 @@ fn parse_font_shorthand(text: &str) -> Result<FontShorthand, String> {
         i += 1;
     };
     let line_height = line_height.transpose()?;
-    let family = list[i..]
-        .join(" ")
-        .split(',')
-        .next()
-        .unwrap_or("")
-        .trim()
-        .trim_matches(|c| c == '"' || c == '\'')
-        .to_owned();
+    let family = geneva_html::style::font_list(&list[i..].join(" ")).join(", ");
     if family.is_empty() {
         return Err(format!(
             "{text:?}: a font shorthand ends with the family, for example \"600 40px Inter\""
@@ -691,7 +684,7 @@ mod tests {
         assert_eq!(f.weight, Some(600));
         assert_eq!(f.size, 40.0);
         assert_eq!(f.line_height, Some(1.2));
-        assert_eq!(f.family, "Inter");
+        assert_eq!(f.family, "Inter, sans-serif");
         let f = parse_font("bold 24px/36px 'Noto Sans'").unwrap().unwrap();
         assert_eq!(f.weight, Some(700));
         assert_eq!(f.line_height, Some(1.5));

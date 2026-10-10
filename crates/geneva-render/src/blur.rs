@@ -33,6 +33,146 @@ pub(crate) fn blur_pixels(pixels: &mut [LinearRgba], w: usize, h: usize, sigma: 
     }
 }
 
+/// Blurs above this standard deviation, in pixels, are worked on a
+/// smaller copy (see [`blur_pixels_reduced`]).
+pub(crate) const REDUCE_ABOVE: f64 = 8.0;
+
+const SPREAD_SHARE: f64 = 5.0;
+
+/// How many times smaller [`blur_pixels_reduced`] works for `sigma`: so
+/// that the smaller copy is blurred by about 4 pixels or more, and at
+/// most 4 times smaller.
+fn reduction(sigma: f64) -> usize {
+    if sigma <= REDUCE_ABOVE {
+        1
+    } else {
+        ((sigma / 4.0).floor() as usize).clamp(1, 4)
+    }
+}
+
+/// The same blur as [`blur_pixels`], computed for a wide `sigma` on a
+/// copy `k` times smaller (each of its pixels the mean of a k-by-k
+/// block, the blocks past the edge transparent), blurred there by a
+/// Gaussian of `sigma / k`, and brought back bilinearly. Against a true
+/// Gaussian it is within about half a code, where the three boxes at
+/// full size are within about five.
+pub(crate) fn blur_pixels_reduced(pixels: &mut [LinearRgba], w: usize, h: usize, sigma: f64) {
+    let k = reduction(sigma);
+    if k == 1 || w < 2 * k || h < 2 * k || pixels.len() < w * h {
+        blur_pixels(pixels, w, h, sigma);
+        return;
+    }
+    let (lw, lh) = (w.div_ceil(k), h.div_ceil(k));
+    let norm = 1.0 / (k * k) as f32;
+    let mut small = vec![LinearRgba::TRANSPARENT; lw * lh];
+    small.par_chunks_mut(lw).enumerate().for_each(|(ly, out)| {
+        for y in ly * k..((ly + 1) * k).min(h) {
+            let row = &pixels[y * w..][..w];
+            for (lx, o) in out.iter_mut().enumerate() {
+                for p in &row[lx * k..((lx + 1) * k).min(w)] {
+                    o.r += p.r;
+                    o.g += p.g;
+                    o.b += p.b;
+                    o.a += p.a;
+                }
+            }
+        }
+        for o in out.iter_mut() {
+            *o = o.scaled(norm);
+        }
+    });
+    // The small copy is blurred with a true Gaussian rather than three
+    // boxes: at its few pixels of radius the kernel is short, and the
+    // result is closer to a Gaussian than the boxes are at full size.
+    // The block mean and the bilinear return widen it a little, a few
+    // times the variance of a box k pixels wide, (k^2 - 1) / 12, which is
+    // taken off what the small copy is blurred by.
+    let spread = (k * k - 1) as f64 / 12.0;
+    let rest = (sigma * sigma - SPREAD_SHARE * spread).max(0.0).sqrt() / k as f64;
+    gaussian_kernel_blur(&mut small, lw, lh, rest);
+    let kf = k as f32;
+    pixels.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+        let v = ((y as f32 + 0.5) / kf - 0.5).clamp(0.0, (lh - 1) as f32);
+        let y0 = v.floor() as usize;
+        let y1 = (y0 + 1).min(lh - 1);
+        let fy = v - y0 as f32;
+        let (top, bottom) = (&small[y0 * lw..][..lw], &small[y1 * lw..][..lw]);
+        for (x, p) in row.iter_mut().enumerate() {
+            let u = ((x as f32 + 0.5) / kf - 0.5).clamp(0.0, (lw - 1) as f32);
+            let x0 = u.floor() as usize;
+            let x1 = (x0 + 1).min(lw - 1);
+            let fx = u - x0 as f32;
+            let lerp = |a: LinearRgba, b: LinearRgba, t: f32| LinearRgba {
+                r: a.r + (b.r - a.r) * t,
+                g: a.g + (b.g - a.g) * t,
+                b: a.b + (b.b - a.b) * t,
+                a: a.a + (b.a - a.a) * t,
+            };
+            *p = lerp(
+                lerp(top[x0], top[x1], fx),
+                lerp(bottom[x0], bottom[x1], fx),
+                fy,
+            );
+        }
+    });
+}
+
+/// A separable Gaussian of standard deviation `sigma` over a buffer of
+/// `w` by `h` pixels, the kernel cut at three deviations and pixels past
+/// the edge transparent.
+fn gaussian_kernel_blur(pixels: &mut [LinearRgba], w: usize, h: usize, sigma: f64) {
+    if sigma <= 0.0 {
+        return;
+    }
+    let r = (3.0 * sigma).ceil() as usize;
+    let mut kernel: Vec<f32> = (0..=2 * r)
+        .map(|i| {
+            let t = i as f64 - r as f64;
+            (-t * t / (2.0 * sigma * sigma)).exp() as f32
+        })
+        .collect();
+    let total: f32 = kernel.iter().sum();
+    for k in &mut kernel {
+        *k /= total;
+    }
+    let mut across = vec![LinearRgba::TRANSPARENT; w * h];
+    across
+        .par_chunks_mut(w)
+        .zip(pixels.par_chunks(w))
+        .for_each(|(out, row)| {
+            for (x, o) in out.iter_mut().enumerate() {
+                let (from, to) = (x.saturating_sub(r), (x + r).min(w - 1));
+                let mut acc = [0f32; 4];
+                for (j, p) in row[from..=to].iter().enumerate() {
+                    let k = kernel[from + j + r - x];
+                    acc[0] += p.r * k;
+                    acc[1] += p.g * k;
+                    acc[2] += p.b * k;
+                    acc[3] += p.a * k;
+                }
+                *o = LinearRgba {
+                    r: acc[0],
+                    g: acc[1],
+                    b: acc[2],
+                    a: acc[3],
+                };
+            }
+        });
+    pixels.par_chunks_mut(w).enumerate().for_each(|(y, out)| {
+        let (from, to) = (y.saturating_sub(r), (y + r).min(h - 1));
+        out.fill(LinearRgba::TRANSPARENT);
+        for yy in from..=to {
+            let k = kernel[yy + r - y];
+            for (o, p) in out.iter_mut().zip(&across[yy * w..][..w]) {
+                o.r += p.r * k;
+                o.g += p.g * k;
+                o.b += p.b * k;
+                o.a += p.a * k;
+            }
+        }
+    });
+}
+
 /// The radii of three box blurs that together approximate a Gaussian of
 /// standard deviation `sigma`; each is applied along the rows and then
 /// down the columns, and a radius of 0 is skipped. Public so that
@@ -185,6 +325,36 @@ mod tests {
         );
         // The edge fades toward the transparent outside.
         assert!(f.get(0, 32).a < 0.8);
+    }
+
+    #[test]
+    fn a_wide_blur_on_a_smaller_copy_is_within_a_code_of_a_gaussian() {
+        // A word-sized block of colour with room around it for the blur.
+        for sigma in [8.5, 11.0, 17.0, 23.0] {
+            let pad = (3.0 * sigma) as usize + 4;
+            let (w, h) = (120 + 2 * pad, 40 + 2 * pad);
+            let mut full = vec![LinearRgba::TRANSPARENT; w * h];
+            for y in pad..pad + 40 {
+                for x in pad..pad + 120 {
+                    full[y * w + x] = LinearRgba {
+                        r: 0.9,
+                        g: 0.6,
+                        b: 0.2,
+                        a: 1.0,
+                    };
+                }
+            }
+            let mut reduced = full.clone();
+            // The reference is the Gaussian kernel itself, at full size.
+            gaussian_kernel_blur(&mut full, w, h, sigma);
+            blur_pixels_reduced(&mut reduced, w, h, sigma);
+            let worst = full
+                .iter()
+                .zip(&reduced)
+                .map(|(a, b)| (a.a - b.a).abs().max((a.r - b.r).abs()))
+                .fold(0.0f32, f32::max);
+            assert!(worst < 0.6 / 255.0, "sigma {sigma}: {worst}");
+        }
     }
 
     #[test]

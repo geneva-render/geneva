@@ -700,14 +700,26 @@ fn a_sentence_with_a_bold_word_wraps_as_one() {
 fn a_smaller_word_leaves_its_line_as_tall_as_the_rest() {
     // Two lines of 40 px text with a 12 px word in the first. The line
     // took its height from the small word alone, so the big glyphs were
-    // cut at the top and the second line was drawn over the first.
-    let f = markup_at(
-        "<p>BIG <small>SMALL</small> BIG<br>BIG BIG</p>",
-        "p { position: absolute; left: 10px; top: 10px; width: 300px; margin: 0; \
-             font: 40px Liberation Sans; color: #ffffff } \
-         small { font-size: 12px }",
-        0,
+    // cut at the top and the second line was drawn over the first. The
+    // frame is tall enough for both lines in any face: a machine without
+    // Liberation Sans (Windows) draws one whose lines are further apart.
+    let text = format!(
+        r#"{{"geneva":"1.0","output":{{"width":200,"height":200,"fps":30,"duration":"1s",
+        "background":"transparent"}},"layers":[{{"clips":[{{"source":{{"kind":"html","width":200,"height":200,
+        "html":{},"css":{}}},"transform":{{"anchor":"top left","position":"0 0"}}}}]}}]}}"#,
+        serde_json::to_string("<p>BIG <small>SMALL</small> BIG<br>BIG BIG</p>").unwrap(),
+        serde_json::to_string(
+            "p { position: absolute; left: 10px; top: 10px; width: 300px; margin: 0; \
+                 font: 40px Liberation Sans; color: #ffffff } \
+             small { font-size: 12px }"
+        )
+        .unwrap(),
     );
+    let l = load(&text);
+    assert!(l.is_ok(), "{:?}", l.diagnostics);
+    let f = CpuRenderer::new(NoAssets)
+        .render_frame(&l.composition.unwrap(), Ratio::ZERO)
+        .unwrap();
     let inked: Vec<bool> = (0..f.height())
         .map(|y| (0..f.width()).any(|x| at(&f, x, y).a > 0.5))
         .collect();
@@ -727,5 +739,377 @@ fn a_smaller_word_leaves_its_line_as_tall_as_the_rest() {
     assert!(
         bands[0].1 - bands[0].0 > 26,
         "the first line whole: {bands:?}"
+    );
+}
+
+#[test]
+fn a_text_stroke_draws_and_its_colour_animates() {
+    let text = r##"{"geneva":"1.1","output":{"width":200,"height":120,"fps":30,"duration":"1s",
+        "background":"transparent"},
+        "layers":[{"clips":[{"source":{"kind":"html","width":200,"height":120,
+        "html":"<div><p>I</p></div>",
+        "css":"p { margin: 0; padding: 10px 40px; font: 700 96px sans-serif; color: #fff; -webkit-text-stroke: 12px #ff0000; animation: s 1s linear both } @keyframes s { to { -webkit-text-stroke-color: #0000ff } }"},
+        "transform":{"anchor":"top left","position":"0 0"}}]}]}"##;
+    let l = load(text);
+    assert!(l.is_ok(), "{:?}", l.diagnostics);
+    let comp = l.composition.unwrap();
+    let mut renderer = CpuRenderer::new(NoAssets);
+    // The first opaque pixel along a row through the stem is the stroke
+    // drawn over the glyph's left edge.
+    let mut edge = |t: Ratio| {
+        let f = renderer.render_frame(&comp, t).unwrap();
+        (0..200)
+            .map(|x| f.get(x, 60))
+            .find(|p| p.a > 0.95)
+            .expect("the stroke is drawn")
+    };
+    let start = edge(Ratio::ZERO);
+    assert!(start.r > 0.9 && start.b < 0.05, "{start:?}");
+    let end = edge(Ratio::new(29, 30));
+    assert!(end.b > 0.8 && end.r < 0.1, "{end:?}");
+    let mid = edge(Ratio::new(1, 2));
+    assert!(mid.r > 0.1 && mid.b > 0.1, "{mid:?}");
+}
+
+/// Markup whose animations only step is drawn once per interval between
+/// the moments it can change, and the picture is reused for the frames
+/// after it. Every frame of a render going forward must be the frame a
+/// fresh renderer draws at that moment.
+#[test]
+fn stepped_markup_reused_between_steps_matches_fresh_frames() {
+    use std::fmt::Write as _;
+    let mut spans = String::new();
+    for k in 0..6 {
+        let delay = 0.05 + 0.13 * f64::from(k);
+        write!(
+            spans,
+            "<span style='animation: lit 0.2s steps(2, jump-end) {delay:.3}s both'>w{k}</span>"
+        )
+        .unwrap();
+    }
+    let text = format!(
+        r##"{{"geneva":"1.1","output":{{"width":240,"height":60,"fps":30,"duration":"1s","background":"#203040"}},
+        "layers":[{{"clips":[{{"source":{{"kind":"html","html":"<style>@keyframes lit {{ from {{ color: #ffffff }} to {{ color: #ffd400 }} }} .c {{ display: flex; gap: 4px; font-size: 18px; color: #ffffff }}</style><div class='c'>{spans}</div>"}}}}]}}]}}"##
+    );
+    let l = load(&text);
+    assert!(l.is_ok(), "{:?}", l.diagnostics);
+    let comp = l.composition.unwrap();
+    let mut going = CpuRenderer::new(NoAssets);
+    let mut changes = 0;
+    let mut previous: Option<Vec<LinearRgba>> = None;
+    for n in 0..comp.frame_count() {
+        let t = comp.frame_time(n);
+        let reused = going.render_frame(&comp, t).unwrap();
+        let fresh = CpuRenderer::new(NoAssets).render_frame(&comp, t).unwrap();
+        assert!(
+            reused.pixels() == fresh.pixels(),
+            "frame {n} differs from a fresh render"
+        );
+        if previous.as_deref().is_some_and(|p| p != reused.pixels()) {
+            changes += 1;
+        }
+        previous = Some(reused.pixels().to_vec());
+    }
+    assert!(changes >= 6, "the words light up: {changes} changes");
+}
+
+#[test]
+fn a_mask_wipes_a_box_on_from_the_left() {
+    // The gradient's opaque half is shown through a tile 220% wide that
+    // slides from the right: hidden at the start, whole at the end, and
+    // part way through, the left side shown and the right not yet.
+    let f = |tenths| {
+        markup_at(
+            "<div class='s'><div class='w'></div></div>",
+            ".s { position: relative; width: 200px; height: 100px } \
+             @keyframes wipe { from { mask-position: 100% 0 } to { mask-position: 0 0 } } \
+             .w { position: absolute; left: 0; top: 0; width: 200px; height: 100px; background: #ff0000; \
+                  mask-image: linear-gradient(90deg, #000 45%, transparent 55%); \
+                  mask-size: 220% 100%; mask-repeat: no-repeat; animation: wipe 1s linear both }",
+            tenths,
+        )
+    };
+    assert!(at(&f(0), 20, 50).a < 0.01, "{:?}", at(&f(0), 20, 50));
+    let mid = f(5);
+    assert!(
+        near(at(&mid, 10, 50), 1.0, 0.0, 0.0, 1.0),
+        "{:?}",
+        at(&mid, 10, 50)
+    );
+    assert!(at(&mid, 190, 50).a < 0.01, "{:?}", at(&mid, 190, 50));
+    assert!(near(at(&f(10), 190, 50), 1.0, 0.0, 0.0, 1.0));
+}
+
+#[test]
+fn an_underline_glides_from_one_anchor_to_the_next() {
+    let f = |tenths| {
+        markup_at(
+            "<div class='row'><div class='a'></div><div class='b'></div><div class='u'></div></div>",
+            "@keyframes glide { from { left: anchor(--a left); width: anchor-size(--a width) } \
+                                to { left: anchor(--b left); width: anchor-size(--b width) } } \
+             .row { position: absolute; left: 10px; top: 0; display: flex; gap: 20px } \
+             .a { anchor-name: --a; width: 40px; height: 20px } \
+             .b { anchor-name: --b; width: 80px; height: 20px } \
+             .u { position: absolute; top: 30px; left: 0; width: 1px; height: 4px; background: #00ff00; \
+                  animation: glide 1s linear both }",
+            tenths,
+        )
+    };
+    // At the start it lies under the first box (10..50), at the end under
+    // the second (70..150), and halfway it is between: 40..100.
+    let start = f(0);
+    assert!(
+        near(at(&start, 30, 31), 0.0, 1.0, 0.0, 1.0),
+        "{:?}",
+        at(&start, 30, 31)
+    );
+    assert!(at(&start, 60, 31).a < 0.01);
+    let end = f(10);
+    assert!(
+        near(at(&end, 140, 31), 0.0, 1.0, 0.0, 1.0),
+        "{:?}",
+        at(&end, 140, 31)
+    );
+    assert!(at(&end, 30, 31).a < 0.01);
+    let mid = f(5);
+    assert!(
+        near(at(&mid, 45, 31), 0.0, 1.0, 0.0, 1.0),
+        "{:?}",
+        at(&mid, 45, 31)
+    );
+    assert!(
+        near(at(&mid, 95, 31), 0.0, 1.0, 0.0, 1.0),
+        "{:?}",
+        at(&mid, 95, 31)
+    );
+    assert!(at(&mid, 30, 31).a < 0.01 && at(&mid, 115, 31).a < 0.01);
+}
+
+#[test]
+fn a_static_transform_moves_the_box() {
+    let f = markup_at(
+        "<div class='a'></div>",
+        ".a { position: absolute; left: 0; top: 0; width: 50px; height: 50px; background: #0000ff; \
+              transform: translateX(100px) }",
+        0,
+    );
+    assert!(at(&f, 25, 25).a < 0.01);
+    assert!(
+        near(at(&f, 125, 25), 0.0, 0.0, 1.0, 1.0),
+        "{:?}",
+        at(&f, 125, 25)
+    );
+}
+
+#[test]
+fn a_background_colour_and_box_shadow_animate() {
+    let f = |tenths| {
+        markup_at(
+            "<div class='s'><div class='a'></div></div>",
+            ".s { position: relative; width: 200px; height: 100px } \
+             @keyframes lit { from { background-color: #000000 } to { background-color: #ffffff; box-shadow: 0 0 0 #ff0000, 60px 0 0 #00ff00 } } \
+             .a { position: absolute; left: 10px; top: 10px; width: 40px; height: 40px; animation: lit 1s linear both }",
+            tenths,
+        )
+    };
+    assert!(near(at(&f(0), 30, 30), 0.0, 0.0, 0.0, 1.0));
+    assert!(near(at(&f(10), 30, 30), 1.0, 1.0, 1.0, 1.0));
+    // The second shadow, offset to the right, is padded from nothing:
+    // transparent at the start, solid at the end.
+    assert!(at(&f(0), 90, 30).a < 0.01);
+    assert!(
+        near(at(&f(10), 90, 30), 0.0, 1.0, 0.0, 1.0),
+        "{:?}",
+        at(&f(10), 90, 30)
+    );
+}
+
+#[test]
+fn a_right_to_left_row_starts_at_the_right() {
+    let f = markup_at(
+        "<div class='r' dir='rtl'><div class='a'></div><div class='b'></div></div>",
+        ".r { position: absolute; left: 0; top: 0; width: 200px; display: flex } \
+         .a { width: 50px; height: 50px; background: #ff0000 } \
+         .b { width: 50px; height: 50px; background: #0000ff }",
+        0,
+    );
+    assert!(
+        near(at(&f, 175, 25), 1.0, 0.0, 0.0, 1.0),
+        "{:?}",
+        at(&f, 175, 25)
+    );
+    assert!(
+        near(at(&f, 125, 25), 0.0, 0.0, 1.0, 1.0),
+        "{:?}",
+        at(&f, 125, 25)
+    );
+    assert!(at(&f, 25, 25).a < 0.01);
+}
+
+#[test]
+fn a_reused_picture_keeps_nothing_of_the_last_frame() {
+    // One renderer draws a moving box at two times: the second frame is
+    // drawn into the first one's buffer, which must come back clear.
+    let text = format!(
+        r#"{{"geneva":"1.0","output":{{"width":200,"height":100,"fps":30,"duration":"2s",
+        "background":"transparent"}},"layers":[{{"clips":[{{"source":{{"kind":"html","width":200,"height":100,
+        "html":{html},"css":{css}}},"duration":"2s",
+        "transform":{{"anchor":"top left","position":"0 0"}}}}]}}]}}"#,
+        html = serde_json::to_string("<div class='stage'><div class='dot'></div></div>").unwrap(),
+        css = serde_json::to_string(
+            "@keyframes go { to { transform: translateX(100px) } } \
+             .stage { position: relative; width: 200px; height: 100px } \
+             .dot { position: absolute; left: 0; top: 0; width: 50px; height: 100px; background: #00ff00; \
+                    animation: go 1s linear forwards }"
+        )
+        .unwrap(),
+    );
+    let comp = load(&text).composition.unwrap();
+    let mut r = CpuRenderer::new(NoAssets);
+    let first = r.render_frame(&comp, Ratio::ZERO).unwrap();
+    assert!(near(at(&first, 25, 50), 0.0, 1.0, 0.0, 1.0));
+    let second = r.render_frame(&comp, Ratio::new(1, 1)).unwrap();
+    assert!(at(&second, 25, 50).a < 0.01, "{:?}", at(&second, 25, 50));
+    assert!(near(at(&second, 125, 50), 0.0, 1.0, 0.0, 1.0));
+}
+
+#[test]
+fn a_box_wholly_below_the_picture_is_left_out() {
+    // The second box starts past the bottom of a 100-pixel picture.
+    let f = markup_at(
+        "<div class='a'></div><div class='b'>below</div>",
+        ".a { height: 150px; background: #ff0000 } .b { height: 40px; background: #0000ff }",
+        0,
+    );
+    assert!(near(at(&f, 100, 50), 1.0, 0.0, 0.0, 1.0));
+}
+
+/// A word whose text shadow grows stays where layout puts it: the room
+/// left for the shadow changes every frame, the glyphs do not move.
+#[test]
+fn a_growing_text_shadow_leaves_the_glyphs_still() {
+    let frames = markup_run(
+        "<div class='c'>one <span class='w'>word</span> two</div>",
+        "@keyframes g { from { text-shadow: 0 0 0px rgba(255,226,180,0) } \
+                        to { text-shadow: 0 0 12.43px rgba(255,226,180,0.55) } } \
+         .c { position: absolute; left: 10px; top: 20px; font: 700 30px Liberation Sans; color: #ffffff } \
+         .w { animation: g 2s ease both }",
+        &(0..20).collect::<Vec<_>>(),
+    );
+    // The glyphs' white cores; the shadow is never white.
+    let cores = |f: &geneva_render::Frame| -> Vec<bool> {
+        (0..f.height())
+            .flat_map(|y| (0..f.width()).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                let p = f.get(x, y);
+                p.a > 0.99 && p.b > 0.95
+            })
+            .collect()
+    };
+    let first = cores(&frames[0]);
+    let count = first.iter().filter(|c| **c).count();
+    for (i, f) in frames.iter().enumerate() {
+        let moved = cores(f).iter().zip(&first).filter(|(a, b)| a != b).count();
+        // Edge pixels the shadow shows through can cross the line; a
+        // glyph a pixel off changes a tenth or more.
+        assert!(
+            moved * 50 <= count,
+            "at {i} tenths {moved} of {count} core pixels changed"
+        );
+    }
+}
+
+/// A word in a box sized to it draws on one line, and in the same place,
+/// whether it is aligned to the start, the centre or the right; with
+/// `white-space: nowrap` and without.
+#[test]
+fn a_word_in_a_box_as_wide_as_it_stays_on_one_line_however_aligned() {
+    use std::fmt::Write as _;
+    let (cols, rows) = (4, 21);
+    let render = |align: &str, nowrap: bool| {
+        let mut html = String::new();
+        for i in 0..cols * rows {
+            let size = 18.0 + 0.6 * f64::from(i / cols);
+            let spacing = [0.0, 0.05, 0.118, 0.2][(i % cols) as usize];
+            write!(
+                html,
+                "<div style='position: absolute; left: {}px; top: {}px; text-align: {align}; {} \
+                 font: 700 {size}px Liberation Sans; letter-spacing: {spacing}em; color: #ffffff'>Making</div>",
+                10 + (i % cols) * 200,
+                10 + (i / cols) * 50,
+                if nowrap { "white-space: nowrap;" } else { "" },
+            )
+            .unwrap();
+        }
+        let text = format!(
+            r#"{{"geneva":"1.0","output":{{"width":800,"height":1060,"fps":30,"duration":"1s",
+            "background":"transparent"}},"layers":[{{"clips":[{{"source":{{"kind":"html","width":800,"height":1060,
+            "html":{}}},"transform":{{"anchor":"top left","position":"0 0"}}}}]}}]}}"#,
+            serde_json::to_string(&html).unwrap()
+        );
+        let l = load(&text);
+        assert!(l.is_ok(), "{:?}", l.diagnostics);
+        CpuRenderer::new(NoAssets)
+            .render_frame(&l.composition.unwrap(), Ratio::ZERO)
+            .unwrap()
+    };
+    for nowrap in [true, false] {
+        let start = render("start", nowrap);
+        for i in 0..cols * rows {
+            let (x0, y0) = (10 + (i % cols) * 200, 10 + (i / cols) * 50);
+            let (mut top, mut bottom) = (u32::MAX, 0);
+            for y in y0..y0 + 48 {
+                for x in x0..x0 + 195 {
+                    if start.get(x, y).a > 0.5 {
+                        top = top.min(y);
+                        bottom = bottom.max(y);
+                    }
+                }
+            }
+            assert!(bottom - top < 32, "cell {i} drew on two lines");
+        }
+        for align in ["center", "right"] {
+            let other = render(align, nowrap);
+            assert!(
+                furthest(&start, &other) == 0.0,
+                "{align} (nowrap {nowrap}) drew the words elsewhere or on two lines"
+            );
+        }
+    }
+}
+
+/// `white-space: nowrap` keeps a line whole in a box narrower than it:
+/// the line runs past the box rather than breaking.
+#[test]
+fn nowrap_text_runs_past_a_narrow_box_on_one_line() {
+    let height = |css: &str| {
+        let f = markup_at(
+            "<div class='n'>Making things</div>",
+            &format!(
+                ".n {{ position: absolute; left: 0; top: 0; width: 40px; font: 700 20px Liberation Sans; color: #ffffff; {css} }}"
+            ),
+            0,
+        );
+        let (mut top, mut bottom, mut right) = (u32::MAX, 0, 0);
+        for y in 0..f.height() {
+            for x in 0..f.width() {
+                if f.get(x, y).a > 0.5 {
+                    top = top.min(y);
+                    bottom = bottom.max(y);
+                    right = right.max(x);
+                }
+            }
+        }
+        (bottom - top, right)
+    };
+    let (wrapped, _) = height("");
+    let (kept, right) = height("white-space: nowrap");
+    assert!(
+        wrapped > 30,
+        "without nowrap the words take two lines: {wrapped}"
+    );
+    assert!(
+        kept < 25 && right > 100,
+        "nowrap kept one line past the box: {kept} tall, to x {right}"
     );
 }

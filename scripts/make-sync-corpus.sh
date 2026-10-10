@@ -102,4 +102,15 @@ ff -f lavfi -i "$(video 24 3)" -f lavfi -i "$(audio 48000 3)" -vf "$(flash 24)" 
 ff -f lavfi -i "$(video 24 3)" -f lavfi -i "$(audio 48000 3)" -vf "$(flash 24)" -af "$tone" \
    "${x264[@]}" -bf 3 -g 12 -c:a aac -b:a 96k "$out/mpegts.ts"
 
+# Files that end a fraction of a frame past their last frame. 73 frames
+# at 24 fps last 3.0416666... s, which six decimals write as 3.041667,
+# past the end of the last frame; a B-frame MOV, so it carries an edit
+# list. Then audio 30 ms longer than the video, and 30 ms shorter.
+ff -f lavfi -i "$(video 24 3.0416667)" -f lavfi -i "$(audio 48000 3.0416667)" -vf "$(flash 24)" -af "$tone" \
+   "${x264[@]}" -bf 3 -g 12 -c:a aac -b:a 96k "$out/editlist-73.mov"
+ff -f lavfi -i "$(video 24 3)" -f lavfi -i "$(audio 48000 3.03)" -vf "$(flash 24)" -af "$tone" \
+   "${x264[@]}" -bf 3 -g 12 -c:a aac -b:a 96k "$out/audio-long.mp4"
+ff -f lavfi -i "$(video 24 3)" -f lavfi -i "$(audio 48000 2.97)" -vf "$(flash 24)" -af "$tone" \
+   "${x264[@]}" -bf 3 -g 12 -c:a aac -b:a 96k "$out/audio-short.mp4"
+
 ls -l "$out"

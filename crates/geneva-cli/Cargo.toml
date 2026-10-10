@@ -24,6 +24,7 @@ gpu = ["dep:geneva-gpu"]
 
 [dependencies]
 anyhow = { workspace = true }
+rayon = { workspace = true }
 clap = { workspace = true }
 geneva-audio = { workspace = true }
 geneva-color = { workspace = true }

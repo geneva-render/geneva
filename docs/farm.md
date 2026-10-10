@@ -68,8 +68,12 @@ out.mp4` works too.
 Text in a font the timeline does not ship comes from the fonts the
 machine has, and the image has DejaVu only. When the farm's machine has
 a family the timeline names and the image does not, the workers see
-that their load differs from the farm's and refuse to render. Ship the
-fonts with the timeline to avoid that.
+that their load differs from the farm's and refuse to render. A generic
+family such as `sans-serif` is not checked that way: each machine draws
+it in its own face, so parts from different machines can differ.
+`geneva --no-system-fonts farm ...` avoids both: the farm and every
+worker draw text only in the fonts the document ships and the built-in
+Liberation Sans, whatever each machine has installed.
 
 ## Docker
 

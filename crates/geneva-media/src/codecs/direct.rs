@@ -161,8 +161,16 @@ impl DirectSource {
                 .map(|a| a.color)
                 .unwrap_or_default();
             let reader = VideoReader::open(&clip.path, overrides)?;
-            // A rotated source is turned upright by the compositor.
-            if reader.rotation() != 0 {
+            // A rotated source is turned upright by the compositor, and one
+            // with non-square pixels stretched to its display aspect: the
+            // raw frames this path scales keep neither.
+            if reader.rotation() != 0 || !reader.sample_aspect_ratio().is_square() {
+                return Ok(None);
+            }
+            // An interlaced source is woven by the compositor's conversion;
+            // this path hands its fields on as they are.
+            let mut reader = reader;
+            if reader.raw_frame_at(clip.in_)?.is_interlaced() {
                 return Ok(None);
             }
             let source = reader.tags();
@@ -348,7 +356,7 @@ impl Converter {
                 // path is the generic one, which can run on several threads.
                 flags |= scaling::Flags::FULL_CHR_H_INT | scaling::Flags::FULL_CHR_H_INP;
             }
-            let threads = std::thread::available_parallelism().map_or(1, usize::from);
+            let threads = geneva_render::limits::threads();
             let mut scaler = ffi::ThreadedScaler::new(
                 raw.format(),
                 (raw.width(), raw.height()),

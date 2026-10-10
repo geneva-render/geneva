@@ -1,0 +1,3 @@
+still-2h                     validate  0.12 s
+still-2m                     wall    14.4 s  cpu    46.5 s  peak   0.34 GB
+still-2h                     wall   792.5 s  cpu  2636.9 s  peak   0.41 GB

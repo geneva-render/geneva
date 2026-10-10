@@ -440,6 +440,28 @@ fn find_encoder(names: &[&str]) -> Result<ffmpeg_next::Codec, MediaError> {
 }
 
 /// Configures and opens one video encoder implementation.
+/// Threads for a software video encoder: the share given (a chunk's),
+/// else the process's cap, else the encoder's own choice; fewer under a
+/// memory budget, the encoder taking a quarter of it. x264 holds about
+/// twelve pictures a frame thread (measured at 1080p: 38 MB a thread),
+/// counted here for every software encoder.
+fn encoder_threads(settings: &VideoSettings) -> Option<u32> {
+    let chosen = settings
+        .threads
+        .or(geneva_render::limits::threads_set().map(|n| n as u32));
+    let format = plane_format_for(settings.codec, settings.profile, settings.color.is_hdr());
+    let (dw, dh) = format.chroma_divisors();
+    let samples = 1.0 + 2.0 / (dw * dh) as f64;
+    let picture = f64::from(settings.width) * f64::from(settings.height) * samples;
+    let per_thread = (picture * format.bytes_per_sample() as f64 * 12.0) as u64;
+    match geneva_render::limits::threads_within_budget(per_thread, 0.25) {
+        Some(fit) if fit < geneva_render::limits::threads() => {
+            Some(chosen.map_or(fit as u32, |c| c.min(fit as u32)))
+        }
+        _ => chosen,
+    }
+}
+
 fn open_video_encoder(
     vcodec: ffmpeg_next::Codec,
     settings: &VideoSettings,
@@ -476,9 +498,9 @@ fn open_video_encoder(
     if global_header {
         vctx.set_flags(codec::Flags::GLOBAL_HEADER);
     }
-    // Software encoders spread work over all cores unless told a share;
-    // the count is theirs to pick from the machine.
-    ffi::set_threads(&mut vctx, settings.threads.unwrap_or(0));
+    // Software encoders spread work over all cores unless told a share,
+    // or the process is capped; the count is then theirs to pick.
+    ffi::set_threads(&mut vctx, encoder_threads(settings).unwrap_or(0));
     let mut venc = vctx
         .encoder()
         .video()
@@ -889,7 +911,7 @@ fn open_video_track(
                 bframes: None,
                 tune: settings.tune.map(VideoTune::as_str),
                 fixed_keyframes: settings.fixed_keyframes,
-                threads: settings.threads,
+                threads: encoder_threads(&settings),
             };
             match X264Encoder::open(&x264) {
                 Ok(enc) => {

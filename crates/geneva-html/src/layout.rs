@@ -98,8 +98,11 @@ pub struct Group {
     pub node: DomId,
     /// The group this one is inside, if any.
     pub parent: Option<usize>,
-    /// The element's border box, which a transform turns about.
+    /// The element's border box.
     pub rect: Rectangle,
+    /// The point a transform turns and scales about: `transform-origin`
+    /// on the border box, in the surface's pixels.
+    pub pivot: (f64, f64),
     /// The element's own opacity, applied to the composited picture.
     pub opacity: f32,
     /// `filter: blur()` in pixels, applied to the composited picture.
@@ -113,6 +116,22 @@ pub struct Group {
     /// `mix-blend-mode`: how the composited picture is mixed with what
     /// is already behind it.
     pub blend: crate::style::Blend,
+    /// `mask-image` placed on the border box, applied to the group's
+    /// picture after `clip-path` and before the transform.
+    pub mask: Option<GroupMask>,
+}
+
+/// A mask as painting takes it: the gradient, its tile in the surface's
+/// pixels, and whether the tile repeats along each axis.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroupMask {
+    /// The gradient whose alpha is kept.
+    pub image: crate::style::Background,
+    /// The tile: left, top, width, height.
+    pub tile: (f64, f64, f64, f64),
+    /// Whether the tile repeats across and down; where it does not,
+    /// nothing outside it is kept.
+    pub repeat: (bool, bool),
 }
 
 /// The laid-out document.
@@ -177,7 +196,12 @@ pub fn layout<M: Measure>(
             match leaf {
                 Leaf::Text(dom) => {
                     let style = &styles[*dom].text;
-                    let text = doc.nodes[*dom].text().unwrap_or_default();
+                    let mut text = doc.nodes[*dom].text().unwrap_or_default();
+                    let transformed;
+                    if style.transform != crate::style::TextTransform::None {
+                        transformed = crate::style::transform_text(text, style, &mut true);
+                        text = &transformed;
+                    }
                     let limit = known.width.or(match available.width {
                         AvailableSpace::Definite(w) => Some(w),
                         AvailableSpace::MinContent => Some(0.0),
@@ -274,6 +298,8 @@ impl Walk<'_> {
             && (style.paint.opacity < 1.0
                 || style.paint.blur > 0.0
                 || style.paint.clip_path.is_some()
+                || style.paint.mask.is_some()
+                || style.paint.transform.is_some()
                 || style.paint.blend != crate::style::Blend::Normal
                 || (style.animation.is_some() && self.played_by_clip != Some(dom)))
     }
@@ -310,15 +336,38 @@ impl Walk<'_> {
                 })
                 .collect()
         });
+        let mask = style.paint.mask.as_ref().map(|image| {
+            let (w, h) = (f64::from(rect[2]), f64::from(rect[3]));
+            let (sw, sh) = style.paint.mask_size;
+            let (tw, th) = (sw.size(w).max(1.0), sh.size(h).max(1.0));
+            let (px, py) = style.paint.mask_position;
+            GroupMask {
+                image: image.clone(),
+                tile: (
+                    f64::from(rect[0]) + px.position(w, tw),
+                    f64::from(rect[1]) + py.position(h, th),
+                    tw,
+                    th,
+                ),
+                repeat: style.paint.mask_repeat,
+            }
+        });
+        let (ox, oy) = style.paint.transform_origin;
+        let pivot = (
+            f64::from(rect[0]) + ox.size(f64::from(rect[2])),
+            f64::from(rect[1]) + oy.size(f64::from(rect[3])),
+        );
         self.groups.push(Group {
             node: dom,
             parent,
             rect,
+            pivot,
             opacity: style.paint.opacity as f32,
             blur: style.paint.blur,
             clip: None,
             clip_path,
             blend: style.paint.blend,
+            mask,
         });
         Ok(Some(self.groups.len() - 1))
     }
@@ -400,6 +449,8 @@ fn plain_inline(doc: &Document, styles: &[Computed], dom: DomId) -> bool {
         && s.paint.opacity >= 1.0
         && s.paint.blur <= 0.0
         && s.paint.clip_path.is_none()
+        && s.paint.mask.is_none()
+        && s.paint.transform.is_none()
         && s.paint.blend == crate::style::Blend::Normal
         && s.layout.border == none.border
         && s.layout.padding == none.padding
@@ -436,26 +487,40 @@ fn inline_runs(doc: &Document, styles: &[Computed], dom: DomId) -> Option<Vec<(S
         return None;
     }
     let mut raw = Vec::new();
-    gather(doc, styles, dom, &mut raw);
+    gather(doc, styles, dom, &mut raw, &mut true);
     Some(collapse_runs(raw))
 }
 
 /// The text of an element's inline content in order, each piece with its
 /// style, as written; a `<br>` is `None`.
-fn gather(doc: &Document, styles: &[Computed], dom: DomId, out: &mut Vec<(Option<String>, Text)>) {
+/// `word_start` carries whether the next piece begins a word, for
+/// `text-transform: capitalize` across elements.
+fn gather(
+    doc: &Document,
+    styles: &[Computed],
+    dom: DomId,
+    out: &mut Vec<(Option<String>, Text)>,
+    word_start: &mut bool,
+) {
     for c in doc.children(dom) {
         if styles[*c].layout.display != Display::None {
             match &doc.nodes[*c].kind {
                 crate::dom::NodeKind::Text(t) => {
-                    out.push((Some(t.clone()), styles[*c].text.clone()));
+                    let style = &styles[*c].text;
+                    out.push((
+                        Some(crate::style::transform_text(t, style, word_start)),
+                        style.clone(),
+                    ));
                 }
                 crate::dom::NodeKind::Element(e) if e.tag == "br" => {
+                    *word_start = true;
                     out.push((None, styles[*c].text.clone()));
                 }
-                crate::dom::NodeKind::Element(_) => gather(doc, styles, *c, out),
+                crate::dom::NodeKind::Element(_) => gather(doc, styles, *c, out, word_start),
             }
         }
         if doc.nodes[*c].space_after {
+            *word_start = true;
             out.push((Some(" ".to_owned()), styles[dom].text.clone()));
         }
     }
@@ -472,7 +537,7 @@ fn collapse_runs(raw: Vec<(Option<String>, Text)>) -> Vec<(String, Text)> {
     // A space written last, dropped if the line ends there.
     let trim_end = |out: &mut Vec<(String, Text)>| {
         if let Some(last) = out.iter_mut().rev().find(|(t, _)| !t.is_empty()) {
-            if last.0.ends_with(' ') && !last.1.pre {
+            if last.0.ends_with(' ') && !last.1.white_space.keeps_spaces() {
                 last.0.pop();
             }
         }
@@ -484,7 +549,7 @@ fn collapse_runs(raw: Vec<(Option<String>, Text)>) -> Vec<(String, Text)> {
             quiet = true;
             continue;
         };
-        if style.pre {
+        if style.white_space.keeps_spaces() {
             quiet = text.ends_with(char::is_whitespace);
             out.push((text, style));
             continue;
@@ -598,7 +663,10 @@ impl Walk<'_> {
                 style: style.text.clone(),
             },
             crate::dom::NodeKind::Text(text) => Content::Text {
-                text: collapse(text, style.text.pre),
+                text: collapse(
+                    &crate::style::transform_text(text, &style.text, &mut true),
+                    style.text.white_space.keeps_spaces(),
+                ),
                 style: style.text.clone(),
             },
             crate::dom::NodeKind::Element(el) if el.tag == "img" => Content::Image {
@@ -754,8 +822,18 @@ mod tests {
     impl Measure for Cells {
         fn text(&mut self, text: &str, style: &Text, width: Option<f32>) -> (f32, f32) {
             let cell = style.size as f32 * 0.5;
-            let line = style.size as f32 * style.line_height as f32;
+            let line = style.size as f32 * style.line_height.unwrap_or(1.2) as f32;
             let chars = text.chars().count() as f32;
+            if width == Some(0.0) {
+                // Min-content: the longest word.
+                let longest = text
+                    .split_whitespace()
+                    .map(|w| w.chars().count())
+                    .max()
+                    .unwrap_or(0);
+                let per_line = longest.max(1) as f32;
+                return (per_line * cell, (chars / per_line).ceil() * line);
+            }
             match width {
                 Some(w) if w > 0.0 && chars * cell > w => {
                     let per_line = (w / cell).floor().max(1.0);
@@ -961,6 +1039,28 @@ mod tests {
         );
         let b = laid.boxes.iter().find(|x| x.rect[2] == 30.0).unwrap();
         assert_eq!(b.rect, [10.0, 80.0, 30.0, 15.0]);
+    }
+
+    #[test]
+    fn an_absolute_box_with_a_width_wraps_its_text() {
+        // 20 characters of 10 px in a 100 px box, padded: two lines.
+        let (_, laid) = lay(
+            "<style>.p { position: absolute; left: 0; top: 0; width: 100px; padding: 5px; font-size: 20px; line-height: 1 }\
+             </style><div class=p>aaaaaaaaa bbbbbbbbb</div>",
+            400.0,
+            300.0,
+        );
+        let b = laid
+            .boxes
+            .iter()
+            .find(|x| x.rect[2] == 110.0)
+            .expect("the padded box");
+        assert_eq!(
+            b.rect[3],
+            50.0,
+            "{:?}",
+            laid.boxes.iter().map(|b| b.rect).collect::<Vec<_>>()
+        );
     }
 
     #[test]

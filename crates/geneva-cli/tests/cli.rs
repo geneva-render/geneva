@@ -110,6 +110,59 @@ fn missing_media_assets_are_reported_before_rendering() {
         .stderr(predicate::str::contains("/assets/main/src"));
 }
 
+/// With only the document's fonts, letters none of them has are boxes
+/// on every machine, and the report names them with their counts and
+/// the clip.
+#[test]
+fn letters_no_declared_font_has_are_named() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("page.html"),
+        r#"<div style="font-family: 'Arial', 'Noto Sans'; font-size: 48px">Hi বাংলা 👍🏽</div>"#,
+    )
+    .unwrap();
+    let path = dir.path().join("t.json");
+    std::fs::write(
+        &path,
+        r#"{"geneva":"1.1","output":{"width":400,"height":80,"fps":30,"duration":"1s"},
+            "assets":{"page":{"src":"page.html"}},
+            "layers":[{"clips":[{"source":{"kind":"html","asset":"page"}}]}]}"#,
+    )
+    .unwrap();
+    let out = geneva()
+        .args(["--no-system-fonts", "--format", "json", "frame"])
+        .arg(&path)
+        .arg("-o")
+        .arg(dir.path().join("f.png"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let doc: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    let w407: Vec<&serde_json::Value> = doc["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["code"] == "W407")
+        .collect();
+    assert_eq!(w407.len(), 1, "{doc}");
+    assert_eq!(w407[0]["path"], "/layers/0/clips/0");
+    let message = w407[0]["message"].as_str().unwrap();
+    for letter in [
+        "ব (U+09AC) x1",
+        "া (U+09BE) x2",
+        "👍 (U+1F44D) x1",
+        "🏽 (U+1F3FD) x1",
+    ] {
+        assert!(message.contains(letter), "{message}");
+    }
+    assert!(
+        !message.contains("(U+0048)"),
+        "H is in Liberation Sans: {message}"
+    );
+}
+
 #[test]
 fn schema_prints_json_schema() {
     geneva()
@@ -279,6 +332,110 @@ fn probe_describes_a_file_in_both_formats() {
     let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(doc["video"]["width"], 192);
     assert_eq!(doc["video"]["color"]["matrix"], "bt709");
+}
+
+/// A file whose pixels are not square (`tests/media/sar-32x27.mp4`, a
+/// solid 72×48 picture at 32:27, made with `ffmpeg -f lavfi -i
+/// color=c=0x2060a0:s=72x48:r=25:d=0.4 -vf setsar=32/27 -c:v libx264
+/// -pix_fmt yuv420p -bf 0`) is probed at its display size and drawn at
+/// its display aspect, as a browser's `<video>` shows it.
+#[test]
+#[cfg(feature = "media")]
+fn non_square_pixels_are_shown_at_their_display_aspect() {
+    let src = media_dir().join("sar-32x27.mp4");
+    let info = run_json(&["probe"], &[&src]);
+    let video = &info["video"];
+    assert_eq!(video["sample_aspect_ratio"], "32:27");
+    assert_eq!(
+        (&video["width"], &video["height"]),
+        (&85.into(), &48.into())
+    );
+    assert_eq!(
+        (&video["stored_width"], &video["stored_height"]),
+        (&72.into(), &48.into())
+    );
+    geneva()
+        .args(["probe"])
+        .arg(&src)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "85×48 @ 25 fps, yuv420p, stored as 72×48 with 32:27 pixels",
+        ));
+
+    // 16:9 at 96×54 with `contain`: the picture fills the frame. Drawn
+    // at its stored 3:2 it left 7.5 px bars at both sides. (The outermost
+    // column is softened, as for any picture drawn larger, so the check
+    // is one in from each edge.)
+    let dir = tempfile::tempdir().unwrap();
+    let timeline = dir.path().join("t.json");
+    std::fs::write(
+        &timeline,
+        r##"{"geneva":"1.0","output":{"width":96,"height":54,"fps":25,"duration":"0.4s","background":"#ff00ff"},
+            "assets":{"v":{"src":"sar-32x27.mp4"}},
+            "layers":[{"clips":[{"source":{"kind":"video","asset":"v"},"fit":"contain","duration":"0.4s"}]}]}"##,
+    )
+    .unwrap();
+    let png = dir.path().join("f.png");
+    geneva()
+        .args(["frame"])
+        .arg(&timeline)
+        .args(["--at", "0.2s", "--assets"])
+        .arg(media_dir())
+        .arg("-o")
+        .arg(&png)
+        .assert()
+        .success();
+    let decoded = image::open(&png).unwrap().to_rgb8();
+    for x in [1, 94] {
+        let p = decoded.get_pixel(x, 27);
+        assert!(p[1] > 90 && p[0] < 60, "a bar at x {x}: {p:?}");
+    }
+
+    // A verb that sizes its output from the source sizes it as shown,
+    // in square pixels.
+    let out = dir.path().join("c.mp4");
+    run_json(&["convert", "-o"], &[&out, &src]);
+    let converted = run_json(&["probe"], &[&out]);
+    assert_eq!(converted["video"]["width"], 86);
+    assert_eq!(converted["video"]["height"], 48);
+    assert_eq!(converted["video"]["sample_aspect_ratio"], "1:1");
+}
+
+/// A stream the build has no decoder for is named by the probe, codec
+/// and reason, rather than reported as no video; a verb that needs the
+/// picture says why it cannot read it.
+#[test]
+#[cfg(feature = "media")]
+fn a_stream_with_no_decoder_is_named() {
+    let src = media_dir().join("legacy/cinepak.avi");
+    let info = run_json(&["probe"], &[&src]);
+    assert!(info["video"].is_null());
+    assert_eq!(info["undecodable"][0]["kind"], "video");
+    assert_eq!(info["undecodable"][0]["codec"], "cinepak");
+    assert_eq!(
+        info["undecodable"][0]["reason"],
+        "no decoder for it in this build"
+    );
+    geneva()
+        .args(["probe"])
+        .arg(&src)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "video: cinepak (stream 0), which cannot be decoded: no decoder for it in this build",
+        ));
+    let dir = tempfile::tempdir().unwrap();
+    geneva()
+        .args(["convert"])
+        .arg(&src)
+        .arg("-o")
+        .arg(dir.path().join("out.mp4"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "its video stream (cinepak) cannot be decoded",
+        ));
 }
 
 #[test]
@@ -657,17 +814,18 @@ fn convert_flags_set_a_bitrate_ceiling_and_the_audio_format() {
         &[&capped, &clip],
     );
     assert_ne!(doc["mode"], "copy");
-    // Without x264 the bundled OpenH264 runs at a pinned quantizer, which
-    // cannot hold a ceiling; it has to say so, and there is nothing to
-    // measure.
+    // Without x264 the encoder may not hold a ceiling: the bundled
+    // OpenH264 runs at a pinned quantizer and VideoToolbox (a Mac with no
+    // x264) at constant quality. Either has to say so, and there is
+    // nothing to measure.
     let notes = doc["diagnostics"].to_string();
-    if notes.contains("OpenH264") {
+    if notes.contains("OpenH264") || notes.contains("VideoToolbox") {
         assert!(notes.contains("ceiling is not applied"), "{notes}");
     } else {
         // 100 kb/s over 2 s is 25 kB, and the buffer the ceiling is held
         // over is two seconds of it, which a clip this short can spend on
         // top: 50 kB at most.
-        assert!(size(&capped) < 50_000, "{} bytes", size(&capped));
+        assert!(size(&capped) < 50_000, "{} bytes; {notes}", size(&capped));
         assert!(
             size(&capped) * 3 < size(&open),
             "{} against {}",
@@ -1949,4 +2107,78 @@ fn a_diagnostic_from_a_real_run_can_be_explained() {
         .assert()
         .success()
         .stdout(predicate::str::contains(code));
+}
+
+#[test]
+#[cfg(feature = "media")]
+fn threads_and_a_memory_budget_are_taken_and_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("solid.mp4");
+    let report = run_json(
+        &["--threads", "2", "--memory-budget", "512M", "render"],
+        &[
+            examples().join("solid.json").as_path(),
+            std::path::Path::new("-o"),
+            &out,
+        ],
+    );
+    assert_eq!(report["ok"], true, "{report}");
+    assert_eq!(report["threads"], 2);
+    if cfg!(target_os = "linux") {
+        assert!(report["peak_memory"].as_u64().unwrap() > 0, "{report}");
+    }
+    let bad = geneva()
+        .args(["--memory-budget", "lots", "validate"])
+        .arg(examples().join("solid.json"))
+        .output()
+        .unwrap();
+    assert_eq!(bad.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("is not a size"));
+}
+
+/// Markup that names its font assets by the families their files declare,
+/// in a fallback list, uses them: no "never used" note, no "not installed"
+/// warning. A family in the list that nothing provides is still reported.
+#[test]
+fn font_assets_named_by_family_in_a_list_are_used() {
+    let dir = tempfile::tempdir().unwrap();
+    let fonts = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/fonts");
+    for name in ["LiberationSans-Regular.ttf", "NotoSansArabic-Subset.ttf"] {
+        std::fs::copy(fonts.join(name), dir.path().join(name)).unwrap();
+    }
+    let doc = |family: &str| {
+        format!(
+            r#"{{"geneva":"1.1","output":{{"width":320,"height":120,"fps":30,"duration":"1s"}},
+                "assets":{{"latin":{{"src":"LiberationSans-Regular.ttf"}},"arabic":{{"src":"NotoSansArabic-Subset.ttf"}}}},
+                "layers":[{{"clips":[{{"source":{{"kind":"html","html":"<p style='font-family: {family}; color: white'>Hi مرحبا</p>"}}}}]}}]}}"#
+        )
+    };
+    let path = dir.path().join("fallback.json");
+    std::fs::write(
+        &path,
+        doc("Liberation Sans, \\\"Noto Sans Arabic\\\", sans-serif"),
+    )
+    .unwrap();
+    geneva()
+        .args(["frame"])
+        .arg(&path)
+        .args(["--at", "0s", "-o"])
+        .arg(dir.path().join("f.png"))
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("W201").not())
+        .stderr(predicate::str::contains("W405").not());
+    std::fs::write(
+        &path,
+        doc("Liberation Sans, Nowhere Sans, Noto Sans Arabic"),
+    )
+    .unwrap();
+    geneva()
+        .args(["validate"])
+        .arg(&path)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("W405"))
+        .stderr(predicate::str::contains("Nowhere Sans"))
+        .stderr(predicate::str::contains("W201").not());
 }
