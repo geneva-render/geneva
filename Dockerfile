@@ -23,7 +23,10 @@ RUN MEDIA_SRC=/tmp/media-src /src/scripts/build-media-libs.sh /opt/media-libs \
  && rm -rf /tmp/media-src
 COPY . /src
 WORKDIR /src
-RUN PKG_CONFIG_PATH=/opt/media-libs/lib/pkgconfig CARGO_TARGET_DIR=/tmp/target \
+# .cargo/config.toml points the build at target/media-libs; these take
+# precedence over it, since cargo's [env] leaves set variables alone.
+RUN FFMPEG_DIR=/opt/media-libs MEDIA_LIBS_DIR=/opt/media-libs \
+      PKG_CONFIG_PATH=/opt/media-libs/lib/pkgconfig CARGO_TARGET_DIR=/tmp/target \
       cargo build --release --locked \
  && cp /tmp/target/release/geneva /usr/local/bin/geneva \
  && rm -rf /tmp/target
