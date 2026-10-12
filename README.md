@@ -147,9 +147,19 @@ The video at the top was made by an agent with those and nothing else. It worked
 > so output 16:9 1080p with the empty sides filled by a blurred copy of
 > the video.
 
+## Rendering on several machines
+
+`geneva farm` cuts a render into parts, hands them to `geneva worker` processes on whatever machines connect (over SSH, in containers, on serverless functions), and joins the parts without re-encoding.
+
+```sh
+geneva farm talk.json -o talk.mp4 --parts 12
+geneva worker --connect http://192.168.1.20:41237 --token 3b8b6d76...   # on each other machine
+```
+
+Every part re-encodes the picture, so a document with a bitrate target or with `outputs` is refused. Launch commands for SSH, Docker, Kubernetes, ECS and Lambda, and the worker image: [docs/farm.md](docs/farm.md).
+
 ## Status
 
-- A render can be split into parts on several machines (over SSH, in containers, on serverless functions) and joined without re-encoding: [docs/farm.md](docs/farm.md).
 - If you are using it or want to, [tell me what you are making](https://genevarender.com/building). Issues and [discussions](https://github.com/geneva-render/geneva/discussions) are open.
 
 ## Docs

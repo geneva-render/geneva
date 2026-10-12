@@ -86,6 +86,11 @@ impl<R: Renderer> Renderer for FramePacker<R> {
         self.renderer.take_warnings()
     }
 
+    fn take_missing_glyphs(&mut self) -> Vec<(String, Vec<(char, usize)>)> {
+        // The same for the letters drawn as boxes.
+        self.renderer.take_missing_glyphs()
+    }
+
     fn render_into(
         &mut self,
         comp: &Composition,

@@ -40,8 +40,18 @@ versions changed the format freely.
   other than the listening one (a forwarded port, a tunnel), and
   `geneva worker --stop-after` stops taking parts at a set time.
   [docs/farm.md](docs/farm.md) has launch commands for SSH, Docker,
-  Kubernetes, ECS and Lambda. Parts do not report W407 (letters with
-  no font).
+  Kubernetes, ECS and Lambda.
+
+### Fixed
+
+- **W407 from `render`.** In 1.4.0 `render` reported letters drawn as
+  boxes only when the GPU composited the frames. With the CPU renderer
+  (no hardware GPU, or `--renderer cpu`), for overlays drawn onto an
+  untouched video, and in a render encoded in several stretches at
+  once, it reported none; the last two also dropped W455. `frame` was
+  not affected. Both are now reported in every case, by `render
+  --frames` and by a farm too, each letter counted as one renderer
+  drawing every frame would count it.
 
 ## 1.4.0 (2026-10-08)
 

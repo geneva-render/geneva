@@ -336,6 +336,113 @@ impl RenderMode {
     }
 }
 
+/// What renderers reported while drawing some of a render's frames:
+/// the warnings of [`RenderStats::warnings`] and the letters of
+/// [`RenderStats::missing_glyphs`]. A render drawn in several stretches
+/// or parts adds up each one's, so it reports what one renderer drawing
+/// every frame would have.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Painted {
+    pub warnings: std::collections::BTreeSet<String>,
+    /// By clip path, each letter with the most one frame drew.
+    pub missing: std::collections::BTreeMap<String, std::collections::BTreeMap<char, usize>>,
+}
+
+impl Painted {
+    /// What `stats` reports.
+    pub fn from_stats(stats: &RenderStats) -> Self {
+        let mut painted = Self {
+            warnings: stats.warnings.iter().cloned().collect(),
+            ..Self::default()
+        };
+        painted.add_missing(stats.missing_glyphs.iter().cloned());
+        painted
+    }
+
+    /// Adds `other`: every warning, and for each letter the larger count.
+    pub fn add(&mut self, other: Self) {
+        self.warnings.extend(other.warnings);
+        for (clip, letters) in other.missing {
+            self.add_missing([(clip, letters.into_iter().collect())]);
+        }
+    }
+
+    fn add_missing(&mut self, missing: impl IntoIterator<Item = (String, Vec<(char, usize)>)>) {
+        for (clip, letters) in missing {
+            let kept = self.missing.entry(clip).or_default();
+            for (ch, n) in letters {
+                let most = kept.entry(ch).or_insert(0);
+                *most = (*most).max(n);
+            }
+        }
+    }
+
+    /// Sets `stats`' warnings and missing letters to these.
+    pub fn into_stats(self, stats: &mut RenderStats) {
+        stats.warnings = self.warnings.into_iter().collect();
+        stats.missing_glyphs = self
+            .missing
+            .into_iter()
+            .map(|(clip, letters)| (clip, letters.into_iter().collect()))
+            .collect();
+    }
+
+    /// As JSON, for a worker to send to its farm: `{"warnings": [...],
+    /// "missing": {clip: {letter: count}}}`.
+    pub fn to_json(&self) -> serde_json::Value {
+        let missing: serde_json::Map<String, serde_json::Value> = self
+            .missing
+            .iter()
+            .map(|(clip, letters)| {
+                let letters: serde_json::Map<String, serde_json::Value> = letters
+                    .iter()
+                    .map(|(ch, n)| (ch.to_string(), serde_json::json!(n)))
+                    .collect();
+                (clip.clone(), serde_json::Value::Object(letters))
+            })
+            .collect();
+        serde_json::json!({ "warnings": self.warnings, "missing": missing })
+    }
+
+    /// Reads what [`to_json`](Self::to_json) wrote; anything else in it
+    /// is left out.
+    pub fn from_json(value: &serde_json::Value) -> Self {
+        let warnings = value["warnings"]
+            .as_array()
+            .map(|w| {
+                w.iter()
+                    .filter_map(|w| w.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let missing = value["missing"]
+            .as_object()
+            .map(|clips| {
+                clips
+                    .iter()
+                    .map(|(clip, letters)| {
+                        let letters = letters
+                            .as_object()
+                            .map(|l| {
+                                l.iter()
+                                    .filter_map(|(ch, n)| {
+                                        let mut chars = ch.chars();
+                                        let ch = chars.next()?;
+                                        chars.next().is_none().then_some(())?;
+                                        Some((ch, usize::try_from(n.as_u64()?).ok()?))
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        (clip.clone(), letters)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self { warnings, missing }
+    }
+}
+
 pub struct RenderStats {
     /// Frames encoded; zero when streams were copied.
     pub frames: u64,
@@ -855,7 +962,7 @@ mod imp {
     use geneva_render::{CpuRenderer, RenderError, Renderer};
     use geneva_timeline::{Composition, Ratio};
 
-    use super::{RenderMode, RenderOverrides, RenderStats};
+    use super::{Painted, RenderMode, RenderOverrides, RenderStats};
 
     /// The subtitle tracks of a composition as streams to write.
     fn subtitle_settings(
@@ -1917,8 +2024,9 @@ mod imp {
         let fast_start = settings.fast_start;
         let has_audio = settings.audio.is_some();
         let mut direct_reason = None;
+        let mut painted = Painted::default();
         let encoding_started = Instant::now();
-        let results: Vec<Result<Option<String>, geneva_media::MediaError>> =
+        let results: Vec<Result<(Option<String>, Painted), geneva_media::MediaError>> =
             std::thread::scope(|scope| {
                 let workers: Vec<_> = plan
                     .ranges
@@ -1961,10 +2069,11 @@ mod imp {
         let mut first_error = None;
         for r in results {
             match r {
-                Ok(reason) => {
+                Ok((reason, drawn)) => {
                     if direct_reason.is_none() {
                         direct_reason = reason;
                     }
+                    painted.add(drawn);
                 }
                 Err(e) => {
                     if first_error.is_none() {
@@ -2009,7 +2118,7 @@ mod imp {
             plan.ranges.len(),
             plan.threads_each
         ));
-        Ok(RenderStats {
+        let mut stats = RenderStats {
             frames: total,
             duration: report.duration,
             mode: if direct_reason_is_direct(&notes) {
@@ -2021,7 +2130,9 @@ mod imp {
             warnings: Vec::new(),
             missing_glyphs: Vec::new(),
             seconds: started.elapsed().as_secs_f64(),
-        })
+        };
+        painted.into_stats(&mut stats);
+        Ok(stats)
     }
 
     /// Whether the notes say the frames came straight from the decoder.
@@ -2036,6 +2147,16 @@ mod imp {
     /// picture is a source's own and the compositor otherwise, counting
     /// finished frames in `done`. Returns the direct path's reason when it
     /// applied.
+    /// What `renderer` has noticed so far, taken.
+    fn painted_by<R: Renderer + ?Sized>(renderer: &mut R) -> Painted {
+        let mut painted = Painted {
+            warnings: renderer.take_warnings().into_iter().collect(),
+            ..Painted::default()
+        };
+        painted.add_missing(renderer.take_missing_glyphs());
+        painted
+    }
+
     fn encode_chunk(
         comp: &Composition,
         root: &Path,
@@ -2044,7 +2165,7 @@ mod imp {
         range: std::ops::Range<u64>,
         threads: u32,
         done: &std::sync::atomic::AtomicU64,
-    ) -> Result<Option<String>, geneva_media::MediaError> {
+    ) -> Result<(Option<String>, Painted), geneva_media::MediaError> {
         // This stretch's decoders take its share of the cores.
         geneva_media::set_decoder_threads_for_this_thread(threads);
         let v = settings.video.as_ref().expect("chunks carry video");
@@ -2077,7 +2198,7 @@ mod imp {
         let (tx, rx) = std::sync::mpsc::sync_channel::<Msg>(super::queue_depth(comp));
         let (spare_tx, spare_rx) = std::sync::mpsc::channel::<geneva_media::convert::Planes>();
         let mut pool = geneva_media::convert::PlanePool::default();
-        std::thread::scope(|scope| -> Result<(), geneva_media::MediaError> {
+        let painted = std::thread::scope(|scope| -> Result<Painted, geneva_media::MediaError> {
             let worker = scope.spawn(move || -> Result<Encoder, geneva_media::MediaError> {
                 let mut encoder = encoder;
                 for msg in rx {
@@ -2196,9 +2317,10 @@ mod imp {
             if let Some(e) = failed {
                 return Err(e);
             }
-            joined?.finish()
+            joined?.finish()?;
+            Ok(painted_by(&mut renderer))
         })?;
-        Ok(reason)
+        Ok((reason, painted))
     }
 
     /// Whether the output of `comp` to `output` can be rendered in parts
@@ -2279,7 +2401,7 @@ mod imp {
                 let done = std::sync::atomic::AtomicU64::new(0);
                 let count = range.end - range.start;
                 let fps = comp.fps.to_f64();
-                let reason = std::thread::scope(|scope| {
+                let (reason, painted) = std::thread::scope(|scope| {
                     let worker = scope.spawn(|| {
                         encode_chunk(comp, root, output, settings, range.clone(), cores, &done)
                     });
@@ -2298,7 +2420,7 @@ mod imp {
                     "frames {}..{} of {total}, picture only, for `geneva join`",
                     range.start, range.end
                 ));
-                Ok(RenderStats {
+                let mut stats = RenderStats {
                     frames: count,
                     duration: Ratio::from_int(count as i64) / comp.fps,
                     mode: if direct_reason_is_direct(&notes) {
@@ -2310,7 +2432,9 @@ mod imp {
                     warnings: Vec::new(),
                     missing_glyphs: Vec::new(),
                     seconds: started.elapsed().as_secs_f64(),
-                })
+                };
+                painted.into_stats(&mut stats);
+                Ok(stats)
             }
             super::Part::Audio => {
                 settings.video = None;
@@ -3209,7 +3333,14 @@ mod imp {
             ));
         }
         encoder.finish().map_err(media_err)?;
-        Ok(RenderStats {
+        let mut painted = Painted::default();
+        if let Some(r) = renderer.as_mut() {
+            painted.add(painted_by(r.as_mut()));
+        }
+        if let Some(r) = overlays.as_mut() {
+            painted.add(painted_by(r));
+        }
+        let mut stats = RenderStats {
             frames: total,
             duration: comp.duration,
             mode: if smart.is_some() {
@@ -3220,16 +3351,12 @@ mod imp {
                 RenderMode::Render
             },
             notes,
-            warnings: renderer
-                .as_mut()
-                .map(|r| r.take_warnings())
-                .unwrap_or_default(),
-            missing_glyphs: renderer
-                .as_mut()
-                .map(|r| r.take_missing_glyphs())
-                .unwrap_or_default(),
+            warnings: Vec::new(),
+            missing_glyphs: Vec::new(),
             seconds: started.elapsed().as_secs_f64(),
-        })
+        };
+        painted.into_stats(&mut stats);
+        Ok(stats)
     }
 }
 

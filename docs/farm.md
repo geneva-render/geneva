@@ -162,9 +162,3 @@ geneva farm talk.json -o out.mp4 --local 0 --launch-count 20 \
     --invocation-type Event --cli-binary-format raw-in-base64-out \
     --payload "{\"url\":\"$GENEVA_FARM_URL\",\"token\":\"$GENEVA_FARM_TOKEN\"}" /dev/null'
 ```
-
-## Limits
-
-Parts do not report W407, the letters drawn as boxes for want of a
-font, and neither does a render split across cores on one machine. Run
-`geneva frame` or a whole `render` on the document to see them.

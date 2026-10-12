@@ -1173,3 +1173,99 @@ fn legacy_sources_keep_their_frames_and_marks() {
     }
     assert!(problems.is_empty(), "\n{}", problems.join("\n"));
 }
+
+/// The W407 warnings `args` print with `--format json`, as messages.
+fn missing_letter_warnings(args: &[&str]) -> Vec<String> {
+    let out = std::process::Command::new(assert_cmd::cargo::cargo_bin("geneva"))
+        .args(["--no-system-fonts", "--format", "json"])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    doc["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["code"] == "W407")
+        .map(|d| format!("{} {}", d["path"].as_str().unwrap(), d["message"]))
+        .collect()
+}
+
+#[test]
+#[cfg(unix)]
+fn letters_drawn_as_boxes_are_reported_however_the_render_is_split() {
+    // The renderer of each stretch, part or worker saw the letters; the
+    // render reports them as one renderer drawing every frame would.
+    let dir = tempfile::tempdir().unwrap();
+    let timeline = |name: &str, chunks: u32| {
+        let path = dir.path().join(name);
+        std::fs::write(
+            &path,
+            r#"{"geneva":"1.0",
+                "output":{"width":160,"height":90,"fps":24,"duration":"4s",
+                          "encode":{"video":{"crf":30,"preset":"ultrafast","chunks":CHUNKS}}},
+                "layers":[{"clips":[{"source":{"kind":"html",
+                    "html":"<p style='color:white;font:30px sans-serif'>Hi \u09ac\u09be\u09be</p>"}}]}]}"#
+                .replace("CHUNKS", &chunks.to_string()),
+        )
+        .unwrap();
+        path.to_str().unwrap().to_owned()
+    };
+    let whole = timeline("whole.json", 1);
+    let t = &timeline("split.json", 2);
+    // The same text over a video, which is decoded and has only the text
+    // drawn onto it.
+    std::fs::copy(corpus().join("cfr.mp4"), dir.path().join("cfr.mp4")).unwrap();
+    let over = dir.path().join("over.json");
+    std::fs::write(
+        &over,
+        r#"{"geneva":"1.0",
+            "output":{"width":160,"height":90,"fps":24,"duration":"3s",
+                      "encode":{"video":{"crf":30,"preset":"ultrafast","chunks":1}}},
+            "assets":{"clip":{"src":"cfr.mp4"}},
+            "layers":[{"clips":[{"source":{"kind":"video","asset":"clip"}}]},
+                      {"clips":[{"source":{"kind":"html",
+                "html":"<p style='color:white;font:30px sans-serif'>Hi \u09ac\u09be\u09be</p>"}}]}]}"#,
+    )
+    .unwrap();
+    let over = over.to_str().unwrap();
+    let out = |name: &str| dir.path().join(name).to_str().unwrap().to_owned();
+    let exe = assert_cmd::cargo::cargo_bin("geneva");
+    let launch = format!("'{}' worker", exe.display());
+    for args in [
+        vec!["render", &whole, "-o", &out("single.mp4")],
+        vec!["render", over, "-o", &out("over.mp4")],
+        vec!["render", t, "-o", &out("chunked.mp4")],
+        vec!["render", t, "-o", &out("part.mp4"), "--frames", "48..96"],
+        vec![
+            "farm",
+            t,
+            "-o",
+            &out("farmed.mp4"),
+            "--parts",
+            "2",
+            "--local",
+            "0",
+            "--listen",
+            "127.0.0.1:0",
+            "--launch",
+            &launch,
+            "--launch-count",
+            "1",
+        ],
+    ] {
+        let warnings = missing_letter_warnings(&args);
+        assert_eq!(warnings.len(), 1, "{args:?}: {warnings:?}");
+        let w = &warnings[0];
+        assert!(w.contains("/clips/0 "), "{args:?}: {w}");
+        assert!(
+            w.contains("\u{09ac} (U+09AC) x1") && w.contains("\u{09be} (U+09BE) x2"),
+            "{args:?}: {w}"
+        );
+    }
+}

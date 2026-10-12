@@ -15,6 +15,9 @@
 //! - `GET /file/<n>`: the `n`th file the timeline reads.
 //! - `POST /claim`: the next part to render (200), nothing yet (202, with
 //!   how long to wait), or nothing more (204).
+//! - `POST /painted/<n>`: what the worker's renderer reported while
+//!   drawing part `n` (warnings, letters drawn as boxes), sent before
+//!   the part, so the farm reports what a single render would.
 //! - `PUT /part/<n>`: a finished part's bytes.
 //! - `POST /failed/<n>`, `POST /refuse`: a part that could not be
 //!   rendered, or a worker that cannot render this job at all.
@@ -450,6 +453,8 @@ struct State {
     refusals: Vec<String>,
     /// Set once the parts are joined, so that late workers stop.
     finished: bool,
+    /// What the workers' renderers reported, over every part.
+    painted: media::Painted,
 }
 
 struct Farm {
@@ -493,6 +498,18 @@ impl Farm {
                 None => req.respond(404, "text/plain", b"no such file"),
             },
             ("POST", "claim") => self.claim(&mut req),
+            ("POST", "painted") => {
+                let painted = media::Painted::from_json(&req.json());
+                let mut state = self.state.lock().expect("state");
+                if index.is_some_and(|i| i < state.parts.len()) {
+                    state.painted.add(painted);
+                    drop(state);
+                    req.respond_json(200, &serde_json::json!({ "ok": true }));
+                } else {
+                    drop(state);
+                    req.respond(404, "text/plain", b"no such part");
+                }
+            }
             ("PUT", "part") => self.receive(&mut req, index),
             ("POST", "failed") => self.failed(&mut req, index),
             ("POST", "refuse") => {
@@ -1043,7 +1060,7 @@ pub fn run(
         eprintln!();
     }
     let render_secs = started.elapsed().as_secs_f64();
-    let (picture, sound, summary) = {
+    let (picture, sound, summary, painted) = {
         let state = farm.state.lock().expect("state");
         let picture: Vec<PathBuf> = state
             .parts
@@ -1068,12 +1085,15 @@ pub fn run(
             .map(|(name, n)| format!("{name} {n}"))
             .collect::<Vec<_>>()
             .join(", ");
-        (picture, sound, summary)
+        (picture, sound, summary, state.painted.clone())
     };
     let joined = media::join_parts(comp, root, output, overrides, &picture, sound.as_deref());
     stop(&farm, &mut children);
     let _ = std::fs::remove_dir_all(&dir);
     let mut stats = joined?;
+    let mut all = media::Painted::from_stats(&stats);
+    all.add(painted);
+    all.into_stats(&mut stats);
     let sent = farm.sent.load(std::sync::atomic::Ordering::Relaxed);
     let workers = farm.state.lock().expect("state").workers.len().max(1) as u64;
     stats.notes = vec![
@@ -1493,7 +1513,15 @@ fn work_in(
         }
         let progress = media::Progress::new(progress_format);
         match media::render_part(comp, &root, &file, &overrides, &part, &progress) {
-            Ok(_) => {
+            Ok(stats) => {
+                let painted = media::Painted::from_stats(&stats);
+                if painted != media::Painted::default() {
+                    let _ = client.call(
+                        "POST",
+                        &format!("/painted/{index}"),
+                        &Body::Json(&painted.to_json()),
+                    );
+                }
                 let sent = client.call(
                     "PUT",
                     &format!("/part/{index}?worker={id}"),
