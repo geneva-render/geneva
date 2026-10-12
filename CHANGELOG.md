@@ -41,7 +41,8 @@ versions changed the format freely.
   `geneva worker --stop-after` stops taking parts at a set time.
   [docs/farm.md](docs/farm.md) has launch commands for SSH, Docker,
   Kubernetes, ECS and Lambda; only Docker and a Lambda emulator have
-  been tried.
+  been tried. A workflow builds the image on amd64 and arm64 and runs a
+  farm in it. Parts do not report W407 (letters with no font).
 
 ## 1.4.0 (2026-10-08)
 

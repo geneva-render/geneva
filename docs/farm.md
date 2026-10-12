@@ -172,3 +172,12 @@ this page; the entry point has not run on Lambda itself. The SSH,
 Kubernetes and ECS commands have not been run; they use each tool's
 documented flags and nothing of geneva beyond the worker's environment
 variables.
+
+The `Docker image` workflow builds the image from the `Dockerfile` on
+amd64 and arm64 runners and renders an example in two parts with
+workers inside the container. It runs on pushes that change the image's
+inputs, and by hand.
+
+Parts do not report W407, the letters drawn as boxes for want of a
+font, and neither does a render split across cores on one machine. Run
+`geneva frame` or a whole `render` on the document to see them.
