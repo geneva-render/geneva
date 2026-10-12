@@ -1,0 +1,50 @@
+name: Docker image
+
+# Builds the worker image from the Dockerfile on both architectures and
+# runs a farm in it, so the image is checked without a machine that has
+# Docker. Nothing is pushed to a registry.
+
+on:
+  push:
+    branches: [main, "geneva/**"]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - docker/**
+      - scripts/build-media-libs.sh
+      - .github/workflows/docker.yml
+  workflow_dispatch:
+
+jobs:
+  image:
+    name: Image ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: amd64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build -t geneva .
+      - name: Version
+        run: docker run --rm geneva --version
+      - name: Farm with two workers in the container
+        run: |
+          docker run --rm -v "$PWD/examples:/w" -w /w geneva \
+            farm lower-third.json -o farm-test.mp4 --local 0 --launch-count 2 \
+            --launch 'geneva worker --connect "$GENEVA_FARM_URL" --token "$GENEVA_FARM_TOKEN"'
+          test -s examples/farm-test.mp4
+      - name: Worker entry point with no arguments
+        run: |
+          # With no farm to reach, the default command must fail rather
+          # than hang or exit 0.
+          if timeout 60 docker run --rm -e GENEVA_FARM_URL=http://127.0.0.1:9 \
+               -e GENEVA_FARM_TOKEN=x geneva; then
+            echo "the worker exited 0 with no farm" >&2
+            exit 1
+          fi
