@@ -151,7 +151,7 @@ The video at the top was made by an agent with those and nothing else. It worked
 
 - Version 1.1. The document format is `"1.1"`; 1.x adds only optional fields, so a `"1.0"` document is read as it is.
 - No GUI and no hosted service.
-- A render can be split into parts on several machines (over SSH, in containers, on serverless functions) and joined without re-encoding: [docs/farm.md](docs/farm.md). Untried outside Docker and a Lambda emulator.
+- A render can be split into parts on several machines (over SSH, in containers, on serverless functions) and joined without re-encoding: [docs/farm.md](docs/farm.md).
 - If you are using it or want to, [tell me what you are making](https://genevarender.com/building). Issues and [discussions](https://github.com/geneva-render/geneva/discussions) are open.
 
 ## Docs
