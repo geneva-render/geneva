@@ -6,6 +6,43 @@ version it was written for; within 1.x the format only gains optional
 fields, so a document keeps meaning what it meant. Before 1.0, minor
 versions changed the format freely.
 
+## Unreleased
+
+### Added
+
+- **Rendering in parts, on several processes or machines.** `geneva
+  plan` cuts a render into picture parts and one sound part and prints
+  the command for each; `render --frames START..END` and `render
+  --audio-only` write one part; `geneva join` puts them together
+  without re-encoding, with the subtitle tracks and fast start of a
+  single render, and refuses parts that are missing or were encoded
+  with other settings. Parts always re-encode the picture, so copy and
+  smart cut are not used; bitrate targets, image sequences and
+  documents with `outputs` are refused. See
+  [docs/cli.md](docs/cli.md).
+- **`geneva farm` and `geneva worker`.** A farm hands a render's parts
+  to workers on any machines that connect (over SSH, in containers, on
+  serverless functions), joins them, and renders on this machine too.
+  Workers pull parts, so faster machines take more; a part whose worker
+  goes quiet, or that runs far longer than the others, is given to
+  another. Workers receive the timeline and every file it reads, and
+  one with another geneva build or encoder, or that reads the timeline
+  differently, is turned away. `/status` and `/metrics` report
+  progress. Plain HTTP with a shared token, no encryption. Workers
+  fetch only the byte ranges of MP4 and MOV sources that their parts
+  read; other files, and those inside nested compositions or used as
+  masks, go whole. A farm started with `--no-system-fonts` has every
+  worker draw text the same way, in the document's fonts and the
+  built-in one.
+- **A `Dockerfile` for workers, and ways to start them.** The image
+  runs `geneva worker` by default and answers AWS Lambda invocations
+  when run as a function. `geneva farm --url` gives workers an address
+  other than the listening one (a forwarded port, a tunnel), and
+  `geneva worker --stop-after` stops taking parts at a set time.
+  [docs/farm.md](docs/farm.md) has launch commands for SSH, Docker,
+  Kubernetes, ECS and Lambda; only Docker and a Lambda emulator have
+  been tried.
+
 ## 1.4.0 (2026-10-08)
 
 ### Added

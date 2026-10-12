@@ -16,10 +16,11 @@ Contents: [the contract](#the-contract), [report shape](#report-shape),
 ## The contract
 
 - **One binary, no services.** `geneva` reads files, writes files and
-  prints one report. It never needs a network.
+  prints one report. Only `farm` and `worker`, which split a render
+  across machines, use the network.
 - **The manual is in the binary.** `geneva guide` prints this page,
   `geneva guide --list` names the others (`timeline`, `cli`, `errors`,
-  `color`, `architecture`), and `geneva explain E302` says what one code means. So a
+  `color`, `architecture`, `farm`), and `geneva explain E302` says what one code means. So a
   machine with `geneva` on its path has the reference for the version
   it is running, without a checkout and without fetching anything.
 - **`--format json` everywhere.** Put it before the subcommand. Stdout

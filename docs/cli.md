@@ -86,7 +86,147 @@ for pictures and video. A sprite sheet's `.vtt` is its own row (`kind`
 | `--no-audio` | No audio track. |
 | `--renderer auto\|cpu\|gpu` | `auto`: a hardware GPU if present, else the CPU. `gpu`: any device, software ones included, else the CPU with a note. A software device (llvmpipe, WARP) is for testing and is several times slower than the CPU renderer: `auto` never picks one. `cpu`: the reference. `GENEVA_GPU=software` forces the software device. The note names the device. `frame`, overlays on a direct-path picture and documents with a markup `backdrop-filter` always use the CPU (with a note when `gpu` was asked for). |
 | `--exact` | Frame-accurate cuts; a [smart cut](#smart-cut) where possible. |
+| `--frames START..END` | Only output frames `START` to `END` (not included), picture only: one part for `geneva join`. Not with `--for`. |
+| `--audio-only` | Only the sound, as the sound part for `join`. Not with `--for` or `--no-audio`. |
 | `--assets DIR` | Asset root. |
+
+### `geneva plan <timeline> -o FILE --parts N`
+
+Cuts a render into `N` picture parts and one sound part that separate
+processes or machines can render at the same time, and prints the
+command for each and the `join` that puts them together. The
+boundaries come from the planner behind `encode.video.chunks`: clip
+starts when one is within a quarter of a part, else the keyframe grid,
+else an even split. A part is at least 2 seconds, so a short output
+gets fewer than `N` (reported as N600). The parts are named after `-o`
+and take its container: `out.part-000.mp4` and so on, and
+`out.audio.mp4`. JSON: `parts[]` with `frames` (`[start, end]`),
+`start` and `end` in seconds, `output` and `command`; `audio` with
+`output` and `command`, or `null` for a container without sound; and
+`join`.
+
+```text
+$ geneva plan talk.json -o out.mp4 --parts 3
+3 parts of 5400 frames in all; run each of these, on any machine with the same geneva and the assets:
+  geneva render talk.json --frames 0..1800 -o out.part-000.mp4
+  geneva render talk.json --frames 1800..3600 -o out.part-001.mp4
+  geneva render talk.json --frames 3600..5400 -o out.part-002.mp4
+  geneva render talk.json --audio-only -o out.audio.mp4
+then put them together:
+  geneva join talk.json out.part-000.mp4 out.part-001.mp4 out.part-002.mp4 --audio out.audio.mp4 -o out.mp4
+```
+
+Refused (E504, exit 3) for a document with `outputs`, a bitrate target
+or ceiling (it holds over the whole file and each part would restart
+it), an image sequence, or an output with no picture.
+
+### `geneva join <timeline> <part>... [--audio FILE] -o FILE`
+
+Puts the parts together without re-encoding: the picture parts in
+order, the sound part beside them, and the timeline's subtitle tracks
+and fast start as `render` would write them. Parts that do not add up
+to the timeline's frame count are refused, so a missing or repeated
+part is an error rather than a shorter file. Parts whose encoder
+parameters differ are refused, and the message names the difference.
+Without `--audio` the output has no sound, with a warning when the
+timeline has some.
+
+### `geneva farm <timeline> -o FILE`
+
+Renders the timeline on several machines at once: the parts `plan`
+describes are handed to `geneva worker` processes as they ask for them,
+and joined when all are back. With no other workers it renders on this
+machine alone (one local worker by default), so the same command serves
+one machine and many.
+
+```text
+$ geneva farm talk.json -o out.mp4 --parts 12
+farm: 13 parts at http://192.168.1.20:41237; start workers with
+  geneva worker --connect http://192.168.1.20:41237 --token 3b8b6d76...
+```
+
+Workers pull parts: a faster machine asks more often and renders more,
+a worker can connect at any time, and a part whose worker has not sent
+it back within `--part-timeout` is given to another as well; the first
+copy to arrive is kept. Near the end, a part running more than twice as
+long as the median part is given to a second worker too. A part that
+fails three times fails the render. The notes say how many parts each
+worker rendered.
+
+| Option | Effect |
+| --- | --- |
+| `--parts N` | Picture parts; one per 10 seconds of output by default, each at least 2 seconds. The sound is one more part. |
+| `--local N` | Workers started on this machine, 1 by default. Each uses every core, so more rarely helps. `0` for only the workers that connect. |
+| `--launch COMMAND` | A shell command that starts one worker elsewhere, run `--launch-count` times (once per part by default) with `GENEVA_FARM_URL`, `GENEVA_FARM_TOKEN` and `GENEVA_FARM_WORKER` (0, 1, ...) set, which `geneva worker` reads. For example `ssh box2 geneva worker` or `docker run -e GENEVA_FARM_URL -e GENEVA_FARM_TOKEN image geneva worker`. |
+| `--listen HOST:PORT` | Where workers connect. A free port on every interface by default; the printed address is the one the route out of this machine uses. |
+| `--url URL` | The address workers are given, printed and passed to `--launch`, when they reach this machine another way than at the listening address: a forwarded port, a tunnel, a load balancer. |
+| `--token TOKEN` | The secret workers present (`GENEVA_FARM_TOKEN`). Random by default. |
+| `--part-timeout SECONDS` | How long a part may take before another worker gets it too; 600 by default. |
+| `--crf`, `--preset`, `--no-audio` | As for `render`; the workers use them. |
+
+The farm sends each worker the timeline and every file it reads: the
+assets, and the pictures and stylesheets its markup points at, at the
+same paths relative to the root. Files outside the asset root are
+refused. Fonts the machine provides are not sent; a worker whose own
+load reports something the farm's did not (a missing font family, a
+file it cannot decode) says so and renders nothing, since its parts
+would differ. A generic family such as `sans-serif` is drawn in each
+machine's own face without a word; with `--no-system-fonts` on the
+farm, every worker draws only in the document's fonts and the built-in
+one, as the farm does. A worker running another geneva version, or with
+x264 where the farm has none or the other way round, is refused when it
+connects.
+
+`GET /status` (JSON) and `GET /metrics` (Prometheus text: parts pending,
+running and done, and workers) need no token, so an autoscaler can add
+workers while parts are waiting. Everything else needs the token.
+Nothing is encrypted: across a network you do not trust, use a tunnel
+or a proxy that adds TLS.
+
+Workers fetch MP4 and MOV sources in byte ranges: the container's
+header and index, the opening second of each track, all of the sound,
+and the picture packets from the keyframe before each part's stretch to
+its end. The rest of the file stays a hole in a sparse file on the
+worker, and a worker that takes another part fetches only what it does
+not have yet. To find the ranges, the farm reads every packet header of
+each such source once before it starts. Other containers, images,
+fonts, and any file used inside a nested composition or as a mask are
+fetched whole. The farm's closing note gives the bytes workers fetched
+next to what whole copies would have cost; on an 80 s, 37 MB source cut
+into 8 parts for 4 workers it was 62.5 MB against 149 MB. Footage far
+from the workers still costs its transfer time, on less of it.
+
+### `geneva worker --connect URL --token TOKEN`
+
+Connects to a farm, fetches the timeline and its files, renders parts
+until the farm has none left, and exits. `--connect` and `--token`
+default to `GENEVA_FARM_URL` and `GENEVA_FARM_TOKEN`. `--name` labels it
+in the farm's notes (the host name by default). `--dir DIR` keeps the
+files there between jobs instead of in a temporary directory removed at
+the end. `--stop-after SECONDS` (`GENEVA_WORKER_STOP_AFTER`) takes no
+new part once that long has passed, for a worker that is stopped at a
+known time; the part it has is finished. A worker waits up to 30
+seconds for a farm that is not answering yet, and stops when a farm it
+was working for stops answering. Exit 3 (E505) when it could not take
+part at all.
+
+Starting workers over SSH, in Docker, on Kubernetes, ECS and AWS
+Lambda, and the image for the last three: [farm.md](farm.md).
+
+What is different from one `render`, for `join` and `farm` alike:
+
+- Every part is encoded by the CPU renderer's path (or the direct path
+  where the picture is a source's own). The `copy`, `copy-picture` and
+  `smart` [modes](#output-modes) are not used, so a timeline that one
+  render would copy is slower and larger in parts.
+- Each part restarts the encoder's rate control, so the bits differ
+  from a single run; the pixels barely do (above 40 dB PSNR in the
+  tests).
+- Every machine needs the same geneva and the same encoder: a part
+  from a machine with x264 and one from a machine without are refused
+  at the join. Give every part the same `--crf` and `--preset`.
+- The assets must be on every machine, at the same paths relative to
+  the timeline (or `--assets`).
 
 ### `geneva probe <file>`
 
@@ -112,7 +252,7 @@ The `--for` table below, with each platform number's source and date.
 
 A page of this manual, carried in the binary. No topic: the agent
 guide. Topics: `agents`, `timeline`, `cli`, `errors`, `color`,
-`architecture`. JSON: `{"topic", "about", "text"}`.
+`architecture`, `farm`. JSON: `{"topic", "about", "text"}`.
 
 ### `geneva explain <CODE> [--list]`
 

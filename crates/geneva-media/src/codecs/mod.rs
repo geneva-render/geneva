@@ -6,6 +6,7 @@ mod direct;
 mod encode;
 mod ffi;
 mod h264;
+mod packets;
 mod probe;
 mod scale;
 mod smartcut;
@@ -31,6 +32,7 @@ pub use encode::{
 pub use ffi::HdrMetadata;
 /// An encoded packet on its way to the muxer.
 pub use ffmpeg_next::Packet;
+pub use packets::packet_map;
 pub use probe::{hdr_metadata_of, probe};
 pub use scale::PlaneScaler;
 pub use smartcut::{

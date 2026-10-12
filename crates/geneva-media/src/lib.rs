@@ -21,6 +21,7 @@ mod info;
 mod levels;
 #[cfg(feature = "media")]
 pub mod mix;
+pub mod ranges;
 mod render;
 pub mod subtitles;
 
@@ -30,6 +31,8 @@ use thiserror::Error;
 
 #[cfg(feature = "media")]
 pub use assets::MediaAssets;
+#[cfg(feature = "media")]
+pub use codecs::packet_map;
 #[cfg(feature = "media")]
 pub use codecs::{
     AudioCopy, AudioEncoder, AudioGrid, AudioReader, AudioSegment, AudioSettings, CopiedPacket,

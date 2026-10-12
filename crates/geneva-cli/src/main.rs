@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+mod farm;
 mod guide;
 mod media;
 mod targets;
@@ -78,6 +79,17 @@ enum Command {
     Frame(FrameArgs),
     /// Render a whole timeline to a video file.
     Render(RenderArgs),
+    /// Split a render into parts that separate processes or machines can
+    /// render at the same time, and print the commands for each.
+    Plan(PlanArgs),
+    /// Put parts written by `render --frames` and `render --audio-only`
+    /// together into the output, without re-encoding.
+    Join(JoinArgs),
+    /// Render a timeline on several machines: hand its parts out to
+    /// `geneva worker` processes, here and elsewhere, and join them.
+    Farm(FarmArgs),
+    /// Render parts for a `geneva farm` until it has none left.
+    Worker(WorkerArgs),
     /// Show what a media file contains.
     Probe(ProbeArgs),
     /// Print the JSON Schema of the timeline format.
@@ -227,6 +239,145 @@ struct RenderArgs {
     /// cut); otherwise everything is re-encoded.
     #[arg(long)]
     exact: bool,
+    /// Render only output frames START..END (END not included), picture
+    /// only, as one part for `geneva join`. `geneva plan` says which
+    /// ranges to use.
+    #[arg(long, value_name = "START..END", conflicts_with_all = ["audio_only", "for_"])]
+    frames: Option<FrameRange>,
+    /// Render only the sound, as the sound part for `geneva join`.
+    #[arg(long, conflicts_with_all = ["no_audio", "for_"])]
+    audio_only: bool,
+}
+
+/// A range of output frames, written START..END.
+#[derive(Clone)]
+struct FrameRange(std::ops::Range<u64>);
+
+impl std::str::FromStr for FrameRange {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (a, b) = s
+            .split_once("..")
+            .ok_or_else(|| format!("{s:?} is not START..END, such as 0..240"))?;
+        let parse = |t: &str| {
+            t.trim()
+                .parse::<u64>()
+                .map_err(|_| format!("{t:?} is not a frame number"))
+        };
+        let (start, end) = (parse(a)?, parse(b)?);
+        if start >= end {
+            return Err(format!("{s:?} is empty: the end must be past the start"));
+        }
+        Ok(Self(start..end))
+    }
+}
+
+#[derive(Args)]
+struct PlanArgs {
+    #[command(flatten)]
+    timeline: TimelineArgs,
+    /// The final output file. The parts take its container and are named
+    /// after it.
+    #[arg(short, long, value_name = "FILE")]
+    output: PathBuf,
+    /// How many picture parts to cut the output into. Each part is at
+    /// least 2 seconds, so a short output gets fewer.
+    #[arg(long, value_name = "N")]
+    parts: u32,
+}
+
+#[derive(Args)]
+struct FarmArgs {
+    #[command(flatten)]
+    timeline: TimelineArgs,
+    /// Output file.
+    #[arg(short, long, value_name = "FILE")]
+    output: PathBuf,
+    /// How many picture parts; one per 10 seconds of output by default.
+    /// Each is at least 2 seconds.
+    #[arg(long, value_name = "N")]
+    parts: Option<u32>,
+    /// Address to listen on for workers. A random free port on every
+    /// interface by default; the command for starting a worker is
+    /// printed with the address to use.
+    #[arg(long, value_name = "HOST:PORT", default_value = "0.0.0.0:0")]
+    listen: String,
+    /// The address workers are given, when they reach this machine some
+    /// other way than at the listening address: through a forwarded
+    /// port, a tunnel or a load balancer.
+    #[arg(long, value_name = "URL")]
+    url: Option<String>,
+    /// The secret workers must present. Random by default, and printed.
+    #[arg(long, value_name = "TOKEN", env = "GENEVA_FARM_TOKEN")]
+    token: Option<String>,
+    /// Workers to start on this machine. Each renders one part at a time
+    /// on all the cores, so more than one here rarely helps. 0 renders
+    /// only on workers that connect.
+    #[arg(long, value_name = "N", default_value_t = 1)]
+    local: u32,
+    /// A shell command that starts one worker somewhere, run
+    /// --launch-count times with GENEVA_FARM_URL, GENEVA_FARM_TOKEN and
+    /// GENEVA_FARM_WORKER (0, 1, ...) in its environment, for example
+    /// "ssh box2 geneva worker" or "docker run ... geneva worker".
+    #[arg(long, value_name = "COMMAND")]
+    launch: Option<String>,
+    /// How many times to run --launch; once per part by default.
+    #[arg(long, value_name = "N", requires = "launch")]
+    launch_count: Option<u32>,
+    /// Seconds a part may take before it is given to another worker as
+    /// well, in case its worker has gone.
+    #[arg(long, value_name = "SECONDS", default_value_t = 600)]
+    part_timeout: u64,
+    /// Constant-quality level, overriding the timeline.
+    #[arg(long)]
+    crf: Option<u8>,
+    /// Encoder preset, overriding the timeline.
+    #[arg(long)]
+    preset: Option<String>,
+    /// Write no audio track.
+    #[arg(long)]
+    no_audio: bool,
+}
+
+#[derive(Args)]
+struct WorkerArgs {
+    /// The farm's address, http://host:port, as `geneva farm` prints it.
+    #[arg(long, value_name = "URL", env = "GENEVA_FARM_URL")]
+    connect: String,
+    /// The farm's token.
+    #[arg(long, value_name = "TOKEN", env = "GENEVA_FARM_TOKEN")]
+    token: String,
+    /// A name for this worker in the farm's report; the host name by
+    /// default.
+    #[arg(long)]
+    name: Option<String>,
+    /// Where to keep the timeline's files and the parts while working. A
+    /// new directory under the system's temporary one by default,
+    /// removed at the end; a directory given here is kept, so a second
+    /// job with the same files does not fetch them again.
+    #[arg(long, value_name = "DIR")]
+    dir: Option<PathBuf>,
+    /// Take no new part once this many seconds have passed, for a worker
+    /// that will be stopped at a known time, such as a serverless
+    /// function with a time limit. A part already taken is finished.
+    #[arg(long, value_name = "SECONDS", env = "GENEVA_WORKER_STOP_AFTER")]
+    stop_after: Option<u64>,
+}
+
+#[derive(Args)]
+struct JoinArgs {
+    #[command(flatten)]
+    timeline: TimelineArgs,
+    /// The picture parts, in order.
+    #[arg(required = true, value_name = "PART")]
+    parts: Vec<PathBuf>,
+    /// The sound part, from `render --audio-only`.
+    #[arg(long, value_name = "FILE")]
+    audio: Option<PathBuf>,
+    /// Output file.
+    #[arg(short, long, value_name = "FILE")]
+    output: PathBuf,
 }
 
 #[derive(Args)]
@@ -708,6 +859,12 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 exact: args.exact,
                 picture_as_is: false,
             };
+            let part = match (&args.frames, args.audio_only) {
+                (Some(range), _) => Some(media::Part::Frames(range.0.clone())),
+                (None, true) => Some(media::Part::Audio),
+                (None, false) => None,
+            };
+            let job = part.as_ref().map_or(RenderJob::Whole, RenderJob::Part);
             render_to(
                 &loaded,
                 &args.timeline.root(),
@@ -715,6 +872,74 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 &overrides,
                 cli.format,
                 size_limit.as_ref(),
+                &job,
+            )
+        }
+        Command::Plan(args) => plan_parts(&args, cli.format),
+        Command::Farm(args) => {
+            let text = std::fs::read_to_string(&args.timeline.timeline)
+                .with_context(|| format!("reading {}", args.timeline.timeline.display()))?;
+            let root = args.timeline.root();
+            let (loaded, files) = load_text_listing_files(&text, &root);
+            let parts = args.parts.unwrap_or_else(|| {
+                loaded
+                    .composition
+                    .as_ref()
+                    .map_or(1, |c| (c.duration.to_f64() / 10.0).ceil().max(1.0) as u32)
+            });
+            let options = farm::FarmOptions {
+                parts,
+                listen: args.listen.clone(),
+                url: args.url.clone(),
+                token: args.token.clone(),
+                local: args.local,
+                launch: args.launch.clone(),
+                launch_count: args.launch_count,
+                part_timeout: std::time::Duration::from_secs(args.part_timeout),
+                files,
+                timeline: text,
+                diagnostics: farm::diagnostic_keys(&loaded.diagnostics),
+            };
+            let overrides = media::RenderOverrides {
+                renderer: media::RendererChoice::Cpu,
+                crf: args.crf,
+                preset: args.preset.clone(),
+                no_audio: args.no_audio,
+                exact: false,
+                picture_as_is: false,
+            };
+            render_to(
+                &loaded,
+                &root,
+                &args.output,
+                &overrides,
+                cli.format,
+                None,
+                &RenderJob::Farm(&options),
+            )
+        }
+        Command::Worker(args) => run_worker(&args, cli.format),
+        Command::Join(args) => {
+            let loaded = load_timeline(&args.timeline, true, false)?;
+            let overrides = media::RenderOverrides {
+                renderer: media::RendererChoice::Cpu,
+                crf: None,
+                preset: None,
+                no_audio: false,
+                exact: false,
+                picture_as_is: false,
+            };
+            render_to(
+                &loaded,
+                &args.timeline.root(),
+                &args.output,
+                &overrides,
+                cli.format,
+                None,
+                &RenderJob::Join {
+                    parts: &args.parts,
+                    audio: args.audio.as_deref(),
+                },
             )
         }
         Command::Convert(args) => {
@@ -988,6 +1213,7 @@ fn run_verb(
         &overrides,
         format,
         size_limit.as_ref(),
+        &RenderJob::Whole,
     )
 }
 
@@ -1060,6 +1286,252 @@ fn apply_target(
 }
 
 /// Renders a loaded timeline to `output` and reports the outcome.
+/// Plans a render in parts: the frame ranges, the file each part is
+/// written to and the command that writes it, and the command that joins
+/// them. The ranges come from the same planner as chunked encoding.
+fn plan_parts(args: &PlanArgs, format: Format) -> Result<ExitCode> {
+    let loaded = load_timeline(&args.timeline, true, false)?;
+    let Some(comp) = &loaded.composition else {
+        report(&loaded.diagnostics, format, None)?;
+        return Ok(ExitCode::from(EXIT_INVALID));
+    };
+    let mut diagnostics = loaded.diagnostics.clone();
+    let has_sound = match media::can_split(comp, &args.output) {
+        Ok(sound) => sound,
+        Err(reason) => {
+            diagnostics.push(
+                Diagnostic::error("E504", "", format!("cannot render in parts: {reason}"))
+                    .with_help("render it in one run with `geneva render`"),
+            );
+            report(
+                &diagnostics,
+                format,
+                Some(serde_json::json!({ "ok": false, "reason": reason })),
+            )?;
+            return Ok(ExitCode::from(EXIT_RENDER));
+        }
+    };
+    let keyframe_interval = comp
+        .encode
+        .as_ref()
+        .and_then(|e| e.video.as_ref())
+        .and_then(|v| v.keyframe_interval);
+    let ranges = geneva_media::chunks::split_frames(comp, keyframe_interval, args.parts.max(1));
+    let dir = args
+        .output
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    let stem = args
+        .output
+        .file_stem()
+        .map_or_else(|| "output".to_owned(), |s| s.to_string_lossy().into_owned());
+    let ext = args
+        .output
+        .extension()
+        .map_or_else(|| "mkv".to_owned(), |e| e.to_string_lossy().into_owned());
+    let mut base = vec![
+        "geneva".to_owned(),
+        "render".to_owned(),
+        args.timeline.timeline.display().to_string(),
+    ];
+    if let Some(assets) = &args.timeline.assets {
+        base.extend(["--assets".to_owned(), assets.display().to_string()]);
+    }
+    let command = |extra: &[String]| {
+        base.iter()
+            .chain(extra)
+            .map(|w| shell_word(w))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let seconds = |f: u64| (Ratio::from_int(f as i64) / comp.fps).to_f64();
+    let mut part_files = Vec::new();
+    let parts: Vec<serde_json::Value> = ranges
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let file = dir.join(format!("{stem}.part-{i:03}.{ext}"));
+            part_files.push(file.display().to_string());
+            serde_json::json!({
+                "frames": [r.start, r.end],
+                "start": seconds(r.start),
+                "end": seconds(r.end),
+                "output": file,
+                "command": command(&[
+                    "--frames".to_owned(),
+                    format!("{}..{}", r.start, r.end),
+                    "-o".to_owned(),
+                    file.display().to_string(),
+                ]),
+            })
+        })
+        .collect();
+    let audio_file = has_sound.then(|| dir.join(format!("{stem}.audio.{ext}")));
+    let audio = audio_file.as_ref().map(|file| {
+        serde_json::json!({
+            "output": file,
+            "command": command(&[
+                "--audio-only".to_owned(),
+                "-o".to_owned(),
+                file.display().to_string(),
+            ]),
+        })
+    });
+    let mut join = vec![
+        "geneva".to_owned(),
+        "join".to_owned(),
+        args.timeline.timeline.display().to_string(),
+    ];
+    if let Some(assets) = &args.timeline.assets {
+        join.extend(["--assets".to_owned(), assets.display().to_string()]);
+    }
+    join.extend(part_files);
+    if let Some(file) = &audio_file {
+        join.extend(["--audio".to_owned(), file.display().to_string()]);
+    }
+    join.extend(["-o".to_owned(), args.output.display().to_string()]);
+    let join = join
+        .iter()
+        .map(|w| shell_word(w))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if ranges.len() < args.parts as usize {
+        diagnostics.push(Diagnostic::note(
+            "N600",
+            "",
+            format!(
+                "{} parts rather than {}: each part is at least 2 seconds",
+                ranges.len(),
+                args.parts
+            ),
+        ));
+    }
+    let result = serde_json::json!({
+        "ok": true,
+        "output": args.output,
+        "frames": comp.frame_count(),
+        "duration": comp.duration,
+        "parts": parts,
+        "audio": audio,
+        "join": join,
+    });
+    if format == Format::Human {
+        report(&diagnostics, format, None)?;
+        println!(
+            "{} parts of {} frames in all; run each of these, on any machine with the same geneva and the assets:",
+            ranges.len(),
+            comp.frame_count()
+        );
+        for p in &parts {
+            println!("  {}", p["command"].as_str().unwrap_or_default());
+        }
+        if let Some(a) = &audio {
+            println!("  {}", a["command"].as_str().unwrap_or_default());
+        }
+        println!("then put them together:\n  {join}");
+    } else {
+        report(&diagnostics, format, Some(result))?;
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `word` as one word for a POSIX shell: as it is when it has nothing
+/// the shell reads, otherwise in single quotes.
+fn shell_word(word: &str) -> String {
+    let plain = !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./=:,+@%".contains(c));
+    if plain {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', r"'\''"))
+    }
+}
+
+/// Runs `geneva worker`: renders parts for a farm until it has none
+/// left, and reports what it did.
+fn run_worker(args: &WorkerArgs, format: Format) -> Result<ExitCode> {
+    let name = args.name.clone().unwrap_or_else(|| {
+        std::env::var("HOSTNAME")
+            .or_else(|_| std::env::var("COMPUTERNAME"))
+            .unwrap_or_else(|_| "worker".to_owned())
+    });
+    let load = |text: &str, root: &Path| load_text(text, root, true, false);
+    let result = farm::work(
+        &args.connect,
+        &args.token,
+        &name,
+        args.dir.as_deref(),
+        args.stop_after.map(std::time::Duration::from_secs),
+        &load,
+        format.progress(),
+        format == Format::Human,
+    );
+    match result {
+        Ok(report) => {
+            let parts: Vec<serde_json::Value> = report
+                .parts
+                .iter()
+                .map(|(i, what, secs)| serde_json::json!({ "part": i, "what": what, "seconds": secs }))
+                .collect();
+            if let Some(reason) = &report.refused {
+                let diagnostics = vec![Diagnostic::error("E505", "", reason.clone())];
+                report_diagnostics_or_json(
+                    &diagnostics,
+                    format,
+                    serde_json::json!({ "ok": false, "parts": parts }),
+                )?;
+                return Ok(ExitCode::from(EXIT_RENDER));
+            }
+            if format == Format::Human {
+                let why = if report.stopped {
+                    "the --stop-after time has passed"
+                } else {
+                    "the farm has no more"
+                };
+                println!("rendered {} parts; {why}", parts.len());
+            } else {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "parts": parts,
+                        "stopped": report.stopped,
+                    }))?
+                );
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(reason) => {
+            let diagnostics = vec![Diagnostic::error("E505", "", reason)];
+            report_diagnostics_or_json(&diagnostics, format, serde_json::json!({ "ok": false }))?;
+            Ok(ExitCode::from(EXIT_RENDER))
+        }
+    }
+}
+
+fn report_diagnostics_or_json(
+    diagnostics: &[Diagnostic],
+    format: Format,
+    result: serde_json::Value,
+) -> Result<()> {
+    report(diagnostics, format, Some(result))
+}
+
+/// What `render_to` writes: the whole output, one part of it for a
+/// render split across machines, or the parts put together.
+enum RenderJob<'a> {
+    Whole,
+    Part(&'a media::Part),
+    Join {
+        parts: &'a [PathBuf],
+        audio: Option<&'a Path>,
+    },
+    Farm(&'a farm::FarmOptions),
+}
+
 fn render_to(
     loaded: &Loaded,
     root: &Path,
@@ -1067,17 +1539,33 @@ fn render_to(
     overrides: &media::RenderOverrides,
     format: Format,
     size_limit: Option<&(String, u64)>,
+    job: &RenderJob<'_>,
 ) -> Result<ExitCode> {
     let Some(comp) = &loaded.composition else {
         report(&loaded.diagnostics, format, None)?;
         return Ok(ExitCode::from(EXIT_INVALID));
     };
-    if !comp.outputs.is_empty() {
+    if !comp.outputs.is_empty() && matches!(job, RenderJob::Whole) {
         return render_outputs_to(loaded, comp, root, output, overrides, format, size_limit);
     }
     let mut diagnostics = loaded.diagnostics.clone();
     let progress = media::Progress::new(format.progress());
-    match media::render(comp, root, output, overrides, &progress) {
+    let rendered = match job {
+        RenderJob::Whole => media::render(comp, root, output, overrides, &progress),
+        RenderJob::Part(part) => media::render_part(comp, root, output, overrides, part, &progress),
+        RenderJob::Join { parts, audio } => {
+            media::join_parts(comp, root, output, overrides, parts, *audio)
+        }
+        RenderJob::Farm(options) => farm::run(
+            comp,
+            root,
+            output,
+            overrides,
+            options,
+            format == Format::Human,
+        ),
+    };
+    match rendered {
         Ok(stats) => {
             for note in &stats.notes {
                 diagnostics.push(Diagnostic::note("N600", "", note.clone()));
@@ -1390,6 +1878,24 @@ fn load_compiled(text: &str, root: &Path) -> Loaded {
 /// `measure` also decodes the audio of every asset for its report.
 fn load_text(text: &str, root: &Path, probe: bool, measure: bool) -> Loaded {
     load_text_with(text, root, probe, measure, false)
+}
+
+/// Loads a timeline as `render` does, and names every file under the
+/// root the load read or looked for: the assets' `src` and the files
+/// markup points at. These are what another machine needs to render it.
+#[cfg_attr(not(feature = "media"), allow(dead_code))]
+fn load_text_listing_files(text: &str, root: &Path) -> (Loaded, Vec<String>) {
+    let info = media::probe_assets(text, root, false);
+    let mut loaded = geneva_timeline::load_with(text, &info);
+    loaded.diagnostics.extend(info.diagnostics());
+    if loaded.diagnostics.iter().any(Diagnostic::is_error) {
+        loaded.composition = None;
+    }
+    let mut files: std::collections::BTreeSet<String> = info.touched().into_iter().collect();
+    if let Ok(timeline) = geneva_timeline::parse(text) {
+        files.extend(timeline.assets.values().map(|a| a.src.clone()));
+    }
+    (loaded, files.into_iter().collect())
 }
 
 fn load_text_with(
