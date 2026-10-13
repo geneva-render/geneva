@@ -156,7 +156,7 @@ geneva farm talk.json -o talk.mp4 --parts 12
 geneva worker --connect http://192.168.1.20:41237 --token 3b8b6d76...   # on each other machine
 ```
 
-A document with several renditions under `outputs` is farmed into a directory, the parts of every rendition in one queue. One with a bitrate target or ceiling (`bitrate_kbps`, `max_bitrate_kbps`) is refused, since each part would hold it on its own rather than over the whole file. Launch commands for SSH, Docker, Kubernetes, ECS and Lambda, and the worker image: [docs/farm.md](docs/farm.md).
+A document that writes several files, such as a 1080p and a 720p version, works the same way: every file is rendered at once and they land in one folder. How to start workers over SSH, in Docker, on Kubernetes, ECS or AWS Lambda: [docs/farm.md](docs/farm.md).
 
 ## Status
 
