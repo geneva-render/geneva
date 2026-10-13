@@ -88,6 +88,7 @@ for pictures and video. A sprite sheet's `.vtt` is its own row (`kind`
 | `--exact` | Frame-accurate cuts; a [smart cut](#smart-cut) where possible. |
 | `--frames START..END` | Only output frames `START` to `END` (not included), picture only: one part for `geneva join`. Not with `--for`. |
 | `--audio-only` | Only the sound, as the sound part for `join`. Not with `--for` or `--no-audio`. |
+| `--rendition NAME` | With `--frames` or `--audio-only`, a part of the `video` entry `NAME` of the document's `outputs`: at its size, with its encode and audio settings. |
 | `--assets DIR` | Asset root. |
 
 ### `geneva plan <timeline> -o FILE --parts N`
@@ -116,9 +117,12 @@ then put them together:
   geneva join talk.json out.part-000.mp4 out.part-001.mp4 out.part-002.mp4 --audio out.audio.mp4 -o out.mp4
 ```
 
-Refused (E504, exit 3) for a document with `outputs`, a bitrate target
-or ceiling (it holds over the whole file and each part would restart
-it), an image sequence, or an output with no picture.
+A document with `outputs` needs `--rendition NAME`: the plan is for
+that `video` entry, at its size and with its encode and audio settings,
+and every command it prints carries the flag. Refused (E504, exit 3)
+for a bitrate target or ceiling (it holds over the whole file and each
+part would restart it), an image sequence, or an output with no
+picture.
 
 ### `geneva join <timeline> <part>... [--audio FILE] -o FILE`
 
@@ -129,9 +133,10 @@ to the timeline's frame count are refused, so a missing or repeated
 part is an error rather than a shorter file. Parts whose encoder
 parameters differ are refused, and the message names the difference.
 Without `--audio` the output has no sound, with a warning when the
-timeline has some.
+timeline has some. `--rendition NAME` joins parts of that `video` entry
+of `outputs`.
 
-### `geneva farm <timeline> -o FILE`
+### `geneva farm <timeline> -o FILE|DIR`
 
 Renders the timeline on several machines at once: the parts `plan`
 describes are handed to `geneva worker` processes as they ask for them,
@@ -152,6 +157,15 @@ copy to arrive is kept. Near the end, a part running more than twice as
 long as the median part is given to a second worker too. A part that
 fails three times fails the render. The notes say how many parts each
 worker rendered.
+
+For a document with `outputs`, `-o` is a directory, as for `render`.
+Every `video` entry is cut into `--parts` picture parts and a sound
+part of its own, all of them in one queue, and each entry's parts are
+joined into its file. The frames are composited at the canvas size and
+scaled to the entry's, as `render -o DIR` does, but once per entry
+rather than once for all, and no entry is stream-copied. Posters,
+sprites and `audio` entries are made on the farm's machine while the
+workers render.
 
 | Option | Effect |
 | --- | --- |

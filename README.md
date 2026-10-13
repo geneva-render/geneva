@@ -156,7 +156,7 @@ geneva farm talk.json -o talk.mp4 --parts 12
 geneva worker --connect http://192.168.1.20:41237 --token 3b8b6d76...   # on each other machine
 ```
 
-Documents encoded at constant quality, the default, split as they are. Two kinds are refused: one with a bitrate target or ceiling (`bitrate_kbps`, `max_bitrate_kbps`), since each part would hold it on its own rather than over the whole file, and one that lists several renditions under `outputs` (farm each rendition as its own document). Launch commands for SSH, Docker, Kubernetes, ECS and Lambda, and the worker image: [docs/farm.md](docs/farm.md).
+A document with several renditions under `outputs` is farmed into a directory, the parts of every rendition in one queue. One with a bitrate target or ceiling (`bitrate_kbps`, `max_bitrate_kbps`) is refused, since each part would hold it on its own rather than over the whole file. Launch commands for SSH, Docker, Kubernetes, ECS and Lambda, and the worker image: [docs/farm.md](docs/farm.md).
 
 ## Status
 

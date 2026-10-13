@@ -2,7 +2,7 @@
 
 `geneva farm` splits a render into parts and hands them to `geneva
 worker` processes that connect to it. The commands and their options
-are in [cli.md](cli.md#geneva-farm-timeline--o-file); this page is about
+are in [cli.md](cli.md#geneva-farm-timeline--o-filedir); this page is about
 where the workers come from.
 
 A worker needs three things: the same geneva build as the farm (and

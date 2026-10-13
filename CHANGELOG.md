@@ -17,8 +17,9 @@ versions changed the format freely.
   without re-encoding, with the subtitle tracks and fast start of a
   single render, and refuses parts that are missing or were encoded
   with other settings. Parts always re-encode the picture, so copy and
-  smart cut are not used; bitrate targets, image sequences and
-  documents with `outputs` are refused. See
+  smart cut are not used; bitrate targets and image sequences are
+  refused. For a document with `outputs`, `--rendition NAME` plans,
+  renders and joins one `video` entry. See
   [docs/cli.md](docs/cli.md).
 - **`geneva farm` and `geneva worker`.** A farm hands a render's parts
   to workers on any machines that connect (over SSH, in containers, on
@@ -33,7 +34,10 @@ versions changed the format freely.
   read; other files, and those inside nested compositions or used as
   masks, go whole. A farm started with `--no-system-fonts` has every
   worker draw text the same way, in the document's fonts and the
-  built-in one.
+  built-in one. A document with `outputs` is farmed into a directory:
+  the parts of every `video` entry go in one queue and are joined into
+  each entry's file, and posters, sprites and `audio` entries are made
+  on the farm's machine.
 - **A `Dockerfile` for workers, and ways to start them.** The image
   runs `geneva worker` by default and answers AWS Lambda invocations
   when run as a function. `geneva farm --url` gives workers an address

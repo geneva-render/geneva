@@ -227,6 +227,7 @@ decoded once.
 - A field not belonging to the kind: E430.
 - A `video` entry at canvas size with no encode settings can be [stream-copied](architecture.md#stream-copy); others are encoded, each in its own thread. `--crf`, `--preset`, `--exact` encode every video entry.
 - With no video entry, only the frames the pictures need are composited.
+- `geneva farm` renders the `video` entries on several machines; see [cli.md](cli.md#geneva-farm-timeline--o-filedir).
 
 ### `assets`
 

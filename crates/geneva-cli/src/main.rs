@@ -247,6 +247,10 @@ struct RenderArgs {
     /// Render only the sound, as the sound part for `geneva join`.
     #[arg(long, conflicts_with_all = ["no_audio", "for_"])]
     audio_only: bool,
+    /// With --frames or --audio-only, a part of this `video` entry of
+    /// the document's `outputs`: its size and encode settings.
+    #[arg(long, value_name = "NAME")]
+    rendition: Option<String>,
 }
 
 /// A range of output frames, written START..END.
@@ -285,14 +289,19 @@ struct PlanArgs {
     /// least 2 seconds, so a short output gets fewer.
     #[arg(long, value_name = "N")]
     parts: u32,
+    /// Plan this `video` entry of the document's `outputs`, which a
+    /// document with `outputs` needs.
+    #[arg(long, value_name = "NAME")]
+    rendition: Option<String>,
 }
 
 #[derive(Args)]
 struct FarmArgs {
     #[command(flatten)]
     timeline: TimelineArgs,
-    /// Output file.
-    #[arg(short, long, value_name = "FILE")]
+    /// Output file, or the directory a document with `outputs` writes
+    /// into.
+    #[arg(short, long, value_name = "FILE|DIR")]
     output: PathBuf,
     /// How many picture parts; one per 10 seconds of output by default.
     /// Each is at least 2 seconds.
@@ -378,6 +387,9 @@ struct JoinArgs {
     /// Output file.
     #[arg(short, long, value_name = "FILE")]
     output: PathBuf,
+    /// Join parts of this `video` entry of the document's `outputs`.
+    #[arg(long, value_name = "NAME")]
+    rendition: Option<String>,
 }
 
 #[derive(Args)]
@@ -851,6 +863,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     loaded.diagnostics.extend(extra);
                 }
             }
+            if args.rendition.is_some() && args.frames.is_none() && !args.audio_only {
+                anyhow::bail!("--rendition goes with --frames or --audio-only");
+            }
+            let size = narrow_to_rendition(&mut loaded, args.rendition.as_deref())?;
             let overrides = media::RenderOverrides {
                 renderer: args.renderer,
                 crf: args.crf,
@@ -858,6 +874,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 no_audio: args.no_audio,
                 exact: args.exact,
                 picture_as_is: false,
+                size,
             };
             let part = match (&args.frames, args.audio_only) {
                 (Some(range), _) => Some(media::Part::Frames(range.0.clone())),
@@ -907,6 +924,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 no_audio: args.no_audio,
                 exact: false,
                 picture_as_is: false,
+                size: None,
             };
             render_to(
                 &loaded,
@@ -920,7 +938,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
         Command::Worker(args) => run_worker(&args, cli.format),
         Command::Join(args) => {
-            let loaded = load_timeline(&args.timeline, true, false)?;
+            let mut loaded = load_timeline(&args.timeline, true, false)?;
+            let size = narrow_to_rendition(&mut loaded, args.rendition.as_deref())?;
             let overrides = media::RenderOverrides {
                 renderer: media::RendererChoice::Cpu,
                 crf: None,
@@ -928,6 +947,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 no_audio: false,
                 exact: false,
                 picture_as_is: false,
+                size,
             };
             render_to(
                 &loaded,
@@ -1205,6 +1225,7 @@ fn run_verb(
         no_audio: encode.no_audio,
         exact: encode.exact,
         picture_as_is,
+        size: None,
     };
     render_to(
         &loaded,
@@ -1289,8 +1310,22 @@ fn apply_target(
 /// Plans a render in parts: the frame ranges, the file each part is
 /// written to and the command that writes it, and the command that joins
 /// them. The ranges come from the same planner as chunked encoding.
+/// With `--rendition`, narrows `loaded` to that `video` entry of its
+/// `outputs` (see [`media::Rendition`]) and returns the size its picture
+/// is scaled to, when that is not the canvas.
+fn narrow_to_rendition(loaded: &mut Loaded, name: Option<&str>) -> Result<Option<(u32, u32)>> {
+    let (Some(name), Some(comp)) = (name, loaded.composition.as_mut()) else {
+        return Ok(None);
+    };
+    let rendition =
+        media::Rendition::named(comp, name).map_err(|e| anyhow::anyhow!("--rendition: {e}"))?;
+    *comp = rendition.comp;
+    Ok(rendition.size)
+}
+
 fn plan_parts(args: &PlanArgs, format: Format) -> Result<ExitCode> {
-    let loaded = load_timeline(&args.timeline, true, false)?;
+    let mut loaded = load_timeline(&args.timeline, true, false)?;
+    narrow_to_rendition(&mut loaded, args.rendition.as_deref())?;
     let Some(comp) = &loaded.composition else {
         report(&loaded.diagnostics, format, None)?;
         return Ok(ExitCode::from(EXIT_INVALID));
@@ -1337,6 +1372,9 @@ fn plan_parts(args: &PlanArgs, format: Format) -> Result<ExitCode> {
     ];
     if let Some(assets) = &args.timeline.assets {
         base.extend(["--assets".to_owned(), assets.display().to_string()]);
+    }
+    if let Some(name) = &args.rendition {
+        base.extend(["--rendition".to_owned(), name.clone()]);
     }
     let command = |extra: &[String]| {
         base.iter()
@@ -1385,6 +1423,9 @@ fn plan_parts(args: &PlanArgs, format: Format) -> Result<ExitCode> {
     ];
     if let Some(assets) = &args.timeline.assets {
         join.extend(["--assets".to_owned(), assets.display().to_string()]);
+    }
+    if let Some(name) = &args.rendition {
+        join.extend(["--rendition".to_owned(), name.clone()]);
     }
     join.extend(part_files);
     if let Some(file) = &audio_file {
@@ -1545,8 +1586,12 @@ fn render_to(
         report(&loaded.diagnostics, format, None)?;
         return Ok(ExitCode::from(EXIT_INVALID));
     };
-    if !comp.outputs.is_empty() && matches!(job, RenderJob::Whole) {
-        return render_outputs_to(loaded, comp, root, output, overrides, format, size_limit);
+    if !comp.outputs.is_empty() && matches!(job, RenderJob::Whole | RenderJob::Farm(_)) {
+        let farm = match job {
+            RenderJob::Farm(options) => Some(*options),
+            _ => None,
+        };
+        return render_outputs_to(loaded, root, output, overrides, format, size_limit, farm);
     }
     let mut diagnostics = loaded.diagnostics.clone();
     let progress = media::Progress::new(format.progress());
@@ -1655,16 +1700,23 @@ fn render_to(
 /// in one pass and reports each file written.
 fn render_outputs_to(
     loaded: &Loaded,
-    comp: &Composition,
     root: &Path,
     dir: &Path,
     overrides: &media::RenderOverrides,
     format: Format,
     size_limit: Option<&(String, u64)>,
+    farm: Option<&farm::FarmOptions>,
 ) -> Result<ExitCode> {
+    let comp = loaded.composition.as_ref().expect("checked by the caller");
     let mut diagnostics = loaded.diagnostics.clone();
     let progress = media::Progress::new(format.progress());
-    match media::render_outputs(comp, root, dir, overrides, &progress) {
+    let made = match farm {
+        Some(options) => {
+            farm::run_outputs(comp, root, dir, overrides, options, format == Format::Human)
+        }
+        None => media::render_outputs(comp, root, dir, overrides, &progress),
+    };
+    match made {
         Ok((outputs, stats)) => {
             for note in &stats.notes {
                 diagnostics.push(Diagnostic::note("N600", "", note.clone()));

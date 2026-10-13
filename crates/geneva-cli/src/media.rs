@@ -17,6 +17,8 @@ pub enum ProgressFormat {
     Human,
     /// One JSON object per line on stderr.
     Json,
+    /// Nothing, for work running beside something that reports its own.
+    Silent,
 }
 
 // Rendering is what reports progress, so in a build without media
@@ -60,6 +62,7 @@ impl Progress {
         let interval = match self.format {
             ProgressFormat::Human => HUMAN_INTERVAL,
             ProgressFormat::Json => JSON_INTERVAL,
+            ProgressFormat::Silent => return,
         };
         let now = Instant::now();
         if let Some(last) = self.last.get() {
@@ -73,7 +76,7 @@ impl Progress {
     /// Reports the finished run, closing the line a person reads. A run
     /// that rendered no frames says nothing.
     pub fn finish(&self, done: u64, total: u64, fps: f64) {
-        if done == 0 {
+        if done == 0 || self.format == ProgressFormat::Silent {
             return;
         }
         self.write(done, total, fps, Instant::now());
@@ -88,6 +91,7 @@ impl Progress {
         match self.format {
             ProgressFormat::Human => eprint!("\rframe {done}/{total}"),
             ProgressFormat::Json => eprintln!("{}", progress_line(done, total, fps, elapsed)),
+            ProgressFormat::Silent => {}
         }
     }
 }
@@ -175,6 +179,7 @@ mod progress_tests {
 }
 
 /// Encoder settings the command line may override.
+#[derive(Clone)]
 pub struct RenderOverrides {
     /// Read by the composited paths, which a build without `media` does
     /// not have.
@@ -190,6 +195,66 @@ pub struct RenderOverrides {
     /// copy paths read it, which a build without `media` does not have.
     #[cfg_attr(not(feature = "media"), allow(dead_code))]
     pub picture_as_is: bool,
+    /// The size a part or a join writes the picture at, when it is not
+    /// the canvas: an `outputs` entry's (see [`Rendition`]). The frames
+    /// are composited at the canvas size and scaled, as `render -o DIR`
+    /// does.
+    #[cfg_attr(not(feature = "media"), allow(dead_code))]
+    pub size: Option<(u32, u32)>,
+}
+
+/// A `video` entry of `outputs` as a render of its own, which can be
+/// split into parts and joined like a document without `outputs`: the
+/// document with the entry's encode and audio settings and no `outputs`,
+/// and the size its picture is scaled to.
+#[derive(Debug, Clone)]
+pub struct Rendition {
+    /// The entry's name.
+    pub name: String,
+    /// The file name it writes, relative to the output directory.
+    pub path: String,
+    pub comp: Composition,
+    /// The entry's size when it is not the canvas.
+    pub size: Option<(u32, u32)>,
+}
+
+impl Rendition {
+    /// Every `video` entry of `comp`'s `outputs`, in order.
+    pub fn all(comp: &Composition) -> Vec<Self> {
+        comp.outputs
+            .iter()
+            .filter(|o| o.kind == geneva_timeline::schema::OutputKind::Video)
+            .map(|o| {
+                let mut own = comp.clone();
+                own.outputs.clear();
+                own.encode.clone_from(&o.encode);
+                own.audio_output.clone_from(&o.audio);
+                Self {
+                    name: o.name.clone(),
+                    path: o.path.clone(),
+                    comp: own,
+                    size: ((o.width, o.height) != (comp.width, comp.height))
+                        .then_some((o.width, o.height)),
+                }
+            })
+            .collect()
+    }
+
+    /// The `video` entry called `name`, or why there is none.
+    pub fn named(comp: &Composition, name: &str) -> Result<Self, String> {
+        let all = Self::all(comp);
+        let names: Vec<String> = all.iter().map(|r| r.name.clone()).collect();
+        all.into_iter().find(|r| r.name == name).ok_or_else(|| {
+            if names.is_empty() {
+                format!("`outputs` has no video entry called {name:?}, nor any other")
+            } else {
+                format!(
+                    "`outputs` has no video entry called {name:?}; the video entries are {}",
+                    names.join(", ")
+                )
+            }
+        })
+    }
 }
 
 /// Which renderer composites the frames.
@@ -2169,6 +2234,7 @@ mod imp {
         // This stretch's decoders take its share of the cores.
         geneva_media::set_decoder_threads_for_this_thread(threads);
         let v = settings.video.as_ref().expect("chunks carry video");
+        let size = (v.width, v.height);
         let format = geneva_media::plane_format_for(v.codec, v.profile, v.color.is_hdr());
         let tags = geneva_media::output_tags_for(v.codec, v.color);
         let output_tags = tags;
@@ -2187,6 +2253,17 @@ mod imp {
         let sample_rate = settings.audio.as_ref().map(|a| a.sample_rate);
         let mut encoder = Encoder::new(path, settings)?;
         let (color, format) = encoder.video_format()?;
+        // An `outputs` entry at another size: the frames are made at the
+        // canvas size and scaled, as `render -o DIR` does.
+        let mut scaler = if size == (comp.width, comp.height) {
+            None
+        } else {
+            Some(geneva_media::PlaneScaler::new(
+                format,
+                (comp.width, comp.height),
+                size,
+            )?)
+        };
         let audio_encoder = encoder.take_audio_encoder().zip(sample_rate);
         let render_err = |e: RenderError| geneva_media::MediaError::Codec {
             context: "rendering".to_owned(),
@@ -2250,9 +2327,20 @@ mod imp {
                             planes
                         })
                 };
-                let planes = match produced {
-                    Ok(p) => p,
-                    Err(e) => {
+                let planes = match (produced, scaler.as_mut()) {
+                    (Ok(p), None) => p,
+                    (Ok(p), Some(s)) => {
+                        let scaled = s.scale(&p, &mut pool);
+                        pool.give(p);
+                        match scaled {
+                            Ok(p) => p,
+                            Err(e) => {
+                                failed = Some(e);
+                                break;
+                            }
+                        }
+                    }
+                    (Err(e), _) => {
                         failed = Some(e);
                         break;
                     }
@@ -2331,7 +2419,10 @@ mod imp {
     /// a document with `outputs`.
     pub fn can_split(comp: &Composition, output: &Path) -> Result<bool, String> {
         if !comp.outputs.is_empty() {
-            return Err("the document has `outputs`; render each entry on its own".to_owned());
+            return Err(
+                "the document has `outputs`; name a video entry with --rendition, or use `geneva farm`, which renders them all"
+                    .to_owned(),
+            );
         }
         let Some(container) =
             geneva_media::container_for(output, comp.encode.as_ref().and_then(|e| e.container))
@@ -2774,12 +2865,13 @@ mod imp {
                     .unwrap_or(false),
             })
         };
+        let (width, height) = overrides.size.unwrap_or((comp.width, comp.height));
         let video_settings = if container.is_audio_only() {
             None
         } else {
             Some(VideoSettings {
-                width: comp.width,
-                height: comp.height,
+                width,
+                height,
                 fps: comp.fps,
                 codec: video.and_then(|v| v.codec).unwrap_or(default_video),
                 crf: overrides.crf.or_else(|| video.and_then(|v| v.crf)),

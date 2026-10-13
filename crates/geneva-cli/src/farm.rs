@@ -13,7 +13,9 @@
 //!   answer is the job (the timeline, the files, the render settings) or
 //!   409 with why the worker cannot take part.
 //! - `GET /file/<n>`: the `n`th file the timeline reads.
-//! - `POST /claim`: the next part to render (200), nothing yet (202, with
+//! - `POST /claim`: the next part to render (200: its frames or the
+//!   sound, the extension its file takes and, for a document with
+//!   `outputs`, the `video` entry it belongs to), nothing yet (202, with
 //!   how long to wait), or nothing more (204).
 //! - `POST /painted/<n>`: what the worker's renderer reported while
 //!   drawing part `n` (warnings, letters drawn as boxes), sent before
@@ -421,6 +423,8 @@ enum Status {
 }
 
 struct PartState {
+    /// Which of the farm's files it is part of.
+    target: usize,
     part: Part,
     /// The bytes of each file fetched in ranges that this part needs
     /// beyond each file's base, by file index.
@@ -462,6 +466,9 @@ struct Farm {
     fingerprint: String,
     /// The job as `/hello` answers it, less the worker's id.
     job: serde_json::Value,
+    /// For each file the farm writes, the `outputs` entry it is, if
+    /// any, and the extension its parts take.
+    targets: Vec<(Option<String>, String)>,
     /// The files under the root, in `/file/<n>` order.
     files: Vec<PathBuf>,
     part_timeout: Duration,
@@ -652,6 +659,11 @@ impl Farm {
             Part::Frames(r) => serde_json::json!({ "part": i, "frames": [r.start, r.end] }),
             Part::Audio => serde_json::json!({ "part": i, "audio": true }),
         };
+        let (rendition, ext) = &self.targets[p.target];
+        body["ext"] = ext.as_str().into();
+        if let Some(name) = rendition {
+            body["rendition"] = name.as_str().into();
+        }
         body["ranges"] = p
             .ranges
             .iter()
@@ -795,6 +807,52 @@ fn reachable_address(bound: std::net::SocketAddr) -> String {
     format!("{ip}:{}", bound.port())
 }
 
+/// One file a farm writes: the document, or one `video` entry of its
+/// `outputs`, rendered in picture parts and a sound part and joined.
+struct Target {
+    /// The `outputs` entry, when it is one.
+    rendition: Option<media::Rendition>,
+    comp: Composition,
+    output: PathBuf,
+    /// The container's extension, which the parts take.
+    ext: String,
+    has_sound: bool,
+}
+
+impl Target {
+    fn new(
+        comp: &Composition,
+        rendition: Option<media::Rendition>,
+        output: PathBuf,
+        overrides: &RenderOverrides,
+    ) -> Result<Self, String> {
+        let comp = rendition
+            .as_ref()
+            .map_or_else(|| comp.clone(), |r| r.comp.clone());
+        let has_sound = media::can_split(&comp, &output).map_err(|reason| match &rendition {
+            Some(r) => format!("{}: {reason}", r.name),
+            None => reason,
+        })? && !overrides.no_audio;
+        let ext = output
+            .extension()
+            .map_or_else(|| "mkv".to_owned(), |e| e.to_string_lossy().into_owned());
+        Ok(Self {
+            rendition,
+            comp,
+            output,
+            ext,
+            has_sound,
+        })
+    }
+
+    fn overrides(&self, overrides: &RenderOverrides) -> RenderOverrides {
+        RenderOverrides {
+            size: self.rendition.as_ref().and_then(|r| r.size),
+            ..overrides.clone()
+        }
+    }
+}
+
 /// Renders `comp` into `output` on whatever workers connect, and joins
 /// the parts. `progress` reports parts, not frames.
 pub fn run(
@@ -805,20 +863,173 @@ pub fn run(
     opts: &FarmOptions,
     human: bool,
 ) -> Result<RenderStats, RenderError> {
-    let started = Instant::now();
     let refuse = |reason: String| RenderError::Asset {
         id: output.display().to_string(),
         reason,
     };
-    let has_sound = media::can_split(comp, output)
+    let target = Target::new(comp, None, output.to_path_buf(), overrides)
         .map_err(|reason| refuse(format!("cannot render on a farm: {reason}")))?;
-    let has_sound = has_sound && !overrides.no_audio;
+    let name = output
+        .file_name()
+        .map_or_else(|| "output".to_owned(), |n| n.to_string_lossy().into_owned());
+    let scratch = output
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default()
+        .join(format!(".{name}.farm-{}", std::process::id()));
+    let farmed =
+        farm_targets(comp, root, &[target], &scratch, overrides, opts, human).map_err(refuse)?;
+    let mut stats = farmed
+        .joined
+        .into_iter()
+        .next()
+        .expect("one target, one file");
+    let mut all = media::Painted::from_stats(&stats);
+    all.add(farmed.painted);
+    all.into_stats(&mut stats);
+    stats.notes = farmed.notes;
+    stats.frames = comp.frame_count();
+    stats.mode = RenderMode::Render;
+    stats.seconds = farmed.seconds;
+    Ok(stats)
+}
+
+/// Renders a document with `outputs` into `dir` on whatever workers
+/// connect: every `video` entry is split into parts, all of them in one
+/// queue, and joined into its own file. Posters, sprites and `audio`
+/// entries are made on this machine meanwhile, as `render -o DIR` makes
+/// them.
+pub fn run_outputs(
+    comp: &Composition,
+    root: &Path,
+    dir: &Path,
+    overrides: &RenderOverrides,
+    opts: &FarmOptions,
+    human: bool,
+) -> Result<(Vec<media::OutputStats>, RenderStats), RenderError> {
+    let refuse = |reason: String| RenderError::Asset {
+        id: dir.display().to_string(),
+        reason,
+    };
+    std::fs::create_dir_all(dir).map_err(|e| refuse(format!("{}: {e}", dir.display())))?;
+    let targets = media::Rendition::all(comp)
+        .into_iter()
+        .map(|r| {
+            let output = dir.join(&r.path);
+            Target::new(comp, Some(r), output, overrides)
+        })
+        .collect::<Result<Vec<_>, String>>()
+        .map_err(|reason| refuse(format!("cannot render on a farm: {reason}")))?;
+    // The other entries, on this machine while the workers render.
+    let mut rest = comp.clone();
+    rest.outputs
+        .retain(|o| o.kind != geneva_timeline::schema::OutputKind::Video);
+    let pictures = (!rest.outputs.is_empty()).then(|| {
+        let root = root.to_path_buf();
+        let dir = dir.to_path_buf();
+        let overrides = overrides.clone();
+        std::thread::spawn(move || {
+            let progress = media::Progress::new(media::ProgressFormat::Silent);
+            media::render_outputs(&rest, &root, &dir, &overrides, &progress)
+        })
+    });
+    let scratch = dir.join(format!(".farm-{}", std::process::id()));
+    let farmed = if targets.is_empty() {
+        None
+    } else {
+        Some(farm_targets(
+            comp, root, &targets, &scratch, overrides, opts, human,
+        ))
+    };
+    let rest = pictures.map(|t| t.join().unwrap_or_else(|p| std::panic::resume_unwind(p)));
+    let farmed = farmed.transpose().map_err(refuse)?;
+    let (mut outputs, rest_stats) = match rest {
+        Some(r) => {
+            let (o, s) = r?;
+            (o, Some(s))
+        }
+        None => (Vec::new(), None),
+    };
+    let mut painted = media::Painted::default();
+    let mut notes = Vec::new();
+    let mut seconds = 0.0;
+    if let Some(farmed) = farmed {
+        for (r, joined) in media::Rendition::all(comp).iter().zip(farmed.joined) {
+            painted.add(media::Painted::from_stats(&joined));
+            let path = dir.join(&r.path);
+            let (width, height) = r.size.unwrap_or((comp.width, comp.height));
+            outputs.push(media::OutputStats {
+                name: r.name.clone(),
+                kind: "video",
+                bytes: std::fs::metadata(&path).map_or(0, |m| m.len()),
+                content_type: media::content_type_for(&path),
+                path,
+                mode: "render",
+                width: Some(width),
+                height: Some(height),
+            });
+        }
+        painted.add(farmed.painted);
+        notes = farmed.notes;
+        seconds = farmed.seconds;
+    }
+    if let Some(s) = rest_stats {
+        seconds = f64::max(seconds, s.seconds);
+        painted.add(media::Painted::from_stats(&s));
+        notes.extend(s.notes);
+    }
+    // As `render -o DIR` lists them: the videos, the sound, the pictures,
+    // each in the document's order.
+    outputs.sort_by_key(|o| {
+        let rank = match o.kind {
+            "video" => 0,
+            "audio" => 1,
+            _ => 2,
+        };
+        (rank, comp.outputs.iter().position(|e| e.name == o.name))
+    });
+    let mut stats = RenderStats {
+        frames: comp.frame_count(),
+        duration: comp.duration,
+        mode: RenderMode::Render,
+        notes,
+        warnings: Vec::new(),
+        missing_glyphs: Vec::new(),
+        seconds,
+    };
+    painted.into_stats(&mut stats);
+    Ok((outputs, stats))
+}
+
+/// What [`farm_targets`] made.
+struct Farmed {
+    /// Each target's join, in order.
+    joined: Vec<RenderStats>,
+    /// What the workers' renderers reported.
+    painted: media::Painted,
+    notes: Vec<String>,
+    seconds: f64,
+}
+
+/// Splits each target into parts, hands them all to whatever workers
+/// connect, and joins each target's parts into its file. `scratch` holds
+/// the parts meanwhile and is removed.
+fn farm_targets(
+    comp: &Composition,
+    root: &Path,
+    targets: &[Target],
+    scratch: &Path,
+    overrides: &RenderOverrides,
+    opts: &FarmOptions,
+    human: bool,
+) -> Result<Farmed, String> {
+    let started = Instant::now();
     let mut files = Vec::new();
     for f in &opts.files {
         if !safe_relative(f) {
-            return Err(refuse(format!(
+            return Err(format!(
                 "{f:?} is not a path under the asset root, so it cannot be sent to a worker"
-            )));
+            ));
         }
         let path = root.join(f);
         if path.is_file() {
@@ -841,28 +1052,13 @@ pub fn run(
                 .collect()
         })
         .collect();
-    let keyframe_interval = comp
-        .encode
-        .as_ref()
-        .and_then(|e| e.video.as_ref())
-        .and_then(|v| v.keyframe_interval);
-    let ranges = geneva_media::chunks::split_frames(comp, keyframe_interval, opts.parts.max(1));
-    let name = output
-        .file_name()
-        .map_or_else(|| "output".to_owned(), |n| n.to_string_lossy().into_owned());
-    let ext = output
-        .extension()
-        .map_or_else(|| "mkv".to_owned(), |e| e.to_string_lossy().into_owned());
-    let dir = output
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_default()
-        .join(format!(".{name}.farm-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).map_err(|e| refuse(format!("{}: {e}", dir.display())))?;
-    let io = |e: std::io::Error| refuse(e.to_string());
+    let dir = scratch;
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let io = |e: std::io::Error| e.to_string();
     let mut parts: Vec<PartState> = Vec::new();
-    let new_part = |part: Part, file: PathBuf| PartState {
+    let new_part = |target: usize, part: Part, file: PathBuf| PartState {
         ranges: part_ranges(comp, &part, &assets_by_file, &maps),
+        target,
         part,
         file,
         status: Status::Pending,
@@ -873,14 +1069,31 @@ pub fn run(
         by: None,
     };
     // The sound first: it is quick, and done early it is off the path.
-    if has_sound {
-        parts.push(new_part(Part::Audio, dir.join(format!("audio.{ext}"))));
+    for (t, target) in targets.iter().enumerate() {
+        if target.has_sound {
+            parts.push(new_part(
+                t,
+                Part::Audio,
+                dir.join(format!("audio-{t:02}.{}", target.ext)),
+            ));
+        }
     }
-    for (i, r) in ranges.iter().enumerate() {
-        parts.push(new_part(
-            Part::Frames(r.clone()),
-            dir.join(format!("part-{i:03}.{ext}")),
-        ));
+    for (t, target) in targets.iter().enumerate() {
+        let keyframe_interval = target
+            .comp
+            .encode
+            .as_ref()
+            .and_then(|e| e.video.as_ref())
+            .and_then(|v| v.keyframe_interval);
+        let ranges =
+            geneva_media::chunks::split_frames(&target.comp, keyframe_interval, opts.parts.max(1));
+        for (i, r) in ranges.iter().enumerate() {
+            parts.push(new_part(
+                t,
+                Part::Frames(r.clone()),
+                dir.join(format!("part-{t:02}-{i:03}.{}", target.ext)),
+            ));
+        }
     }
     let token = opts.token.clone().unwrap_or_else(random_token);
     let job = serde_json::json!({
@@ -895,7 +1108,6 @@ pub fn run(
             }
             entry
         }).collect::<Vec<_>>(),
-        "ext": ext,
         "crf": overrides.crf,
         "preset": overrides.preset,
         "diagnostics": opts.diagnostics,
@@ -907,6 +1119,10 @@ pub fn run(
         token: token.clone(),
         fingerprint: fingerprint(),
         job,
+        targets: targets
+            .iter()
+            .map(|t| (t.rendition.as_ref().map(|r| r.name.clone()), t.ext.clone()))
+            .collect(),
         files: files.iter().map(|(_, p)| p.clone()).collect(),
         part_timeout: opts.part_timeout,
         state: Mutex::new(State {
@@ -921,7 +1137,7 @@ pub fn run(
         .map(|(_, p)| std::fs::metadata(p).map_or(0, |m| m.len()))
         .sum();
     let listener = TcpListener::bind(&opts.listen)
-        .map_err(|e| refuse(format!("cannot listen on {}: {e}", opts.listen)))?;
+        .map_err(|e| format!("cannot listen on {}: {e}", opts.listen))?;
     let bound = listener.local_addr().map_err(io)?;
     let url = opts.url.as_ref().map_or_else(
         || format!("http://{}", reachable_address(bound)),
@@ -984,7 +1200,7 @@ pub fn run(
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::inherit())
                 .spawn()
-                .map_err(|e| refuse(format!("cannot run the launch command: {e}")))?;
+                .map_err(|e| format!("cannot run the launch command: {e}"))?;
             children.push(child);
         }
     }
@@ -1001,8 +1217,8 @@ pub fn run(
             let reason = reason.clone();
             drop(state);
             stop(&farm, &mut children);
-            let _ = std::fs::remove_dir_all(&dir);
-            return Err(refuse(reason));
+            let _ = std::fs::remove_dir_all(dir);
+            return Err(reason);
         }
         let done = state
             .parts
@@ -1033,8 +1249,8 @@ pub fn run(
             };
             drop(state);
             stop(&farm, &mut children);
-            let _ = std::fs::remove_dir_all(&dir);
-            return Err(refuse(why));
+            let _ = std::fs::remove_dir_all(dir);
+            return Err(why);
         }
         drop(state);
         let pace = if human {
@@ -1060,19 +1276,21 @@ pub fn run(
         eprintln!();
     }
     let render_secs = started.elapsed().as_secs_f64();
-    let (picture, sound, summary, painted) = {
+    let (by_target, summary, painted) = {
         let state = farm.state.lock().expect("state");
-        let picture: Vec<PathBuf> = state
-            .parts
-            .iter()
-            .filter(|p| matches!(p.part, Part::Frames(_)))
-            .map(|p| p.file.clone())
+        let by_target: Vec<(Vec<PathBuf>, Option<PathBuf>)> = (0..targets.len())
+            .map(|t| {
+                let mine = || state.parts.iter().filter(move |p| p.target == t);
+                let picture = mine()
+                    .filter(|p| matches!(p.part, Part::Frames(_)))
+                    .map(|p| p.file.clone())
+                    .collect();
+                let sound = mine()
+                    .find(|p| matches!(p.part, Part::Audio))
+                    .map(|p| p.file.clone());
+                (picture, sound)
+            })
             .collect();
-        let sound = state
-            .parts
-            .iter()
-            .find(|p| matches!(p.part, Part::Audio))
-            .map(|p| p.file.clone());
         let mut by_worker: BTreeMap<String, u32> = BTreeMap::new();
         for p in &state.parts {
             let name =
@@ -1085,20 +1303,38 @@ pub fn run(
             .map(|(name, n)| format!("{name} {n}"))
             .collect::<Vec<_>>()
             .join(", ");
-        (picture, sound, summary, state.painted.clone())
+        (by_target, summary, state.painted.clone())
     };
-    let joined = media::join_parts(comp, root, output, overrides, &picture, sound.as_deref());
     stop(&farm, &mut children);
-    let _ = std::fs::remove_dir_all(&dir);
-    let mut stats = joined?;
-    let mut all = media::Painted::from_stats(&stats);
-    all.add(painted);
-    all.into_stats(&mut stats);
+    let mut joined = Vec::new();
+    for (target, (picture, sound)) in targets.iter().zip(&by_target) {
+        let made = media::join_parts(
+            &target.comp,
+            root,
+            &target.output,
+            &target.overrides(overrides),
+            picture,
+            sound.as_deref(),
+        );
+        match made {
+            Ok(stats) => joined.push(stats),
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(dir);
+                return Err(e.to_string());
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(dir);
     let sent = farm.sent.load(std::sync::atomic::Ordering::Relaxed);
     let workers = farm.state.lock().expect("state").workers.len().max(1) as u64;
-    stats.notes = vec![
+    let files_joined = if targets.len() == 1 {
+        "joined without re-encoding".to_owned()
+    } else {
+        format!("joined into {} files without re-encoding", targets.len())
+    };
+    let notes = vec![
         format!(
-            "rendered in {total_parts} parts in {render_secs:.1}s (parts by worker: {summary}), joined without re-encoding"
+            "rendered in {total_parts} parts in {render_secs:.1}s (parts by worker: {summary}), {files_joined}"
         ),
         format!(
             "workers fetched {} of files; each whole copy is {}, so {workers} whole copies would have been {}",
@@ -1107,10 +1343,12 @@ pub fn run(
             human_bytes(whole * workers)
         ),
     ];
-    stats.frames = comp.frame_count();
-    stats.mode = RenderMode::Render;
-    stats.seconds = started.elapsed().as_secs_f64();
-    Ok(stats)
+    Ok(Farmed {
+        joined,
+        painted,
+        notes,
+        seconds: started.elapsed().as_secs_f64(),
+    })
 }
 
 fn human_bytes(n: u64) -> String {
@@ -1444,8 +1682,8 @@ fn work_in(
         no_audio: false,
         exact: false,
         picture_as_is: false,
+        size: None,
     };
-    let ext = job["ext"].as_str().unwrap_or("mkv");
     let mut done = Vec::new();
     let mut quiet_since: Option<Instant> = None;
     let mut stopped = false;
@@ -1491,6 +1729,36 @@ fn work_in(
             let b = claim["frames"][1].as_u64().unwrap_or(0);
             (Part::Frames(a..b), format!("frames {a}..{b}"))
         };
+        // A part of one `video` entry of the document's `outputs`.
+        let rendition = match claim["rendition"].as_str() {
+            Some(name) => match media::Rendition::named(comp, name) {
+                Ok(r) => Some(r),
+                Err(reason) => {
+                    let _ = client.call(
+                        "POST",
+                        &format!("/failed/{index}"),
+                        &Body::Json(&serde_json::json!({ "worker": id, "reason": reason })),
+                    );
+                    continue;
+                }
+            },
+            None => None,
+        };
+        let what = match &rendition {
+            Some(r) => format!("{}, {what}", r.name),
+            None => what,
+        };
+        let (part_comp, part_overrides) = match &rendition {
+            Some(r) => (
+                &r.comp,
+                RenderOverrides {
+                    size: r.size,
+                    ..overrides.clone()
+                },
+            ),
+            None => (comp, overrides.clone()),
+        };
+        let ext = claim["ext"].as_str().unwrap_or("mkv");
         let file = dir.join(format!("part-{index:03}.{ext}"));
         let started = Instant::now();
         let mut fetch_failed = None;
@@ -1512,7 +1780,7 @@ fn work_in(
             continue;
         }
         let progress = media::Progress::new(progress_format);
-        match media::render_part(comp, &root, &file, &overrides, &part, &progress) {
+        match media::render_part(part_comp, &root, &file, &part_overrides, &part, &progress) {
             Ok(stats) => {
                 let painted = media::Painted::from_stats(&stats);
                 if painted != media::Painted::default() {

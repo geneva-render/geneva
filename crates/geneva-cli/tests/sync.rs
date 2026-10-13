@@ -1269,3 +1269,95 @@ fn letters_drawn_as_boxes_are_reported_however_the_render_is_split() {
         );
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn a_farm_renders_every_entry_of_outputs() {
+    // Each video entry is split and joined on its own, at its own size
+    // and settings; the poster and the audio entry are made beside them.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::copy(corpus().join("cfr.mp4"), dir.path().join("cfr.mp4")).unwrap();
+    let timeline = dir.path().join("outputs.json");
+    std::fs::write(
+        &timeline,
+        r#"{"geneva":"1.1",
+            "output":{"width":160,"height":90,"fps":24,"duration":"3s",
+                      "encode":{"video":{"crf":10,"preset":"ultrafast"}}},
+            "assets":{"clip":{"src":"cfr.mp4"}},
+            "layers":[{"clips":[{"source":{"kind":"video","asset":"clip"},
+                                 "transform":{"scale":0.75}}]}],
+            "outputs":{"full":{"kind":"video"},
+                       "small":{"kind":"video","height":46,"path":"small.mov",
+                                "audio":{"sample_rate":22050,"channels":1}},
+                       "poster":{"kind":"poster","at":"1s"},
+                       "speech":{"kind":"audio","audio":{"sample_rate":16000,"channels":1}}}}"#,
+    )
+    .unwrap();
+    let t = timeline.to_str().unwrap();
+    let single = dir.path().join("single");
+    let farmed = dir.path().join("farmed");
+    run(&["render", t, "-o", single.to_str().unwrap()]);
+    let exe = assert_cmd::cargo::cargo_bin("geneva");
+    run(&[
+        "farm",
+        t,
+        "-o",
+        farmed.to_str().unwrap(),
+        "--parts",
+        "3",
+        "--local",
+        "0",
+        "--listen",
+        "127.0.0.1:0",
+        "--launch",
+        &format!("'{}' worker", exe.display()),
+        "--launch-count",
+        "2",
+    ]);
+    for (name, size, rate) in [
+        ("full.mp4", (160, 90), 48000),
+        ("small.mov", (82, 46), 22050),
+    ] {
+        let (a, b) = (single.join(name), farmed.join(name));
+        let info = probe(&b).unwrap();
+        let video = info.video.as_ref().unwrap();
+        assert_eq!((video.width, video.height), size, "{name}");
+        assert_eq!(video.frames, Some(72), "{name}");
+        assert_eq!(info.audio.as_ref().unwrap().sample_rate, rate, "{name}");
+        for n in [0, 23, 24, 25, 47, 48, 71] {
+            let psnr = frame_psnr(&a, &b, n);
+            assert!(psnr > 40.0, "{name} frame {n}: {psnr:.1} dB");
+        }
+    }
+    for name in ["poster.jpg", "speech.wav"] {
+        assert_eq!(
+            std::fs::read(single.join(name)).unwrap(),
+            std::fs::read(farmed.join(name)).unwrap(),
+            "{name}"
+        );
+    }
+    // By hand, a part of one entry takes that entry's size.
+    let part = dir.path().join("part.mov");
+    run(&[
+        "render",
+        t,
+        "--rendition",
+        "small",
+        "--frames",
+        "24..48",
+        "-o",
+        part.to_str().unwrap(),
+    ]);
+    let video = probe(&part).unwrap().video.unwrap();
+    assert_eq!(
+        (video.width, video.height, video.frames),
+        (82, 46, Some(24))
+    );
+    // Nothing of the farm's own is left in the directory.
+    let mut left: Vec<String> = std::fs::read_dir(&farmed)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    left.sort();
+    assert_eq!(left, ["full.mp4", "poster.jpg", "small.mov", "speech.wav"]);
+}
