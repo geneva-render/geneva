@@ -79,6 +79,50 @@ fn open_error(path: &Path, e: ffmpeg_next::Error) -> MediaError {
     }
 }
 
+/// Samples asked for by each call that drains a converter at the end of a
+/// stream. A drain gives back the converter's filter tail on top of what
+/// it already held, which its upper bound does not count, so it asks for
+/// at least this much and repeats until a call gives back nothing.
+const RESAMPLE_DRAIN_BLOCK: usize = 4096;
+
+/// Converts `input` with `ctx`, or drains what `ctx` still holds when
+/// `input` is `None`, into a new frame.
+///
+/// The frame is allocated with room for everything the call can give
+/// back. Left to the binding, an empty output frame is sized to the input,
+/// so when the output rate is higher the converter keeps the excess and
+/// the backlog grows for the whole stream. A new frame each call also
+/// keeps a short first frame (Opus and Vorbis start with one) from capping
+/// the later ones.
+fn resample(
+    ctx: &mut ffmpeg_next::software::resampling::Context,
+    input: Option<&ffmpeg_next::util::frame::Audio>,
+) -> Result<ffmpeg_next::util::frame::Audio, ffmpeg_next::Error> {
+    use ffmpeg_next::util::frame::Audio;
+    let target = *ctx.output();
+    let mut room = ffi::resampler_out_samples(ctx, input.map_or(0, Audio::samples))?;
+    if input.is_none() {
+        room = room.max(RESAMPLE_DRAIN_BLOCK);
+    }
+    if room == 0 {
+        return Ok(Audio::empty());
+    }
+    let mut out = Audio::new(target.format, room, target.channel_layout);
+    out.set_rate(target.rate);
+    match input {
+        Some(input) => ctx.run(input, &mut out)?,
+        None => ctx.flush(&mut out)?,
+    };
+    // With the output sized to fit, what the converter holds between calls
+    // stays within its filter length rather than growing with the stream.
+    debug_assert!(
+        ctx.delay()
+            .is_none_or(|d| d.output < i64::from(target.rate)),
+        "the audio converter is holding back more than a second of audio"
+    );
+    Ok(out)
+}
+
 fn codec_error(context: impl Into<String>, e: ffmpeg_next::Error) -> MediaError {
     MediaError::Codec {
         context: context.into(),

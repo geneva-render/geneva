@@ -6,6 +6,26 @@ version it was written for; within 1.x the format only gains optional
 fields, so a document keeps meaning what it meant. Before 1.0, minor
 versions changed the format freely.
 
+## Unreleased
+
+### Fixed
+
+- **Audio stopped early when it was resampled to a higher rate.** A
+  source whose sample rate is below the output's (44.1 kHz into the
+  default 48 kHz, for one) gave the converter room for only as many
+  samples as went in, so it held back the rest and the backlog grew for
+  the whole file: the audio ended at duration × source rate / output
+  rate (27.56s of a 30s render from 44.1 kHz, 20.01s from 32 kHz) and
+  the rest of the output was silent. The picture was not affected, and
+  neither were sources at or above the output rate. Each conversion now
+  has room for everything the converter can give back, so the audio
+  reaches the end.
+- **The end of every resampled stream was dropped.** The drain at the
+  end of a source failed on every call and the failure was taken for
+  "nothing left", so the samples the converter still held (its filter
+  tail, a few milliseconds) were lost at any rate. The drain now
+  returns them, and an error from it is reported instead of ignored.
+
 ## 1.5.0 (2026-10-13)
 
 ### Added

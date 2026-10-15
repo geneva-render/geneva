@@ -620,3 +620,18 @@ pub fn attach_hdr_metadata_to_frame(
         }
     }
 }
+
+/// An upper bound on the samples a converter gives back when it is next
+/// handed `in_samples` input samples, counting those it still holds from
+/// earlier calls.
+#[allow(unsafe_code)]
+pub fn resampler_out_samples(
+    ctx: &mut ffmpeg_next::software::resampling::Context,
+    in_samples: usize,
+) -> Result<usize, ffmpeg_next::Error> {
+    let n = i32::try_from(in_samples).unwrap_or(i32::MAX);
+    // SAFETY: `ctx` wraps a valid `SwrContext` the binding allocated and
+    // initialised; `swr_get_out_samples` only reads its state.
+    let out = unsafe { ffmpeg_next::ffi::swr_get_out_samples(ctx.as_mut_ptr(), n) };
+    usize::try_from(out).map_err(|_| ffmpeg_next::Error::from(out))
+}

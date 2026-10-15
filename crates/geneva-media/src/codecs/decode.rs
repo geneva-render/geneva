@@ -13,7 +13,7 @@ use geneva_render::Image;
 use geneva_timeline::Ratio;
 
 use super::probe::ts_to_secs;
-use super::{codec_error, ffi, init, open_error, tags};
+use super::{codec_error, ffi, init, open_error, resample, tags};
 use crate::MediaError;
 use crate::convert::{Planes16, Planes420, rgba8_into, ycbcr16_into, yuv420p8_into};
 use geneva_color::hdr::HdrToSdr;
@@ -955,10 +955,6 @@ impl AudioReader {
             if !self.inner.next_frame(&mut self.decoder, &mut raw)? {
                 break;
             }
-            // A fresh output frame each time: the converter sizes it to the
-            // input, and decoders such as Opus and Vorbis start with a short
-            // frame that would otherwise cap every later one.
-            let mut resampled = frame::Audio::empty();
             let secs = self.inner.secs(&raw);
             if write_pos.is_none() {
                 write_pos = Some(((secs - from).to_f64() * f64::from(rate)).round() as i64);
@@ -968,8 +964,7 @@ impl AudioReader {
                 Some(r) => r,
                 None => resampler.insert(make_resampler(&raw)?),
             };
-            converter
-                .run(&raw, &mut resampled)
+            let resampled = resample(converter, Some(&raw))
                 .map_err(|e| codec_error(format!("{}: audio resampling", path.display()), e))?;
             let pos = write_pos.as_mut().expect("set above");
             copy_samples(&resampled, pos, &mut out);
@@ -977,14 +972,14 @@ impl AudioReader {
                 break;
             }
         }
-        let mut tail = frame::Audio::empty();
         if let (Some(pos), Some(resampler)) = (write_pos.as_mut(), resampler.as_mut()) {
-            while resampler.flush(&mut tail).is_ok_and(|d| d.is_some()) || tail.samples() > 0 {
-                copy_samples(&tail, pos, &mut out);
+            while *pos < frames_wanted as i64 {
+                let tail = resample(resampler, None)
+                    .map_err(|e| codec_error(format!("{}: audio resampling", path.display()), e))?;
                 if tail.samples() == 0 {
                     break;
                 }
-                tail = frame::Audio::empty();
+                copy_samples(&tail, pos, &mut out);
             }
         }
         Ok(out)
@@ -1038,17 +1033,15 @@ impl AudioStream {
         while self.pending.len() < want && !self.finished {
             if !self.inner.next_frame(&mut self.decoder, &mut raw)? {
                 self.finished = true;
-                let mut tail = frame::Audio::empty();
                 if let Some(resampler) = self.resampler.as_mut() {
-                    while resampler.flush(&mut tail).is_ok_and(|d| d.is_some())
-                        || tail.samples() > 0
-                    {
-                        let n = tail.samples();
-                        if n == 0 {
+                    loop {
+                        let tail = resample(resampler, None).map_err(|e| {
+                            codec_error(format!("{}: audio resampling", path.display()), e)
+                        })?;
+                        if tail.samples() == 0 {
                             break;
                         }
                         Self::append(&mut self.pending, &mut self.skip, &tail);
-                        tail = frame::Audio::empty();
                     }
                 }
                 break;
@@ -1083,9 +1076,7 @@ impl AudioStream {
                     .map_err(|e| codec_error(format!("{}: audio resampling", path.display()), e))?,
                 ),
             };
-            let mut resampled = frame::Audio::empty();
-            converter
-                .run(&raw, &mut resampled)
+            let resampled = resample(converter, Some(&raw))
                 .map_err(|e| codec_error(format!("{}: audio resampling", path.display()), e))?;
             Self::append(&mut self.pending, &mut self.skip, &resampled);
         }

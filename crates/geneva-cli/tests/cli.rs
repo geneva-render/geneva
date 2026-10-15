@@ -2182,3 +2182,54 @@ fn font_assets_named_by_family_in_a_list_are_used() {
         .stderr(predicate::str::contains("Nowhere Sans"))
         .stderr(predicate::str::contains("W201").not());
 }
+
+#[test]
+#[cfg(feature = "media")]
+fn audio_below_the_output_rate_reaches_the_end_of_the_render() {
+    // A 44.1 kHz source rendered to the default 48 kHz used to fall silent
+    // at 2s × 44.1/48 = 1.84s.
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("in44100.mp4");
+    run_json(
+        &["convert", "--sample-rate", "44100", "-o"],
+        &[&source, &media_dir().join("clip.mp4")],
+    );
+    assert_eq!(
+        run_json(&["probe"], &[&source])["audio"]["sample_rate"],
+        44100
+    );
+    let timeline = dir.path().join("t.json");
+    std::fs::write(
+        &timeline,
+        r#"{"geneva":"1.1","output":{"width":192,"height":108,"fps":25,"duration":"2s",
+            "encode":{"video":{"codec":"h264","preset":"ultrafast"},"audio":{"codec":"aac"}}},
+            "assets":{"video":{"kind":"video","src":"in44100.mp4"}},
+            "layers":[{"id":"video","clips":[{"source":{"kind":"video","asset":"video"},"fit":"fill"}]}]}"#,
+    )
+    .unwrap();
+    let out = dir.path().join("out.mp4");
+    run_json(&["render", "-o"], &[&out, &timeline]);
+    assert_eq!(run_json(&["probe"], &[&out])["audio"]["sample_rate"], 48000);
+
+    let rms = |path: &std::path::Path, rate: u32| {
+        let samples = geneva_media::AudioReader::open(path)
+            .unwrap()
+            .read(
+                geneva_timeline::Ratio::new(185, 100),
+                geneva_timeline::Ratio::new(10, 100),
+                rate,
+            )
+            .unwrap();
+        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+    };
+    let before = rms(&source, 44100);
+    let after = rms(&out, 48000);
+    assert!(
+        before > 0.05,
+        "the source is quiet at its end: rms {before}"
+    );
+    assert!(
+        (after / before - 1.0).abs() < 0.1,
+        "the render's last tenth of a second has rms {after}, the source's {before}"
+    );
+}

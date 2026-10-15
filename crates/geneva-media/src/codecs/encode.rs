@@ -1237,9 +1237,7 @@ impl AudioEncoder {
         for (dst, v) in data.chunks_exact_mut(4).zip(chunk) {
             dst.copy_from_slice(&v.to_le_bytes());
         }
-        let mut converted = frame::Audio::empty();
-        self.resampler
-            .run(&packed, &mut converted)
+        let mut converted = super::resample(&mut self.resampler, Some(&packed))
             .map_err(|e| codec_error("audio sample format conversion", e))?;
         converted.set_pts(Some(self.next_pts));
         self.next_pts += n as i64;

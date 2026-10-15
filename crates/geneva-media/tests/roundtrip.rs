@@ -1937,3 +1937,104 @@ fn the_reader_applies_the_rotation_a_file_asks_for() {
     let raw = reader.raw_frame_at(Ratio::new(1, 2)).unwrap();
     assert_eq!((raw.width(), raw.height()), (160, 90));
 }
+
+/// Writes `secs` seconds of a 440 Hz stereo tone at half scale as 16-bit
+/// PCM at `rate` Hz, so the file holds exactly `secs × rate` samples.
+fn tone_wav(dir: &Path, rate: u32, secs: u32) -> PathBuf {
+    let out = dir.join(format!("tone{rate}.wav"));
+    let settings = EncodeSettings {
+        video: None,
+        container: None,
+        subtitles: Vec::new(),
+        fast_start: false,
+        copied_audio: None,
+        audio: Some(AudioSettings {
+            codec: AudioCodec::Pcm,
+            bitrate_kbps: 0,
+            sample_rate: rate,
+            channels: 2,
+            loudness: None,
+            hygiene: false,
+        }),
+    };
+    let mut enc = Encoder::new(&out, settings).unwrap();
+    let tone: Vec<f32> = (0..rate * secs)
+        .flat_map(|i| {
+            let v = (i as f32 * 440.0 * std::f32::consts::TAU / rate as f32).sin() * 0.5;
+            [v, v]
+        })
+        .collect();
+    enc.push_audio(&tone).unwrap();
+    enc.finish().unwrap();
+    let a = probe(&out).unwrap().audio.unwrap();
+    assert_eq!(a.sample_rate, rate);
+    out
+}
+
+/// Checks that interleaved stereo `samples` at `rate` hold the tone of
+/// [`tone_wav`] up to `secs` seconds and silence after it.
+fn assert_tone_ends_at(samples: &[f32], rate: u32, secs: u32, what: &str) {
+    let frames = samples.len() / 2;
+    let end = secs as usize * rate as usize;
+    let last = (0..frames)
+        .rev()
+        .find(|&i| samples[i * 2].abs() > 0.01 || samples[i * 2 + 1].abs() > 0.01)
+        .map_or(0, |i| i + 1);
+    let gap = (last as f64 - end as f64) / f64::from(rate);
+    assert!(
+        gap.abs() < 0.01,
+        "{what}: the tone ends at {:.3}s, not {secs}s",
+        last as f64 / f64::from(rate)
+    );
+    let tenth = rate as usize / 10;
+    let level = rms(&samples[(end - tenth) * 2..end * 2]);
+    assert!(
+        (level - 0.5 / 2f32.sqrt()).abs() < 0.02,
+        "{what}: the last tenth of a second has rms {level}"
+    );
+    if frames > end + tenth {
+        let after = rms(&samples[(end + rate as usize / 50) * 2..]);
+        assert!(after < 1e-4, "{what}: rms {after} after the end");
+    }
+}
+
+#[test]
+fn resampled_audio_reaches_the_end_of_the_source() {
+    // Upsampling used to give back only as many samples as went in, so the
+    // converter's backlog grew for the whole file and the drain at the end
+    // returned nothing: a 44.1 kHz source read at 48 kHz stopped 8% early.
+    let dir = tempfile::tempdir().unwrap();
+    let secs = 3;
+    for (source, output) in [
+        (8000, 48000),
+        (22050, 48000),
+        (32000, 48000),
+        (44100, 48000),
+        (48000, 48000),
+        (48000, 44100),
+    ] {
+        let path = tone_wav(dir.path(), source, secs);
+        let what = format!("{source} Hz read at {output} Hz");
+
+        let mut stream = AudioReader::open(&path)
+            .unwrap()
+            .into_stream(Ratio::ZERO, output)
+            .unwrap();
+        let mut streamed = Vec::new();
+        let total = (secs as usize + 1) * output as usize;
+        for block in [1000, 4800].into_iter().cycle() {
+            if streamed.len() >= total * 2 {
+                break;
+            }
+            streamed.extend(stream.read(block).unwrap());
+        }
+        assert_tone_ends_at(&streamed, output, secs, &format!("{what}, streamed"));
+
+        let whole = AudioReader::open(&path)
+            .unwrap()
+            .read(Ratio::ZERO, Ratio::from_int(i64::from(secs)), output)
+            .unwrap();
+        assert_eq!(whole.len(), secs as usize * output as usize * 2);
+        assert_tone_ends_at(&whole, output, secs, &format!("{what}, one read"));
+    }
+}
