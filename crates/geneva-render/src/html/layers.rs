@@ -286,7 +286,7 @@ pub fn render_layers<'c>(
             let ready = (serving.is_none() && served.contains(&g))
                 .then_some(want)
                 .flatten()
-                .and_then(|want| cache.entries.get(&g).map(|c| (want, c)));
+                .zip(cache.entries.get(&g));
             match ready {
                 Some((want, c)) => {
                     serving = Some(g);
